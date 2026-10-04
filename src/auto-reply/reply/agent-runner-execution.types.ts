@@ -7,12 +7,20 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { resolveBlockStreamingChunking } from "./block-streaming.js";
+import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+export type InternalFollowupRun = FollowupRun & {
+  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
+};
 
 export type CompletedAgentAuthSelection = Pick<
   FollowupRun["run"],
@@ -41,28 +49,10 @@ type AbortedAgentTurn = {
   compaction?: AgentTurnCompaction;
 };
 
-/** Internal fallback-cycle result before caller-facing settlement projection. */
+/** Internal execution may reject before producing a settled turn. */
 export type AgentTurnInternalResult =
   | AbortedAgentTurn
-  | {
-      kind: "completed";
-      maintenanceAuthProfile?: CompletedAgentAuthSelection;
-      compactionRequestBudget?: CompactionRequestBudget;
-      result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-      fallbackProvider?: string;
-      fallbackModel?: string;
-      fallbackExhausted?: true;
-      fallbackAttempts: RuntimeFallbackAttempt[];
-      didLogHeartbeatStrip: boolean;
-      autoCompactionCount: number;
-      /** Captured before cleanup; late settlements remain in the live receipts below. */
-      hasDirectlySentBlockReply?: true;
-      /** Delivery receipts for direct tool-flush payloads, including retry custody. */
-      directBlockDeliveries?: DirectBlockDelivery[];
-      /** Prepared terminal failure, appended only after delivery evidence settles. */
-      terminalFailurePayload?: ReplyPayload;
-      postCompactionModelFailure?: true;
-    }
+  | SettledAgentTurn
   | {
       kind: "final";
       payload: ReplyPayload;
@@ -80,7 +70,9 @@ type SettledAgentTurnBase = {
   autoCompactionCount: number;
   compaction?: AgentTurnCompaction;
   didLogHeartbeatStrip: boolean;
+  /** Captured before cleanup; late settlements remain in the live receipts below. */
   hasDirectlySentBlockReply?: true;
+  /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
 };
 
@@ -128,18 +120,12 @@ export type AgentTurnParams = {
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
+  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
@@ -150,7 +136,7 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
+  isRestartRecoveryArmed?: () => Promise<boolean>;
 };
 
 export type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;

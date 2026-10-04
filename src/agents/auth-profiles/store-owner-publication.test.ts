@@ -1,10 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import {
+  withCanonicalAuthProfileCredentialObserver,
+  type CanonicalAuthProfileCredentialObservation,
+} from "./credential-observation.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -17,6 +24,7 @@ import {
 import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -32,10 +40,10 @@ import {
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
+import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
-  resolveRuntimeAuthProfileAgentDir,
   restoreAuthProfileStorePersistenceSnapshot,
   withAuthProfileStoreAgentDir,
 } from "./store.js";
@@ -46,6 +54,71 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("auth publication owner receipts", () => {
+  it.each(["cold", "cached", "activated", "admitted"] as const)(
+    "observes exact shared and local credential owners through a %s read",
+    async (mode) => {
+      const owner = await seedRoot("observed");
+      if (mode === "cold") {
+        clearRuntimeAuthProfileStoreSnapshots();
+      } else if (mode === "activated") {
+        withEnv(owner.env, () => {
+          const prepared = prepareSecretsRuntimeFastPathSnapshot({
+            config: {},
+            env: owner.env,
+            agentDirs: [owner.agentDir],
+            loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+          });
+          expect(prepared).not.toBeNull();
+          activateSecretsRuntimeSnapshotState({
+            snapshot: prepared!.snapshot,
+            refreshContext: prepared!.refreshContext,
+            refreshHandler: null,
+          });
+        });
+      } else if (mode === "admitted") {
+        const { prepareSecretsRuntimeSnapshot } = await import("../../secrets/runtime.js");
+        await withEnvAsync(owner.env, async () => {
+          const snapshot = await prepareSecretsRuntimeSnapshot({
+            config: {},
+            env: owner.env,
+            agentDirs: [owner.agentDir],
+            includeConfigRefs: false,
+            loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+          });
+          activateSecretsRuntimeSnapshotState({
+            snapshot,
+            refreshContext: null,
+            refreshHandler: null,
+          });
+        });
+      }
+      const observations: CanonicalAuthProfileCredentialObservation[] = [];
+      await withEnvAsync(owner.env, () =>
+        withCanonicalAuthProfileCredentialObserver(
+          (value) => observations.push(value),
+          async () => {
+            const selected = ensureAuthProfileStoreWithoutExternalProfiles(owner.agentDir);
+            expect(selected.profiles).toEqual({
+              shared: apiKey("observed"),
+              local: apiKey("observed-local"),
+            });
+          },
+        ),
+      );
+      expect(observations).toEqual(
+        expect.arrayContaining([
+          { databasePath: owner.sharedPath, profiles: { shared: apiKey("observed") } },
+          { databasePath: owner.agentPath, profiles: { local: apiKey("observed-local") } },
+        ]),
+      );
+      expect(
+        observations.some(
+          (value) => value.databasePath === owner.agentPath && value.profiles.shared !== undefined,
+        ),
+      ).toBe(false);
+    },
+  );
+
   it.each(["prepare", "activate"] as const)(
     "requires a recorded migration diagnosis discovered at %s before empty-owner activation",
     async (discoveredAt) => {
@@ -576,29 +649,30 @@ describe("auth publication owner receipts", () => {
     expect(snapshotAt(original.agentPath)?.profiles.shared).toEqual(apiKey("updated-original"));
   });
 
-  it("keeps relative scope paths bound to their original working directory during preparation", async () => {
-    const original = await seedRoot("original");
+  it("keeps relative scope paths bound to their original working directory during preparation", async ({
+    signal,
+  }) => {
+    const stateDir = tempDirs.make("openclaw-auth-scope-state-");
+    const agentDir = tempDirs.make("openclaw-auth-scope-agent-");
     const entryCwd = tempDirs.make("openclaw-auth-scope-entry-cwd-");
     const laterCwd = path.join(tempDirs.make("openclaw-auth-scope-later-cwd-"), "nested");
     fs.mkdirSync(laterCwd);
-    const previousCwd = process.cwd();
-    try {
-      process.chdir(entryCwd);
-      const preparing = withAuthProfileStoreAgentDir(
-        path.relative(entryCwd, original.agentDir),
-        path.relative(entryCwd, original.stateDir),
-        () => {
-          expect(resolveRuntimeAuthProfileAgentDir()).toBe(original.agentDir);
-          expect(ensureAuthProfileStoreWithoutExternalProfiles().profiles.shared).toEqual(
-            apiKey("original"),
-          );
-        },
-      );
-      process.chdir(laterCwd);
-      await preparing;
-    } finally {
-      process.chdir(previousCwd);
-    }
+    const result = await runNodeScript(
+      (workerArgv) => [
+        ...workerArgv(resolveRuntimeWorkerUrl(authProfileScopeCwdEntrypoint)),
+        stateDir,
+        agentDir,
+        laterCwd,
+      ],
+      {
+        ...process.env,
+        TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
+      },
+      undefined,
+      { cwd: entryCwd, signal, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("retains shared OAuth in the owner snapshot but excludes it from bounded exec", async () => {

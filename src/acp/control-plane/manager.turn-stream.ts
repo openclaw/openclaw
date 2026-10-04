@@ -1,4 +1,3 @@
-/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -15,7 +14,6 @@ type AcpTurnEventGate = {
   pendingDelivery?: Promise<void>;
 };
 
-/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   terminalStatus?: "completed" | "cancelled";
@@ -134,7 +132,6 @@ export async function emitCancelledAcpTurn(
   return { sawOutput: false, terminalStatus: "cancelled" };
 }
 
-/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
@@ -228,30 +225,18 @@ export async function consumeAcpTurnStream(params: {
       await params.onPromptStarted?.({ authoritative: false });
     }
 
-    let eventOutcome: AcpTurnStreamOutcome | null = null;
-    let result: AcpRuntimeTurnResult | null = null;
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
       throw firstOutcome.error;
     }
-    if (firstOutcome.kind === "events") {
-      eventOutcome = firstOutcome.outcome;
-    } else if (firstOutcome.kind === "result-error") {
+    const terminalOutcome = firstOutcome.kind === "events" ? await resultPromise : firstOutcome;
+    if (terminalOutcome.kind === "result-error") {
       await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-      throw firstOutcome.error;
-    } else {
-      result = firstOutcome.result;
+      throw terminalOutcome.error;
     }
+    const result = terminalOutcome.result;
 
-    if (!result) {
-      const terminalOutcome = await resultPromise;
-      if (terminalOutcome.kind === "result-error") {
-        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-        throw terminalOutcome.error;
-      }
-      result = terminalOutcome.result;
-    }
-
+    let eventOutcome = firstOutcome.kind === "events" ? firstOutcome.outcome : null;
     let closedTerminalStream = false;
     while (!eventOutcome) {
       // Channel delivery can outlive the backend result. Only an idle event

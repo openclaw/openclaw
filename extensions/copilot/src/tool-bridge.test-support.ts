@@ -1,4 +1,4 @@
-import type { Tool as SdkTool } from "@github/copilot-sdk";
+import type { Tool as SdkTool, ToolInvocation } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -61,18 +61,32 @@ export async function convertOpenClawToolToSdkToolForTest(
   const bridge = await createCopilotToolBridge({
     abortSignal: options.abortSignal,
     allowModelTools: true,
-    attemptParams:
-      options.onAgentToolResult || options.observeToolTerminal
-        ? {
-            ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
-            ...(options.observeToolTerminal
-              ? { observeToolTerminal: options.observeToolTerminal }
-              : {}),
-          }
-        : undefined,
+    attemptParams: {
+      // Conversion targets the direct SDK handler; default Tool Search would catalog the tool.
+      config: { tools: { toolSearch: false } },
+      ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
+      ...(options.observeToolTerminal ? { observeToolTerminal: options.observeToolTerminal } : {}),
+    },
     createOpenClawCodingTools: () => [sourceTool],
     modelId: "gpt-test",
     onToolCompleted: options.onToolCompleted,
   });
   return expectDefined(bridge.promptToolPolicy.apply().tools[0], "Copilot SDK tool");
+}
+
+export function makeInvocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
+  return {
+    arguments: { value: "input" },
+    sessionId: "session-1",
+    toolCallId: "call-1",
+    toolName: "tool-a",
+    ...overrides,
+  };
+}
+
+export function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation()) {
+  if (!tool.handler) {
+    throw new Error(`SDK tool '${tool.name}' has no handler`);
+  }
+  return tool.handler(args, invocation);
 }

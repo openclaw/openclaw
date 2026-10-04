@@ -14,9 +14,16 @@ import {
   resolveRuntimePostBuildRequirement,
 } from "../../scripts/run-node.mts";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.ts";
+import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
+import type {
+  ControlUiE2eBuildIdentity,
+  ControlUiE2ePrebuiltAssets,
+} from "../../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
+    controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
+    controlUiE2eBuildRoot?: string;
     controlUiE2ePrebuiltGeneration: string;
   }
 }
@@ -71,8 +78,12 @@ export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
     fail(runtime.reason);
   }
   const uiRoot = path.join(distRoot, "control-ui");
-  if (inspectControlUiRootAssets(uiRoot).kind !== "ready") {
-    fail("canonical Control UI assets are not ready");
+  const { buildId } = normalizeControlUiBuildInfo(
+    JSON.parse(fs.readFileSync(path.join(distRoot, "build-info.json"), "utf8")),
+  );
+  const health = inspectControlUiRootAssets(uiRoot, buildId);
+  if (health.kind !== "ready") {
+    fail(`canonical Control UI assets are not ready (${health.kind})`);
   }
   const digest = createHash("sha256").update(head);
   for (const file of [
@@ -95,6 +106,14 @@ export default function setup(project: TestProject) {
   // CI's successful artifact step owns preparation. Never repair outputs while
   // parallel Gateway readers are live; the normal local config remains serial.
   const before = assertPrebuiltUiE2eRuntime(root.config.root);
+  const distRoot = path.join(root.config.root, "dist");
+  const { buildId, version }: ControlUiE2eBuildIdentity = normalizeControlUiBuildInfo(
+    JSON.parse(fs.readFileSync(path.join(distRoot, "build-info.json"), "utf8")),
+  );
+  root.provide("controlUiE2ePrebuiltAssets", {
+    root: path.join(distRoot, "control-ui"),
+    buildInfo: { buildId, version },
+  });
   root.provide("controlUiE2ePrebuiltGeneration", before);
   return () => {
     try {

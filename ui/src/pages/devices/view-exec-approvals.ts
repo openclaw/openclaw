@@ -1,4 +1,3 @@
-// Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import "../../components/agent-select-registration.ts";
@@ -11,22 +10,20 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   isNativeExecApprovalsSnapshot,
-  type ExecApprovalsAllowlistEntry,
   type ExecApprovalsFile,
   type ExecApprovalsResolvedDefaults,
   type ExecAsk,
   type ExecSecurity,
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/page-operations.ts";
-import {
-  resolveConfigAgents as resolveSharedConfigAgents,
-  resolveNodeTargets,
-  type NodeTargetOption,
-} from "./view-shared.ts";
+import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 type ExecApprovalsAgentOption = {
   id: string;
@@ -34,32 +31,7 @@ type ExecApprovalsAgentOption = {
   isDefault?: boolean;
 };
 
-type ExecApprovalsTargetNode = NodeTargetOption;
-
-type ExecApprovalsState = {
-  ready: boolean;
-  disabled: boolean;
-  dirty: boolean;
-  loading: boolean;
-  saving: boolean;
-  form: ExecApprovalsFile | null;
-  nativePolicy: NativeExecApprovalsSnapshot | null;
-  defaults: ExecApprovalsResolvedDefaults;
-  selectedScope: string;
-  selectedAgent: Record<string, unknown> | null;
-  agents: ExecApprovalsAgentOption[];
-  allowlist: ExecApprovalsAllowlistEntry[];
-  target: "gateway" | "node";
-  targetNodeId: string | null;
-  targetNodes: ExecApprovalsTargetNode[];
-  onSelectScope: (agentId: string) => void;
-  onSelectTarget: (kind: "gateway" | "node", nodeId: string | null) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
-  onRemove: (path: Array<string | number>) => void;
-  onLoad: () => void;
-  onSave: () => void;
-  canAdmin: boolean;
-};
+type ExecApprovalsState = ReturnType<typeof resolveExecApprovalsState>;
 
 const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
 
@@ -107,14 +79,6 @@ function resolveExecApprovalsDefaults(
   };
 }
 
-function resolveConfigAgents(config: Record<string, unknown> | null): ExecApprovalsAgentOption[] {
-  return resolveSharedConfigAgents(config).map((entry) => ({
-    id: entry.id,
-    name: entry.name,
-    isDefault: entry.isDefault,
-  }));
-}
-
 function resolveExecApprovalsAgents(
   config: Record<string, unknown> | null,
   form: ExecApprovalsFile | null,
@@ -147,59 +111,48 @@ function resolveExecApprovalsAgents(
   return agents;
 }
 
-function resolveExecApprovalsScope(
-  selected: string | null,
-  agents: ExecApprovalsAgentOption[],
-): string {
-  if (selected === EXEC_APPROVALS_DEFAULT_SCOPE) {
-    return EXEC_APPROVALS_DEFAULT_SCOPE;
-  }
-  if (selected && agents.some((agent) => agent.id === selected)) {
-    return selected;
-  }
-  return EXEC_APPROVALS_DEFAULT_SCOPE;
-}
-
-export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsState {
+export function resolveExecApprovalsState(props: DevicesProps) {
   const snapshot = props.execApprovalsSnapshot;
   const nativePolicy = isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const form = nativePolicy ? null : (props.execApprovalsForm ?? fileSnapshot?.file ?? null);
   const ready = Boolean(form || nativePolicy);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
-  const targetNodes = resolveExecApprovalsNodes(props.nodes);
+  const targetNodes = resolveNodeTargets(props.nodes, [
+    "system.execApprovals.get",
+    "system.execApprovals.set",
+  ]);
   const target = props.execApprovalsTarget;
   let targetNodeId =
     target === "node" && props.execApprovalsTargetNodeId ? props.execApprovalsTargetNodeId : null;
   if (target === "node" && targetNodeId && !targetNodes.some((node) => node.id === targetNodeId)) {
     targetNodeId = null;
   }
-  const selectedScope = resolveExecApprovalsScope(props.execApprovalsSelectedAgent, agents);
+  const selected = props.execApprovalsSelectedAgent;
+  const selectedScope =
+    selected && agents.some((agent) => agent.id === selected)
+      ? selected
+      : EXEC_APPROVALS_DEFAULT_SCOPE;
   const defaults = resolveExecApprovalsDefaults(
     form,
     fileSnapshot?.resolvedDefaults,
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE,
   );
   const selectedAgent =
-    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
-      ? (((form?.agents ?? {})[selectedScope] as Record<string, unknown> | undefined) ?? null)
-      : null;
-  const allowlist = Array.isArray((selectedAgent as { allowlist?: unknown })?.allowlist)
-    ? ((selectedAgent as { allowlist?: ExecApprovalsAllowlistEntry[] }).allowlist ?? [])
-    : [];
+    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE ? (form?.agents?.[selectedScope] ?? null) : null;
+  const allowlist = selectedAgent?.allowlist;
   return {
     ready,
     disabled: !props.canAdmin || props.execApprovalsSaving || props.execApprovalsLoading,
     dirty: props.execApprovalsDirty,
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
-    form,
     nativePolicy,
     defaults,
     selectedScope,
     selectedAgent,
     agents,
-    allowlist,
+    allowlist: Array.isArray(allowlist) ? allowlist : [],
     target,
     targetNodeId,
     targetNodes,
@@ -405,118 +358,68 @@ function renderExecApprovalsScope(state: ExecApprovalsState) {
   });
 }
 
-function renderPolicySelect(
-  state: ExecApprovalsState,
-  options: {
-    key: "security" | "ask" | "askFallback";
-    ariaLabel: string;
-    values: Array<{ value: string; labelKey: string }>;
-    currentValue: string;
-    defaultValue: string;
-    isDefaults: boolean;
-    basePath: Array<string | number>;
-  },
-) {
-  return html`
-    <select
-      class="settings-select"
-      aria-label=${options.ariaLabel}
-      .value=${live(options.currentValue)}
-      ?disabled=${state.disabled}
-      @change=${(event: Event) => {
-        const target = event.target as HTMLSelectElement;
-        const value = target.value;
-        if (!options.isDefaults && value === "__default__") {
-          state.onRemove([...options.basePath, options.key]);
-        } else {
-          state.onPatch([...options.basePath, options.key], value);
-        }
-      }}
-    >
-      ${
-        !options.isDefaults
-          ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
-              ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
-            </option>`
-          : nothing
-      }
-      ${options.values.map(
-        (option) =>
-          html`<option value=${option.value} ?selected=${options.currentValue === option.value}>
-            ${t(option.labelKey)}
-          </option>`,
-      )}
-    </select>
-  `;
-}
-
 function renderExecApprovalsPolicy(state: ExecApprovalsState) {
   const isDefaults = state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE;
   const defaults = state.defaults;
   const agent = state.selectedAgent ?? {};
   const basePath = isDefaults ? ["defaults"] : ["agents", state.selectedScope];
-  const agentSecurity = typeof agent.security === "string" ? agent.security : undefined;
-  const agentAsk = typeof agent.ask === "string" ? agent.ask : undefined;
-  const agentAskFallback = typeof agent.askFallback === "string" ? agent.askFallback : undefined;
-  const securityValue = isDefaults ? defaults.security : (agentSecurity ?? "__default__");
-  const askValue = isDefaults ? defaults.ask : (agentAsk ?? "__default__");
-  const askFallbackValue = isDefaults ? defaults.askFallback : (agentAskFallback ?? "__default__");
   const autoOverride =
     typeof agent.autoAllowSkills === "boolean" ? agent.autoAllowSkills : undefined;
   const autoEffective = autoOverride ?? defaults.autoAllowSkills;
   const autoIsDefault = autoOverride == null;
 
   return html`
-    ${renderSettingsRow({
-      title: t("devices.execApprovals.security"),
-      description: isDefaults
-        ? t("devices.execApprovals.defaultSecurity")
-        : agentSecurity !== undefined
-          ? t("devices.execApprovals.defaultValue", { value: defaults.security })
-          : undefined,
-      control: renderPolicySelect(state, {
-        key: "security",
-        ariaLabel: t("devices.execApprovals.mode"),
-        values: SECURITY_OPTIONS,
-        currentValue: securityValue,
-        defaultValue: defaults.security,
-        isDefaults,
-        basePath,
-      }),
-    })}
-    ${renderSettingsRow({
-      title: t("devices.execApprovals.ask"),
-      description: isDefaults
-        ? t("devices.execApprovals.defaultPrompt")
-        : agentAsk !== undefined
-          ? t("devices.execApprovals.defaultValue", { value: defaults.ask })
-          : undefined,
-      control: renderPolicySelect(state, {
-        key: "ask",
-        ariaLabel: t("devices.execApprovals.mode"),
-        values: ASK_OPTIONS,
-        currentValue: askValue,
-        defaultValue: defaults.ask,
-        isDefaults,
-        basePath,
-      }),
-    })}
-    ${renderSettingsRow({
-      title: t("devices.execApprovals.askFallback"),
-      description: isDefaults
-        ? t("devices.execApprovals.promptUnavailable")
-        : agentAskFallback !== undefined
-          ? t("devices.execApprovals.defaultValue", { value: defaults.askFallback })
-          : undefined,
-      control: renderPolicySelect(state, {
-        key: "askFallback",
-        ariaLabel: t("devices.execApprovals.fallback"),
-        values: SECURITY_OPTIONS,
-        currentValue: askFallbackValue,
-        defaultValue: defaults.askFallback,
-        isDefaults,
-        basePath,
-      }),
+    ${(
+      [
+        {
+          key: "security",
+          descriptionKey: "devices.execApprovals.defaultSecurity",
+          ariaLabelKey: "devices.execApprovals.mode",
+          values: SECURITY_OPTIONS,
+        },
+        {
+          key: "ask",
+          descriptionKey: "devices.execApprovals.defaultPrompt",
+          ariaLabelKey: "devices.execApprovals.mode",
+          values: ASK_OPTIONS,
+        },
+        {
+          key: "askFallback",
+          descriptionKey: "devices.execApprovals.promptUnavailable",
+          ariaLabelKey: "devices.execApprovals.fallback",
+          values: SECURITY_OPTIONS,
+        },
+      ] as const
+    ).map(({ key, descriptionKey, ariaLabelKey, values }) => {
+      const override = typeof agent[key] === "string" ? agent[key] : undefined;
+      const currentValue = isDefaults ? defaults[key] : (override ?? "__default__");
+      return renderSettingsRow({
+        title: t(`devices.execApprovals.${key}`),
+        description: isDefaults
+          ? t(descriptionKey)
+          : override !== undefined
+            ? t("devices.execApprovals.defaultValue", { value: defaults[key] })
+            : undefined,
+        control: html`
+          <select
+            class="settings-select"
+            aria-label=${t(ariaLabelKey)}
+            .value=${live(currentValue)}
+            ?disabled=${state.disabled}
+            @change=${(event: Event) => {
+              const value = (event.target as HTMLSelectElement).value;
+              if (!isDefaults && value === "__default__") {
+                state.onRemove([...basePath, key]);
+              } else {
+                state.onPatch([...basePath, key], value);
+              }
+            }}
+          >
+            ${!isDefaults ? html`<option value="__default__" ?selected=${currentValue === "__default__"}>${t("devices.execApprovals.useDefaultValue", { value: defaults[key] })}</option>` : nothing}
+            ${values.map((option) => html`<option value=${option.value} ?selected=${currentValue === option.value}>${t(option.labelKey)}</option>`)}
+          </select>
+        `,
+      });
     })}
     ${renderSettingsRow({
       title: t("devices.execApprovals.autoAllowSkills"),
@@ -572,59 +475,46 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
     },
     entries.length === 0
       ? renderSettingsEmpty(t("devices.execApprovals.emptyAllowlist"))
-      : entries.map((entry, index) => renderAllowlistEntry(state, entry, index)),
+      : entries.map((entry, index) => {
+          const lastUsed = entry.lastUsedAt
+            ? formatRelativeTimestamp(entry.lastUsedAt)
+            : t("common.never");
+          const lastCommand = entry.lastUsedCommand ? clampText(entry.lastUsedCommand, 120) : null;
+          const lastPath = entry.lastResolvedPath ? clampText(entry.lastResolvedPath, 120) : null;
+          return renderSettingsRow({
+            title: entry.pattern?.trim() ? entry.pattern : t("devices.execApprovals.newPattern"),
+            description: html`
+              ${t("devices.execApprovals.lastUsed", { time: lastUsed })}
+              ${lastCommand ? html`<br /><span class="mono">${lastCommand}</span>` : nothing}
+              ${lastPath ? html`<br /><span class="mono">${lastPath}</span>` : nothing}
+            `,
+            control: html`
+              <input
+                class="settings-input"
+                type="text"
+                aria-label=${t("devices.execApprovals.pattern")}
+                .value=${entry.pattern ?? ""}
+                ?disabled=${state.disabled}
+                @input=${(event: Event) => {
+                  const target = event.target as HTMLInputElement;
+                  state.onPatch([...allowlistPath, index, "pattern"], target.value);
+                }}
+              />
+              <button
+                class="btn btn--sm danger"
+                ?disabled=${state.disabled}
+                @click=${() => {
+                  if (state.allowlist.length <= 1) {
+                    state.onRemove(allowlistPath);
+                    return;
+                  }
+                  state.onRemove([...allowlistPath, index]);
+                }}
+              >
+                ${t("devices.execApprovals.remove")}
+              </button>
+            `,
+          });
+        }),
   );
-}
-
-function renderAllowlistEntry(
-  state: ExecApprovalsState,
-  entry: ExecApprovalsAllowlistEntry,
-  index: number,
-) {
-  const lastUsed = entry.lastUsedAt ? formatRelativeTimestamp(entry.lastUsedAt) : t("common.never");
-  const lastCommand = entry.lastUsedCommand ? clampText(entry.lastUsedCommand, 120) : null;
-  const lastPath = entry.lastResolvedPath ? clampText(entry.lastResolvedPath, 120) : null;
-  return renderSettingsRow({
-    title: entry.pattern?.trim() ? entry.pattern : t("devices.execApprovals.newPattern"),
-    description: html`
-      ${t("devices.execApprovals.lastUsed", { time: lastUsed })}
-      ${lastCommand ? html`<br /><span class="mono">${lastCommand}</span>` : nothing}
-      ${lastPath ? html`<br /><span class="mono">${lastPath}</span>` : nothing}
-    `,
-    control: html`
-      <input
-        class="settings-input"
-        type="text"
-        aria-label=${t("devices.execApprovals.pattern")}
-        .value=${entry.pattern ?? ""}
-        ?disabled=${state.disabled}
-        @input=${(event: Event) => {
-          const target = event.target as HTMLInputElement;
-          state.onPatch(
-            ["agents", state.selectedScope, "allowlist", index, "pattern"],
-            target.value,
-          );
-        }}
-      />
-      <button
-        class="btn btn--sm danger"
-        ?disabled=${state.disabled}
-        @click=${() => {
-          if (state.allowlist.length <= 1) {
-            state.onRemove(["agents", state.selectedScope, "allowlist"]);
-            return;
-          }
-          state.onRemove(["agents", state.selectedScope, "allowlist", index]);
-        }}
-      >
-        ${t("devices.execApprovals.remove")}
-      </button>
-    `,
-  });
-}
-
-function resolveExecApprovalsNodes(
-  nodes: Array<Record<string, unknown>>,
-): ExecApprovalsTargetNode[] {
-  return resolveNodeTargets(nodes, ["system.execApprovals.get", "system.execApprovals.set"]);
 }

@@ -1,7 +1,3 @@
-/**
- * Implements filesystem JSON-RPC handlers for the Codex sandbox exec-server
- * with OpenClaw sandbox policy checks before every bridge operation.
- */
 import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
@@ -65,7 +61,8 @@ export async function openFile(
   }
 
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
   // Claim the handle before even stat so slow or cancelled stats cannot bypass
   // the connection's handle cap or lose their cancellation and ownership.
@@ -76,7 +73,17 @@ export async function openFile(
   };
   handles.set(handleId, handle);
   try {
-    const stat = await fsBridge.stat({ filePath, signal: handle.abortController.signal });
+    const readPolicy = await authorizePhysicalReadPath(
+      fsBridge,
+      fsSandboxPolicy,
+      filePath,
+      handle.abortController.signal,
+    );
+    const stat = await fsBridge.stat({
+      filePath,
+      signal: handle.abortController.signal,
+      ...readPolicy,
+    });
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
         JSON_RPC_NOT_FOUND,
@@ -108,6 +115,7 @@ export async function openFile(
       filePath,
       maxBytes: handle.reservedBytes,
       signal: handle.abortController.signal,
+      ...readPolicy,
     });
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
@@ -219,16 +227,17 @@ function requireFileReadHandleId(value: unknown): string {
   return handleId;
 }
 
-/** Reads a sandbox file as base64 after read-policy and size checks. */
 export async function readFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/readFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
-  const stat = await fsBridge.stat({ filePath });
+  const readPolicy = await authorizePhysicalReadPath(fsBridge, fsSandboxPolicy, filePath);
+  const stat = await fsBridge.stat({ filePath, ...readPolicy });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
@@ -236,11 +245,11 @@ export async function readFile(
   const data = await fsBridge.readFile({
     filePath,
     maxBytes: CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES,
+    ...readPolicy,
   });
   return { dataBase64: data.toString("base64") };
 }
 
-/** Writes base64 data to an existing sandbox directory after write-policy checks. */
 export async function writeFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -273,7 +282,6 @@ export async function writeFile(
   });
 }
 
-/** Creates a sandbox directory, respecting recursive and parent-directory semantics. */
 export async function createDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -307,24 +315,33 @@ export async function createDirectory(
   });
 }
 
-/** Returns normalized metadata for a sandbox path. */
 export async function getMetadata(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/getMetadata params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const stat = await execServer.fsBridge.stat({
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
+  const readPolicy = await authorizePhysicalReadPath(
+    execServer.fsBridge,
+    fsSandboxPolicy,
     filePath,
-  });
+  );
+  const stat = await execServer.fsBridge.stat({ filePath, ...readPolicy });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  return metadataResponse(stat);
+  return {
+    isDirectory: stat.type === "directory",
+    isFile: stat.type === "file",
+    isSymlink: false,
+    size: stat.size,
+    createdAtMs: 0,
+    modifiedAtMs: stat.mtimeMs ?? 0,
+  };
 }
 
-/** Lists sandbox directory entries visible under the resolved filesystem policy. */
 export async function readDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -351,7 +368,7 @@ async function listDirectoryEntries(
   }
   const result = await execServer.backend.runShellCommand({
     script:
-      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s\\t%s\\n" "$kind" "$name"; done\' sh {} +',
+      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s%s\\000" "$kind" "$name"; done\' sh {} +',
     args: [resolved.containerPath],
     allowFailure: true,
   });
@@ -359,18 +376,32 @@ async function listDirectoryEntries(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox directory listing failed with code ${result.code}`);
   }
-  const lines = result.stdout.toString("utf8").split("\n").filter(Boolean);
-  return lines.map((line) => {
-    const [kind = "o", fileName = ""] = line.split("\t");
-    return {
-      fileName,
-      isDirectory: kind === "d",
-      isFile: kind === "f",
-    };
-  });
+  // POSIX basenames can contain tabs and newlines, but never a NUL byte.
+  return result.stdout
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => ({
+      fileName: entry.slice(1),
+      isDirectory: entry[0] === "d",
+      isFile: entry[0] === "f",
+    }));
 }
 
-/** Removes a sandbox path after rejecting writes outside policy or under read-only descendants. */
+async function authorizePhysicalReadPath(
+  fsBridge: OpenClawExecServer["fsBridge"],
+  policy: ResolvedFsSandboxPolicy | undefined,
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<{ expectedPolicyPath?: string }> {
+  if (!policy || policy.unrestricted || !fsBridge.resolveReadPolicyPath) {
+    return {};
+  }
+  const expectedPolicyPath = await fsBridge.resolveReadPolicyPath({ filePath, signal });
+  assertResolvedFsSandboxAccess(policy, [{ path: expectedPolicyPath, access: "read" }]);
+  return { expectedPolicyPath };
+}
+
 export async function removePath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -402,7 +433,6 @@ export async function removePath(
   });
 }
 
-/** Copies sandbox files or recursive directories while enforcing source and destination policy. */
 export async function copyPath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -417,10 +447,6 @@ export async function copyPath(
     "copy destination path",
   );
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
-  assertResolvedFsSandboxAccess(fsSandboxPolicy, [
-    { path: sourcePath, access: "read" },
-    { path: destinationPath, access: "write" },
-  ]);
   await copySandboxPath(execServer, {
     sourcePath,
     destinationPath,
@@ -541,15 +567,4 @@ function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
       `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
     );
   }
-}
-
-function metadataResponse(stat: SandboxFsStat | null): JsonObject {
-  return {
-    isDirectory: stat?.type === "directory",
-    isFile: stat?.type === "file",
-    isSymlink: false,
-    size: stat?.size ?? 0,
-    createdAtMs: 0,
-    modifiedAtMs: stat?.mtimeMs ?? 0,
-  };
 }

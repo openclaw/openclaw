@@ -1,4 +1,3 @@
-// Delivery-result adapters for channel turn receipts.
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -9,7 +8,7 @@ import type {
   ChannelDeliveryIntent,
   ChannelDeliveryOutcome,
   ChannelDeliveryResult,
-} from "./types.js";
+} from "./delivery-outcome.js";
 
 type ReceiptParams = Parameters<typeof createMessageReceiptFromOutboundResults>[0];
 

@@ -29,7 +29,6 @@ export const pluginArrays = [
   "agentToolResultMiddlewareOwners",
   "agentToolResultMiddlewares",
   "agentHarnesses",
-  "detachedTaskRuntimes",
   "legacyInternalHooks",
   "memoryCapabilities",
   "memoryCorpusSupplements",
@@ -42,6 +41,7 @@ export const pluginArrays = [
   "reloads",
   "nodeHostCommands",
   "nodeInvokePolicies",
+  "gatewayAccessPolicies",
   "securityAuditCollectors",
   "services",
   "gatewayDiscoveryServices",
@@ -59,6 +59,7 @@ export const pluginArrays = [
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 export const pluginMaps = [
   "workerProviders",
+  "storageProviders",
   "sessionDiscussionProviders",
   "dashboardDataBindings",
   "dashboardActionVerbs",

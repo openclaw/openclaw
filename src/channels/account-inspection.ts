@@ -1,10 +1,6 @@
-/**
- * Channel account inspection helpers.
- *
- * Combines plugin inspection hooks, read-only fallbacks, and configured credential status.
- */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccount } from "./account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -15,7 +11,7 @@ import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "./account-summary.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "./read-only-account-inspect.js";
 import { resolveUnavailableChannelAccountSnapshot } from "./status/account-state.js";
@@ -28,9 +24,6 @@ export type ChannelAccountInspectionResult = {
   snapshot: ChannelAccountSnapshot;
 };
 
-/**
- * Inspects one channel account using the plugin hook or read-only fallback.
- */
 export async function inspectChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -46,9 +39,6 @@ export async function inspectChannelAccount(params: {
   );
 }
 
-/**
- * Resolves an inspected channel account plus enabled/configured state for status surfaces.
- */
 export async function resolveInspectedChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -102,7 +92,7 @@ export async function resolveInspectedChannelAccount(params: {
       snapshot,
     };
   }
-  const account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  const account = await resolveChannelAccount(params);
   const enabled = resolveChannelAccountEnabled({ plugin: params.plugin, account, cfg: params.cfg });
   const configured = await resolveChannelAccountConfigured({
     plugin: params.plugin,

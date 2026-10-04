@@ -1,71 +1,69 @@
 /** Best-effort durable signal log for session state changes. */
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import {
+  assertSessionEntriesCurrentAdmission,
+  assertSessionEntryCurrentAdmission,
+} from "../config/sessions/session-entry-current-admission.js";
+import type {
+  SessionEntriesCurrentCheck,
+  SessionEntryCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
+import {
   captureSessionWatcherStorePaths,
-  resolvePhysicalSessionStorePath,
+  preparePhysicalSessionStorePath,
+  prepareSessionWatcherStorePaths,
+  type PreparedSessionWatcherStorePaths,
 } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  captureSystemEventStoreCurrentCheck,
+  prepareSystemEventStorePath,
+} from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
   SESSION_WATCH_PROVENANCE_EXPLICIT,
+  type SessionWatchCursorProvenance,
 } from "../state/session-watch-cursor-provenance.js";
 import { classifySessionKind } from "./classify-session-kind.js";
 import type { InputProvenance } from "./input-provenance.js";
-import type { SessionStateActorType, SessionStateEventKind } from "./session-state-event-kinds.js";
+import type { SessionStateActorType } from "./session-state-event-kinds.js";
+import { invalidateAmbientWatchReads } from "./session-state-events.ambient-read.js";
 import {
   getSessionStateKysely,
   isAmbientGroupWatchCursor,
   isNotifiableWatcherKey,
-  normalizeOptionalSqliteNumber,
-  pruneSessionStateEventsInDatabase,
-  readCursor,
   recordSessionStateEventInDatabase,
-  upsertSeedCursor,
+  rowToSessionStateEvent,
   type SessionStateEventInput,
-  type SessionStateEventRow,
-  type SessionStateEventRecord,
-  type SessionStateNotice,
 } from "./session-state-events.kernel.js";
+import { pruneSessionStateEvents } from "./session-state-events.prune.js";
+import type { SessionStateReadOperations } from "./session-state-events.read.worker-contract.js";
+import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import type { SessionStateWatchAddress } from "./session-state-events.worker-contract.js";
 import { enqueueSessionStateNotice } from "./session-state-notices.js";
 import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
+import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 export type { SessionStateActorType } from "./session-state-event-kinds.js";
 
-const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
 const log = createSubsystemLogger("sessions/state-events");
-let lastPruneAt = 0;
-let prunePending = false;
-
-function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
-  const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
-  return {
-    sequence: normalizeSqliteNumber(row.sequence) ?? 0,
-    sessionKey: row.session_key,
-    ...(row.session_id ? { sessionId: row.session_id } : {}),
-    agentId: row.agent_id,
-    kind: row.kind as SessionStateEventKind,
-    actorType: row.actor_type as SessionStateActorType,
-    ...(row.actor_id ? { actorId: row.actor_id } : {}),
-    ...(row.run_id ? { runId: row.run_id } : {}),
-    occurredAt: normalizeSqliteNumber(row.occurred_at) ?? 0,
-    summary: row.summary,
-    ...(payload ? { payload } : {}),
-  };
-}
-
 /** Classify the actor once at producer boundaries; missing provenance is interactive human input. */
 export function classifySessionStateActor(opts: {
   inputProvenance?: InputProvenance;
@@ -111,9 +109,7 @@ export function recordSessionStateEvent(
     for (const notice of result.notices) {
       enqueueSessionStateNotice(notice);
     }
-    if (!prunePending && now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
-      pruneSessionStateEvents({ ...options, now });
-    }
+    void pruneSessionStateEvents({ ...options, now });
     return result.row ? rowToSessionStateEvent(result.row) : undefined;
   } catch (error) {
     log.warn(`failed to record session state event: ${String(error)}`);
@@ -122,171 +118,171 @@ export function recordSessionStateEvent(
 }
 
 /** Return the durable signal-log head for one session; degrades to 0 on read failure. */
-export function getSessionStateVersion(
+export async function getSessionStateVersion(
   sessionKey: string,
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
-): number {
-  try {
-    const { db } = openOpenClawStateDatabase(options);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionStateKysely(db)
-        .selectFrom("session_state_heads")
-        .select("last_sequence")
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
-    );
-    return normalizeOptionalSqliteNumber(row?.last_sequence) ?? 0;
-  } catch (error) {
-    // Best-effort log: enrichment reads must never fail core session tools.
-    log.warn(`failed to read session state version: ${String(error)}`);
-    return 0;
-  }
+): Promise<number> {
+  return (
+    (await getSessionStateVersions([{ sessionKey, agentId }], options))[agentId]?.[sessionKey] ?? 0
+  );
 }
 
 /** Batch durable signal-log heads for session-list enrichment, keyed agent → session key. */
-export function getSessionStateVersions(
+export async function getSessionStateVersions(
   refs: ReadonlyArray<{ sessionKey: string; agentId: string }>,
   options: OpenClawStateDatabaseOptions = {},
-): Record<string, Record<string, number>> {
-  const keys = [...new Set(refs.map((ref) => ref.sessionKey).filter(Boolean))];
-  if (keys.length === 0) {
+): Promise<Record<string, Record<string, number>>> {
+  if (refs.length === 0) {
     return {};
   }
-  const byAgent: Record<string, Record<string, number>> = {};
   try {
-    const { db } = openOpenClawStateDatabase(options);
-    // Chunk IN() binds: sessions_list accepts arbitrary limits and SQLite caps
-    // host parameters per statement.
-    for (let offset = 0; offset < keys.length; offset += 500) {
-      const rows = executeSqliteQuerySync(
-        db,
-        getSessionStateKysely(db)
-          .selectFrom("session_state_heads")
-          .select(["session_key", "agent_id", "last_sequence"])
-          .where("session_key", "in", keys.slice(offset, offset + 500)),
-      ).rows;
-      for (const row of rows) {
-        (byAgent[row.agent_id] ??= {})[row.session_key] =
-          normalizeSqliteNumber(row.last_sequence) ?? 0;
-      }
+    const context = captureOpenClawStateReadWorkerContext(options);
+    const result = await executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "sessionState.versions",
+        input: refs,
+      },
+      { context },
+    );
+    context.admission.assertCurrent();
+    if (result && !result.ok) {
+      throw new Error(result.message);
     }
+    return result?.type === "sessionState.versions" ? result.versions : {};
   } catch (error) {
-    // Best-effort log: enrichment reads must never fail core session tools.
     log.warn(`failed to read session state versions: ${String(error)}`);
+    return {};
   }
-  return byAgent;
 }
 
 /** List retained signal-log events after a version without advancing watcher cursors. */
-export function listSessionStateEventsSince(
+export async function listSessionStateEventsSince(
   sessionKey: string,
   agentId: string,
   afterSequence: number,
   limit = 200,
   options: OpenClawStateDatabaseOptions = {},
-): {
-  events: SessionStateEventRecord[];
-  truncated: boolean;
-  earliestAvailableSequence: number;
-  historyGap: boolean;
-} {
+): Promise<SessionStateReadOperations["sessionState.events"]["output"]["page"]> {
   try {
-    const boundedLimit = Math.max(1, Math.min(200, Math.floor(limit)));
-    const { db } = openOpenClawStateDatabase(options);
-    const kysely = getSessionStateKysely(db);
-    const rows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("session_state_events")
-        .selectAll()
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId)
-        .where("sequence", ">", afterSequence)
-        .orderBy("sequence", "asc")
-        .limit(boundedLimit + 1),
-    ).rows;
-    const earliest = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("session_state_events")
-        .select((eb) => eb.fn.min<number>("sequence").as("sequence"))
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
+    const context = captureOpenClawStateReadWorkerContext(options);
+    const result = await executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "sessionState.events",
+        input: { sessionKey, agentId, afterSequence, limit },
+      },
+      { context },
     );
-    const headRow = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("session_state_heads")
-        .select(["last_sequence", "pruned_max_sequence"])
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
-    );
-    const head = normalizeOptionalSqliteNumber(headRow?.last_sequence) ?? 0;
-    const prunedMax = normalizeOptionalSqliteNumber(headRow?.pruned_max_sequence) ?? 0;
-    const earliestAvailableSequence =
-      normalizeOptionalSqliteNumber(earliest?.sequence) ?? (head > 0 ? head + 1 : 0);
-    return {
-      events: rows.slice(0, boundedLimit).map(rowToSessionStateEvent),
-      truncated: rows.length > boundedLimit,
-      earliestAvailableSequence,
-      // Sequences are globally sparse, so distance from earliest retained proves nothing.
-      // Only the per-session pruned watermark stamped by pruneSessionStateEvents can say
-      // whether events this cursor never saw were actually removed.
-      historyGap: afterSequence < prunedMax,
-    };
+    context.admission.assertCurrent();
+    if (result && !result.ok) {
+      throw new Error(result.message);
+    }
+    if (result?.type === "sessionState.events") {
+      return result.page;
+    }
   } catch (error) {
-    // Best-effort log: enrichment reads must never fail core session tools.
     log.warn(`failed to list session state events: ${String(error)}`);
-    return { events: [], truncated: false, earliestAvailableSequence: 0, historyGap: false };
   }
+  return { events: [], truncated: false, earliestAvailableSequence: 0, historyGap: false };
+}
+
+type SessionWatchOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  now?: number;
+  assertCurrent?: () => void;
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck;
+};
+
+type PreparedSessionWatchCaller = Pick<
+  SessionWatchOptions,
+  "assertCurrent" | "sessionEntriesCurrent"
+> & {
+  release(): void;
+};
+
+type SessionWatchRegistrationOptions =
+  | (SessionWatchOptions & { prepareCurrent?: undefined })
+  | (Pick<SessionWatchOptions, "path" | "env" | "now"> & {
+      prepareCurrent(): Promise<PreparedSessionWatchCaller>;
+      assertCurrent?: never;
+      sessionEntriesCurrent?: never;
+    });
+
+function runSessionWatchOperation<T>(
+  context: ReturnType<typeof captureOpenClawStateWorkerContext>,
+  operation: Parameters<typeof runOpenClawStateWorkerOperation<T>>[1],
+  assertCurrent: () => void,
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck,
+): Promise<T> {
+  return runOpenClawStateWorkerOperation(context, operation, {
+    assertCurrent,
+    createAdmission: () => ({
+      nativeLocations: [context.admission.databasePath],
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        if (
+          request.stage !== "prepare" &&
+          request.stage !== "transaction" &&
+          request.stage !== "commit"
+        ) {
+          throw new Error("Session watch operation requires worker admission");
+        }
+        context.admission.assertCurrent();
+        assertSessionEntriesCurrentAdmission(request, sessionEntriesCurrent);
+        assertCurrent();
+        grant();
+      }),
+    }),
+  });
 }
 
 /** Ack only the frozen notice watermark; advancing to head would lose an interleaved event. */
-export function acknowledgeSessionStateNotices(
+export async function acknowledgeSessionStateNotices(
   watcherSessionKey: string,
-  targetSessionKeys: readonly string[],
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
-  const now = options.now ?? Date.now();
-  const followups: SessionStateNotice[] = [];
+  notices: readonly SessionStateWatchAddress[],
+  options: SessionWatchOptions = {},
+): Promise<void> {
   try {
-    runOpenClawStateWriteTransaction(({ db }) => {
-      for (const targetSessionKey of new Set(targetSessionKeys)) {
-        const row = readCursor(db, watcherSessionKey, targetSessionKey);
-        if (!row || !isSystemEventStoreCurrent(watcherSessionKey, row.watcher_store_path ?? null)) {
-          continue;
-        }
-        const notified = normalizeSqliteNumber(row.notified_sequence) ?? 0;
-        const material = normalizeSqliteNumber(row.material_sequence) ?? 0;
-        const nextNotified = material > notified ? material : notified;
-        executeSqliteQuerySync(
-          db,
-          getSessionStateKysely(db)
-            .updateTable("session_watch_cursors")
-            .set({
-              last_seen_sequence: notified,
-              notified_sequence: nextNotified,
-              updated_at: now,
-            })
-            .where("watcher_session_key", "=", watcherSessionKey)
-            .where("target_session_key", "=", targetSessionKey),
-        );
-        if (material > notified) {
-          followups.push({
-            watcherSessionKey,
-            watcherStorePath: row.watcher_store_path ?? null,
-            targetSessionKey,
-            lastSeenSequence: notified,
-            queueOnly: isAmbientGroupWatchCursor(row),
-          });
+    const context = captureOpenClawStateWorkerContext(options);
+    const now = options.now ?? Date.now();
+    const isStoreCurrent = captureSystemEventStoreCurrentCheck(watcherSessionKey);
+    const cursors = [
+      ...new Map(
+        notices
+          .filter((notice) => isStoreCurrent(notice.watcherStorePath))
+          .map((notice) => [notice.targetSessionKey, { ...notice }]),
+      ).values(),
+    ];
+    const assertCurrent = () => {
+      options.assertCurrent?.();
+      for (const cursor of cursors) {
+        if (!isStoreCurrent(cursor.watcherStorePath)) {
+          throw new Error("Session watch acknowledgment lost its system-event store");
         }
       }
-    }, options);
-    for (const followup of followups) {
-      enqueueSessionStateNotice(followup);
-    }
+    };
+    await runSessionWatchOperation(
+      context,
+      async (scope) => {
+        if (cursors.length === 0) {
+          return;
+        }
+        const followups = await scope.execute({
+          type: "sessionState.acknowledge",
+          input: {
+            watcherSessionKey,
+            cursors,
+            now,
+            sessionEntryCurrentSources: options.sessionEntriesCurrent?.sources,
+          },
+        });
+        for (const followup of followups) {
+          enqueueSessionStateNotice(followup);
+        }
+      },
+      assertCurrent,
+      options.sessionEntriesCurrent,
+    );
   } catch (error) {
     log.warn(`failed to acknowledge session state notices: ${String(error)}`);
   }
@@ -298,6 +294,9 @@ export function handleSessionStateSessionReset(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   try {
+    invalidateAmbientWatchReads(
+      captureOpenClawStateReadWorkerContext(options).admission.identity.key,
+    );
     runOpenClawStateWriteTransaction(({ db }) => {
       executeSqliteQuerySync(
         db,
@@ -319,22 +318,20 @@ export function handleSessionStateSessionDeleted(
 ): void {
   deleteSessionUpstreamLink(sessionKey, agentId, options);
   try {
+    invalidateAmbientWatchReads(
+      captureOpenClawStateReadWorkerContext(options).admission.identity.key,
+    );
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("session_state_events")
-          .where("session_key", "=", sessionKey)
-          .where("agent_id", "=", agentId),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("session_state_heads")
-          .where("session_key", "=", sessionKey)
-          .where("agent_id", "=", agentId),
-      );
+      for (const table of ["session_state_events", "session_state_heads"] as const) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom(table)
+            .where("session_key", "=", sessionKey)
+            .where("agent_id", "=", agentId),
+        );
+      }
       executeSqliteQuerySync(
         db,
         kysely
@@ -361,9 +358,9 @@ function sessionExists(sessionKey: string, env?: NodeJS.ProcessEnv): boolean {
 }
 
 /** Re-materialize pending notices after the in-memory queue is lost on restart. */
-export function sweepSessionStateWatchNotices(
+export async function sweepSessionStateWatchNotices(
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
+): Promise<void> {
   const now = options.now ?? Date.now();
   try {
     const { db } = openOpenClawStateDatabase(options);
@@ -395,25 +392,9 @@ export function sweepSessionStateWatchNotices(
         queueOnly: isAmbientGroupWatchCursor(row),
       });
     }
-    pruneSessionStateEvents({ ...options, now });
+    await pruneSessionStateEvents({ ...options, now, force: true });
   } catch (error) {
     log.warn(`failed to sweep session state notices: ${String(error)}`);
-  }
-}
-
-/** Enforce bounded retained history without regressing durable per-session heads. */
-function pruneSessionStateEvents(
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
-  const now = options.now ?? Date.now();
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => pruneSessionStateEventsInDatabase(db, now),
-      options,
-    );
-    lastPruneAt = now;
-  } catch (error) {
-    log.warn(`failed to prune session state history: ${String(error)}`);
   }
 }
 
@@ -424,12 +405,12 @@ export function recordSessionCompacted(params: {
   sessionId?: string;
   agentId?: string;
   runId?: string;
-}): void {
+}): Promise<void> | undefined {
   if (!params.sessionKey) {
-    return;
+    return undefined;
   }
   // Native-harness-only compaction remains log-incomplete in v1; this signal is reconciliation aid.
-  recordSessionStateEvent({
+  return recordSessionStateEventAsync({
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
@@ -438,7 +419,112 @@ export function recordSessionCompacted(params: {
     runId: params.runId,
     dedupeKey: `compacted:${params.operationId}`,
     summary: "session compacted",
-  });
+  }).then(() => {});
+}
+
+type AsyncSessionStateEventOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  context?: OpenClawStateWorkerContext;
+  now?: number;
+  assertCurrent?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+  onlyIfWatched?: boolean;
+  expectedUpstream?: SessionUpstreamLink;
+  acpControl?: import("../acp/runtime/session-meta-control.types.js").AcpSessionControlConstraint;
+};
+
+/** Async producers settle the existing worker's event, notices, and bounded maintenance together. */
+export async function recordSessionStateEventAsync(
+  input: SessionStateEventInput,
+  options: AsyncSessionStateEventOptions = {},
+): Promise<SessionStateEventRecord | undefined> {
+  const sessionEntryCurrent = options.sessionEntryCurrent;
+  let watcherPaths: Promise<PromiseSettledResult<PreparedSessionWatcherStorePaths>[]> | undefined;
+  try {
+    const context = options.context ?? captureOpenClawStateWorkerContext(options);
+    const now = options.now ?? Date.now();
+    const event = structuredClone(input);
+    const expectedUpstream = options.expectedUpstream && structuredClone(options.expectedUpstream);
+    const acpControl = options.acpControl && structuredClone(options.acpControl);
+    let preparedWatchers: PreparedSessionWatcherStorePaths | undefined;
+    const assertCurrent = () => {
+      options.assertCurrent?.();
+      preparedWatchers?.assertCurrent();
+    };
+    if (!event.watcherStorePaths) {
+      watcherPaths = Promise.allSettled([
+        prepareSessionWatcherStorePaths(
+          event.watcherSessionKeys,
+          context.initializationEnvironment,
+        ),
+      ]);
+    }
+    const preparedPaths = watcherPaths;
+    return await runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => {
+        if (preparedPaths) {
+          const result = (await preparedPaths)[0]!;
+          if (result.status === "rejected") {
+            throw result.reason;
+          }
+          preparedWatchers = result.value;
+          event.watcherStorePaths = preparedWatchers.paths;
+        }
+        const recorded = await scope.execute({
+          type: "sessionState.record",
+          input: {
+            event,
+            now,
+            onlyIfWatched: options.onlyIfWatched,
+            expectedUpstream,
+            acpControl,
+            sessionEntryCurrentSource: sessionEntryCurrent?.source,
+          },
+        });
+        for (const notice of recorded.notices) {
+          enqueueSessionStateNotice(notice);
+        }
+        if (recorded.row) {
+          await pruneSessionStateEvents({
+            context,
+            now,
+            execute: () =>
+              scope.execute({
+                type: "sessionState.prune",
+                input: { now, sessionEntryCurrentSource: sessionEntryCurrent?.source },
+              }),
+          });
+        }
+        return recorded.row ? rowToSessionStateEvent(recorded.row) : undefined;
+      },
+      {
+        assertCurrent,
+        createAdmission: () => ({
+          nativeLocations: [context.admission.databasePath],
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            if (request.stage !== "transaction" && request.stage !== "commit") {
+              throw new Error("Session signal mutation requires transaction admission");
+            }
+            context.admission.assertCurrent();
+            assertCurrent();
+            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+            grant();
+          }),
+        }),
+      },
+    );
+  } catch (error) {
+    // A committed originating action and an uncertain signal must never be replayed.
+    try {
+      log.warn(`failed to record session state event: ${String(error)}`);
+    } catch {
+      // Keep the originating durable result even when the diagnostic sink fails.
+    }
+    return undefined;
+  } finally {
+    // Preparation may already be admitted when the signal writer refuses opening.
+    await watcherPaths;
+  }
 }
 
 /** Record a persisted goal mutation using lineage already available at the session-store seam. */
@@ -449,79 +535,20 @@ export async function recordSessionGoalChanged(params: {
   agentId?: string;
   summary: string;
 }): Promise<void> {
-  try {
-    const context = captureOpenClawStateWorkerContext();
-    const now = Date.now();
-    const watcherSessionKey = params.entry.spawnedBy ?? params.entry.parentSessionKey;
-    // Bare "global" does not encode its store owner; carry the producer's resolved agent.
-    const input = {
-      sessionKey: params.sessionKey,
-      sessionId: params.entry.sessionId,
-      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-      kind: "goal_changed",
-      actorType: params.actor?.type ?? "system",
-      ...(params.actor?.id ? { actorId: params.actor.id } : {}),
-      summary: params.summary,
-      ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
-      watcherStorePaths: captureSessionWatcherStorePaths(
-        watcherSessionKey ? [watcherSessionKey] : [],
-      ),
-    } satisfies SessionStateEventInput & { kind: "goal_changed" };
-    await runOpenClawStateWorkerOperation(context, async (scope) => {
-      const notices = await scope.execute({
-        type: "sessionState.recordGoalChange",
-        input: { event: input, now },
-      });
-      for (const notice of notices) {
-        enqueueSessionStateNotice(notice);
-      }
-      if (!prunePending && now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
-        prunePending = true;
-        try {
-          await scope.execute({ type: "sessionState.prune", input: { now } });
-          // A synchronous sweep may have completed while this operation was awaiting its worker.
-          lastPruneAt = Math.max(lastPruneAt, now);
-        } catch (error) {
-          log.warn(`failed to prune session state history: ${String(error)}`);
-        } finally {
-          prunePending = false;
-        }
-      }
-    });
-  } catch (error) {
-    // Goal persistence already succeeded; neither an uncertain event nor logging may replace it.
-    try {
-      log.warn(`failed to record session state event: ${String(error)}`);
-    } catch {
-      // Keep the originating durable result even when the diagnostic sink fails.
-    }
-  }
+  const watcherSessionKey = params.entry.spawnedBy ?? params.entry.parentSessionKey;
+  await recordSessionStateEventAsync({
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    kind: "goal_changed",
+    actorType: params.actor?.type ?? "system",
+    ...(params.actor?.id ? { actorId: params.actor.id } : {}),
+    summary: params.summary,
+    ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
+  });
 }
 
-/** True when any seeded or explicitly registered watcher cursor targets this session. */
-function hasSessionStateWatchers(
-  targetSessionKey: string,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  try {
-    const { db } = openOpenClawStateDatabase(options);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionStateKysely(db)
-        .selectFrom("session_watch_cursors")
-        .select("watcher_session_key")
-        .where("target_session_key", "=", targetSessionKey)
-        .limit(1),
-    );
-    return row !== undefined;
-  } catch (error) {
-    // Best-effort log: enrichment reads must never fail core session tools.
-    log.warn(`failed to probe session state watchers: ${String(error)}`);
-    return false;
-  }
-}
-
-/** List durable ambient-group targets owned by one watcher; failures grant nothing. */
+/** Released synchronous SDK compatibility; runtime prompt preparation uses worker reads. */
 export function listAmbientGroupWatchTargets(
   watcherSessionKey: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -543,140 +570,114 @@ export function listAmbientGroupWatchTargets(
   }
 }
 
-/** Register an explicit watcher (e.g. a sessions_send coordinator) for a target session. */
-export function registerSessionStateWatch(
+async function registerWatch(
   params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): boolean {
+  provenance: SessionWatchCursorProvenance,
+  options: SessionWatchRegistrationOptions,
+): Promise<boolean> {
   if (
     params.watcherSessionKey === params.targetSessionKey ||
     !isNotifiableWatcherKey(params.watcherSessionKey)
   ) {
     return false;
   }
-  const now = options.now ?? Date.now();
+  let prepared: PreparedSessionWatchCaller | undefined;
   try {
-    const watcherStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: params.watcherSessionKey,
-      env: options.env,
-    });
-    let registered = false;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      // Re-watching must not clobber pending-notice cursor state.
-      const existing = readCursor(db, params.watcherSessionKey, params.targetSessionKey);
-      if (existing?.watcher_store_path === watcherStorePath) {
-        if (existing.provenance !== SESSION_WATCH_PROVENANCE_EXPLICIT) {
-          executeSqliteQuerySync(
-            db,
-            getSessionStateKysely(db)
-              .updateTable("session_watch_cursors")
-              .set({ provenance: SESSION_WATCH_PROVENANCE_EXPLICIT })
-              .where("watcher_session_key", "=", params.watcherSessionKey)
-              .where("target_session_key", "=", params.targetSessionKey),
-          );
-        }
-        registered = true;
-        return;
+    const context = captureOpenClawStateWorkerContext(options);
+    const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.watcherSessionKey);
+    const input = {
+      ...params,
+      targetAgentId: params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey),
+      provenance,
+      now: options.now ?? Date.now(),
+    };
+    const watcherStorePath = await (prepareSystemEventStorePath(input.watcherSessionKey) ??
+      preparePhysicalSessionStorePath({
+        sessionKey: input.watcherSessionKey,
+        env: context.initializationEnvironment,
+      }));
+    context.admission.assertCurrent();
+    prepared = await options.prepareCurrent?.();
+    const caller = prepared ?? options;
+    context.admission.assertCurrent();
+    const assertCurrent = () => {
+      caller.assertCurrent?.();
+      if (!isStoreCurrent(watcherStorePath)) {
+        throw new Error("Session watch registration lost its system-event store");
       }
-      const agentId = params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey);
-      const head = executeSqliteQueryTakeFirstSync(
-        db,
-        getSessionStateKysely(db)
-          .selectFrom("session_state_heads")
-          .select("last_sequence")
-          .where("session_key", "=", params.targetSessionKey)
-          .where("agent_id", "=", agentId),
-      );
-      // Seed at the current head: the watcher is synced now; only future changes notify.
-      upsertSeedCursor({
-        db,
-        watcherSessionKey: params.watcherSessionKey,
-        watcherStorePath,
-        targetSessionKey: params.targetSessionKey,
-        sequence: normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0,
-        now,
-      });
-      registered = true;
-    }, options);
-    return registered;
+    };
+    return await runSessionWatchOperation(
+      context,
+      async (scope) => {
+        const registered = await scope.execute({
+          type: "sessionState.registerWatch",
+          input: {
+            ...input,
+            watcherStorePath,
+            sessionEntryCurrentSources: caller.sessionEntriesCurrent?.sources,
+          },
+        });
+        assertCurrent();
+        return registered;
+      },
+      assertCurrent,
+      caller.sessionEntriesCurrent,
+    );
   } catch (error) {
     log.warn(`failed to register session state watch: ${String(error)}`);
     return false;
+  } finally {
+    prepared?.release();
   }
 }
 
+/** Register an explicit watcher (e.g. a sessions_send coordinator) for a target session. */
+export function registerSessionStateWatch(
+  params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
+  options: SessionWatchRegistrationOptions = {},
+): Promise<boolean> {
+  return registerWatch(params, SESSION_WATCH_PROVENANCE_EXPLICIT, options);
+}
+
 /** Register the agent's main session to observe one routed group session. */
-export function registerMainSessionGroupWatch(
+export async function registerMainSessionGroupWatch(
   params: {
     sessionKey: string;
     agentId: string;
     entry?: SessionEntry;
     mainKey?: string;
+    isSystemEvent?: boolean;
+    inputProvenance?: InputProvenance;
+    signal?: AbortSignal;
   },
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): boolean {
-  if (classifySessionKind(params.sessionKey, params.entry) !== "group") {
+  options: SessionWatchOptions = {},
+): Promise<boolean> {
+  if (
+    params.isSystemEvent ||
+    classifySessionStateActor(params).actorType !== "human" ||
+    classifySessionKind(params.sessionKey, params.entry) !== "group"
+  ) {
     return false;
   }
   const watcherSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: params.mainKey,
   });
-  // groupScope already chose the routed key: "main" is the watcher itself,
-  // while every distinct group key is a per-group target. dmScope is orthogonal.
-  if (params.sessionKey === watcherSessionKey) {
-    return false;
-  }
-  const now = options.now ?? Date.now();
-  try {
-    const watcherStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: watcherSessionKey,
-      env: options.env,
-    });
-    const { db: readDb } = openOpenClawStateDatabase(options);
-    // This runs on every human group turn. Keep the steady-state path read-only;
-    // the transaction below is only for first registration and its race recheck.
-    const current = readCursor(readDb, watcherSessionKey, params.sessionKey);
-    if (current?.watcher_store_path === watcherStorePath) {
-      return true;
-    }
-    let registered = false;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      const existing = readCursor(db, watcherSessionKey, params.sessionKey);
-      if (existing?.watcher_store_path === watcherStorePath) {
-        // An explicit watch already owns this pair. Do not downgrade it when
-        // later human group turns revisit registration.
-        registered = true;
-        return;
-      }
-      const head = executeSqliteQueryTakeFirstSync(
-        db,
-        getSessionStateKysely(db)
-          .selectFrom("session_state_heads")
-          .select("last_sequence")
-          .where("session_key", "=", params.sessionKey)
-          .where("agent_id", "=", params.agentId),
-      );
-      const sequence = normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0;
-      upsertSeedCursor({
-        db,
-        watcherSessionKey,
-        watcherStorePath,
-        targetSessionKey: params.sessionKey,
-        sequence,
-        now,
-        provenance: SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
-      });
-      registered = true;
-    }, options);
-    return registered;
-  } catch (error) {
-    log.warn(`failed to register ambient group watch: ${String(error)}`);
-    return false;
-  }
+  // A group routed into main already shares its conversation; dmScope is orthogonal.
+  return registerWatch(
+    { watcherSessionKey, targetSessionKey: params.sessionKey, targetAgentId: params.agentId },
+    SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
+    {
+      ...options,
+      assertCurrent: () => {
+        params.signal?.throwIfAborted();
+        options.assertCurrent?.();
+      },
+    },
+  );
 }
 
-export function recordSessionHumanDirectMessage(
+export async function recordSessionHumanDirectMessage(
   params: {
     sessionKey: string;
     entry?: SessionEntry;
@@ -688,17 +689,13 @@ export function recordSessionHumanDirectMessage(
     payload?: Record<string, unknown>;
     occurredAt?: number;
   },
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): SessionStateEventRecord | undefined {
+  options: AsyncSessionStateEventOptions = {},
+): Promise<SessionStateEventRecord | undefined> {
   const watcherSessionKey = params.entry?.spawnedBy ?? params.entry?.parentSessionKey;
   if (params.actor.actorType !== "human") {
     return undefined;
   }
-  // One indexed watcher probe keeps ordinary un-watched human turns write-free.
-  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey, options)) {
-    return undefined;
-  }
-  return recordSessionStateEvent(
+  return recordSessionStateEventAsync(
     {
       sessionKey: params.sessionKey,
       sessionId: params.entry?.sessionId,
@@ -713,18 +710,18 @@ export function recordSessionHumanDirectMessage(
       ...(params.occurredAt === undefined ? {} : { occurredAt: params.occurredAt }),
       ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
     },
-    options,
+    { ...options, onlyIfWatched: !watcherSessionKey },
   );
 }
 
 /** Seed the parent cursor at the child-spawn version. */
-export function recordSubagentSpawned(params: {
+export async function recordSubagentSpawned(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
   agentId: string;
-}): void {
-  recordSessionStateEvent({
+}): Promise<void> {
+  await recordSessionStateEventAsync({
     sessionKey: params.childSessionKey,
     agentId: params.agentId,
     kind: "child_spawned",
@@ -733,38 +730,6 @@ export function recordSubagentSpawned(params: {
     runId: params.childRunId,
     dedupeKey: `child-spawned:${params.childRunId}`,
     summary: "child session spawned",
-    watcherSessionKeys: [params.requesterSessionKey],
-  });
-}
-
-type SubagentTerminalStatus = "ok" | "error" | "timeout" | "cancelled";
-
-const SUBAGENT_TERMINAL_SUMMARY: Record<SubagentTerminalStatus, string> = {
-  ok: "child run completed",
-  error: "child run failed",
-  timeout: "child run timed out",
-  cancelled: "child run cancelled",
-};
-
-/** Project an already-normalized subagent terminal outcome into the signal log. */
-export function recordSubagentTerminalState(params: {
-  childSessionKey: string;
-  runId: string;
-  requesterSessionKey: string;
-  outcomeStatus: SubagentTerminalStatus;
-}): void {
-  // Non-ok statuses share kind run_failed: the closed kind union mirrors the sibling
-  // SubagentRunOutcome status projection, which also folds cancel/timeout into error
-  // status. The precise outcome survives in payload for changesSince consumers.
-  recordSessionStateEvent({
-    sessionKey: params.childSessionKey,
-    agentId: resolveAgentIdFromSessionKey(params.childSessionKey),
-    kind: params.outcomeStatus === "ok" ? "run_completed" : "run_failed",
-    actorType: "system",
-    runId: params.runId,
-    dedupeKey: `run-terminal:${params.runId}`,
-    summary: SUBAGENT_TERMINAL_SUMMARY[params.outcomeStatus],
-    ...(params.outcomeStatus === "ok" ? {} : { payload: { outcome: params.outcomeStatus } }),
     watcherSessionKeys: [params.requesterSessionKey],
   });
 }

@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createRealtimeVoiceAudioPortSender } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, vi } from "vitest";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
@@ -640,7 +641,10 @@ it("reports player startup failure and lets another speaker play", async () => {
   });
   try {
     expect(() => fixture.playback.sendOutputAudio(Buffer.alloc(24_000))).not.toThrow();
-    expect(fixture.onTerminalError).toHaveBeenCalledWith(failure);
+    expect(fixture.onTerminalError).toHaveBeenCalledWith(
+      expect.objectContaining({ name: failure.name, message: failure.message }),
+    );
+    expect(fixture.onTerminalError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect(fixture.stopTerminally).toHaveBeenCalledOnce();
     next.playback.sendOutputAudio(Buffer.alloc(24_000));
     next.playback.handleResponseDone({ status: "completed" });
@@ -1012,6 +1016,29 @@ it("plays overlapping speaker responses in order without replacing another lane'
     expect(second.playback.retainedExactSpeechTexts()).toEqual([]);
     expect(fixture.onPlayerError).not.toHaveBeenCalled();
   } finally {
+    fixture.close();
+  }
+});
+
+it("clears active direct output for room controls without muting continuous replies", async () => {
+  const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+  const sender = createRealtimeVoiceAudioPortSender(fixture.playback.createOutputAudioPort());
+  try {
+    const tone = Buffer.alloc(9_600);
+    for (let offset = 0; offset < tone.length; offset += 2) {
+      tone.writeInt16LE(12_000, offset);
+    }
+    sender.sendAudio(tone);
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(true));
+    fixture.playback.speakControlResult("Stopped.");
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(false));
+    expect(fixture.sendUserMessage).toHaveBeenCalledWith("Stopped.");
+    // Continuous control speech has no response-created boundary. A local
+    // buffer clear must not mute the still-admitted provider stream.
+    sender.sendAudio(tone);
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(true));
+  } finally {
+    sender.close();
     fixture.close();
   }
 });

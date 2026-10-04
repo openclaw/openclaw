@@ -1,4 +1,4 @@
-/** Sandboxed guest globals and host bridge for Code Mode QuickJS cells. */
+/** Guest globals and host bridge shared by Code Mode JavaScript executors. */
 import { CODE_MODE_CONSOLE_SOURCE } from "./code-mode-console-source.js";
 import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
@@ -20,6 +20,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
   const hostCancelRequest = globalThis.__openclawHostCancelRequest;
+  const hostObserveNetworkContent = globalThis.__openclawHostObserveNetworkContent;
+  const hostOutput = globalThis.__openclawHostOutput;
+  delete globalThis.__openclawHostOutput;
+  delete globalThis.__openclawHostObserveNetworkContent;
   delete globalThis.__openclawHostRequest;
   delete globalThis.__openclawHostCancelRequest;
   delete globalThis.__openclawCatalog;
@@ -30,12 +34,28 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  const bridgeErrors = new WeakSet();
+  // Guest prototype changes must not replace the operations that own error provenance.
+  const rememberBridgeError = bridgeErrors.add.bind(bridgeErrors);
+  const isBridgeError = bridgeErrors.has.bind(bridgeErrors);
   let nextTimerId = 0;
   const GuestPromise = Promise;
   const GuestError = Error;
   const GuestTypeError = TypeError;
+  const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
+  function emitOutput(entry) {
+    const count = output.push(entry);
+    if (hostOutput) hostOutput(encodeFinalValue(entry));
+    return count;
+  }
   const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
+  let networkContentObserved = false;
+  function observeNetworkContent() {
+    if (networkContentObserved) return;
+    networkContentObserved = true;
+    hostObserveNetworkContent();
+  }
 
   ${CODE_MODE_CONSOLE_SOURCE}
 
@@ -168,10 +188,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       for (const entry of Array.isArray(value.entries) ? value.entries : []) {
         const key = Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : "";
         if (!key) continue;
-        Object.defineProperty(object, key, {
-          value: deserializeNamespaceValue(namespaceId, entry[1]),
-          enumerable: true,
-        });
+        const projected = deserializeNamespaceValue(namespaceId, entry[1]);
+        Object.defineProperty(object, key, namespaceId === "mcp" && entry[1]?.kind === "value"
+          ? { get: () => { observeNetworkContent(); return projected; }, enumerable: true }
+          : { value: projected, enumerable: true });
       }
       return Object.freeze(object);
     }
@@ -198,6 +218,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         error.code = parsed.code;
         error.effectStatus = "unknown";
       }
+      rememberBridgeError(error);
       entry.reject(error);
     }
     return true;
@@ -228,7 +249,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const skills = Object.freeze({
-    list: () => request("skillsList", []),
+    list: (offset = 0) => request("skillsList", [offset]),
+    search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
     read: (name) => request("skillsRead", [name]),
   });
 
@@ -237,6 +259,26 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     load: (id) => request("resultLoad", [id]),
     delete: (id) => request("resultDelete", [id]),
   });
+
+  // Session operations use the existing result bridge; buffers stay with the host cell.
+  async function sessionResult(method, key, value) {
+    if (typeof key !== "string") throw new GuestTypeError("Code Mode store key must be a string.");
+    try {
+      const result = await request(method, method === "resultSave"
+        ? [value, "session", key]
+        : [key, "session"]);
+      return method === "resultLoad" ? result.value : undefined;
+    } catch (error) {
+      if (!(error instanceof GuestError)) throw error;
+      const Constructor = error.code === "store_range" ? GuestRangeError
+        : error.code === "store_type" ? GuestTypeError : undefined;
+      if (!Constructor) throw error;
+      const typed = new Constructor(error.message);
+      typed.stack = error.stack;
+      rememberBridgeError(typed);
+      throw typed;
+    }
+  }
 
   if (globalThis.__openclawSwarmEnabled === true) {
     Object.defineProperties(globalThis, {
@@ -288,12 +330,16 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
           description: file.description,
           bytes: file.bytes,
         }));
+      if (files.some(file => file.path.startsWith("mcp/"))) observeNetworkContent();
       return { files };
     },
     read: async (path) => {
       const normalizedPath = normalizeApiPath(path);
       const file = apiFileMap.get(normalizedPath);
-      if (file) return file;
+      if (file) {
+        if (normalizedPath.startsWith("mcp/")) observeNetworkContent();
+        return file;
+      }
       const callableName = nativeApiFiles.get(normalizedPath);
       if (callableName) return request("describe", [callableName, "declaration"]);
       throw new Error("Unknown API file: " + normalizedPath);
@@ -323,7 +369,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       ...(isMcp ? { apiPath: binding.apiPath } : {}),
     });
     for (const [key, value] of Object.entries(metadata)) {
-      Object.defineProperty(handle, key, { value, enumerable: true });
+      Object.defineProperty(handle, key, binding.source !== "openclaw"
+        ? { get: () => { observeNetworkContent(); return value; }, enumerable: true }
+        : { value, enumerable: true });
     }
     Object.defineProperties(handle, {
       name: { value: callableName },
@@ -333,7 +381,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
           : () => request("describe", [callableName]),
         enumerable: true,
       },
-      toJSON: { value: () => metadata },
+      toJSON: { value: () => {
+        if (binding.source !== "openclaw") observeNetworkContent();
+        return metadata;
+      } },
     });
     const frozen = Object.freeze(handle);
     callableHandles.set(callableName, frozen);
@@ -344,7 +395,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   function serializeOutputValue(value, seen = new Map(), finalState) {
     if (value instanceof GuestPromise) return promiseOutput;
     const metadata = callableMetadata.get(value);
-    if (metadata) return finalState ? serializeOutputValue(metadata, seen, finalState) : metadata;
+    if (metadata) {
+      if (metadata.source !== "openclaw") observeNetworkContent();
+      return finalState ? serializeOutputValue(metadata, seen, finalState) : metadata;
+    }
     if (finalState) {
       if (typeof value === "function") return undefined;
       if (typeof value === "bigint") finalState.hasBigInt = true;
@@ -445,13 +499,16 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
     results: { value: results, enumerable: true },
+    store: { value: (key, value) => sessionResult(value === undefined ? "resultDelete" : "resultSave", key, value), enumerable: true },
+    load: { value: (key) => sessionResult("resultLoad", key), enumerable: true },
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     console: { value: guestConsole, enumerable: true },
-    text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
-    json: { value: (value) => output.push({ type: "json", value: safe(value, true) }), enumerable: true },
+    text: { value: (value) => emitOutput({ type: "text", text: asText(value) }), enumerable: true },
+    json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawIsBridgeError: { value: isBridgeError },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.

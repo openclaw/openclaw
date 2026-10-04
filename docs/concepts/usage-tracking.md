@@ -37,11 +37,19 @@ traffic bounded. Until a cold cache has any usage data, the page shows a
 loading placeholder instead of zero totals. Available partial totals stay visible;
 if automatic checks finish without complete data, select **Refresh** to try again.
 
+Session reports preserve agent attribution when agents share a session store. A
+background usage refresh does not invalidate a selected report when its session
+store is unchanged.
+
 Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
 **90d**, **1y**, **All**, or the date inputs change the reporting range. Historical
 lineage includes retained earlier instances of a session; the date range still
 controls which activity appears in the chart. Totals and daily charts come from
 the same session report, including sessions beyond the visible list limit.
+
+A recorded zero-dollar cost is valid cost data. The average-cost hint warns
+about missing prices only when the selected report contains unpriced usage;
+filtering to sessions with known zero cost clears that warning.
 
 **Started by** groups usage by the recorded session creator. Select an identity
 to filter the full report, including its history and totals. Human profiles,

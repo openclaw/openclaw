@@ -11,7 +11,9 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
@@ -87,12 +89,14 @@ suite.define(() => {
       return result.stdout;
     };
     const key = "agent:main:partial-refresh";
-    await call("sessions.create", {
-      key,
-      agentId: "main",
-      label: "Partial refresh",
-      model: "openai/gpt-5.4",
-    });
+    const { sessionId }: { sessionId: string } = JSON.parse(
+      await call("sessions.create", {
+        key,
+        agentId: "main",
+        label: "Partial refresh",
+        model: "openai/gpt-5.4",
+      }),
+    );
     await call("sessions.patch", { key, thinkingLevel: "high" });
     let catalog: ModelCatalogResult = JSON.parse(
       await call("models.list", { agentId: "main", view: "configured", refresh: true }),
@@ -123,15 +127,18 @@ suite.define(() => {
         async ({ page }) => {
           let currentSocket: WebSocket | undefined;
           let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
+          let latestHistory: { socket: WebSocket; id: string; complete: boolean } | undefined;
           page.on("websocket", (socket) => {
             currentSocket = socket;
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
-              if (
-                frame.type !== "req" ||
-                frame.method !== "sessions.catalog.list" ||
-                typeof frame.id !== "string"
-              ) {
+              if (frame.type !== "req" || typeof frame.id !== "string") {
+                return;
+              }
+              if (frame.method === "chat.startup" || frame.method === "chat.history") {
+                latestHistory = { socket, id: frame.id, complete: false };
+              }
+              if (frame.method !== "sessions.catalog.list") {
                 return;
               }
               const params = requireRecord(frame.params);
@@ -149,11 +156,23 @@ suite.define(() => {
               ) {
                 latestDiscovery.complete = frame.ok === true;
               }
+              if (
+                frame.type === "res" &&
+                latestHistory !== undefined &&
+                frame.id === latestHistory.id &&
+                latestHistory.socket === socket
+              ) {
+                const historyResult = frame.ok === true ? requireRecord(frame.payload) : undefined;
+                latestHistory.complete =
+                  historyResult !== undefined &&
+                  historyResult.kind !== "reset" &&
+                  requireRecord(historyResult.sessionInfo).sessionId === sessionId;
+              }
             });
           });
           await page.addInitScript(() => {
             localStorage.setItem(
-              "openclaw:control-ui:community-invite",
+              "openclaw:control-ui:community-invite:v2",
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             );
           });
@@ -170,7 +189,9 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
-          await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
+          await revealChatModelOption(
+            composer.locator('[data-chat-model-option="openai/gpt-5.4"]'),
+          );
           if (route === "new") {
             // An absent CLI group can mean discovery has not started, or a completed empty result.
             await expect
@@ -233,9 +254,43 @@ suite.define(() => {
             path: path.join(suite.artifactDir, `${stage}-composer.png`),
             animations: "disabled",
           });
+          if (route !== "new") {
+            // Model browsing is ready before history hydration unlocks effort changes.
+            await expect
+              .poll(async () => {
+                const history = latestHistory;
+                if (!history?.complete || history.socket !== currentSocket) {
+                  return false;
+                }
+                const rendered = await page.evaluate(
+                  ({ key: expectedKey, sessionId: expectedSessionId }) => {
+                    const pane = document.querySelector<
+                      HTMLElement & {
+                        state?: ChatPageHost;
+                        transcriptReady: boolean;
+                        hasUpdated: boolean;
+                        isUpdatePending: boolean;
+                      }
+                    >('openclaw-chat-pane[aria-hidden="false"]');
+                    const state = pane?.state;
+                    return (
+                      pane?.hasUpdated === true &&
+                      !pane.isUpdatePending &&
+                      pane.transcriptReady &&
+                      state?.sessionKey === expectedKey &&
+                      state.currentSessionId === expectedSessionId &&
+                      !state.chatLoading
+                    );
+                  },
+                  { key, sessionId },
+                );
+                return rendered && latestHistory === history && currentSocket === history.socket;
+              })
+              .toBe(true);
+          }
           const effort = composer.locator("[data-chat-thinking-select]");
           await expect.poll(() => effort.isVisible()).toBe(true);
-          expect(await effort.getAttribute("aria-disabled")).toBe("false");
+          await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
           await effort.click();
           await expect
             .poll(() => composer.locator("[data-chat-thinking-slider]").isEnabled())

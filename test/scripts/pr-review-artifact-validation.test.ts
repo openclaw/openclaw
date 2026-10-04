@@ -129,12 +129,39 @@ function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}
 }
 
 function runMergeVerification(
-  checks: "api-error" | "invalid-json" | "invalid-row" | "no-required" | "pending" | "cancelled",
+  checks:
+    | "api-error"
+    | "invalid-json"
+    | "invalid-row"
+    | "no-required"
+    | "pending"
+    | "cancelled"
+    | "failed",
+  investigatedLocalFailure = false,
 ) {
   const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
   const localDir = join(fixtureRoot, ".local");
   const head = "a".repeat(40);
   mkdirSync(localDir);
+  const review = validReadyReview();
+  review.pr = { number: 42, headSha: head };
+  if (investigatedLocalFailure) {
+    Object.assign(review.tests, {
+      result: "fail",
+      investigatedLocalFailures: {
+        head,
+        failures: [
+          {
+            failure: "A local live check returned an incomplete reply.",
+            reproductionAttempts: ["A same-head diagnostic replay passed."],
+            evidence: ["Original failure and diagnostic logs recorded in the PR."],
+            remainingUncertainty: "The cause remains unknown; the replay does not prove a fix.",
+          },
+        ],
+      },
+    });
+  }
+  writeReviewArtifacts(fixtureRoot, review, { headSha: head, prNumber: 42 });
   writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${head}\n`);
   writeFileSync(join(localDir, "gates.env"), "GATES_MODE=full\n");
 
@@ -144,10 +171,29 @@ function runMergeVerification(
       "echo \"no required checks reported on the 'review-branch' branch\" >&2; return 1",
     pending: `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`,
     cancelled: `printf '%s\\n' '[{"name":"CI","bucket":"cancel","state":"CANCELLED"}]'`,
+    failed: `printf '%s\\n' '[{"name":"CI","bucket":"fail","state":"FAILURE"}]'`,
     "invalid-json": "printf '%s\\n' 'not valid JSON'",
     "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
   }[checks];
   const reviewComments = JSON.stringify(validClawsweeperReviewCommentPages(42, head));
+  const observation = {
+    number: 42,
+    url: "https://github.com/fixture/repo/pull/42",
+    state: "OPEN",
+    isDraft: false,
+    baseRefName: "main",
+    baseRefOid: "b".repeat(40),
+    baseRepository: {
+      id: "fixture-repo",
+      databaseId: 123,
+      nameWithOwner: "fixture/repo",
+      url: "https://github.com/fixture/repo",
+    },
+    headRefName: "review-branch",
+    headRefOid: head,
+    headRepository: { nameWithOwner: "fixture/repo" },
+    headRepositoryOwner: { login: "fixture" },
+  };
 
   return spawnSync(
     bash,
@@ -159,7 +205,9 @@ function runMergeVerification(
         'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
         'fixture_root="$2"',
         'source "$script_parent_dir/pr-lib/common.sh"',
+        'source "$script_parent_dir/pr-lib/review.sh"',
         'source "$script_parent_dir/pr-lib/worktree.sh"',
+        'source "$script_parent_dir/pr-lib/merge-outcome.sh"',
         'repo_root() { printf "%s\\n" "$fixture_root"; }',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
@@ -180,12 +228,14 @@ function runMergeVerification(
         'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
         "MERGE_REPO_NAME=fixture/repo",
         "MERGE_REPO_HOST=github.com",
-        `pr_gh_plain() { case "$*" in *"issues/42/comments?per_page=100"*) printf '%s\\n' ${JSON.stringify(reviewComments)};; *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
+        `pr_gh_plain() { case "$*" in "issue-comments fixture/repo github.com 42") printf '%s\\n' ${JSON.stringify(reviewComments)};; "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
+        'pr_gh_quota_read() { pr_gh_plain "$@"; }',
+        `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
         "pr_gh() {",
-        '  test "$*" = "pr view 42 --json headRefName,headRefOid,headRepository,headRepositoryOwner" || return 99',
-        `  printf '%s\\n' '{"headRefOid":"${head}","headRefName":"review-branch","headRepository":{"nameWithOwner":"fixture/repo"},"headRepositoryOwner":{"login":"fixture"}}'`,
+        '  test "$*" = "pr view 42 --json number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository" || return 99',
+        `  printf '%s\\n' '${JSON.stringify(observation)}'`,
         "}",
-        "merge_verify 42 || exit 1",
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
       ].join("\n"),
       "pr-merge-verification",
       mergeScript,
@@ -459,6 +509,14 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.stdout).not.toContain("No required checks configured");
   });
 
+  it("keeps required CI failures blocking after local failure investigation", () => {
+    const result = runMergeVerification("failed", true);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Required checks are failing");
+    expect(result.stdout).not.toContain("merge-verify passed");
+  });
+
   it("preserves GitHub CLI behavior when a branch has no required checks", () => {
     const result = runMergeVerification("no-required");
 
@@ -482,7 +540,11 @@ describePosix("scripts/pr review artifact validation", () => {
       const result = runMergeVerification(checks);
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("GitHub returned invalid required-check evidence");
+      expect(result.stderr).toContain(
+        checks === "invalid-json"
+          ? "unable to verify the required GitHub checks"
+          : "GitHub returned invalid required-check evidence",
+      );
       expect(result.stdout).not.toContain("merge-verify passed");
     },
   );

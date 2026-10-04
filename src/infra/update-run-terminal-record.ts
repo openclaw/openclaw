@@ -1,6 +1,6 @@
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
-import { readUpdateRunRecord as readRun } from "./update-run-reader.js";
+import { readUpdateRunRecord as readRun } from "./update-run-read.kernel.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
 import { updateRunLedgerSchema as schema } from "./update-run-write.js";

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle, type QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
 import {
@@ -28,10 +29,7 @@ import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cp
 
 export type { QaGatewayChildCommand } from "./gateway-child-command.js";
 export type { QaGatewayStopResult, QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
-export type {
-  QaGatewayChildListeningContext,
-  QaGatewayChildStateMutationContext,
-} from "./gateway-child-setup.js";
+export type { QaGatewayChildListeningContext } from "./gateway-child-setup.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 export type QaGatewayChild = Awaited<ReturnType<typeof startOwnedGatewayChild>>;
 
@@ -111,7 +109,7 @@ async function startOwnedGatewayChild(
       cwd: gatewayCwd,
       env: prepared?.env ?? launch.env,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     // Register synchronously: acceptance/readiness may reject with descendants
     // still alive, and replacement must immediately supersede its stopped parent.
@@ -298,6 +296,8 @@ async function startOwnedGatewayChild(
         throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
+        // Mutation can reopen parent stores; release them before child startup maintenance.
+        await closeQaRuntimeStores(tempRoot);
         const replacementLogMark = output.mark();
         try {
           await launchReady(false);

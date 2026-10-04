@@ -3,6 +3,7 @@ import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -32,6 +33,43 @@ const cfg: OpenClawConfig = {
     },
   },
 };
+
+function operatorModelConfig(allow: string[]): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: {
+          "title-test/primary": {},
+          "title-test/utility": {},
+          "title-test/blocked": { alias: "hidden-title-model" },
+        },
+      },
+    },
+    gateway: {
+      roles: {
+        default: "limited",
+        definitions: {
+          limited: {
+            agents: "*",
+            scopes: ["operator.write"],
+            sessions: { others: "none" },
+            modelPolicy: { sourceAgent: "main", allow },
+          },
+        },
+      },
+    },
+  };
+}
+
+function utilityModelConfig(utilityModel: string): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, utilityModel } },
+  };
+}
 
 let testState: OpenClawTestState;
 let ownerId: string;
@@ -120,123 +158,235 @@ describe("sessions.title.prepare", () => {
     });
   });
 
-  it("returns a normalized title from exactly one utility completion", async () => {
-    const respond = await prepare({ agentId: "main", message: "Plan a new session" });
-    expect(respond).toHaveBeenCalledWith(true, { title: "Draft session title" });
-    expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        provider: "title-test",
-        model: "utility",
-        prompt: "Plan a new session",
-        outputTextPolicy: "strict-visible",
-      }),
-    );
-  });
-
-  it.each(["automatic", "personal"] as const)(
-    "returns a null title without primary fallback when %s utility inference fails",
-    async (selection) => {
-      mocks.runIsolatedCompletion.mockRejectedValue(new Error("private provider diagnostic"));
-      const respond = await prepare(
-        {
-          agentId: "main",
-          message: "Private draft",
-          ...(selection === "personal" ? { model: `title-test/primary@${personalAccountId}` } : {}),
-        },
-        cfg,
-        connectedClient(ownerId),
-      );
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { title: null });
-      expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["", "invalid/"])(
-    "does not route disabled or malformed utility setting %j to the primary",
-    async (utilityModel) => {
-      const config = {
-        ...cfg,
-        agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, utilityModel } },
+  it.each(["params", "connection"] as const)(
+    "retains the original title request across profile preparation when %s changes",
+    async (change) => {
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const originalPrepare = profileReader.prepareUserProfileIdentity;
+      const releases: ReturnType<typeof vi.fn>[] = [];
+      const spy = vi
+        .spyOn(profileReader, "prepareUserProfileIdentity")
+        .mockImplementation(async (...args) => {
+          const prepared = await originalPrepare(...args);
+          const release = vi.fn(prepared.release);
+          prepared.release = release;
+          releases.push(release);
+          entered.resolve();
+          await resume.promise;
+          return prepared;
+        });
+      const params = {
+        agentId: "main",
+        message: "Original title request",
+        model: "title-test/primary",
       };
-      expect(
-        await prepare({ agentId: "main", message: "Plan a session" }, config),
-      ).toHaveBeenCalledWith(true, { title: null });
-      expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+      const client = connectedClient(ownerId);
+      const running = prepare(params, cfg, client).then(
+        (respond) => ({ respond }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        if (change === "params") {
+          params.message = "Replacement title request";
+          params.model = "title-test/blocked";
+        } else {
+          client.invalidated = true;
+        }
+        resume.resolve();
+        const result = await running;
+        if (change === "params") {
+          expect(result).toHaveProperty("respond");
+          expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              prompt: "Original title request",
+            }),
+          );
+        } else {
+          expect(result).toHaveProperty("error");
+          expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+        }
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        await running;
+        spy.mockRestore();
+      }
     },
   );
 
-  it.each([
-    { message: "" },
-    { message: "   " },
-    { message: "/new" },
-    { message: "Secret draft", incognito: true },
-    { message: "Catalog draft", catalogId: "missing" },
-  ])("skips non-speculative input %# without inference", async (params) => {
-    expect(await prepare({ agentId: "main", ...params })).toHaveBeenCalledWith(true, {
-      title: null,
-    });
-    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { message: "Draft", agentId: "missing" },
-    { message: "x".repeat(1_001), agentId: "main" },
-    { message: "Draft", agentId: "main", sessionKey: "existing-session" },
-    { message: "Draft", agentId: "main", model: "title-test/primary", catalogId: "catalog" },
-  ])("rejects invalid selection or an existing-session target %#", async (params) => {
-    expect(await prepare(params)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it("enforces the operator's allowed creation agent before inference", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      gateway: {
-        roles: {
-          default: "limited",
-          definitions: {
-            limited: { agents: [], scopes: ["operator.write"], sessions: { others: "none" } },
+  it.each<{
+    name: string;
+    params?: Record<string, unknown>;
+    config?: OpenClawConfig;
+    profile?: "owner" | "foreign" | "delegated" | "unidentified";
+    personal?: boolean;
+    error?: "INVALID_REQUEST" | "FORBIDDEN";
+  }>([
+    ...["", "invalid/"].map((utilityModel) => ({
+      name: `disabled or malformed utility ${JSON.stringify(utilityModel)}`,
+      config: utilityModelConfig(utilityModel),
+      params: { message: "Plan a session" },
+    })),
+    { name: "blank input", params: { message: "   " } },
+    { name: "slash command", params: { message: "/new" } },
+    { name: "incognito input", params: { message: "Secret draft", incognito: true } },
+    { name: "unknown catalog", params: { message: "Catalog draft", catalogId: "missing" } },
+    ...(
+      [
+        ["unknown agent", { agentId: "missing" }],
+        ["oversized input", { message: "x".repeat(1_001) }],
+        ["existing session target", { sessionKey: "existing-session" }],
+        ["model and catalog conflict", { model: "title-test/primary", catalogId: "catalog" }],
+      ] as const
+    ).map(([name, params]) => ({ name, params, error: "INVALID_REQUEST" as const })),
+    {
+      name: "denied creation agent",
+      config: {
+        ...cfg,
+        gateway: {
+          roles: {
+            default: "limited",
+            definitions: {
+              limited: { agents: [], scopes: ["operator.write"], sessions: { others: "none" } },
+            },
           },
         },
       },
-    };
-    expect(
-      await prepare({ agentId: "main", message: "Draft" }, config, connectedClient(ownerId)),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
-    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it("skips a selected model denied by the creation agent's model policy", async () => {
-    const config = {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        entries: { main: { modelPolicy: { allow: ["title-test/primary"] } } },
-      },
-    };
-    expect(
-      await prepare({ agentId: "main", message: "Draft", model: "other-model/denied" }, config),
-    ).toHaveBeenCalledWith(true, { title: null });
-    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["openai", "codex"],
-    ["other-title", undefined],
-  ])(
-    "uses only the catalog runtime compatible with utility provider %s",
-    async (provider, runtime) => {
-      const config = {
+      profile: "owner",
+      error: "FORBIDDEN",
+    },
+    ...["title-test/blocked", "hidden-title-model"].map((model) => ({
+      name: `denied operator model ${model}`,
+      params: { model },
+      config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
+      profile: "owner" as const,
+      error: "FORBIDDEN" as const,
+    })),
+    {
+      name: "denied operator utility without primary fallback",
+      params: { model: "title-test/primary" },
+      config: operatorModelConfig(["title-test/primary"]),
+      profile: "owner",
+    },
+    {
+      name: "denied creation-agent model",
+      params: { model: "other-model/denied" },
+      config: {
         ...cfg,
         agents: {
           ...cfg.agents,
-          defaults: { ...cfg.agents?.defaults, utilityModel: `${provider}/synthetic-utility` },
+          entries: { main: { modelPolicy: { allow: ["title-test/primary"] } } },
         },
+      },
+    },
+    ...(["foreign", "delegated", "unidentified"] as const).map((profile) => ({
+      name: `${profile} personal account`,
+      params: { message: "Personal draft" },
+      profile,
+      personal: true,
+      error: "FORBIDDEN" as const,
+    })),
+  ])("avoids inference for $name", async ({ params, config, profile, personal, error }) => {
+    const client = profile
+      ? connectedClient(
+          profile === "foreign" ? otherId : profile === "unidentified" ? undefined : ownerId,
+        )
+      : null;
+    if (client && profile === "delegated") {
+      client.internal = {
+        syntheticClient: true,
+        agentToolCaller: { agentId: "main", sessionKey: "agent:main:dashboard:delegated-title" },
       };
+    }
+    const respond = await prepare(
+      {
+        agentId: "main",
+        message: "Draft",
+        ...params,
+        ...(personal ? { model: `title-test/primary@${personalAccountId}` } : {}),
+      },
+      config,
+      client,
+    );
+    if (error) {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: error }),
+      );
+    } else {
+      expect(respond).toHaveBeenCalledWith(true, { title: null });
+    }
+    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    name: string;
+    message?: string;
+    model?: string;
+    config?: OpenClawConfig;
+    connected?: boolean;
+    personal?: boolean;
+    catalog?: boolean;
+    provider?: string;
+    utility?: string;
+    runtime?: "codex";
+    operator?: boolean;
+    fails?: boolean;
+  }>([
+    { name: "default utility", message: "Plan a new session" },
+    {
+      name: "same-provider auth profile",
+      model: "title-test/primary@work",
+    },
+    {
+      name: "connected personal account",
+      message: "Personal draft",
+      connected: true,
+      personal: true,
+    },
+    {
+      name: "cross-provider utility without primary credentials",
+      model: "title-test/primary@work",
+      config: utilityModelConfig("other-title/utility"),
+      provider: "other-title",
+    },
+    ...(
+      [
+        ["openai", "codex"],
+        ["other-title", undefined],
+      ] as const
+    ).map(([provider, runtime]) => ({
+      name: `${provider} catalog runtime`,
+      config: utilityModelConfig(`${provider}/synthetic-utility`),
+      catalog: true,
+      provider,
+      utility: "synthetic-utility",
+      runtime,
+    })),
+    {
+      name: "operator-allowed utility",
+      model: "title-test/primary",
+      config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
+      connected: true,
+      operator: true,
+    },
+    { name: "failed automatic inference", message: "Private draft", connected: true, fails: true },
+    {
+      name: "failed personal inference",
+      message: "Private draft",
+      connected: true,
+      personal: true,
+      fails: true,
+    },
+  ])("uses only utility inference for $name", async (selection) => {
+    if (selection.fails) {
+      mocks.runIsolatedCompletion.mockRejectedValue(new Error("private provider diagnostic"));
+    }
+    if (selection.catalog) {
       mocks.resolveRegisteredCatalogCreateTarget.mockReturnValue({
         ok: true,
         target: {
@@ -245,77 +395,47 @@ describe("sessions.title.prepare", () => {
           pluginOwnerId: "codex",
         },
       });
-      expect(
-        await prepare({ agentId: "main", message: "Draft", catalogId: "native-catalog" }, config),
-      ).toHaveBeenCalledWith(true, { title: "Draft session title" });
+    }
+    const respond = await prepare(
+      {
+        agentId: "main",
+        message: selection.message ?? "Draft",
+        ...(selection.model ? { model: selection.model } : {}),
+        ...(selection.personal ? { model: `title-test/primary@${personalAccountId}` } : {}),
+        ...(selection.catalog ? { catalogId: "native-catalog" } : {}),
+      },
+      selection.config,
+      selection.connected ? connectedClient(ownerId) : null,
+    );
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+      title: selection.fails ? null : "Draft session title",
+    });
+    if (selection.fails) {
+      expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);
+    } else {
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ provider, model: "synthetic-utility" }),
+        expect.objectContaining({
+          provider: selection.provider ?? "title-test",
+          model: selection.utility ?? "utility",
+          prompt: selection.message ?? "Draft",
+          outputTextPolicy: "strict-visible",
+          ...(selection.personal
+            ? { authProfileId: personalAccountId }
+            : selection.model === "title-test/primary@work"
+              ? { authProfileId: selection.provider ? undefined : "work" }
+              : {}),
+          ...(selection.operator
+            ? { operatorAuthority: expect.objectContaining({ profileId: ownerId }) }
+            : {}),
+        }),
       );
-      expect(mocks.runIsolatedCompletion.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBe(
-        runtime,
-      );
-    },
-  );
-
-  it("inherits the selected model's same-provider auth profile for utility inference", async () => {
-    expect(
-      await prepare({ agentId: "main", message: "Draft", model: "title-test/primary@work" }),
-    ).toHaveBeenCalledWith(true, { title: "Draft session title" });
-    expect(mocks.runIsolatedCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "title-test", model: "utility", authProfileId: "work" }),
-    );
-  });
-
-  it("uses the connected owner's personal account for title inference", async () => {
-    expect(
-      await prepare(
-        {
-          agentId: "main",
-          message: "Personal draft",
-          model: `title-test/primary@${personalAccountId}`,
-        },
-        cfg,
-        connectedClient(ownerId),
-      ),
-    ).toHaveBeenCalledWith(true, { title: "Draft session title" });
-    expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        provider: "title-test",
-        model: "utility",
-        authProfileId: personalAccountId,
-      }),
-    );
-  });
-
-  it.each(["foreign", "delegated", "unidentified"] as const)(
-    "rejects %s personal title selection before inference",
-    async (kind) => {
-      const client = connectedClient(
-        kind === "foreign" ? otherId : kind === "delegated" ? ownerId : undefined,
-      );
-      if (kind === "delegated") {
-        client.internal = {
-          syntheticClient: true,
-          agentToolCaller: { agentId: "main", sessionKey: "agent:main:dashboard:delegated-title" },
-        };
+      if (selection.catalog) {
+        expect(mocks.runIsolatedCompletion.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBe(
+          selection.runtime,
+        );
       }
-      const respond = await prepare(
-        {
-          agentId: "main",
-          message: "Personal draft",
-          model: `title-test/primary@${personalAccountId}`,
-        },
-        cfg,
-        client,
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-      expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-    },
-  );
+    }
+  });
 
   it.each([
     { loss: "disconnected", completion: "succeeds" },
@@ -380,22 +500,4 @@ describe("sessions.title.prepare", () => {
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("does not send the primary provider's auth profile to another utility provider", async () => {
-    const config = {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: { ...cfg.agents?.defaults, utilityModel: "other-title/utility" },
-      },
-    };
-    await prepare({ agentId: "main", message: "Draft", model: "title-test/primary@work" }, config);
-    expect(mocks.runIsolatedCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "other-title",
-        model: "utility",
-        authProfileId: undefined,
-      }),
-    );
-  });
 });

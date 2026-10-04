@@ -107,7 +107,7 @@ export async function commitMainSessionRecovery(params: {
         // Canonical session-key migration may happen between reservation and
         // Gateway admission; the reservation identity remains authoritative.
         candidate = entries.find(({ entry }) => {
-          const reservation = (entry as SessionEntry).mainRestartRecovery?.reservation;
+          const reservation = entry.mainRestartRecovery?.reservation;
           return (
             entry.sessionId === recoveryAdmission.sessionId &&
             reservation?.runId === recoveryAdmission.runId &&
@@ -116,7 +116,7 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (exactOwnerClaim) {
         candidate = entries.find(({ entry }) => {
-          const state = (entry as SessionEntry).mainRestartRecovery;
+          const state = entry.mainRestartRecovery;
           return (
             state?.cycleId === exactOwnerClaim.cycleId &&
             state.foregroundClaims?.lifecycleGeneration === exactOwnerClaim.lifecycleGeneration &&
@@ -152,7 +152,7 @@ export async function commitMainSessionRecovery(params: {
           },
         };
       }
-      const entry = candidate.entry as SessionEntry;
+      const entry = candidate.entry;
       const previousRecoveryState = entry.mainRestartRecovery;
       const command =
         (params.command.kind === "claim_foreground" ||
@@ -240,8 +240,10 @@ export async function claimMainSessionRecoveryOwner(params: {
   if (!claim.entry && (params.allowMissingSession || params.replacementSessionId)) {
     // A fresh explicit session has no predecessor. An automatic rollover can
     // also lose its predecessor before admission. Either way, no row remains to fence.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
+  // A healthy completion may clear recovery between the caller's read and this
+  // transaction. Only that fully clean same-session state can proceed unclaimed.
   const healthyExpectedSession =
     claim.entry &&
     claim.entry.abortedLastRun !== true &&
@@ -250,16 +252,12 @@ export async function claimMainSessionRecoveryOwner(params: {
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (
-    claim.entry?.sessionId === params.sessionId &&
-    claim.sessionKey &&
-    !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey)
+    healthyExpectedSession ||
+    (claim.entry?.sessionId === params.sessionId &&
+      claim.sessionKey &&
+      !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey))
   ) {
-    return { kind: "not_required" } as const;
-  }
-  if (healthyExpectedSession) {
-    // A healthy completion may clear recovery between the caller's read and this
-    // transaction. Only that fully clean same-session state can proceed unclaimed.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;

@@ -1,7 +1,7 @@
 ---
-summary: "Gateway RPC families for system status, models, channels, plugins, messaging, and the operator terminal"
+summary: "Gateway RPC families for system status, memory, models, channels, plugins, messaging, and the operator terminal"
 read_when:
-  - Looking up a system, model, channel, or plugin RPC
+  - Looking up a system, memory, model, channel, or plugin RPC
   - Wiring operator terminal or messaging methods
   - Checking the scope a gateway method requires
 title: "Gateway protocol system and channel methods"
@@ -29,13 +29,23 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views).
 - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
 - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
-- `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
+- `doctor.memory.status` returns provider health for a native memory provider, or vector-memory / cached embedding readiness for a legacy provider. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit legacy embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
 - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
 - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
+
+## Memory
+
+- `memory.search` with `version: 2` searches the selected provider and returns provider-scoped references. Omitting `version`, or sending `version: 1`, uses the legacy file-shaped contract only for legacy providers. A native provider returns an error naming the plugin; retry with `version: 2`.
+- `memory.get` resolves a provider-scoped reference through the selected provider.
+- `memory.status` reports selected-provider health.
+
+These methods require authenticated operator read authority. `memory.get` and
+`memory.status` use the provider-runtime contract directly; `memory.search`
+selects that contract when `version: 2` is present.
 
 ## Channels and login helpers
 
@@ -49,12 +59,44 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `voicewake.get` returns the stored wake-word triggers.
 - `voicewake.set` updates wake-word triggers and broadcasts the change.
 
+### Channel DM pairing
+
+`channels.pairing.list`, `channels.pairing.approve`, and
+`channels.pairing.dismiss` manage channel DM access requests. They are separate
+from [device bootstrap](/gateway/protocol/rpc-devices-nodes-and-approvals#device-pairing-and-device-tokens).
+
+The existing list request accepts optional `channel` and `accountId` and returns
+`accounts`, `requests`, `commandOwnerConfigured`, and `limits`. Public request
+rows contain a `requestId` and sender/account metadata, never the pairing code.
+Existing approval and dismissal use `channel`, `accountId`, and `requestId`;
+approval also accepts `notify` and `bootstrapCommandOwner`. Approval returns
+`requestId`, `senderId`, `notification`, and `commandOwnerBootstrap`; dismissal
+returns `requestId` and `senderId`. These contracts remain unchanged.
+
+The local CLI uses two explicit, `operator.admin`-protected branches after
+negotiating the corresponding
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing):
+
+| Method                     | Request                                                             | Result                                                                                              |
+| -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId` | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.          |
+| `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches. |
+
+The code selector and existing request-ID selector are mutually exclusive.
+Omitting `accountId` in the CLI branch preserves cross-account listing and code
+lookup; an explicit account restricts both. The owner resolves and mutates the
+matching request. CLI output remains unchanged, and first-command-owner config
+bootstrap and optional notification remain client-side after acknowledgement.
+Neither runs after a refusal or unknown outcome. Listing is mutation-capable
+because it prunes expired or excess pending requests.
+
 ## Plugin management
 
 - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
-- `plugins.inspect` (`operator.read`) inspects one plugin with `{ pluginId }`, including declared capabilities, grants, trust details, and a `reviewToken` for capability consent.
+- `plugins.inspect` (`operator.read`) accepts `{ pluginId }` for installed, staged, or official candidates; `{ source: "clawhub", packageName, version? }` for arbitrary ClawHub plugins; or `{ catalogId, version? }` using a discovery identity. Installed and staged inspections include a `reviewToken` for capability consent. Remote inspections expose the selected catalog detail, applicable grants, and release trust. Their `declaredSurfaceStatus` is `partial` or `unavailable`: registry summaries omit some capability groups and package siblings, so they cannot issue a consent token. Empty unsupported groups do not mean the package declares no such capabilities.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
 - `plugins.catalog.browse` (`operator.read`) returns ClawHub discovery results with Gateway-local installed and bundled state. The Control UI adds `searchSource: "openclaw-control-ui"` only after manual input of at least two characters settles for 250 ms. Initial browsing, refreshes, filter changes, and generic API searches omit it. The Gateway honors `CLAWHUB_DISABLE_TELEMETRY` and does not replay attributed HTTP searches after transient failures. ClawHub records the normalized query, source, and remote result counts; those counts exclude local-only matches added by the Gateway. Installed inventory and operator, device, and session identities are not included in the observation.
+- `plugins.catalog.get` (`operator.read`) accepts `{ id, version? }` using the unchanged discovery ID from `plugins.catalog.browse`. Detail includes publisher metadata, README, topics, package tags, selected-release notes, capabilities, configuration, verification, and security when supplied by ClawHub. `detail.selectedRelease` names the actual release independently of `plugin.catalog.latestVersion`; null means no release was selected. `detail.metadata` explicitly reports available or missing README, manifest, and security data. An installed counterpart can supply local detail during registry outages; `remoteError` explains the failure, and remote selected-release facts remain unknown. Local-only identities do not support remote version selection.
 - `plugins.install` (`operator.admin`) accepts these source-specific request fields:
 
   | `source`      | Fields                                                                     |
@@ -73,14 +115,41 @@ RPC method families for gateway status and identity, models and usage, channels 
   When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks.
 
 - `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled, acknowledgeCapabilities? }`. The response includes the updated catalog entry and any slot-selection warnings.
-- `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, `restartRequired: false`, and a required `runtime` receipt.
+- `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, a boolean `restartRequired`, and a required `runtime` receipt. When compiled bundled code retains its loaded module after its files change, `restartRequired` is `true` and the result explains why.
 - `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.
 - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId, keepFiles? }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions.
+
+### Catalog detail and client confirmation
+
+`detail.downloadability` has one of these shapes:
+
+| Status                                         | Meaning                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `{ "status": "downloadable" }`                 | The source has confirmed selected-release artifact availability.       |
+| `{ "status": "unavailable", "reason": "..." }` | A missing release or source download policy prevents download.         |
+| `{ "status": "unknown", "reason": "..." }`     | The source cannot establish availability, or the registry read failed. |
+
+ClawHub currently exposes a selected plugin release's download-policy block, but
+its read-only detail and artifact resolver do not check stored artifact bytes.
+A permitted security verdict, download URL, listing, or local install action
+therefore produces `unknown`, never `downloadable`. A side-effect-free per-release
+availability fact requires a ClawHub contract extension. Gateway inspection does
+not download packages to probe them; registry download routes record telemetry.
+
+A native client can fetch `plugins.catalog.get`, inspect the same `catalogId`,
+display the returned facts, and collect confirmation itself. After approval,
+call `plugins.install` with `source: "clawhub"`, the exact returned `packageName`,
+and `selectedRelease.version` when present. Preserve scope and publisher spelling;
+do not rebuild the package name from a runtime plugin ID. If installation requires
+capability consent or install-policy acknowledgment, display that owner-issued
+review and retry the same intent with its acknowledgment. Catalog inspection does
+not grant consent or bypass install policy, integrity, trust, or authorization.
+Cancel sends no installation RPC. The Gateway does not manage confirmation dialogs.
 
 Runtime-only refresh works with read-only, Nix-managed, and root `$include` configurations without rewriting them.
 Plugin lifecycle and Claw package removal requests return retryable `UNAVAILABLE` with `retryAfterMs` when another plugin or config operation is already applying. This busy response occurs before the requested mutation starts; retry after the current operation completes. Failures after a mutation starts retain their application details and are not automatically retryable.
 
-These mutations wait for runtime application without restarting the Gateway. Successful responses include `restartRequired: false` and a `runtime` receipt with `operationId`, `generation`, `pluginIds`, and optional `sourceDigests`. The Gateway broadcasts `plugins.changed` with `{ generation }` after publication. Runtime replacement errors include `details.runtime.phase` and `details.runtime.committed`, so clients can distinguish rejection before publication from failure after a new generation became active.
+These mutations wait for runtime application without restarting the Gateway. Successful responses include `restartRequired` and a `runtime` receipt with `operationId`, `generation`, `pluginIds`, and optional `sourceDigests`. Reloading unchanged bundled code or replacing captured external code returns `restartRequired: false`; edited bundled code that remains loaded, or whose files cannot be verified, requires a restart. The Gateway broadcasts `plugins.changed` with `{ generation }` after publication. Runtime replacement errors include `details.runtime.phase` and `details.runtime.committed`, so clients can distinguish rejection before publication from failure after a new generation became active.
 
 If a multi-step mutation publishes a runtime and later fails, `details.runtime` retains the published receipt with `committed: true`. A subsequent replacement that fails before publication is reported separately in `details.runtimeAttempt`. Clients should refresh their runtime view after any committed change, even when the overall mutation fails.
 

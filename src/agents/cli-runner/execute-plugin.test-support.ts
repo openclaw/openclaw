@@ -4,6 +4,7 @@ import type {
   CliBackendExecuteContext,
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../agent-tools.before-tool-call.state.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -79,8 +80,12 @@ export function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
-    onOutstandingWorkChange?: (active: boolean) => void;
+    onOutstandingWorkChange?: NonNullable<
+      Parameters<typeof executePluginOwnedProcess>[0]["onOutstandingWorkChange"]
+    >;
     activeToolCount?: () => number;
+    compactionActive?: () => boolean;
+    onCompactionActiveChange?: (listener: () => void) => () => void;
     getActiveLoopbackAskUserDeadline?: () => number | undefined;
     onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
     onInterrupted?: (reason: "aborted" | "timeout") => boolean;
@@ -106,6 +111,8 @@ export function runPlugin(
     ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
     onOutstandingWorkChange: options.onOutstandingWorkChange,
     activeToolCount: options.activeToolCount,
+    compactionActive: options.compactionActive,
+    onCompactionActiveChange: options.onCompactionActiveChange,
     getActiveLoopbackAskUserDeadline: options.getActiveLoopbackAskUserDeadline,
     onActiveLoopbackAskUserDeadlineChange: options.onActiveLoopbackAskUserDeadlineChange,
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
@@ -131,6 +138,7 @@ export function closePluginTestAdmissions(): void {
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
   }
+  resetAdjustedParamsByToolCallIdForTests();
 }
 
 export function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {

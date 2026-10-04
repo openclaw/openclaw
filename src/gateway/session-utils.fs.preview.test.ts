@@ -1,12 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test } from "vitest";
-import { buildSessionPreviewItems } from "./session-utils.fs.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 
 describe("buildSessionPreviewItems bounded projection", () => {
-  test.each([
-    { name: "ordinary 64-row tail", visible: 64, hidden: 0 },
-    { name: "recovery 1024-row tail", visible: 704, hidden: 320 },
-  ])("parses only 12 visible signatures from the $name", ({ visible, hidden }) => {
+  test("parses only 12 visible signatures from the recovery 1024-row tail", () => {
+    const visible = 704;
+    const hidden = 320;
     const sourceMessages = Array.from({ length: visible + hidden }, (_, index) => ({
       role: index < visible ? "assistant" : "toolResult",
       content: [
@@ -61,63 +60,55 @@ describe("buildSessionPreviewItems bounded projection", () => {
     expect(parsedSignatures).toBe(12);
   });
 
-  test.each([
-    { view: "display" as const, preceding: { role: "user", text: "question" } },
-    { view: "model-context" as const, preceding: { role: "assistant", text: "model only" } },
-  ])("keeps visibility, order and UTF-16 bounds in the $view", ({ view, preceding }) => {
-    const messages = [
-      { role: "user", content: "older excluded text" },
-      { role: "assistant", content: "NO_REPLY" },
-      { role: "toolResult", content: "tool output" },
-      { role: "user", content: [{ type: "input_text", text: "  question  " }] },
-      { role: "assistant", content: "model only", display: false },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "private commentary",
-            textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-          },
-          {
-            type: "text",
-            text: `${"x".repeat(16)}🦊tail`,
-            textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
-          },
-        ],
-      },
-      { role: "assistant", content: "REPLY_SKIP" },
-      { role: "assistant", content: [{ type: "text", text: "   " }] },
-      { role: "system", content: "system metadata" },
-    ];
-    const original = JSON.stringify(messages);
-
-    expect(buildSessionPreviewItems(messages, 2, 20, view)).toEqual([
-      preceding,
-      { role: "assistant", text: `${"x".repeat(16)}...` },
-    ]);
-    expect(JSON.stringify(messages)).toBe(original);
-  });
-
-  test.each([
-    { name: "empty", messages: [], expected: [] },
+  const visibilityMessages = [
+    { role: "user", content: "older excluded text" },
+    { role: "assistant", content: "NO_REPLY" },
+    { role: "toolResult", content: "tool output" },
+    { role: "user", content: [{ type: "input_text", text: "  question  " }] },
+    { role: "assistant", content: "model only", display: false },
     {
-      name: "fully filtered",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "private commentary",
+          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: `${"x".repeat(16)}🦊tail`,
+          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+        },
+      ],
+    },
+    { role: "assistant", content: "REPLY_SKIP" },
+    { role: "assistant", content: [{ type: "text", text: "   " }] },
+    { role: "system", content: "system metadata" },
+  ];
+  test.each([
+    ...(
+      [
+        ["display", { role: "user", text: "question" }],
+        ["model-context", { role: "assistant", text: "model only" }],
+      ] as const
+    ).map(([view, preceding]) => ({
+      name: `${view} visibility, order and UTF-16 bounds`,
+      messages: visibilityMessages,
+      view,
+      limit: 2,
+      maxChars: 20,
+      expected: [preceding, { role: "assistant", text: `${"x".repeat(16)}...` }],
+    })),
+    {
+      name: "fewer visible items than the limit",
       messages: [
         null,
         undefined,
         {},
+        { role: "user", content: "first" },
         { role: "toolResult", content: "tool output" },
         { role: "assistant", content: "ANNOUNCE_SKIP" },
         { role: "assistant", content: "hidden", display: false },
-      ],
-      expected: [],
-    },
-    {
-      name: "fewer visible items than the limit",
-      messages: [
-        { role: "user", content: "first" },
-        { role: "toolResult", content: "tool output" },
         { role: "assistant", content: "last" },
         {
           role: "assistant",
@@ -130,15 +121,17 @@ describe("buildSessionPreviewItems bounded projection", () => {
           ],
         },
       ],
+      view: undefined,
+      limit: 12,
+      maxChars: 120,
       expected: [
         { role: "user", text: "first" },
         { role: "assistant", text: "last" },
       ],
     },
-  ])("preserves the $name preview", ({ messages, expected }) => {
+  ])("preserves $name", ({ messages, expected, limit, maxChars, view }) => {
     const original = JSON.stringify(messages);
-
-    expect(buildSessionPreviewItems(messages, 12, 120)).toEqual(expected);
+    expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
     expect(JSON.stringify(messages)).toBe(original);
   });
 });

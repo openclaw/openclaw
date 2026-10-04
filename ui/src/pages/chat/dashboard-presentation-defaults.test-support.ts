@@ -10,27 +10,27 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  fullscreenBoardWidgetMenu: (
+  pageBoardWidgetMenu: (
     layout: SidebarLayout,
     board?: ResolvedBoardView,
   ) => BoardWidgetPageMenu | undefined;
   boardProvider: BoardProvider;
-  routeFace: "chat" | "dashboard";
+  routeFace: "chat" | "dashboard" | undefined;
   dashboardExpanded: boolean;
   narrow: boolean;
   paneWidth: number;
   resolveBoardView: () => ResolvedBoardView;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
+  captureNavigationFace: () => "chat" | "dashboard" | undefined;
   commitSidebarPanelResize: (layout: SidebarLayout, columnId: string, size: number) => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
@@ -76,6 +76,7 @@ export function createDashboardHarness(
         current = {
           ...current,
           ...(result.entry.updatedAt !== undefined ? { updatedAt: result.entry.updatedAt } : {}),
+          ...(result.entry.boardFace !== undefined ? { boardFace: result.entry.boardFace } : {}),
           ...(Object.hasOwn(result.entry, "boardPresentation")
             ? { boardPresentation: result.entry.boardPresentation }
             : {}),
@@ -143,8 +144,7 @@ export function createDashboardHarness(
   const header = async () => {
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],
         false,
         undefined,

@@ -2,7 +2,7 @@
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveSession } from "../agents/command/session.js";
 import {
   appendTranscriptEvent,
@@ -19,14 +19,14 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-session-",
-    skipSessionCleanup: true,
   });
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentEntries?: NonNullable<OpenClawConfig["agents"]>["entries"],
+  systemAgentId?: string,
 ): OpenClawConfig {
   return {
     agents: {
@@ -34,11 +34,13 @@ function mockConfig(
         model: { primary: "anthropic/claude-opus-4-6" },
         models: { "anthropic/claude-opus-4-6": {} },
         workspace: path.join(home, "openclaw"),
+        ...(systemAgentId ? { systemAgent: { agentId: systemAgentId } } : {}),
       },
-      list: agentsList,
+      entries: agentEntries,
+      ...(systemAgentId ? { ownership: "explicit" as const } : {}),
     },
     session: { store: storePath, mainKey: "main" },
-  } as OpenClawConfig;
+  };
 }
 
 async function writeSessionStoreSeed(
@@ -67,7 +69,7 @@ async function withCrossAgentResumeFixture(
         systemSent: true,
       },
     });
-    const cfg = mockConfig(home, storePattern, [{ id: "dev" }, { id: "exec", default: true }]);
+    const cfg = mockConfig(home, storePattern, { dev: {}, exec: {} }, "exec");
     await run({ sessionId, sessionKey, cfg });
   });
 }
@@ -100,43 +102,37 @@ describe("agent session resolution", () => {
     });
   });
 
-  it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
-    await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
-      const resolution = resolveSession({ cfg, sessionId });
-      expect(resolution.sessionKey).toBe(sessionKey);
-      const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
-      expect(agentId).toBe("exec");
-      expect(resolveAgentDir(cfg, agentId)).toContain(
-        `${path.sep}agents${path.sep}exec${path.sep}agent`,
-      );
-    });
-  });
+  it.each(["main", "global", "unknown"])(
+    "finds a session-id-only %s target in another explicit agent store",
+    async (sessionKey) => {
+      await withTempHome(async (home) => {
+        const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+        const researchStore = path.join(home, "agents", "research", "sessions", "sessions.json");
+        const base = mockConfig(home, storePattern);
+        const cfg = {
+          ...base,
+          agents: {
+            ...base.agents,
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        } satisfies OpenClawConfig;
+        await replaceSessionEntry(
+          { agentId: "research", sessionKey, storePath: researchStore },
+          { sessionId: "research-session", updatedAt: Date.now() },
+        );
 
-  it("finds a session-id-only target in another explicit agent store", async () => {
-    await withTempHome(async (home) => {
-      const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
-      const researchStore = path.join(home, "agents", "research", "sessions", "sessions.json");
-      const base = mockConfig(home, storePattern);
-      const cfg = {
-        ...base,
-        agents: {
-          ...base.agents,
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-        },
-      } satisfies OpenClawConfig;
-      await replaceSessionEntry(
-        { agentId: "research", sessionKey: "main", storePath: researchStore },
-        { sessionId: "research-session", updatedAt: Date.now() },
-      );
+        const resolution = resolveSession({ cfg, sessionId: "research-session" });
 
-      const resolution = resolveSession({ cfg, sessionId: "research-session" });
-
-      expect(resolution.sessionId).toBe("research-session");
-      expect(resolution.sessionKey).toBe("agent:research:main");
-      expect(resolution.storePath).toBe(researchStore);
-    });
-  });
+        expect(resolution.sessionId).toBe("research-session");
+        expect(resolution.sessionAgentId).toBe("research");
+        expect(resolution.sessionKey).toBe(
+          sessionKey === "main" ? "agent:research:main" : sessionKey,
+        );
+        expect(resolution.storePath).toBe(researchStore);
+      });
+    },
+  );
 
   it("resolves duplicate cross-agent sessionIds deterministically", async () => {
     await withTempHome(async (home) => {
@@ -155,10 +151,7 @@ describe("agent session resolution", () => {
           updatedAt: Date.now(),
         },
       });
-      const cfg = mockConfig(home, storePattern, [
-        { id: "other" },
-        { id: "retired", default: true },
-      ]);
+      const cfg = mockConfig(home, storePattern, { other: {}, retired: {} }, "retired");
 
       const resolution = resolveSession({ cfg, sessionId: "run-dup" });
 
@@ -345,22 +338,16 @@ describe("agent session resolution", () => {
       }
       const sessionStore = { [resolution.sessionKey]: resolution.sessionEntry };
       const resolvedTranscript = await resolveSessionTranscriptFile({
-        sessionId: resolution.sessionId,
         sessionKey: resolution.sessionKey,
         sessionEntry: resolution.sessionEntry,
         sessionStore,
-        storePath: resolution.storePath,
-        agentId: "main",
       });
       expect(resolvedTranscript.sessionFile).toBe(resolution.sessionKey);
       await expect(
         resolveSessionTranscriptFile({
-          sessionId: resolution.sessionId,
           sessionKey: resolution.sessionKey,
           sessionEntry: undefined,
           sessionStore,
-          storePath: resolution.storePath,
-          agentId: "main",
         }),
       ).resolves.toMatchObject({
         sessionEntry: expect.objectContaining({ sessionId }),

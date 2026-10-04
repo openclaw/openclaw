@@ -1,9 +1,13 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { FailoverError } from "./failover/error.js";
+import type { AgentHarness } from "./harness/types.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 // Cache process-stable modules, not the catalog/auth facts read from each request's owner.
@@ -117,42 +121,77 @@ export async function prepareModelChoice(params: {
             authOwner(ref.provider) === requestedAuthOwner
               ? splitTrailingAuthProfile(params.raw).profile
               : undefined;
-          const decisions = createModelCatalogDecisions({
-            cfg: owner.config,
-            agentId: params.agentId,
-            agentDir: owner.agentDir,
-            workspaceDir: owner.workspaceDir,
-            snapshot: owner.modelCatalog,
-            metadataSnapshot: owner.metadataSnapshot,
-            preparedAuthStore: authStore,
-            preparedRuntimeAuthModes: owner.authModes,
-            pluginRegistry: owner.pluginRegistry,
-            observationConfig: owner.observationConfig,
-            isCurrent: owner.isCurrent,
-            preferredProfileId: profileId,
-            pinnedProfileId: profileId,
-            profileProvider: ref.provider,
-          });
           const key = modelKey(ref.provider, ref.model);
-          const entry = decisions.snapshot.entries.find(
-            (row) => modelKey(row.provider, row.id) === key,
-          ) ?? {
-            provider: ref.provider,
-            id: ref.model,
-            name: ref.model,
+          const decide = async (snapshot: typeof owner.modelCatalog) => {
+            const decisions = createModelCatalogDecisions({
+              cfg: owner.config,
+              agentId: params.agentId,
+              agentDir: owner.agentDir,
+              workspaceDir: owner.workspaceDir,
+              snapshot,
+              metadataSnapshot: owner.metadataSnapshot,
+              preparedAuthStore: authStore,
+              preparedRuntimeAuthModes: owner.authModes,
+              pluginRegistry: owner.pluginRegistry,
+              observationConfig: owner.observationConfig,
+              isCurrent: owner.isCurrent,
+              preferredProfileId: profileId,
+              pinnedProfileId: profileId,
+              profileProvider: ref.provider,
+            });
+            const entry = decisions.snapshot.entries.find(
+              (row) => modelKey(row.provider, row.id) === key,
+            ) ?? {
+              provider: ref.provider,
+              id: ref.model,
+              name: ref.model,
+            };
+            const variants = decisions.snapshot.routeVariants.filter(
+              (row) => modelKey(row.provider, row.id) === key,
+            );
+            const host = await decisions.evaluateEntry(entry, variants);
+            return { decisions, entry, auth: decisions.evaluateNative(entry, host) };
           };
-          const variants = decisions.snapshot.routeVariants.filter(
-            (row) => modelKey(row.provider, row.id) === key,
-          );
-          const host = await decisions.evaluateEntry(entry, variants);
-          const auth = decisions.evaluateNative(entry, host);
+          let { decisions, entry, auth } = await decide(owner.modelCatalog);
+          let renewalError: unknown;
+          // A native observation can outlive its runtime client (another agent's turn may
+          // replace it). Renew it once through the owner's native load; the gate is unchanged.
+          if (
+            auth.availability === false &&
+            auth.runtimeAuth?.source === "native" &&
+            owner.loadNativeModelCatalog
+          ) {
+            const renewed = await owner
+              .loadNativeModelCatalog({
+                provider: ref.provider,
+                modelId: ref.model,
+                runtime: auth.runtimeAuth.id,
+              })
+              .catch((error: unknown) => {
+                renewalError = error;
+                return undefined;
+              });
+            if (renewed) {
+              if (!renewed.entries.some((row) => modelKey(row.provider, row.id) === key)) {
+                return {
+                  kind: "unavailable",
+                  error: `The native runtime no longer offers ${key}. Refresh the model catalog and choose again.`,
+                };
+              }
+              ({ decisions, entry, auth } = await decide(renewed));
+            }
+          }
           if (auth.routeResolution?.kind === "incompatible") {
             return { kind: "unavailable", error: auth.routeResolution.message };
           }
           if ((profileId || auth.availabilityAuthoritative) && auth.availability === false) {
+            // A failed renewal left the old observation in place; it says nothing about the account.
             return {
               kind: "unavailable",
-              error: `The selected account or native runtime is unavailable for ${key}. Restore that account before spawning this model.`,
+              error:
+                renewalError === undefined
+                  ? `The selected account or native runtime is unavailable for ${key}. Restore that account before spawning this model.`
+                  : `The native runtime is unavailable for ${key}: native catalog renewal failed: ${formatErrorMessage(renewalError)}`,
             };
           }
           const selectedRuntime = resolveCatalogDecisionRuntime({
@@ -214,7 +253,9 @@ export async function prepareModelChoice(params: {
               throw error;
             }
           }
-          // Automatic choices must not turn an unobserved dynamic catalog into a network probe.
+          // Automatic choices defer unobserved dynamic model preparation instead of probing here.
+          // A native rejection above still renews once through loadNativeModelCatalog for every
+          // source, including each automatic fallback, like the turn path does.
           return resolution.deferred === "provider-dynamic-model"
             ? { kind: "pending", ref }
             : { kind: "unavailable", error: resolution.error };
@@ -254,13 +295,20 @@ export async function preparePublishedModelRuntimeChoice(params: {
   workspaceDir?: string;
   provider: string;
   model: string;
-  runtimeId: string;
+  runtimeId?: string;
+  preferredRuntimeId?: string;
   sessionEntry?: Pick<
     SessionEntry,
     "authProfileOverride" | "authProfileOverrideSource" | "providerOverride" | "modelProvider"
   >;
 }): Promise<
-  { kind: "unavailable"; message: string } | { kind: "ready"; validate: () => string | undefined }
+  | { kind: "unavailable"; message: string }
+  | {
+      kind: "ready";
+      runtimeId: string;
+      harness?: AgentHarness;
+      validate: () => string | undefined;
+    }
 > {
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     await loadPreparedModelCatalog();
@@ -271,7 +319,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   });
-  const unavailable = `Runtime "${params.runtimeId}" is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
+  const unavailable = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
@@ -299,18 +347,29 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  let entry = decisions.snapshot.entries.find(
-    (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
-  );
+  let entry =
+    findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ??
+    decisions.snapshot.entries.find(
+      (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
+    );
   if (!entry) {
     // Explicit selections may be outside finite browse inventory. The normal
     // resolver still owns the requested model's provider and physical route.
     const { resolveModelAsync } = await loadModelResolver();
     const { modelCatalogRowToEntry } = await loadModelCatalogEntry();
+    const requestedEntry = { provider: params.provider, id: params.model, name: params.model };
+    const materializationRuntime =
+      params.runtimeId ??
+      (params.preferredRuntimeId &&
+      (await decisions.runtimeChoices(requestedEntry, [requestedEntry]))?.includes(
+        params.preferredRuntimeId,
+      )
+        ? params.preferredRuntimeId
+        : undefined);
     const selectedAuth = await decisions.evaluateEntry(
-      { provider: params.provider, id: params.model },
+      requestedEntry,
       undefined,
-      params.runtimeId,
+      materializationRuntime,
     );
     const authProfileMode = resolveProviderModelMaterializationAuthMode(
       selectedAuth.selectedAuthMode,
@@ -327,7 +386,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         agentId: owner.agentId ?? params.agentId,
         workspaceDir: owner.workspaceDir,
         preparedModelRuntime: owner,
-        agentRuntimeId: params.runtimeId,
+        agentRuntimeId: materializationRuntime,
         allowBundledStaticCatalogFallback: true,
         // Discovery must retain the prepared account instead of rereading live auth stores.
         authProfileMode,
@@ -341,23 +400,37 @@ export async function preparePublishedModelRuntimeChoice(params: {
     }
     entry = modelCatalogRowToEntry(resolved.model);
   }
+  const identityKey = createModelCatalogIdentityKeyResolver();
+  const selectedIdentity = identityKey(entry);
   const variants = decisions.snapshot.routeVariants.filter(
-    (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),
+    (row) => identityKey(row) === selectedIdentity,
   );
   const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
-  if (!choices?.includes(params.runtimeId)) {
+  const runtimeId =
+    params.runtimeId ??
+    (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
+      ? params.preferredRuntimeId
+      : choices?.[0]);
+  if (!runtimeId || !choices?.includes(runtimeId)) {
     return { kind: "unavailable", message: unavailable };
   }
   const host = await decisions.evaluateEntry(
     entry,
     variants.length ? variants : [entry],
-    params.runtimeId,
+    runtimeId,
   );
   const validate = () =>
-    decisions.isCurrent() &&
-    decisions.evaluateNative(entry, host, params.runtimeId).availability === true
+    decisions.isCurrent() && decisions.evaluateNative(entry, host, runtimeId).availability === true
       ? undefined
       : unavailable;
 
-  return { kind: "ready", validate };
+  const harness = owner.pluginRegistry?.agentHarnesses.find(
+    (registration) => registration.harness.id === runtimeId,
+  )?.harness;
+  return {
+    kind: "ready",
+    runtimeId,
+    validate,
+    harness,
+  };
 }

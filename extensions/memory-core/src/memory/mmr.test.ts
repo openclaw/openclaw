@@ -10,7 +10,13 @@ describe("memory MMR", () => {
       expected: ["hello", "今天", "天讨", "讨论", "今", "天", "讨", "论"],
     },
     { text: " Hello WORLD_42 hello! ", expected: ["hello", "world_42"] },
-    { text: "Привет 🙂 العربية", expected: [] },
+    { text: "Привет 🙂 العربية", expected: ["привет", "العربية"] },
+    { text: "CAFÉ cafe\u0301", expected: ["café"] },
+    { text: "server Москва резервная копия", expected: ["server", "москва", "резервная", "копия"] },
+    { text: "दिल्ली संग्रहित प्रतियां", expected: ["दिल्ली", "संग्रहित", "प्रतियां"] },
+    { text: "กรุงเทพ สำรอง ข้อมูล", expected: ["กรุงเทพ", "สำรอง", "ข้อมูล"] },
+    { text: "Café中文العربية", expected: ["café", "العربية", "中文", "中", "文"] },
+    { text: "🙂\uFE0F \u0301 !!!", expected: [] },
     { text: "中文🙂今天", expected: ["中文", "今天", "中", "文", "今", "天"] },
   ])("tokenizes $text in stable term order", ({ text, expected }) => {
     expect([...tokenize(text)]).toEqual(expected);
@@ -34,7 +40,7 @@ describe("memory MMR", () => {
       expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
     },
     {
-      name: "preserves relevance for distinct non-tokenized snippets",
+      name: "preserves relevance for distinct scripts",
       results: [
         ["/arabic.md", 1, "إعداد الشبكة الرئيسي"],
         ["/cyrillic.md", 0.98, "резервная конфигурация сети"],
@@ -44,12 +50,32 @@ describe("memory MMR", () => {
       expected: ["/arabic.md", "/cyrillic.md", "/ascii.md", "/tail.md"],
     },
     {
-      name: "diversifies normalized-equal non-tokenized snippets",
+      name: "diversifies normalized-equal Cyrillic snippets",
       results: [
         ["/primary.md", 1, "Привет мир"],
         ["/duplicate.md", 0.98, "  ПРИВЕТ МИР  "],
         ["/diverse.md", 0.94, "Доброе утро"],
         ["/tail.md", 0.4, "إعداد الشبكة الرئيسي"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
+      name: "diversifies NFC-equivalent Hangul",
+      results: [
+        ["/primary.md", 1, "각"],
+        ["/duplicate.md", 0.98, "\u1100\u1161\u11a8"],
+        ["/diverse.md", 0.94, "나"],
+        ["/tail.md", 0.4, "garden compost schedule"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
+      name: "diversifies NFC-equivalent kana",
+      results: [
+        ["/primary.md", 1, "が"],
+        ["/duplicate.md", 0.98, "\u304b\u3099"],
+        ["/diverse.md", 0.94, "な"],
+        ["/tail.md", 0.4, "garden compost schedule"],
       ],
       expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
     },
@@ -81,6 +107,23 @@ describe("memory MMR", () => {
     for (const result of reranked) {
       expect(result).toBe(candidates.find((candidate) => candidate.path === result.path));
     }
+  });
+
+  it.each([
+    ["server Москва резервная копия", "server Берлин погода сегодня"],
+    ["server القاهرة نسخة احتياطية", "server برلين توقعات الطقس"],
+    ["server दिल्ली संग्रहित प्रतियां", "server मुंबई मौसम आज"],
+  ])("retains distinct mixed-script memories sharing an ASCII term: %s", (primary, distinct) => {
+    const results = [
+      { path: "/primary.md", startLine: 1, score: 1, snippet: primary },
+      { path: "/distinct.md", startLine: 1, score: 0.98, snippet: distinct },
+      { path: "/weak.md", startLine: 1, score: 0.9, snippet: "database connection pool" },
+      { path: "/tail.md", startLine: 1, score: 0.1, snippet: "garden compost schedule" },
+    ];
+
+    expect(
+      applyMMRToHybridResults(results, { enabled: true, lambda: 0.7 }).map((entry) => entry.path),
+    ).toEqual(["/primary.md", "/distinct.md", "/weak.md", "/tail.md"]);
   });
 
   it("keeps input order when disabled", () => {

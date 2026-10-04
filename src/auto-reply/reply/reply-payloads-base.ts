@@ -1,11 +1,9 @@
-// Defines base reply payload helpers shared by delivery and dedupe logic.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   copyReplyPayloadMetadata,
-  hasReplyPayloadSpeechContent,
+  isRenderablePayload,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -15,21 +13,7 @@ import {
   resolveImplicitCurrentMessageReplyAllowance,
 } from "./reply-threading.js";
 
-/** Adds the BTW question banner for channels that only accept plain text bodies. */
-export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
-  const text = normalizeOptionalString(payload.text);
-  if (!text) {
-    return payload.text;
-  }
-  const question = normalizeOptionalString(payload.btw?.question);
-  if (!question) {
-    return payload.text;
-  }
-  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
-  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
-}
-
-function resolveReplyThreadingForPayload(params: {
+export function applyReplyTagsToPayload(params: {
   payload: ReplyPayload;
   replyToMode?: ReplyToMode;
   implicitReplyToId?: string;
@@ -84,27 +68,6 @@ function resolveReplyThreadingForPayload(params: {
   return resolved;
 }
 
-/** Applies inline reply tags to a single payload. */
-export function applyReplyTagsToPayload(
-  payload: ReplyPayload,
-  currentMessageId?: string,
-): ReplyPayload {
-  return resolveReplyThreadingForPayload({ payload, currentMessageId });
-}
-
-/** True when a payload has visible or playable content for delivery. */
-export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, {
-    extraContent:
-      payload.audioAsVoice || payload.location != null || hasReplyPayloadSpeechContent(payload),
-  });
-}
-
-/** True when a payload should stay internal as reasoning-only output. */
-export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
-  return payload.isReasoning === true;
-}
-
 type ReplyThreadingParams = {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -119,7 +82,7 @@ export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): Rep
   const implicitReplyToId = normalizeOptionalString(currentMessageId);
   return payloads
     .map((payload) =>
-      resolveReplyThreadingForPayload({
+      applyReplyTagsToPayload({
         payload,
         replyToMode,
         implicitReplyToId,

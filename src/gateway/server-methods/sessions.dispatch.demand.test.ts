@@ -7,10 +7,7 @@ import {
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import {
-  clearAgentRunContext,
-  rotateAgentRunRegistryLifecycleGeneration,
-} from "../../infra/agent-run-registry.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -58,7 +55,6 @@ async function withDemandFixture(
   run: (fixture: {
     dispatch: (sessionId: string, deviceId?: string) => Promise<string>;
     send: (sessionId: string) => Promise<HeldTurn>;
-    release: (sessionId: string) => void;
     nodes: NodeWorkerSupervisorNodeProof[];
     placements: Map<string, WorkerSessionPlacementRecord>;
     service: NonNullable<GatewayRequestContext["workerPlacementDispatchService"]>;
@@ -89,6 +85,23 @@ async function withDemandFixture(
     const placements = new Map<string, WorkerSessionPlacementRecord>();
     const environments = new Map<string, Environment>();
     const placementReader = {
+      prepareRuntimeRefresh: async (sessionId: string) => {
+        const placement = placements.get(sessionId);
+        let released = false;
+        return {
+          placement,
+          move: undefined,
+          pendingResult: undefined,
+          assertCurrent: () => {
+            if (released || placements.get(sessionId) !== placement) {
+              throw new Error("Worker placement observation is no longer current");
+            }
+          },
+          release: () => {
+            released = true;
+          },
+        };
+      },
       getMany: (ids: readonly string[]) =>
         new Map(
           ids.flatMap((id) => {
@@ -248,11 +261,6 @@ async function withDemandFixture(
       await run({
         dispatch,
         send,
-        release: (sessionId) =>
-          expectDefined(
-            heldTurns.get(sessionId),
-            "admitted session turn",
-          ).admission.cleanupAdmittedRun(),
         nodes,
         placements,
         service,
@@ -286,33 +294,13 @@ describe("sessions.dispatch after admitted sessions.send", () => {
     });
   });
 
-  it.each(["idle", "released", "stale-lifecycle"] as const)(
-    "does not reserve capacity for a retained placement with %s admission",
-    async (state) => {
-      await withDemandFixture(async ({ dispatch, send, placements }) => {
-        expect(await dispatch("auto-04")).toBe("node-3");
-        if (state !== "idle") {
-          const turn = await send("auto-04");
-          if (state === "released") {
-            turn.admission.cleanupAdmittedRun();
-          } else {
-            rotateAgentRunRegistryLifecycleGeneration();
-          }
-        }
-        expect(placements.get("auto-04")?.state).toBe("active");
-        expect(await dispatch("auto-05")).toBe("node-3");
-      });
-    },
-  );
-
-  it("excludes a physically full node even when it has the least admitted demand", async () => {
-    await withDemandFixture(async ({ dispatch, release, nodes }) => {
-      // Release the first real send without changing its retained placement.
-      release("explicit-1");
-      nodes[0]!.workerHost.capacity = { total: 2, available: 0 };
-      nodes[2]!.workerHost.capacity = { total: 2, available: 1 };
-
-      expect(await dispatch("auto-04")).toBe("node-2");
+  it("does not reserve capacity for a retained placement after admission is released", async () => {
+    await withDemandFixture(async ({ dispatch, send, placements }) => {
+      expect(await dispatch("auto-04")).toBe("node-3");
+      const turn = await send("auto-04");
+      turn.admission.cleanupAdmittedRun();
+      expect(placements.get("auto-04")?.state).toBe("active");
+      expect(await dispatch("auto-05")).toBe("node-3");
     });
   });
 });

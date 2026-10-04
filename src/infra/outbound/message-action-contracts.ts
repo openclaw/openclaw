@@ -1,15 +1,19 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
-import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../../channels/plugins/conversation-read-origin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelId,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
@@ -19,10 +23,8 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
@@ -185,6 +187,7 @@ export type MessageActionResult =
       kind: "action";
       channel: ChannelId;
       action: Exclude<ChannelMessageActionName, "send" | "poll">;
+      to?: string;
       handledBy: "plugin" | "dry-run";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
@@ -250,21 +253,11 @@ export function resolveMessageActionOutcome(
 }
 
 export function resolveMessageActionMessageId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
-  const record = payload as Record<string, unknown>;
-  const direct = normalizeOptionalString(record.messageId);
-  if (direct) {
-    return direct;
-  }
-  const result = record.result;
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  // SAFETY: The nested object check preserves the same permissive payload contract.
-  return normalizeOptionalString((result as Record<string, unknown>).messageId);
+  const record = asOptionalObjectRecord(payload);
+  return (
+    normalizeOptionalString(record?.messageId) ??
+    normalizeOptionalString(asOptionalObjectRecord(record?.result)?.messageId)
+  );
 }
 
 export type ResolvedActionContext = {
@@ -274,7 +267,6 @@ export type ResolvedActionContext = {
   channel: ChannelId;
   channelPlugin: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
-  extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionGateway;
@@ -283,3 +275,39 @@ export type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+export function createChannelActionContext(params: {
+  ctx: Omit<ResolvedActionContext, "mediaAccess"> & { mediaAccess?: OutboundMediaAccess };
+  action: ChannelMessageActionContext["action"];
+  mediaAccess?: OutboundMediaAccess;
+  reply?: OutboundReplyFacts;
+}): ChannelMessageActionContext {
+  const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
+  return {
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    ...(params.reply ? { reply: params.reply } : {}),
+    ...(mediaAccess ? { mediaAccess } : {}),
+    mediaLocalRoots: mediaAccess?.localRoots,
+    mediaReadFile: mediaAccess?.readFile,
+    accountId: params.ctx.accountId ?? undefined,
+    requesterAccountId: params.ctx.input.requesterAccountId ?? undefined,
+    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
+    senderIsOwner: params.ctx.input.senderIsOwner,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+      params.ctx.input.conversationReadOrigin,
+    ),
+    sessionKey: params.ctx.input.sessionKey,
+    sessionId: params.ctx.input.sessionId,
+    inboundEventKind: params.ctx.input.inboundEventKind,
+    agentId: params.ctx.agentId,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.input.toolContext,
+    dryRun: params.ctx.dryRun,
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+    ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),
+  };
+}

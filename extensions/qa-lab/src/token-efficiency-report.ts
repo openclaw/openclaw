@@ -1,20 +1,14 @@
-import { formatCacheMisses } from "./agentic-parity-cache-usage.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import {
+  formatCacheMisses,
+  formatRuntimeCacheCount as formatOptionalCount,
+} from "./agentic-parity-cache-usage.js";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import { pushQaReportListSection } from "./report.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 type ProcessedTokenEvidence = "measured" | "derived" | "unavailable";
-
-export type TokenEfficiencySuiteSummary = {
-  scenarios: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    runtimeParity?: RuntimeParityResult;
-  }>;
-  run?: {
-    providerMode?: string;
-    runtimePair?: [RuntimeId, RuntimeId] | null;
-  };
-};
 
 const DEFAULT_THRESHOLD_PERCENT = 15;
 const ZERO_AGGREGATE_RUNTIME = {
@@ -51,7 +45,7 @@ function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].toSorted((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[index] ?? 0;
 }
@@ -63,10 +57,6 @@ function isLiveProviderMode(providerMode: string | undefined) {
 function formatPercent(value: number) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
-}
-
-function formatOptionalCount(value: number | null): string {
-  return value === null ? "N/A" : String(value);
 }
 
 function formatProcessedCount(
@@ -282,7 +272,7 @@ function liveUsageShapeFailures(
 }
 
 export function buildTokenEfficiencyReport(params: {
-  summary: TokenEfficiencySuiteSummary;
+  summary: QaParitySuiteSummary;
   generatedAt?: string;
   thresholdPercent?: number;
 }) {
@@ -294,24 +284,6 @@ export function buildTokenEfficiencyReport(params: {
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
     .filter((result): result is RuntimeParityResult => Boolean(result));
-
-  if (parityResults.length === 0) {
-    const noCapturesReason = "No runtime parity captures were present in the suite summary.";
-    return {
-      status: liveUsage ? "evaluated" : "skipped",
-      runtimePair,
-      generatedAt: params.generatedAt ?? new Date().toISOString(),
-      ...(providerMode ? { providerMode } : {}),
-      thresholdPercent,
-      rows: [],
-      notApplicableScenarios: [],
-      aggregate: ZERO_AGGREGATE,
-      pass: !liveUsage,
-      failures: liveUsage ? [noCapturesReason] : [],
-      ...(liveUsage ? {} : { skipReason: noCapturesReason }),
-      notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
-    } as const;
-  }
 
   const notApplicableScenarios = parityResults.flatMap((result) => {
     const usage = resolveRuntimeParityUsagePolicy(result.runtimeParityUsage);
@@ -326,7 +298,9 @@ export function buildTokenEfficiencyReport(params: {
   );
   if (usageApplicableResults.length === 0) {
     const noApplicableReason =
-      "No usage-applicable runtime parity captures were present in the suite summary.";
+      parityResults.length === 0
+        ? "No runtime parity captures were present in the suite summary."
+        : "No usage-applicable runtime parity captures were present in the suite summary.";
     return {
       status: liveUsage ? "evaluated" : "skipped",
       runtimePair,
@@ -339,7 +313,11 @@ export function buildTokenEfficiencyReport(params: {
       pass: !liveUsage,
       failures: liveUsage ? [noApplicableReason] : [],
       ...(liveUsage ? {} : { skipReason: noApplicableReason }),
-      notes: ["Token efficiency requires at least one assistant-message usage capture."],
+      notes: [
+        parityResults.length === 0
+          ? "Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."
+          : "Token efficiency requires at least one assistant-message usage capture.",
+      ],
     } as const;
   }
 
@@ -439,26 +417,18 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
   }
 
   if (report.notApplicableScenarios.length > 0) {
-    lines.push("## Usage Not Applicable", "");
-    for (const scenario of report.notApplicableScenarios) {
-      lines.push(`- ${scenario.scenarioId}: ${scenario.reason}`);
-    }
-    lines.push("");
+    pushQaReportListSection(
+      lines,
+      "Usage Not Applicable",
+      report.notApplicableScenarios.map((scenario) => `${scenario.scenarioId}: ${scenario.reason}`),
+    );
   }
 
   if (report.failures.length > 0) {
-    lines.push("## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-    lines.push("");
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
   }
 
-  lines.push("## Notes", "");
-  for (const note of report.notes) {
-    lines.push(`- ${note}`);
-  }
-  lines.push("");
+  pushQaReportListSection(lines, "Notes", report.notes);
 
   return lines.join("\n");
 }

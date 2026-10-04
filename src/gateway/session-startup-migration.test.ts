@@ -22,8 +22,8 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import * as gatewayOwner from "../infra/gateway-owner-lease.js";
+import * as stateOwner from "../infra/gateway-state-owner.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import * as coordinator from "../infra/state-database-coordinator.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -128,7 +128,7 @@ describe("runStartupSessionMigration", () => {
       const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
       const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const lifecycle = vi
-        .spyOn(coordinator, "hasGatewayLifecycleCoordinator")
+        .spyOn(stateOwner, "hasActiveGatewayStateOwner")
         .mockReturnValue(gatewayActive);
       const lock = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,
@@ -344,7 +344,7 @@ describe("runStartupSessionMigration", () => {
   );
 
   it.each(["configured", "retired-root"] as const)(
-    "preserves the %s legacy source and requires explicit Doctor import",
+    "preserves the %s legacy source until a configured Doctor import",
     async (layout) => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-legacy-session-startup-"));
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "migration" };
@@ -362,6 +362,12 @@ describe("runStartupSessionMigration", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, original);
 
+      if (layout === "retired-root") {
+        await expect(
+          runStartupSessionMigration({ cfg, env, log: makeLog() }),
+        ).resolves.toBeUndefined();
+        cfg.session = { store: storePath };
+      }
       await expect(runStartupSessionMigration({ cfg, env, log: makeLog() })).rejects.toThrow(
         "openclaw --profile migration doctor --fix",
       );

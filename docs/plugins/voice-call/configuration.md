@@ -141,7 +141,7 @@ that Region. See
     - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
     - `skipSignatureVerification` is for local testing only.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
-    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
+    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` trusts forwarding headers from loopback requests when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). This reconstructs the public URL used for signing; valid Twilio signatures are still required.
     - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
     - Tailscale Serve and Funnel automatically expose the realtime or streaming WebSocket path when that audio mode is enabled.
     - `tailscale.port` selects the external HTTPS port for both `tailscale.mode` and unified `tunnel.provider: "tailscale-serve" | "tailscale-funnel"`. It defaults to `443`; use `8443` when another HTTPS server owns port 443. Funnel accepts only `443`, `8443`, or `10000`, while Serve accepts any valid TCP port. Non-default ports appear in the webhook and realtime stream URLs.
@@ -168,7 +168,7 @@ that Region. See
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
-    - `realtime.agentContext.includeSystemPrompt` is removed (realtime context now uses the generated agent prompt)
+    - `realtime.agentContext.includeSystemPrompt` is removed. Hosts with the shared context resolver always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files. Supported older hosts retain their optional, bounded context capsule. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 
   </Accordion>
 </AccordionGroup>

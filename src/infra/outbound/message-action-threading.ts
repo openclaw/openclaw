@@ -1,5 +1,3 @@
-// Message-action threading helpers inherit reply/thread metadata only for
-// same-conversation sends and prepare outbound session mirroring.
 import { readToolStringParam } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
@@ -190,15 +188,7 @@ export async function prepareOutboundMirrorRoute(params: {
   resolvedThreadId?: string;
   outboundRoute: OutboundSessionRoute | null;
 }> {
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    toolContext: params.toolContext,
-    resolveAutoThreadId: params.resolveAutoThreadId,
-    resolveReplyTransport: params.resolveReplyTransport,
-    replyToIsExplicit: params.replyToIsExplicit,
-  });
+  const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, params);
   const replyToId = readToolStringParam(params.actionParams, "replyTo");
   // Route resolution is read-only here; the durable session/route write happens
   // in ensureOutboundSessionEntry only after the send succeeds. Persisting
@@ -217,7 +207,7 @@ export async function prepareOutboundMirrorRoute(params: {
           threadId: resolvedThreadId,
         })
       : null;
-  if (outboundRoute && !params.dryRun) {
+  if (outboundRoute) {
     params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }
   if (params.agentId) {

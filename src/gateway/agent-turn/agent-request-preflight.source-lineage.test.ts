@@ -6,10 +6,9 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createChatRunState } from "../server-chat-state.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
+import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { createAgentTurnIo } from "./io.js";
-import type { AgentTurnContext } from "./types.js";
 
 it.each([
   { kind: "child", location: "configured", expectedRole: "subagent" },
@@ -21,7 +20,7 @@ it.each([
   async ({ kind, location, expectedRole }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, worker: {} } },
+        agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
         session: { store: path.join(state.root, "configured", "{agentId}", "sessions.json") },
       };
       await state.writeConfig(cfg);
@@ -58,24 +57,10 @@ it.each([
           }),
         });
       }
-      const context: AgentTurnContext = {
-        addChatRun: vi.fn(),
-        agentRunSeq: new Map(),
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-        chatRunState: createChatRunState(),
-        dedupe: new Map(),
-        deps: {},
-        getRuntimeConfig: () => cfg,
-        getSessionEventSubscriberConnIds: () => new Set(),
-        loadGatewayModelCatalog: vi.fn(async () => []),
-        loadGatewayModelCatalogSnapshot: vi.fn(),
-        logGateway: createSubsystemLogger("test/source-lineage"),
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(() => undefined),
-      };
+      const { context } = createTrackedDispatch();
+      context.chatAbortControllers.clear();
+      context.getRuntimeConfig = () => cfg;
+      context.logGateway = createSubsystemLogger("test/source-lineage");
       const result = prepareAgentRequestPreflight({
         request: {
           message: "Worker progress",

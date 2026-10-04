@@ -2,6 +2,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import {
   createCallResponse,
   emitSideband,
@@ -45,7 +46,7 @@ function createBridge(params: {
       })),
       createPeer,
       fetchImpl,
-      webSocketFactory: () => {
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
         socket = new FakeSocket();
         const send = socket.send.bind(socket);
         socket.send = (payload) => {
@@ -60,7 +61,7 @@ function createBridge(params: {
           }
         };
         return socket;
-      },
+      }),
     },
     openAIRealtimeHost,
   );

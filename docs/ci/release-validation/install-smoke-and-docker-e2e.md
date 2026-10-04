@@ -18,6 +18,8 @@ The `Install Smoke` workflow no longer runs on pull requests or `main` pushes. I
 
 The slow Bun global install and runtime smoke is separately gated by `run_bun_global_install_smoke`. It installs the candidate with trusted lifecycle scripts, then verifies representative CLI, local-agent, and Gateway paths under Bun 1.4 or newer. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
+The Bun-only runtime smoke reuses the verified candidate tarball with the checksum-pinned Bun fork from `setup-test-bun`. It masks system Node with recording sentinels in a private mount namespace, leaving the host unchanged, and uses child-PID-correlated spawn tracing to detect Node attempts across install, CLI, Gateway, node-host pairing, a mocked agent turn, Doctor, terminal, and browser steps. The lane makes one Node-less `bun install` attempt with `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the pinned Bun executable; an install failure fails the lane without retrying with Node. The install puts sentinels for the other Node launchers on PATH, leaving `node` absent from the install sentinel directory so Bun can inject its lifecycle shim. Node remains available for payload preparation and verification before the smoke hides it. The Bun-only lane runs only in Release Checks (Full Release Validation) through its own `run_bun_only_runtime_smoke` input, never on the nightly schedule or a manual `Install Smoke` dispatch, and skips frozen targets. It is advisory for now (`continue-on-error`): a failure is recorded on the run without blocking the release. Known Node requirements live in `scripts/e2e/lib/bun-only-runtime/expected-node-blockers.json`: an unlisted Node attempt fails, and a listed blocker that no longer reproduces fails until its entry is deleted.
+
 ## Local Docker E2E
 
 `pnpm test:docker:all` prebuilds one shared live-test image, packs OpenClaw once as an npm tarball, and builds two shared `scripts/e2e/Dockerfile` images:
@@ -96,6 +98,33 @@ it does not exercise Gateway session scheduling.
 The scheduler declares `anthropic-api-key` for this lane, and both full-chunk and
 targeted-lane preflights require `ANTHROPIC_API_KEY` specifically; OAuth credentials
 remain accepted for the other Anthropic lanes that support them.
+
+First-hop compatibility lanes share a 3,200-second inner container budget and a
+3,500-second outer lane budget. Hosted 4-vCPU run `36506342273` spent about 1,558
+seconds before its final candidate hop; another 560 seconds for that hop and about
+five seconds for assertions project roughly 2,125 seconds for a complete lane.
+A roughly 1.5× slow-host margin gives 3,200 seconds, with another 300 seconds for
+host-side work. Targeted runs measured roughly 540–720 seconds per update; each
+lane performs multiple updates, so that is not the complete lane duration.
+First-hop lanes have weight two under the unchanged npm weight limit of five,
+admitting at most two at once to reduce npm and disk contention. The 20-minute,
+weight-three survivor can overlap one first-hop lane. The self-upgrade job allows
+210 minutes: three 3,500-second waves plus a conservative 20 minutes for the
+survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
+Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
+durations are printed in the lane log.
+
+Authenticated update restart uses a 2,280-second container budget and a
+2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
+seconds, multiplied by roughly 1.5 with another 300 seconds for host-side work.
+Its restart command took 856 seconds in hosted run `36506210440` and 993 seconds
+on four-CPU Crabbox; 993 × 1.5 gives a lane-specific 1,500-second command timeout.
+The shared 900-second command default stays unchanged. The `package-update-openai`
+job allows 160 minutes: its five weight-three npm lanes serialize under the npm
+limit of five, with budgets of 30 + 30 + 20 + 25 + 43 = 148 minutes. The ten-minute
+chat lane overlaps them; ten minutes for setup and artifacts gives 158 minutes,
+rounded to 160. CI's 60-minute `docker-seed-e2e` job does not select
+`update-restart-auth`, so its budget stays unchanged.
 
 Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 

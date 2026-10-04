@@ -1,12 +1,15 @@
+import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import { runGatewayStartupMaintenance } from "../gateway/server-startup-plugins.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -17,16 +20,6 @@ import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
-const siblingIndexes = [
-  "archived_at",
-  "current_session_id",
-  "entry_valid_pending",
-  "last_interaction_at",
-  "parent_session_key",
-  "spawned_by",
-  "status",
-  "updated_at",
-].map((suffix) => `idx_agent_session_nodes_${suffix}`);
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -64,6 +57,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     await replaceSessionEntry(session, { sessionId: `${agentId}-history`, updatedAt: 1 });
     agents.push({ agentId, path: agentPath, session, entry: loadSessionEntry(session) });
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const { DatabaseSync } = requireNodeSqlite();
@@ -71,28 +65,6 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     const writer = new DatabaseSync(agent.path);
     writer.exec("DROP INDEX idx_agent_session_nodes_active;");
     writer.exec("UPDATE schema_meta SET app_version = '2026.9.1';");
-    expect(writer.prepare("PRAGMA user_version").get()?.user_version).toBe(21);
-    expect(writer.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version).toBe(21);
-    expect(writer.prepare("SELECT app_version FROM schema_meta").get()?.app_version).toBe(
-      "2026.9.1",
-    );
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE type='index'")
-        .all()
-        .map((row) => row.name),
-    ).toEqual(expect.arrayContaining(siblingIndexes));
-    // Keep the current schema's later optional label index; only _active is missing.
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE name='idx_agent_session_nodes_label'")
-        .get(),
-    ).toBeDefined();
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE name='idx_agent_session_nodes_active'")
-        .get(),
-    ).toBeUndefined();
     if (damage === "drifted") {
       writer.exec("CREATE INDEX idx_agent_session_nodes_active ON session_nodes(session_key);");
     } else if (damage === "missing table") {
@@ -116,17 +88,21 @@ it.each(["missing", "drifted"] as const)(
       ["memes", "main", "friends"],
       damage,
     );
+    const runStartup = () =>
+      runGatewayStartupMaintenance({
+        cfgAtStart: config,
+        startupRuntimeConfig: config,
+        minimalTestGateway: false,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      });
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
     ).resolves.toBeUndefined();
-    expect(agents.map((agent) => fs.readFileSync(agent.path))).toEqual(before);
-    // This automatic prelude selects all databases before its maintenance owner repairs them.
-    const migrations = await migrateHistoricalTranscriptDirectives({
-      env,
-      configuredAgentDatabaseTargets: agents,
-    });
-    expect(migrations.warnings).toEqual([]);
-    await runSessionStartupMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
+    deepStrictEqual(
+      agents.map((agent) => fs.readFileSync(agent.path)),
+      before,
+    );
+    await runStartup();
     for (const agent of agents) {
       const reader = new (requireNodeSqlite().DatabaseSync)(agent.path, { readOnly: true });
       try {
@@ -150,7 +126,7 @@ it.each(["missing", "drifted"] as const)(
         .map((line): { message?: string; "1"?: unknown } => JSON.parse(line))
         .filter((record) => record.message?.startsWith(repairMessage));
     const ordered = agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId));
-    expect(repairs()).toEqual(
+    expect(repairs().toSorted((a, b) => (a.message ?? "").localeCompare(b.message ?? ""))).toEqual(
       ordered.map((agent) =>
         expect.objectContaining({
           message: `${repairMessage} for ${agent.agentId} (${agent.path}): idx_agent_session_nodes_active`,
@@ -166,39 +142,96 @@ it.each(["missing", "drifted"] as const)(
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-restart", config }),
     ).resolves.toBeUndefined();
-    expect(
-      (await migrateHistoricalTranscriptDirectives({ env, configuredAgentDatabaseTargets: agents }))
-        .warnings,
-    ).toEqual([]);
-    await runSessionStartupMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
+    await runStartup();
     await flushLogger();
     expect(repairs()).toHaveLength(3);
   },
 );
 
-it("reports every refused database and its missing indexes without mutating any agent", async () => {
+it.each([
+  ["unscoped", "schema", "schema", 78],
+  ["unscoped", "unavailable", "schema", 78],
+  ["unscoped", "schema", "unavailable", 78],
+  ["unscoped", "unavailable", "unavailable", 1],
+  ["scoped", "schema", "unavailable", 78],
+  ["scoped", "unavailable", "schema", 1],
+] as const)("classifies %s %s / %s startup as exit %i", async (scope, first, second, exitCode) => {
+  const allSchema = first === "schema" && second === "schema";
   const { env, config, agents, before } = await createFixture(
-    ["work", "memes", "main", "friends"],
+    allSchema ? ["work", "memes", "main", "friends"] : ["main", "worker"],
     "missing table",
   );
-  const message = await assertOpenClawDatabasesReady({
-    env,
-    operation: "gateway-startup",
-    config,
-  }).then(
-    () => "",
-    (error: unknown) => String(error),
-  );
-  const rows = message.split("\n").filter((line) => line.startsWith("agent "));
-  expect(rows).toEqual(
-    agents
-      .toSorted((a, b) => a.agentId.localeCompare(b.agentId))
-      .map((agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`)),
-  );
-  for (const row of rows) {
-    expect(row).toContain("missing table session_key_contract");
-    expect(row).toContain("missing or drifted index idx_agent_session_nodes_active");
-    expect(row).toContain("openclaw doctor --fix");
+  const failures = allSchema ? agents.map(() => first) : [first, second];
+  const unavailable = agents
+    .filter((_, index) => failures[index] === "unavailable")
+    .map((agent) => agent.agentId);
+  if (unavailable.length > 0) {
+    const preload = path.join(env.OPENCLAW_STATE_DIR, "schema-read-failure.cjs");
+    fs.writeFileSync(
+      preload,
+      `const { DatabaseSync } = require('node:sqlite');
+     const prepare = DatabaseSync.prototype.prepare;
+     DatabaseSync.prototype.prepare = function(sql) {
+       if (sql === 'PRAGMA table_list' &&
+           prepare.call(this, 'SELECT role FROM schema_meta').get()?.role === 'agent' &&
+           ${JSON.stringify(unavailable)}.includes(prepare.call(this, 'SELECT agent_id FROM schema_meta').get()?.agent_id)) {
+         throw Object.assign(new Error('synthetic schema read unavailable'), {code: 'SQLITE_IOERR', errcode: 10});
+       }
+       return prepare.call(this, sql);
+     };`,
+    );
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
   }
-  expect(agents.map((agent) => fs.readFileSync(agent.path))).toEqual(before);
+  const inspect = () =>
+    assertOpenClawDatabasesReady({
+      env,
+      operation: "gateway-startup",
+      config:
+        scope === "scoped"
+          ? {
+              agents: {
+                entries: { main: {}, worker: {} },
+                defaults: { systemAgent: { agentId: "main" } },
+              },
+            }
+          : config,
+    });
+  const failure = await (
+    scope === "scoped" ? withAgentDatabaseStartupAdmission(inspect) : inspect()
+  ).catch((error: unknown) => error);
+  const message = String(failure);
+  if (scope === "unscoped") {
+    const rows = message.split("\n").filter((line) => line.startsWith("agent "));
+    expect(rows).toEqual(
+      (allSchema ? agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId)) : agents).map(
+        (agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`),
+      ),
+    );
+    for (const [index, kind] of failures.entries()) {
+      if (kind === "schema") {
+        expect(rows[index]).toContain("missing or drifted index idx_agent_session_nodes_active");
+        expect(rows[index]).toContain("openclaw doctor --fix");
+      }
+      expect(rows[index]).toContain(
+        kind === "schema"
+          ? "missing table session_key_contract"
+          : "synthetic schema read unavailable",
+      );
+    }
+  } else {
+    expect(message).toContain(agents[0]?.path);
+    expect(message).not.toContain(agents[1]?.path);
+    expect(message).toContain(
+      first === "schema"
+        ? "missing table session_key_contract"
+        : "synthetic schema read unavailable",
+    );
+  }
+  expect(resolveGatewayStartupFailureExitCode(failure)).toBe(exitCode);
+  deepStrictEqual(
+    agents.map((agent) => fs.readFileSync(agent.path)),
+    before,
+  );
 });

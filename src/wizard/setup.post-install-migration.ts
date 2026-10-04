@@ -8,7 +8,6 @@ import {
 } from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
 type PostInstallMigrationOptions = {
@@ -35,12 +34,6 @@ type ResolvedProviderCandidate = {
   source?: string;
 };
 
-const loadMigrationContextModule = createLazyRuntimeModule(
-  () => import("../commands/migrate/context.js"),
-);
-
-const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
-
 async function resolveCandidates(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -56,8 +49,8 @@ async function resolveCandidates(params: {
     { resolveStateDir },
   ] = await Promise.all([
     import("../plugins/manifest-contract-runtime.js"),
-    loadMigrationContextModule(),
-    loadConfigPathsModule(),
+    import("../commands/migrate/context.js"),
+    import("../config/paths.js"),
   ]);
   const installedIds = new Set(params.installedPluginIds);
   const stateDir = resolveStateDir();
@@ -198,8 +191,17 @@ async function runPostInstallMigrationOffers(
     const description = describeCandidate(candidate);
     let accepted;
     try {
+      await prompter.note(
+        [
+          candidate.provider.description,
+          "You will review import options and confirm before applying.",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        `${candidate.provider.label} migration`,
+      );
       accepted = await prompter.confirm({
-        message: `Migrate ${description} into this agent now?`,
+        message: `Review migration from ${description}?`,
         initialValue: false,
       });
     } catch (error) {
@@ -227,8 +229,8 @@ async function runPostInstallMigrationOffers(
       const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
         await Promise.all([
           import("../commands/migrate.js"),
-          loadMigrationContextModule(),
-          loadConfigPathsModule(),
+          import("../commands/migrate/context.js"),
+          import("../config/paths.js"),
         ]);
       const runCommand = async (provider: MigrationProviderPlugin) => {
         let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>>;

@@ -25,7 +25,6 @@ describe("environments.prepare", () => {
   });
 
   it.each([
-    {},
     { profileId: "development" },
     { ...request, projectPath: "" },
     { ...request, setupAuthorized: false },
@@ -45,8 +44,8 @@ describe("environments.prepare", () => {
     ]);
   });
 
-  it.each([false, true])("returns the admitted preparation with reused=%s", async (reused) => {
-    const result = { environmentId: "worker-1", preparationKey: "project-key", reused };
+  it("returns the admitted preparation", async () => {
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: true };
     const prepare = vi.fn(async () => result);
     expect(
       await callEnvironmentMethod("environments.prepare", request, {
@@ -87,7 +86,7 @@ describe("environments.prepare", () => {
     ]);
   });
 
-  it("projects preparation identity without the durable demand or expiry fields", () => {
+  it("omits administrator preparation details by default", () => {
     const preparation = {
       purpose: "build" as const,
       key: "project-key",

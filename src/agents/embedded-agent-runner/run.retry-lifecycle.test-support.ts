@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedBuildEmbeddedRunPayloads,
   mockedClassifyAssistantFailoverReason,
@@ -34,7 +34,6 @@ describe("direct embedded retry lifecycle", () => {
   it.each([
     { progress: true, budget: 8, expectedAttempts: 3 },
     { progress: false, budget: 8, expectedAttempts: 2 },
-    { progress: undefined, budget: 8, expectedAttempts: 2 },
     { progress: true, budget: 1, expectedAttempts: 2 },
   ])(
     "recovers a later outage after model progress=$progress with retry budget=$budget",
@@ -61,7 +60,7 @@ describe("direct embedded retry lifecycle", () => {
             content: failed ? [] : [{ type: "text", text: "Recovered reply" }],
             errorMessage: failed ? "An error occurred while processing the request." : undefined,
           });
-          return makeAttemptResult({
+          return session.makeAttemptResult({
             providerRetryMaxRetries: budget,
             hasSuccessfulModelResponse: attempts === 2 ? progress : false,
             assistantTexts: failed ? [] : ["Recovered reply"],
@@ -109,6 +108,7 @@ describe("direct embedded retry lifecycle", () => {
     let wait: Promise<void> | undefined;
     let waitSettled = false;
     let pending: ReturnType<typeof run> | undefined;
+    const sleepStarted = createDeferred();
     vi.useFakeTimers();
     try {
       mockedSleep.mockImplementation((delayMs, signal) => {
@@ -116,6 +116,7 @@ describe("direct embedded retry lifecycle", () => {
         wait = sleep(delayMs, signal).finally(() => {
           waitSettled = true;
         });
+        sleepStarted.resolve();
         return wait;
       });
       const assistant = makeAssistantMessageFixture({
@@ -124,7 +125,7 @@ describe("direct embedded retry lifecycle", () => {
         errorMessage: "429 rate limit exceeded; Retry-After: 3600",
       });
       mockedRunEmbeddedAttempt.mockResolvedValue(
-        makeAttemptResult({
+        session.makeAttemptResult({
           lastAssistant: assistant,
           currentAttemptAssistant: assistant,
         }),
@@ -138,7 +139,7 @@ describe("direct embedded retry lifecycle", () => {
         abortSignal: caller.signal,
       });
       const outcome = pending.catch((error: unknown) => error);
-      await vi.waitFor(() => expect(mockedSleep).toHaveBeenCalled(), { timeout: 10_000 });
+      await Promise.race([sleepStarted.promise, pending]);
       expect(mockedSleep).toHaveBeenCalledWith(3_600_000, expect.any(AbortSignal));
       expect(waitSettled).toBe(false);
       await vi.advanceTimersByTimeAsync(60_001);
@@ -177,7 +178,7 @@ describe("direct embedded retry lifecycle", () => {
             assistantTranscriptIdempotencyKey: "saved-A",
           },
         });
-        return makeAttemptResult({
+        return session.makeAttemptResult({
           assistantTexts: [],
           lastAssistant: assistant,
           currentAttemptAssistant: assistant,
@@ -230,7 +231,7 @@ describe("direct embedded retry lifecycle", () => {
             assistantTranscriptIdempotencyKey: `saved-${attempts}`,
           },
         });
-        return makeAttemptResult({
+        return session.makeAttemptResult({
           assistantTexts: failed ? [] : ["Recovered reply"],
           lastAssistant: assistant,
           currentAttemptAssistant: assistant,

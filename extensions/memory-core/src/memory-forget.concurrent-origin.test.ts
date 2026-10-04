@@ -40,12 +40,12 @@ describe("Forget with origins committed by another workspace", () => {
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
       db.prepare(`INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, '[]', 1)`).run(
+        VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, x'', 1)`).run(
         content,
       );
       const publishOrigin = () =>
         withMemoryWorkspaceLock(otherWorkspace, async () => {
-          recordMemoryEntryOrigins({
+          await recordMemoryEntryOrigins({
             agentId: "main",
             origins: [
               {
@@ -87,7 +87,7 @@ describe("Forget with origins committed by another workspace", () => {
             }),
           ]);
           await publishOrigin();
-          expect(listMemoryEntryOrigins({ agentId: "main" })).toMatchObject([
+          expect(await listMemoryEntryOrigins({ agentId: "main" })).toMatchObject([
             { entryKey: "late-lineage", sessionId: "target" },
           ]);
           resume.resolve();
@@ -97,8 +97,8 @@ describe("Forget with origins committed by another workspace", () => {
           entryKeys: report.entryKeys,
           memory: await fs.readFile(memoryPath, "utf8"),
           index: db.prepare("SELECT id FROM memory_index_chunks").all(),
-          origins: listMemoryEntryOrigins({ agentId: "main" }),
-          targetTombstoned: listMemorySessionTombstones({ agentId: "main" }).some(
+          origins: await listMemoryEntryOrigins({ agentId: "main" }),
+          targetTombstoned: (await listMemorySessionTombstones({ agentId: "main" })).some(
             ({ sessionId }) => sessionId === "target",
           ),
         };

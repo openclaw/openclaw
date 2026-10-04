@@ -12,6 +12,7 @@ import {
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
@@ -40,7 +41,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("publishes the rewritten view before commit observers append", async () => {
+it("keeps deprecated sync rewrite publication ahead of synchronous commit observers", async () => {
   const dir = tempDirs.make("openclaw-rewrite-observer-");
   const scope = {
     agentId: "main",
@@ -51,7 +52,7 @@ it("publishes the rewritten view before commit observers append", async () => {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   const manager = SessionManager.open(scope, dir);
   const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-  manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
+  const tail = manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
   const database = openOpenClawAgentDatabase({
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
@@ -67,12 +68,24 @@ it("publishes the rewritten view before commit observers append", async () => {
   database.db.exec(
     "CREATE TRIGGER append_from_observer AFTER INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.message.content') = 'replacement' BEGIN SELECT queue_observer_append(); END;",
   );
-  rewriteTranscriptEntriesInSessionManager({
-    sessionManager: manager,
-    replacements: [
-      { entryId: first, message: { role: "user", content: "replacement", timestamp: 1 } },
-    ],
+  const rewrite = manager.prepareTranscriptRewrite();
+  rewrite.sessionManager.resetLeaf();
+  const replacement = rewrite.sessionManager.appendMessage({
+    role: "user",
+    content: "replacement",
+    timestamp: 1,
   });
+  const copiedTail = rewrite.sessionManager.appendMessage({
+    role: "user",
+    content: "tail",
+    timestamp: 2,
+  });
+  rewrite.commit(
+    new Map([
+      [first, replacement],
+      [tail, copiedTail],
+    ]),
+  );
   const expected = [
     { message: { content: "replacement" } },
     { message: { content: "tail" } },
@@ -101,16 +114,12 @@ it("does not certify stale navigation with a post-commit replacement version", a
   });
   const kept = manager.appendMessage({ role: "user", content: "kept-after-trim", timestamp: 3 });
   manager.appendMessage({ role: "user", content: "remove-tail", timestamp: 4 });
-  const database = openOpenClawAgentDatabase({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
-  let queued = false;
-  database.db.function("queue_navigation_replacement", () => {
-    if (!queued) {
-      queued = true;
+  let published = false;
+  runOpenClawAgentWriteTransaction(
+    (database) => {
       expect(
         deferOpenClawAgentPostCommitPublication(database, () => {
+          published = true;
           const events = loadTranscriptEventsSync(scope);
           for (const event of events) {
             if (isRecord(event) && event.id === control.id) {
@@ -120,22 +129,18 @@ it("does not certify stale navigation with a post-commit replacement version", a
           replaceTranscriptEventsSync(scope, events);
         }),
       ).toBe(true);
-    }
-    return 0;
-  });
-  database.db.exec(
-    // Suffix cleanup leaves the retained prefix untouched; inject at its actual deletion edge.
-    "CREATE TRIGGER replace_after_commit AFTER DELETE ON transcript_events WHEN json_extract(OLD.event_json, '$.message.content') = 'remove-tail' BEGIN SELECT queue_navigation_replacement(); END;",
+      expect(
+        manager.removeTrailingEntries(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            entry.message.content === "remove-tail",
+        ),
+      ).toBe(1);
+    },
+    { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) },
   );
-  expect(
-    manager.removeTrailingEntries(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message.role === "user" &&
-        entry.message.content === "remove-tail",
-    ),
-  ).toBe(1);
-  expect(queued).toBe(true);
+  expect(published).toBe(true);
   const committed = loadTranscriptEventsSync(scope);
   const rewrite = () =>
     rewriteTranscriptEntriesInSessionManager({
@@ -144,10 +149,10 @@ it("does not certify stale navigation with a post-commit replacement version", a
         { entryId: kept, message: { role: "user", content: "replacement", timestamp: 3 } },
       ],
     });
-  expect(rewrite).toThrow("Session transcript changed");
+  await expect(rewrite()).rejects.toThrow("Session transcript changed");
   expect(loadTranscriptEventsSync(scope)).toEqual(committed);
   manager.reloadPersistedTranscript();
-  expect(rewrite().changed).toBe(true);
+  expect((await rewrite()).changed).toBe(true);
   expect(SessionManager.open(scope).getBranch()).toMatchObject([
     { message: { content: "first" } },
     { message: { content: "second" } },
@@ -177,7 +182,7 @@ it.each(["compaction", "reset"] as const)(
     full.appendMessage({ role: "user", content: "last", timestamp: 3 });
     const manager = SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 16384 });
     expect(manager.getBoundaryCount()).toBe(1);
-    rewriteTranscriptEntriesInSessionManager({
+    await rewriteTranscriptEntriesInSessionManager({
       sessionManager: manager,
       replacements: [
         { entryId: first, message: { role: "user", content: "rewritten", timestamp: 1 } },

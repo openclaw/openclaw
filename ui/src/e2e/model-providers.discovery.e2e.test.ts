@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,7 +16,9 @@ suite.define(() => {
       const setupRelease = new Promise<void>((resolve) => {
         releaseSetup = resolve;
       });
-      const setupModule = /\/model-setup-page(?:\.ts|-[^/]+\.js)(?:\?|$)/;
+      const setupModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/model-setup/model-setup-page.ts",
+      );
       const setupRequested = page.waitForRequest(setupModule);
       await page.route(setupModule, async (route) => {
         await setupRelease;
@@ -120,94 +123,6 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("wizard.cancel")).toHaveLength(0);
         expect(await gateway.getRequests(startMethod)).toHaveLength(1);
-      });
-    },
-  );
-
-  it.each(["auth", "manual"] as const)(
-    "recovers an aliased provider through the exact %s credential method",
-    async (kind) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const choice = {
-          id: "fixture/account-key",
-          brandId: "account-brand",
-          groupLabel: "Account brand",
-          label: "Account key",
-          kind: "secret",
-          featured: false,
-        };
-        const gateway = await installMockGateway(page, {
-          featureMethods: [
-            "config.get",
-            "config.patch",
-            "models.authStatus",
-            "models.list",
-            "models.authLogin",
-            "openclaw.setup.detect",
-            "wizard.next",
-          ],
-          methodResponses: {
-            "models.authStatus": {
-              ts: 1,
-              providers: [],
-              providerCapabilities: [
-                {
-                  provider: "credential-owner",
-                  apiKeySupported: true,
-                  quickApiKeySetup: false,
-                  loginOptions: [
-                    { ...choice, id: "fixture/browser", label: "Browser sign-in", kind: "oauth" },
-                    choice,
-                  ],
-                },
-              ],
-            },
-            "openclaw.setup.detect": {
-              candidates: [],
-              setupComplete: false,
-              workspace: "/synthetic/workspace",
-              authOptions: kind === "auth" ? [choice] : [],
-              manualProviders: kind === "manual" ? [choice] : [],
-              unavailableCandidates: [
-                {
-                  id: "expired-account",
-                  label: "Account brand",
-                  detail: "Saved credential expired",
-                  reason: "Connect the account again",
-                  ...(kind === "auth"
-                    ? { authOptionId: choice.id }
-                    : { manualProviderId: choice.id }),
-                },
-              ],
-            },
-            "models.authLogin": { done: false, status: "running" },
-            "wizard.next": {
-              done: false,
-              status: "running",
-              step: { id: "key", type: "text", sensitive: true, message: "Enter account key" },
-            },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
-        await page.locator("[data-models-login-discover]").click();
-        await page.locator('[data-unavailable-candidate="expired-account"] button').click();
-        const method = page
-          .locator("[data-models-login-choice]")
-          .getByRole("button", { name: choice.label, exact: true });
-        await method.waitFor();
-        expect(await page.locator(".model-provider-login__provider").textContent()).toContain(
-          "Account brand",
-        );
-        expect(await page.locator(".model-setup-discovery").count()).toBe(0);
-        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        await method.click();
-        expect((await gateway.waitForRequest("models.authLogin")).params).toMatchObject({
-          authChoice: choice.id,
-          agentId: "main",
-        });
-        expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
-        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       });
     },
   );

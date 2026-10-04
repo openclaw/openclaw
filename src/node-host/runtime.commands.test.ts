@@ -74,7 +74,6 @@ describe("restricted node command surface", () => {
       config: { nodeHost: { workerRuns: { enabled: true } }, desktop: { host: { enabled: true } } },
       env: { PATH: "/private/host/bin" },
       enableAgentRuns: true,
-      enableWorkerRuns: true,
       forceWorkerRuns: true,
       installedAppsSharingEnabled: true,
       platform: "darwin",

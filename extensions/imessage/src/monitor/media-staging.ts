@@ -9,17 +9,13 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-type StagedIMessageAttachment = ChannelInboundMediaInput;
-
 type StagedIMessageAttachments = {
-  attachments: StagedIMessageAttachment[];
+  attachments: ChannelInboundMediaInput[];
   unavailableCount: number;
 };
 
-type SaveMediaBufferImpl = typeof saveMediaBuffer;
-
 type StageIMessageAttachmentsDeps = {
-  saveMediaBuffer?: SaveMediaBufferImpl;
+  saveMediaBuffer?: typeof saveMediaBuffer;
   convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
   openLocalFileSafely?: typeof openLocalFileSafely;
   logVerbose?: (message: string) => void;
@@ -27,7 +23,7 @@ type StageIMessageAttachmentsDeps = {
 
 function createTypeOnlyIMessageAttachment(
   attachment: IMessageAttachment,
-): StagedIMessageAttachment {
+): ChannelInboundMediaInput {
   const contentType = attachment.mime_type?.trim() || undefined;
   return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
 }
@@ -85,66 +81,62 @@ async function readAttachmentBuffer(params: {
   allowedRoots?: readonly string[];
   deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
-  const opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
+  await using opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
     filePath: params.attachmentPath,
   });
-  try {
-    if (opened.stat.size > params.maxBytes) {
-      throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
-    }
-    await assertAllowedCanonicalAttachmentPath({
-      canonicalPath: opened.realPath,
-      allowedRoots: params.allowedRoots,
-    });
-    // The inode can grow after the pinned open; keep the allocation bounded as well as the stat.
-    const buffer = await readFileHandleBounded(opened.handle, params.maxBytes).catch(
-      (error: unknown) => {
-        if (error instanceof FsSafeError && error.code === "too-large") {
-          throw new Error(
-            `attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`,
-          );
-        }
-        throw error;
-      },
-    );
-
-    if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
-      try {
-        const convert = params.deps.convertHeicToJpeg;
-        const converted = await withTempWorkspace(
-          { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
-          async (workspace) => {
-            const pinnedPath = await workspace.write("attachment.heic", buffer);
-            return convert
-              ? {
-                  buffer: await convert(pinnedPath, params.maxBytes),
-                }
-              : await loadWebMedia(pinnedPath, {
-                  maxBytes: params.maxBytes,
-                  localRoots: [workspace.dir],
-                });
-          },
-        );
-        return {
-          buffer: converted.buffer,
-          contentType: "image/jpeg",
-          originalFilename: jpegFilenameForAttachment(params.attachmentPath),
-        };
-      } catch (err) {
-        params.deps.logVerbose?.(
-          `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
+  if (opened.stat.size > params.maxBytes) {
+    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
+  }
+  await assertAllowedCanonicalAttachmentPath({
+    canonicalPath: opened.realPath,
+    allowedRoots: params.allowedRoots,
+  });
+  // The inode can grow after the pinned open; keep the allocation bounded as well as the stat.
+  const buffer = await readFileHandleBounded(opened.handle, params.maxBytes).catch(
+    (error: unknown) => {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        throw new Error(
+          `attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`,
         );
       }
-    }
+      throw error;
+    },
+  );
 
-    return {
-      buffer,
-      contentType: params.mimeType ?? undefined,
-      originalFilename: path.basename(params.attachmentPath),
-    };
-  } finally {
-    await opened.handle.close().catch(() => undefined);
+  if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
+    try {
+      const convert = params.deps.convertHeicToJpeg;
+      const converted = await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
+        async (workspace) => {
+          const pinnedPath = await workspace.write("attachment.heic", buffer);
+          return convert
+            ? {
+                buffer: await convert(pinnedPath, params.maxBytes),
+              }
+            : await loadWebMedia(pinnedPath, {
+                maxBytes: params.maxBytes,
+                localRoots: [workspace.dir],
+              });
+        },
+      );
+      return {
+        buffer: converted.buffer,
+        contentType: "image/jpeg",
+        originalFilename: jpegFilenameForAttachment(params.attachmentPath),
+      };
+    } catch (err) {
+      params.deps.logVerbose?.(
+        `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
+      );
+    }
   }
+
+  return {
+    buffer,
+    contentType: params.mimeType ?? undefined,
+    originalFilename: path.basename(params.attachmentPath),
+  };
 }
 
 export async function stageIMessageAttachments(
@@ -157,7 +149,7 @@ export async function stageIMessageAttachments(
 ): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
   const save = deps.saveMediaBuffer ?? saveMediaBuffer;
-  const staged: StagedIMessageAttachment[] = [];
+  const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 
   for (const attachment of attachments) {

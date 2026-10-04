@@ -66,13 +66,11 @@ export function createToolCallLookup<Value>() {
   };
 }
 
-function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  return item.kind === "message" && chatItemStartsUserTurn(item);
-}
-
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const item = items.findLast(isUserChatItem);
-  return item ? { afterKey: item.key } : null;
+  const userTurn = items.findLast(
+    (item) => item.kind === "message" && chatItemStartsUserTurn(item),
+  );
+  return userTurn ? { afterKey: userTurn.key } : null;
 }
 
 export function createRunTurnLookup(items: ChatItem[]) {
@@ -81,14 +79,15 @@ export function createRunTurnLookup(items: ChatItem[]) {
     if (!bounds) {
       bounds = new Map();
       let nextUserKey: string | undefined;
-      // Keys survive canvas splices. Rebuild after user rows are filtered or
-      // inserted; the earliest user for a run owns its next-user ceiling.
+      // Keys survive canvas splices; rebuild after turn boundaries change.
+      // The earliest user for a run owns its next-turn ceiling. Projected
+      // notices contribute ceilings, not identities inferred from their keys.
       for (let index = items.length - 1; index >= 0; index--) {
         const item = items[index]!;
-        if (!isUserChatItem(item)) {
+        if (!chatItemStartsUserTurn(item)) {
           continue;
         }
-        const owner = userTurnRunId(item.message);
+        const owner = item.kind === "message" ? userTurnRunId(item.message) : null;
         if (owner !== null) {
           bounds.set(owner, {
             afterKey: item.key,

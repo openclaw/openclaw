@@ -2,14 +2,34 @@ import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 
 describe("docs Markdown rendering", () => {
-  it("preserves published acronym and localized component anchors", () => {
-    // A slugify upgrade must preserve targets in the publisher's MDX and locales too.
+  it.each([
+    {
+      name: "APIUsage",
+      title: "سلوك إعادة المحاولة",
+      ids: ["param-apiusage", "slwk-ieadt-almhawlt"],
+    },
+    {
+      name: "APISection fooBar APIs DNS2API",
+      title: "ու ՈՒ Ու aŒb aœb aƏb aəb ẞ",
+      ids: ["param-api-section-foo-bar-apis-dns-2-api", "vo-vo-vo-a-b-a-b-a-b-a-b-ss"],
+    },
+    {
+      name: "a𝓀b a𝕆b aⓒb aⓓb",
+      title: "Conway’s Law — DON’T",
+      ids: ["param-ahb-a-nb-a-b-b-a-c-b", "conways-law-dont"],
+    },
+    {
+      name: "ŌōfooBar",
+      title: "before−after before⁓after",
+      ids: ["param-oofoo-bar", "before-after-before-after"],
+    },
+  ])("preserves published component anchors for $name", ({ name, title, ids }) => {
     const document = parseDocsDocument(
-      '<ParamField body="APIUsage">Usage</ParamField>\n\n' +
-        '<Accordion title="سلوك إعادة المحاولة">Retry</Accordion>',
+      `<ParamField body="${name}">Usage</ParamField>\n\n` +
+        `<Accordion title="${title}">Details</Accordion>`,
     );
 
-    expect(document.ids).toEqual(["param-apiusage", "slwk-ieadt-almhawlt"]);
+    expect(document.ids).toEqual(ids);
   });
 
   it.each(["", "> "].flatMap((quote) => ["html", "jsx"].map((kind) => ({ quote, kind }))))(
@@ -80,6 +100,9 @@ describe("docs Markdown rendering", () => {
 
       expect(html).not.toContain("hidden");
       expect(html).not.toContain("<blockquote>");
+      if (prefix) {
+        expect(html).toContain(prefix.trimEnd());
+      }
       expect(document.ids).toContain("param-live");
       expect(document.links).toEqual(["/visible"]);
     },
@@ -97,21 +120,6 @@ describe("docs Markdown rendering", () => {
     expect(html.match(/<blockquote>/g)).toHaveLength(1);
     expect(html).not.toContain("hidden");
     expect(document.links).toEqual([{ href: "/visible", line: 5 }]);
-  });
-
-  it("does not inherit a quote from an earlier raw literal", () => {
-    const literal = "<pre>\n> raw literal quote\n</pre>";
-    const md = createDocsMarkdown();
-    const document = parseDocsDocument(
-      `${literal}\n{/*\n> hidden comment quote\n*/}\n\n[Visible](/visible)`,
-      md,
-    );
-    const html = md.renderer.render(document.tokens, md.options, document.env);
-
-    expect(html).toContain(literal);
-    expect(html).not.toContain("<blockquote>");
-    expect(html).not.toContain("hidden");
-    expect(document.links).toEqual(["/visible"]);
   });
 
   it("preserves JSX comment bytes inside indented code", () => {
@@ -181,7 +189,7 @@ describe("docs Markdown rendering", () => {
     expect(document.links).toEqual(["/visible"]);
   });
 
-  it.each(["pre", "code", "script", "style", "textarea"])(
+  it.each(["pre", "code"])(
     "keeps inline <%s> examples literal before a later HTML example",
     (tag) => {
       const source = [

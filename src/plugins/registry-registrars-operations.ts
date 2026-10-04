@@ -19,6 +19,8 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -34,6 +36,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginServiceV2,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -59,8 +62,13 @@ export function canClaimReservedCommandOwnership(
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, createRegistration, reportRegistrationError, reportRegistrationWarning } =
-    state;
+  const {
+    registry,
+    createRegistration,
+    createIdentityRegistration,
+    reportRegistrationError,
+    reportRegistrationWarning,
+  } = state;
 
   const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
     const description = normalizeOptionalString(presenter.description);
@@ -318,6 +326,18 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerGatewayAccessPolicy = (record: PluginRecord, policy: PluginGatewayAccessPolicy) => {
+    if (typeof policy.authorize !== "function") {
+      reportRegistrationError(record, "Gateway access policy requires an authorize handler");
+      return;
+    }
+    registry.gatewayAccessPolicies.push(
+      createIdentityRegistration(record, {
+        policy: bindPluginGatewayAccessPolicy(policy, getPluginInstance(record)),
+      }),
+    );
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -347,7 +367,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     return undefined;
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const registerService = (
+    record: PluginRecord,
+    service: OpenClawPluginService | OpenClawPluginServiceV2,
+  ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {
       return;
@@ -442,6 +465,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerReload,
     registerNodeHostCommand,
     registerNodeInvokePolicy,
+    registerGatewayAccessPolicy,
     registerSecurityAuditCollector,
     registerService,
     registerGatewayDiscoveryService,

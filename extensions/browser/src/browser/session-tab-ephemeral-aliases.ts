@@ -1,6 +1,8 @@
 /**
  * Process-local aliases for durable storage keys and non-durable tab rows.
  */
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
 
 type AliasIdentity = {
@@ -25,59 +27,32 @@ const volatileAliasStateSymbol = Symbol.for("openclaw.browser.session-tabs.volat
 const volatileExactStateSymbol = Symbol.for("openclaw.browser.session-tabs.exact-volatile-aliases");
 
 function interactionKey(identity: AliasIdentity): string {
-  const route = identity.route
-    ? browserSessionTabRouteKey(identity.route)
-    : browserSessionTabRouteKey({ kind: "browser-control" });
+  const route = browserSessionTabRouteKey(identity.route ?? { kind: "browser-control" });
   return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
 }
 
-function normalizedTargetIds(
-  identity: AliasIdentity,
+function normalizedAliases<T extends string | undefined>(
+  primary: T,
   aliases: Array<string | undefined>,
-): Set<string> {
-  return new Set([
-    identity.targetId,
-    ...aliases.flatMap((alias) => {
-      const targetId = alias?.trim();
-      return targetId ? [targetId] : [];
-    }),
-  ]);
-}
-
-function normalizedProfiles(
-  identity: AliasIdentity,
-  aliases: Array<string | undefined>,
-): Set<string | undefined> {
-  const profiles = new Set<string | undefined>([identity.profile]);
-  for (const alias of aliases) {
-    const profile = alias?.trim();
-    if (profile) {
-      profiles.add(profile);
-    }
-  }
-  return profiles;
+): Set<T | string> {
+  return new Set([primary, ...normalizeTrimmedStringList(aliases)]);
 }
 
 function durableKeysByInteraction(): Map<string, Set<string>> {
-  const state = globalThis as typeof globalThis & {
-    [durableAliasStateSymbol]?: Map<string, Set<string>>;
-  };
-  state[durableAliasStateSymbol] ??= new Map();
-  return state[durableAliasStateSymbol];
+  return resolveGlobalMap(durableAliasStateSymbol);
 }
 
 function durableExactKeysByInteraction(): Map<string, Set<string>> {
-  const state = globalThis as typeof globalThis & {
-    [durableExactStateSymbol]?: Map<string, Set<string>>;
-  };
-  state[durableExactStateSymbol] ??= new Map();
-  return state[durableExactStateSymbol];
+  return resolveGlobalMap(durableExactStateSymbol);
 }
 
-function removeStorageKey(mappings: Map<string, Set<string>>, storageKey: string): void {
-  for (const [key, storageKeys] of mappings) {
-    storageKeys.delete(storageKey);
-    if (storageKeys.size === 0) {
+function removeAliasTarget<T extends Set<string> | Map<string, VolatileAliasTarget>>(
+  mappings: Map<string, T>,
+  targetKey: string,
+): void {
+  for (const [key, targets] of mappings) {
+    targets.delete(targetKey);
+    if (targets.size === 0) {
       mappings.delete(key);
     }
   }
@@ -89,8 +64,8 @@ export function resetDurableTabAliases(): void {
 }
 
 export function clearDurableTabAliases(storageKey: string): void {
-  removeStorageKey(durableKeysByInteraction(), storageKey);
-  removeStorageKey(durableExactKeysByInteraction(), storageKey);
+  removeAliasTarget(durableKeysByInteraction(), storageKey);
+  removeAliasTarget(durableExactKeysByInteraction(), storageKey);
 }
 
 export function rememberDurableTabAliases(
@@ -102,12 +77,12 @@ export function rememberDurableTabAliases(
   clearDurableTabAliases(storageKey);
   const mappings = durableKeysByInteraction();
   const exactMappings = durableExactKeysByInteraction();
-  for (const profile of normalizedProfiles(identity, profileAliases)) {
+  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactStorageKeys = exactMappings.get(exactKey) ?? new Set<string>();
     exactStorageKeys.add(storageKey);
     exactMappings.set(exactKey, exactStorageKeys);
-    for (const targetId of normalizedTargetIds(identity, aliases)) {
+    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
       const key = interactionKey({ ...identity, profile, targetId });
       const storageKeys = mappings.get(key) ?? new Set<string>();
       storageKeys.add(storageKey);
@@ -139,37 +114,17 @@ function volatileAliasTargetKey(target: VolatileAliasTarget): string {
 }
 
 function volatileAliasesByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  const state = globalThis as typeof globalThis & {
-    [volatileAliasStateSymbol]?: Map<string, Map<string, VolatileAliasTarget>>;
-  };
-  state[volatileAliasStateSymbol] ??= new Map();
-  return state[volatileAliasStateSymbol];
+  return resolveGlobalMap(volatileAliasStateSymbol);
 }
 
 function volatileExactTargetsByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  const state = globalThis as typeof globalThis & {
-    [volatileExactStateSymbol]?: Map<string, Map<string, VolatileAliasTarget>>;
-  };
-  state[volatileExactStateSymbol] ??= new Map();
-  return state[volatileExactStateSymbol];
-}
-
-function removeVolatileTarget(
-  mappings: Map<string, Map<string, VolatileAliasTarget>>,
-  targetKey: string,
-): void {
-  for (const [key, targets] of mappings) {
-    targets.delete(targetKey);
-    if (targets.size === 0) {
-      mappings.delete(key);
-    }
-  }
+  return resolveGlobalMap(volatileExactStateSymbol);
 }
 
 export function clearVolatileTabAliases(sessionKey: string, tabKey: string): void {
   const targetKey = volatileAliasTargetKey({ sessionKey, tabKey });
-  removeVolatileTarget(volatileAliasesByInteraction(), targetKey);
-  removeVolatileTarget(volatileExactTargetsByInteraction(), targetKey);
+  removeAliasTarget(volatileAliasesByInteraction(), targetKey);
+  removeAliasTarget(volatileExactTargetsByInteraction(), targetKey);
 }
 
 export function rememberVolatileTabAliases(
@@ -182,12 +137,12 @@ export function rememberVolatileTabAliases(
   const target = { sessionKey: identity.sessionKey, tabKey };
   const mappings = volatileAliasesByInteraction();
   const exactMappings = volatileExactTargetsByInteraction();
-  for (const profile of normalizedProfiles(identity, profileAliases)) {
+  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactTargets = exactMappings.get(exactKey) ?? new Map<string, VolatileAliasTarget>();
     exactTargets.set(volatileAliasTargetKey(target), target);
     exactMappings.set(exactKey, exactTargets);
-    for (const targetId of normalizedTargetIds(identity, aliases)) {
+    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
       const key = interactionKey({ ...identity, profile, targetId });
       const targets = mappings.get(key) ?? new Map<string, VolatileAliasTarget>();
       targets.set(volatileAliasTargetKey(target), target);

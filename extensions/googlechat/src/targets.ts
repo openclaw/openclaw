@@ -1,6 +1,5 @@
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Googlechat plugin module implements targets behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage, getGoogleChatSpace } from "./api.js";
@@ -78,9 +77,6 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
     throw new Error("Missing Google Chat target.");
   }
   const base = stripMessageSuffix(normalized);
-  if (isGoogleChatSpaceTarget(base)) {
-    return { name: base };
-  }
   if (isGoogleChatUserTarget(base)) {
     const dm = await findGoogleChatDirectMessage({
       account: params.account,

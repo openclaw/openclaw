@@ -1,15 +1,15 @@
-import {
-  type AccessGroupMembershipFact,
-  type ChannelIngressEventInput,
-  type ChannelIngressContextBinding,
-  type IdentifierAuthentication,
-  createChannelIngressResolver,
-  type ChannelIngressIdentitySubjectInput,
-  type ResolveChannelMessageIngressParams,
+import type {
+  AccessGroupMembershipFact,
+  ChannelIngressEventInput,
+  ChannelIngressContextBinding,
+  IdentifierAuthentication,
+  ChannelIngressIdentitySubjectInput,
+  ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { discordIngressIdentity } from "./ingress-identity.js";
 
@@ -84,7 +84,7 @@ function createDiscordIngressResolver(params: {
   readStoreAllowFrom?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
   useDefaultPairingStore?: boolean;
 }) {
-  return createChannelIngressResolver({
+  return getDiscordRuntime().channel.inbound.ingress.createResolver({
     channelId: DISCORD_CHANNEL_ID,
     accountId: params.accountId,
     identity: discordIngressIdentity,
@@ -137,11 +137,7 @@ export async function resolveDiscordDmCommandAccess(params: {
   minIdentifierAuthentication?: IdentifierAuthentication;
 }) {
   return await createDiscordIngressResolver({
-    accountId: params.accountId,
-    cfg: params.cfg,
-    token: params.token,
-    rest: params.rest,
-    readStoreAllowFrom: params.readStoreAllowFrom,
+    ...params,
     useDefaultPairingStore: params.readStoreAllowFrom == null,
   }).message({
     subject: createDiscordDmIngressSubject(params.sender),
@@ -197,12 +193,7 @@ export async function resolveDiscordTextCommandAccess(params: {
   const accessGroupMembership = params.memberAccessConfigured
     ? [syntheticAccessGroupMembership(memberAccessGroup, params.memberAllowed)]
     : [];
-  const result = await createDiscordIngressResolver({
-    accountId: params.accountId,
-    cfg: params.cfg,
-    token: params.token,
-    rest: params.rest,
-  }).command({
+  return await createDiscordIngressResolver(params).command({
     subject: createDiscordDmIngressSubject(params.sender),
     conversation: {
       kind: "channel",
@@ -228,5 +219,4 @@ export async function resolveDiscordTextCommandAccess(params: {
       modeWhenAccessGroupsOff: "configured",
     },
   });
-  return result;
 }

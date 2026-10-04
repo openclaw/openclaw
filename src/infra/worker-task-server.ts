@@ -1,172 +1,77 @@
-import { parentPort, type Transferable } from "node:worker_threads";
-import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import type { MessagePort, Transferable } from "node:worker_threads";
 import {
-  createWorkerTaskControl,
-  observeWorkerTaskCancellation,
+  serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
+  type WorkerTaskChannel,
   type WorkerTaskControl,
-} from "./worker-task-native-sections.js";
+} from "@openclaw/worker-runtime/worker";
+import { loggingState } from "../logging/state.js";
+import {
+  applyAgentDatabaseReaderRequest,
+  decodeAgentDatabaseReaderRequest,
+  installDeletedAgentDatabaseFences,
+} from "./agent-database-readers.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
 
-type WorkerChannelResponse = { input: unknown; consumed: () => void };
-type WorkerConversation = {
-  taskId: number;
-  responseId: number;
-  pending?: Deferred<WorkerChannelResponse>;
-  assertCurrent: () => void;
-  cancelPending: (error: unknown) => void;
-};
+export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
-/** A conversation never outlives the pool task or crosses worker generations. */
-export type WorkerTaskChannel = {
-  consumeInput: () => void;
-  request: (
-    value: unknown,
-    transferList?: readonly Transferable[],
-  ) => Promise<{ input: unknown; consumed: () => void }>;
-};
+type WorkerTaskHandler<Output> = (
+  input: unknown,
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+) => Output | Promise<Output>;
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+  handler: WorkerTaskHandler<Output>,
   options: { transferList?: (value: Output) => Transferable[] } = {},
 ): void {
-  const port = parentPort;
-  if (!port) {
-    return;
-  }
-  let active: WorkerConversation | undefined;
-  let cancelledResponse: { taskId: number; responseId: number } | undefined;
-  port.on(
-    "message",
-    (message: {
-      input: unknown;
-      taskId: number;
-      interactive?: boolean;
-      responseId?: number;
-      nativeSections: SharedArrayBuffer;
-    }) => {
-      if (message.responseId !== undefined) {
-        if (
-          message.taskId === cancelledResponse?.taskId &&
-          message.responseId === cancelledResponse.responseId
-        ) {
-          return;
+  serveOwnedWorkerTasks(handler, options);
+}
+
+/** Every served worker closes its agent database readers by path between tasks; owners may add more. */
+export function serveOwnedWorkerTasks<Output>(
+  handler: WorkerTaskHandler<Output>,
+  options: {
+    transferList?: (value: Output) => Transferable[];
+    closeResource?: (key?: string) => void | Promise<void>;
+    encodeResourceError?: (error: unknown) => unknown;
+  } = {},
+): void {
+  let memoryPort: MessagePort;
+  let memorySamplesStarted = false;
+  serveRuntimeWorkerTasks<Output, [string, string][]>(
+    handler,
+    {
+      ...options,
+      closeResource: async (key) => {
+        const request = decodeAgentDatabaseReaderRequest(key);
+        if (!request && !options.closeResource) {
+          throw new Error("Worker does not own retained resources");
         }
-        if (
-          !active ||
-          message.taskId !== active.taskId ||
-          message.responseId !== active.responseId ||
-          !active.pending
-        ) {
-          throw new Error("stale worker task response");
+        if (request) {
+          await applyAgentDatabaseReaderRequest(request);
         }
-        try {
-          active.assertCurrent();
-        } catch (error) {
-          active.cancelPending(error);
-          return;
+        if (!request || request.kind === "close") {
+          await options.closeResource?.(key);
         }
-        const pending = active.pending;
-        active.pending = undefined;
-        let consumed = false;
-        const taskId = message.taskId;
-        const id = message.responseId;
-        pending.resolve({
-          input: message.input,
-          consumed: () => {
-            if (consumed) {
-              return;
-            }
-            consumed = true;
-            port.postMessage({ status: "consumed", taskId, id });
-          },
-        });
-        return;
-      }
-      if (active) {
-        throw new Error("overlapping worker tasks");
-      }
-      const nativeSections = new Int32Array(message.nativeSections);
-      const task: WorkerConversation = {
-        taskId: message.taskId,
-        responseId: 0,
-        assertCurrent: () => control.throwIfCancelled(),
-        cancelPending: (error) => {
-          const pending = task.pending;
-          if (!pending) {
-            return;
-          }
-          task.pending = undefined;
-          cancelledResponse = { taskId: task.taskId, responseId: task.responseId };
-          pending.reject(error);
-        },
-      };
-      const control = createWorkerTaskControl(nativeSections, () => active === task);
-      active = task;
-      const stopObserving = message.interactive
-        ? observeWorkerTaskCancellation(
-            nativeSections,
-            () => active === task,
-            () => task.cancelPending(new Error("worker task cancelled")),
-          )
-        : undefined;
-      const channel: WorkerTaskChannel | undefined = message.interactive
-        ? {
-            consumeInput: () =>
-              port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
-            request: (value, transferList) => {
-              control.throwIfCancelled();
-              if (active !== task || task.pending) {
-                throw new Error("closed or busy worker channel");
-              }
-              const pending = createDeferredCore<WorkerChannelResponse>();
-              task.pending = pending;
-              try {
-                const transfers = transferList ? [...transferList] : [];
-                control.throwIfCancelled();
-                port.postMessage(
-                  {
-                    status: "request",
-                    taskId: task.taskId,
-                    id: ++task.responseId,
-                    value,
-                  },
-                  transfers,
-                );
-              } catch (error) {
-                task.pending = undefined;
-                pending.reject(error);
-              }
-              return pending.promise;
-            },
-          }
-        : undefined;
-      void Promise.resolve()
-        .then(async () => {
-          try {
-            control.throwIfCancelled();
-            return await handler(message.input, channel, control);
-          } finally {
-            await stopObserving?.();
-            active = undefined;
-          }
-        })
-        .then((value) => {
-          port.postMessage(
-            { status: "ok", value, taskId: task.taskId },
-            options.transferList?.(value) ?? [],
-          );
-        })
-        .catch((error: unknown) => {
-          port.postMessage({
-            status: "failed",
-            taskId: task.taskId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+      },
+    },
+    {
+      initialize(port) {
+        // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
+        loggingState.forceConsoleToStderr = true;
+        memoryPort = port;
+      },
+      onMessage(sampleMemory) {
+        if (sampleMemory && !memorySamplesStarted) {
+          memorySamplesStarted = true;
+          serveWorkerMemorySamples(memoryPort);
+        }
+        cancelWorkerIdleGc();
+      },
+      installTaskContext: installDeletedAgentDatabaseFences,
+      onIdle: scheduleWorkerIdleGc,
     },
   );
 }

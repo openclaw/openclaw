@@ -1,13 +1,30 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { racePromiseWithAbortSignal, waitForAbortSignal } from "../../infra/abort-signal.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
+
+function observeDestroyIntent(environmentId: string) {
+  const committed = createDeferredCore();
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if (
+      "all" in change &&
+      change.scope === "worker-environments" &&
+      support.testState.store
+        .list()
+        .some((row) => row.environmentId === environmentId && row.destroyRequestedAtMs !== null)
+    ) {
+      committed.resolve();
+    }
+  });
+  return { committed: committed.promise, unsubscribe };
+}
 
 function createRuntimeManager(
   transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>,
@@ -38,9 +55,9 @@ describe("worker provisioning cancellation ownership", () => {
   it.each(["bootstrapping", "ready", "idle"] as const)(
     "cancels persisted SSH bootstrap from %s while retaining its child and lease cleanup",
     async (state) => {
-      let record = support.seedBootstrapping(`worker-persisted-bootstrap-stop-${state}`);
+      let record = await support.seedBootstrapping(`worker-persisted-bootstrap-stop-${state}`);
       if (state !== "bootstrapping") {
-        record = support.testState.store.transition({
+        record = await support.testState.store.transition({
           environmentId: record.environmentId,
           from: record.state,
           to: "ready",
@@ -50,7 +67,7 @@ describe("worker provisioning cancellation ownership", () => {
           }),
         });
         if (state === "idle") {
-          record = support.testState.store.transition({
+          record = await support.testState.store.transition({
             environmentId: record.environmentId,
             from: record.state,
             to: "idle",
@@ -83,6 +100,7 @@ describe("worker provisioning cancellation ownership", () => {
         settled = true;
       });
       let teardown: ReturnType<typeof service.destroy> | undefined;
+      const stopIntent = observeDestroyIntent(record.environmentId);
       try {
         await Promise.race([
           entered.promise,
@@ -97,13 +115,15 @@ describe("worker provisioning cancellation ownership", () => {
         }
         controller.abort(new DOMException("Stop persisted bootstrap", "AbortError"));
         teardown = service.destroy(record.environmentId);
-        await support.waitForFast(() => expect(bootstrapSignal?.aborted).toBe(true));
+        await stopIntent.committed;
+        expect(bootstrapSignal?.aborted).toBe(true);
         expect(settled).toBe(false);
         expect(destroy).not.toHaveBeenCalled();
         expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toEqual(
           expect.any(Number),
         );
       } finally {
+        stopIntent.unsubscribe();
         childClosed.resolve();
         await Promise.allSettled([recovery, teardown]);
         await uninstall();
@@ -254,10 +274,11 @@ describe("worker provisioning cancellation ownership", () => {
       await started.promise;
       const record = support.testState.store.list()[0]!;
       let teardown: ReturnType<typeof service.destroy> | undefined;
+      const stopIntent = observeDestroyIntent(record.environmentId);
       try {
         controller.abort(reason);
         teardown = service.destroy(record.environmentId);
-        await setImmediate();
+        await stopIntent.committed;
         expect(providerSignal?.aborted).toBe(true);
         expect(support.testState.store.get(record.environmentId)).toMatchObject({
           state: "provisioning",
@@ -266,6 +287,7 @@ describe("worker provisioning cancellation ownership", () => {
         expect(events).toEqual(["provision", "abort"]);
         expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
       } finally {
+        stopIntent.unsubscribe();
         childClosed.resolve();
         await creation;
         await teardown;
@@ -280,111 +302,94 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it.each(["warm-runtime", "enrollment"] as const)(
-    "cleans the %s lease while shutdown retains its cancelled bundle producer",
-    async (phase) => {
-      const preparing = createDeferredCore();
-      const prepared = createDeferredCore();
-      const controller = new AbortController();
-      const events: string[] = [];
-      support.testState.prepareInstallation = vi.fn(async () => {
-        events.push("bundle-started");
-        preparing.resolve();
-        await prepared.promise;
-        events.push("bundle-settled");
-        return support.BUNDLE_ARTIFACT;
-      });
-      const transfer = createWorkerBootstrapArtifactTransferService();
-      const grant = vi.spyOn(transfer, "prepare");
-      const manager = createRuntimeManager(transfer);
-      const destroy = vi.fn(async () => {
-        events.push("destroy");
-      });
-      const service = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn"],
-          requiresNodeEnrollment: true,
-          provisionBeforeInstallation: true,
-          provision: async (_profile, _operation, options) => {
-            events.push("allocated");
-            if (phase === "warm-runtime") {
-              await options!.prepareNodeRuntime!();
-            } else {
-              await options!.beginNodeEnrollment!();
-              await waitForAbortSignal(options!.signal);
-              options!.signal!.throwIfAborted();
-            }
-            throw new Error("Cancelled runtime preparation unexpectedly completed");
-          },
-          destroy,
-        }),
-        {
-          prepareNodeBootstrap: manager.prepare,
-          prepareNodeRuntime: manager.prepareRuntime,
-          closeNodeRuntime: manager.closeRuntime,
-          prepareNodeEnrollment: manager.begin,
-          closeNodeEnrollment: manager.close,
-          stopNodeEnrollmentWaits: manager.stop,
-        },
-      );
-      let settled = false;
-      const creation = service
-        .createWithRequest({
-          profileId: "development",
-          idempotencyKey: `${phase}-bundle-stop`,
-          executionMode: "worker-turn",
-          signal: controller.signal,
-        })
-        .catch((error: unknown) => error)
-        .finally(() => {
-          settled = true;
-        });
-      let teardown: ReturnType<typeof service.destroy> | undefined;
-      let shutdown: Promise<void> | undefined;
-      let shutdownSettled = false;
-      try {
-        await Promise.race([
-          preparing.promise,
-          creation.then((result) => {
-            throw new Error("Creation ended before bundle preparation", { cause: result });
-          }),
-        ]);
-        const record = support.testState.store.list()[0]!;
-        controller.abort(new DOMException("Stop bundle packaging", "AbortError"));
-        teardown = service.destroy(record.environmentId);
-        await support.waitForFast(() => expect(settled).toBe(true));
-        await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-        expect(events).toEqual(["allocated", "bundle-started", "destroy"]);
-        expect(destroy).toHaveBeenCalledOnce();
-        expect(grant).toHaveBeenCalledTimes(phase === "enrollment" ? 1 : 0);
-        shutdown = service.stop().then(() => {
-          shutdownSettled = true;
-        });
-        await setImmediate();
-        expect(shutdownSettled).toBe(false);
-      } finally {
-        prepared.resolve();
-        await Promise.allSettled([creation, teardown, shutdown]);
-        manager.stop();
-        grant.mockRestore();
-      }
-      expect(await creation).toMatchObject({ name: "AbortError" });
-      expect(shutdownSettled).toBe(true);
-      expect(events).toEqual(["allocated", "bundle-started", "destroy", "bundle-settled"]);
-    },
-  );
-
-  it("does not let older runtime packaging revoke a newer enrollment", async () => {
+  it("cancels node bundle preparation before allocation while shutdown retains its producer", async () => {
     const preparing = createDeferredCore();
     const prepared = createDeferredCore();
+    const controller = new AbortController();
+    const events: string[] = [];
+    support.testState.prepareInstallation = vi.fn(async () => {
+      events.push("bundle-started");
+      preparing.resolve();
+      await prepared.promise;
+      events.push("bundle-settled");
+      return support.BUNDLE_ARTIFACT;
+    });
+    const transfer = createWorkerBootstrapArtifactTransferService();
+    const grant = vi.spyOn(transfer, "prepare");
+    const manager = createRuntimeManager(transfer);
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
+    const service = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        requiresNodeEnrollment: true,
+        provisionBeforeInstallation: true,
+        provision: async () => {
+          events.push("allocated");
+          throw new Error("Cancelled runtime preparation unexpectedly completed");
+        },
+        destroy,
+      }),
+      {
+        prepareNodeBootstrap: manager.prepare,
+        prepareNodeRuntime: manager.prepareRuntime,
+        closeNodeRuntime: manager.closeRuntime,
+        prepareNodeEnrollment: manager.begin,
+        closeNodeEnrollment: manager.close,
+        stopNodeEnrollmentWaits: manager.stop,
+      },
+    );
+    let settled = false;
+    const creation = service
+      .createWithRequest({
+        profileId: "development",
+        idempotencyKey: "node-bundle-stop",
+        executionMode: "worker-turn",
+        signal: controller.signal,
+      })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    let teardown: ReturnType<typeof service.destroy> | undefined;
+    let shutdown: Promise<void> | undefined;
+    let shutdownSettled = false;
+    try {
+      await Promise.race([
+        preparing.promise,
+        creation.then((result) => {
+          throw new Error("Creation ended before bundle preparation", { cause: result });
+        }),
+      ]);
+      const record = support.testState.store.list()[0]!;
+      controller.abort(new DOMException("Stop bundle packaging", "AbortError"));
+      teardown = service.destroy(record.environmentId);
+      await support.waitForFast(() => expect(settled).toBe(true));
+      await expect(teardown).resolves.toMatchObject({ state: "failed" });
+      expect(events).toEqual(["bundle-started"]);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(grant).not.toHaveBeenCalled();
+      shutdown = service.stop().then(() => {
+        shutdownSettled = true;
+      });
+      await setImmediate();
+      expect(shutdownSettled).toBe(false);
+    } finally {
+      prepared.resolve();
+      await Promise.allSettled([creation, teardown, shutdown]);
+      manager.stop();
+      grant.mockRestore();
+    }
+    expect(await creation).toMatchObject({ name: "AbortError" });
+    expect(shutdownSettled).toBe(true);
+    expect(events).toEqual(["bundle-started", "bundle-settled"]);
+  });
+
+  it("does not let queued runtime preparation revoke a newer enrollment", async () => {
     const enrolled = createDeferredCore<WorkerNodeEnrollment>();
     const runtimeResult = createDeferredCore<unknown>();
     const finishProvider = createDeferredCore();
-    support.testState.prepareInstallation = vi.fn(async () => {
-      preparing.resolve();
-      await prepared.promise;
-      return support.BUNDLE_ARTIFACT;
-    });
     const transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createRuntimeManager(transfer);
     const deviceId = "newer-enrollment-device";
@@ -394,17 +399,20 @@ describe("worker provisioning cancellation ownership", () => {
         requiresNodeEnrollment: true,
         provisionBeforeInstallation: true,
         provision: async (_profile, _operation, options) => {
-          void options!.prepareNodeRuntime!().then(runtimeResult.resolve, runtimeResult.resolve);
-          await preparing.promise;
           const record = support.testState.store.list()[0]!;
-          const owner = support.testState.store.ensureNodeEnrollment(record.environmentId);
-          if (!owner.nodeSetupId) {
+          const owner = await support.testState.store.ensureNodeEnrollment(record.environmentId);
+          const setupId = owner.nodeSetupId;
+          if (!setupId) {
             throw new Error("Expected persisted enrollment setup identity");
           }
-          bindCloudWorkerSetupCompletion({
-            db: support.testState.stateDb.db,
-            completion: { setupId: owner.nodeSetupId, deviceId, completedAtMs: 1_000 },
+          await completeWorkerNodeSetupForTest({
+            baseDir: support.testState.root,
+            store: support.testState.store,
+            setupId,
+            deviceId,
+            completedAtMs: 1_000,
           });
+          void options!.prepareNodeRuntime!().then(runtimeResult.resolve, runtimeResult.resolve);
           enrolled.resolve(await options!.beginNodeEnrollment!());
           await finishProvider.promise;
           return { leaseId: "newer-enrollment-lease", node: { deviceId }, sharedHost: false };
@@ -440,14 +448,12 @@ describe("worker provisioning cancellation ownership", () => {
       });
       expect(authorization).toBeDefined();
       expect(enrollment.signal?.aborted).toBe(false);
-      prepared.resolve();
       await expect(runtimeResult.promise).resolves.toMatchObject({
         message: "Worker node enrollment has already begun",
       });
       expect(enrollment.signal?.aborted).toBe(false);
       expect(transfer.isAuthorizationCurrent(authorization!)).toBe(true);
     } finally {
-      prepared.resolve();
       finishProvider.resolve();
       await creation;
       manager.stop();
@@ -663,6 +669,7 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
   it("retains cancellation after the caller timeout until the real provider exits", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const entered = createDeferredCore();
     const exited = createDeferredCore();
     const controller = new AbortController();
@@ -686,24 +693,43 @@ describe("worker provisioning cancellation ownership", () => {
         signal: controller.signal,
       })
       .catch((error: unknown) => error);
-    await entered.promise;
-    await creation;
-    const record = support.testState.store.list()[0]!;
-    controller.abort(new Error("Stop after provider timeout"));
-    const teardown = service.destroy(record.environmentId);
+    let stopIntent: ReturnType<typeof observeDestroyIntent> | undefined;
+    let teardownResult: Promise<unknown> | undefined;
     try {
-      await setImmediate();
+      await Promise.race([
+        entered.promise,
+        creation.then((result) => {
+          throw new Error("Creation ended before provider entry", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await creation).toMatchObject({ code: "provider_failure" });
+      const record = support.testState.store.list()[0]!;
+      stopIntent = observeDestroyIntent(record.environmentId);
+      controller.abort(new Error("Stop after provider timeout"));
+      teardownResult = service.destroy(record.environmentId).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await Promise.race([
+        stopIntent.committed,
+        teardownResult.then((result) => {
+          throw new Error("Teardown ended before cancellation intent committed", { cause: result });
+        }),
+      ]);
       expect(signal?.aborted).toBe(true);
       expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBe(
         support.testState.nowMs,
       );
       expect(destroy).not.toHaveBeenCalled();
     } finally {
+      stopIntent?.unsubscribe();
       exited.resolve();
-      await teardown;
+      await Promise.all([creation, teardownResult]);
     }
+    expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
     expect(destroy).toHaveBeenCalledOnce();
-    expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
+    expect(support.testState.store.list()[0]?.state).toBe("destroyed");
   });
 
   it("cancels the allocated node installer and joins it before destroying the lease", async () => {

@@ -1,11 +1,79 @@
-import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseBrowserTabToolBinding } from "./browser-tool-binding.js";
+import {
+  BrowserToolOutputSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+  type BrowserToolCapabilities,
+} from "./browser-tool.schema.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
-/** Build the Browser tool guidance shared by lazy registration and runtime execution. */
-export function describeBrowserTool(opts: {
-  targetDefault: "sandbox" | "host";
-  hostHint: string;
+/** Lazy registration and execution expose exactly the same configured tool. */
+export function createBrowserToolDefinition(
+  opts:
+    | {
+        runToolBinding?: unknown;
+        toolCapabilities?: BrowserToolCapabilities;
+        sandboxBridgeUrl?: string;
+        allowHostControl?: boolean;
+      }
+    | undefined,
+  getConfig: () => OpenClawConfig | undefined,
+) {
+  const parsed =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (parsed && !parsed.ok) {
+    throw new Error(`invalid browser run binding: ${parsed.error}`);
+  }
+  const binding = parsed?.binding;
+  const config = getConfig();
+  const capabilities =
+    opts?.toolCapabilities ??
+    (() => {
+      const profile =
+        binding?.target === "host"
+          ? resolveProfile(resolveBrowserConfig(config?.browser, config), binding.profile)
+          : undefined;
+      return resolveBrowserToolCapabilities({
+        tabBound: Boolean(binding),
+        evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+        ...(profile ? { profileCapabilities: getBrowserProfileCapabilities(profile) } : {}),
+      });
+    })();
+  return {
+    binding,
+    capabilities,
+    metadata: {
+      label: "Browser",
+      name: "browser",
+      resultContentSource: "network" as const,
+      description: describeBrowserTool({
+        config,
+        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+        allowHostControl: opts?.allowHostControl,
+        capabilities,
+      }),
+      parameters: createBrowserToolSchema(capabilities),
+      outputSchema: BrowserToolOutputSchema,
+    },
+  };
+}
+
+function describeBrowserTool(opts: {
+  config?: OpenClawConfig;
+  sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
   capabilities: BrowserToolCapabilities;
 }): string {
+  const nodePolicy = opts.config?.gateway?.nodes?.browser;
+  const usePinnedNode =
+    nodePolicy?.mode !== "off" &&
+    Boolean(nodePolicy?.node?.trim()) &&
+    !opts.sandboxBridgeUrl?.trim() &&
+    opts.allowHostControl !== false;
   const actions = new Set(opts.capabilities.actions);
   const evaluateEnabled = opts.capabilities.actKinds.includes("evaluate");
   const lines = [
@@ -13,7 +81,7 @@ export function describeBrowserTool(opts: {
     ...(actions.has("profiles")
       ? [
           "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
-          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name. Use only when the task requires an existing session and the user has authorized it.",
+          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name.",
         ]
       : []),
     ...(actions.has("importprofile")
@@ -24,14 +92,16 @@ export function describeBrowserTool(opts: {
     `For Chrome MCP existing-session profiles, omit timeoutMs on act:type, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.${evaluateEnabled ? " act:evaluate supports timeoutMs." : ""}`,
     ...(!opts.capabilities.tabBound
       ? [
-          'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
+          usePinnedNode
+            ? 'Omit target and node to use the configured browser node. If it is unavailable, report the routing error rather than switching to host. Set target="host" only when you intend to use the Gateway host browser; it bypasses configured node routing.'
+            : 'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
         ]
       : []),
     "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
     "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
     ...(!opts.capabilities.tabBound
       ? [
-          'Only create a Browser dashboard when the user asks for a dashboard. Opening the browser sidebar or side panel does not require a widget. For a requested agent-controllable HTTP(S) dashboard, first call tool dashboard with action="widget_put", pluginKind="browser:dashboard", name=<stable widget name>, props={url}, and size="full". Next call tool browser with action="open", dashboard=<that widget name>, and no targetUrl. Then call tool dashboard with action="set_presentation", presentation="expanded". The dashboard tool owns widget authoring and presentation; the browser tool owns page interaction. The widget uses the local managed openclaw profile by default. For snapshot, navigate, act, and other tab actions, call tool browser with dashboard=<widget name>; omit targetId and route overrides. This operates the same page the user sees and preserves it while hidden and through ordinary cleanup. Call browser with action="close" and dashboard to request stop, or action="open" and dashboard to resume its saved URL. A session:website widget is a lightweight iframe and cannot be controlled through this selector.',
+          'Only create a Browser dashboard when the user asks for a dashboard. Opening the browser sidebar or side panel does not require a widget. For a requested agent-controllable HTTP(S) dashboard, first call tool dashboard with action="widget_put", pluginKind="browser:dashboard", name=<stable widget name>, props={url}, and size="full". Next call tool browser with action="open", dashboard=<that widget name>, and no targetUrl. Then call tool dashboard with action="set_presentation", presentation="expanded". The dashboard tool owns widget authoring and presentation; the browser tool owns page interaction. Use dashboard=<widget name> and omit targetId/profile/route overrides. Administrator dashboards use managed-profile state. Non-admin selectors use an empty isolated context in the configured default local managed profile; supported actions are tabs, focus, navigate, snapshot, screenshot, act, open and close. Session mode is unavailable when a sandbox is required or model selection is locked. Agent and viewer must use the same mode to share page state. Hiding a dashboard preserves its page; resetting a session closes its isolated context. General browser actions retain their configured host/profile access. Call browser with action="close" and dashboard to request stop, or action="open" and dashboard to resume its saved URL. A session:website widget is a lightweight iframe and cannot be controlled through this selector.',
         ]
       : []),
     'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -62,8 +132,10 @@ export function describeBrowserTool(opts: {
       : []),
     ...(!opts.capabilities.tabBound
       ? [
-          `target selects browser location (sandbox|host|node). Default: ${opts.targetDefault}.`,
-          opts.hostHint,
+          `target selects browser location (sandbox|host|node). Default: ${usePinnedNode ? "configured browser node" : opts.sandboxBridgeUrl ? "sandbox" : "host"}.`,
+          opts.allowHostControl === false
+            ? "Host target blocked by policy."
+            : "Host target allowed.",
         ]
       : []),
   ];

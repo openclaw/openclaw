@@ -1,4 +1,5 @@
 import { getDeferredPluginMigrationConfigFacts } from "../../../config/deferred-plugin-migration-config.js";
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 // Validating legacy config migration wrapper used by doctor config flow.
 import type { OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectRawWithPlugins } from "../../../config/validation.js";
@@ -36,5 +37,9 @@ export function migrateLegacyConfig(
     changes.push("Migration applied; other validation issues remain — run doctor to review.");
     return { config: next as OpenClawConfig, ...diagnostics, partiallyValid: true };
   }
-  return { config: validated.config, sourceConfig: next as OpenClawConfig, ...diagnostics };
+  return {
+    config: inheritLegacyDefaultAgentId(resolvedCandidate, validated.config),
+    sourceConfig: next as OpenClawConfig,
+    ...diagnostics,
+  };
 }

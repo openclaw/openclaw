@@ -97,7 +97,9 @@ export async function runGatewayServiceUpdateCommand(
             await operation();
           }
         },
-        grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+        {
+          originalRoot: grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+        },
       ),
     );
   } catch (cause) {

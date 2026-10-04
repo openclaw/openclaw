@@ -7,8 +7,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -21,28 +21,14 @@ function dedupeAllowlistEntries(
   entries: string[],
   entryKey: (entry: string) => string = normalizeLowercaseStringOrEmpty,
 ): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const entry of entries) {
-    const normalized = entry.trim();
-    if (!normalized) {
-      continue;
-    }
-    const key = entryKey(normalized);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(normalized);
-  }
-  return deduped;
+  return dedupeByKey(entries.map((entry) => entry.trim()).filter(Boolean), entryKey);
 }
 
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
+  return dedupeAllowlistEntries([...(params.existing ?? []).map(String), ...params.additions]);
 }
 
 /** Splits lookup results into resolved mappings, unresolved display text, and id additions. */

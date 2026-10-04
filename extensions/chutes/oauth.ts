@@ -1,6 +1,3 @@
-/**
- * Chutes OAuth PKCE login flow.
- */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -15,25 +12,17 @@ import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
+  buildOAuthRequestSignal,
+  type OAuthCredentials,
+  type OAuthPrompt,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
-
-type OAuthPrompt = {
-  message: string;
-  placeholder?: string;
-};
-
-type OAuthCredentials = {
-  refresh: string;
-  access: string;
-  expires: number;
-  [key: string]: unknown;
-};
 
 type ChutesOAuthAppConfig = {
   clientId: string;
@@ -61,7 +50,7 @@ function parseRedirectUri(redirectUri: string): {
   if (url.protocol !== "http:") {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${redirectUri})`);
   }
-  const hostname = url.hostname || "127.0.0.1";
+  const hostname = url.hostname === "[::1]" ? "::1" : url.hostname || "127.0.0.1";
   if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
     throw new Error(
       `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
@@ -89,25 +78,6 @@ function parseManualOAuthInput(
     throw new Error("OAuth state mismatch - possible CSRF attack. Please retry login.");
   }
   return parsed;
-}
-
-function buildAuthorizeUrl(params: {
-  clientId: string;
-  redirectUri: string;
-  scopes: string[];
-  state: string;
-  challenge: string;
-}): string {
-  const qs = new URLSearchParams({
-    client_id: params.clientId,
-    redirect_uri: params.redirectUri,
-    response_type: "code",
-    scope: params.scopes.join(" "),
-    state: params.state,
-    code_challenge: params.challenge,
-    code_challenge_method: "S256",
-  });
-  return `${CHUTES_AUTHORIZE_ENDPOINT}?${qs.toString()}`;
 }
 
 function resolveChutesExpiresAt(value: unknown, now: number): number | undefined {
@@ -227,7 +197,7 @@ async function exchangeChutesCodeForTokens(params: {
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
-  } as ChutesStoredOAuth;
+  };
 }
 
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
@@ -286,25 +256,30 @@ export async function loginChutes(params: {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = params.createState?.() ?? randomBytes(16).toString("hex");
   const timeoutMs = params.timeoutMs ?? 3 * 60 * 1000;
-  const url = buildAuthorizeUrl({
-    clientId: params.app.clientId,
-    redirectUri: params.app.redirectUri,
-    scopes: params.app.scopes,
+  const query = new URLSearchParams({
+    client_id: params.app.clientId,
+    redirect_uri: params.app.redirectUri,
+    response_type: "code",
+    scope: params.app.scopes.join(" "),
     state,
-    challenge,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
   });
-
-  let codeAndState: { code: string; state: string };
-  if (params.manual) {
-    await params.onAuth({ url });
-    params.onProgress?.("Waiting for redirect URL...");
-    codeAndState = parseManualOAuthInput(
+  const url = `${CHUTES_AUTHORIZE_ENDPOINT}?${query}`;
+  const promptForCode = async () =>
+    parseManualOAuthInput(
       await params.onPrompt({
         message: "Paste the redirect URL",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       }),
       state,
     );
+
+  let codeAndState: { code: string; state: string };
+  if (params.manual) {
+    await params.onAuth({ url });
+    params.onProgress?.("Waiting for redirect URL...");
+    codeAndState = await promptForCode();
   } else {
     const redirect = parseRedirectUri(params.app.redirectUri);
     const callback = waitForLocalOAuthCallback({
@@ -322,13 +297,7 @@ export async function loginChutes(params: {
         throw error;
       }
       params.onProgress?.("OAuth callback not detected; paste redirect URL...");
-      return parseManualOAuthInput(
-        await params.onPrompt({
-          message: "Paste the redirect URL",
-          placeholder: `${params.app.redirectUri}?code=...&state=...`,
-        }),
-        state,
-      );
+      return await promptForCode();
     });
 
     await params.onAuth({ url });

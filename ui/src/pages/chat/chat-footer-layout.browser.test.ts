@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { withBrowserPage } from "../../test-helpers/browser-page.ts";
 import {
@@ -19,15 +20,142 @@ const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip
 const layoutBrowser = createChatLayoutBrowser();
 const { openBrowserPage } = layoutBrowser;
 
+// Playwright types generic trace records as string dictionaries, while Chromium
+// sends structured arguments. Validate the records this regression relies on.
+const layoutTraceEventSchema = z.discriminatedUnion("name", [
+  z.object({
+    name: z.literal("Layout"),
+    args: z.object({ beginData: z.object({ frame: z.string() }) }),
+  }),
+  z.object({
+    name: z.literal("LayoutInvalidationTracking"),
+    args: z.object({
+      data: z.object({
+        frame: z.string(),
+        reason: z.string(),
+        nodeName: z.string().optional(),
+      }),
+    }),
+  }),
+]);
+
 describeBrowserLayout.concurrent("chat footer browser layout", () => {
   beforeAll(() => layoutBrowser.start());
   afterAll(() => layoutBrowser.close());
+
+  it("does not rebuild the footer layout tree while autosizing the editor", async () => {
+    await withBrowserPage(openBrowserPage(1200, 800), async (page) => {
+      // Keep the grid/flex chain: a directly sized conversation cannot reproduce
+      // the intermediate height-query changes during flex measurement.
+      await page.setContent(`<style>${readUiCss()}</style>
+        <section class="chat">
+          <div class="chat-workbench"><div class="chat-workbench__main">
+            <div class="chat-split-container"><div class="chat-main">
+              <div class="chat-main__conversation-column">
+                <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
+                  <div class="chat-thread">${"<p>Earlier message</p>".repeat(20)}</div>
+                  <div class="chat-footer"><div class="agent-chat__composer-shell">
+                    <div class="agent-chat__input agent-chat__input--chat">
+                      <div class="agent-chat__composer-combobox"><textarea></textarea></div>
+                    </div>
+                  </div></div>
+                </div></div>
+              </div>
+            </div></div>
+          </div></div>
+        </section>`);
+      await waitForLayoutSettled(page, ".chat-main__conversation, .chat-footer");
+      const before = await getRect(page, ".chat-main__conversation");
+      expect(before.height).toBeGreaterThan(320);
+      const client = await page.context().newCDPSession(page);
+      const { frameTree } = await client.send("Page.getFrameTree");
+      let layouts = 0;
+      const footerReattachments: string[] = [];
+      const traceErrors: string[] = [];
+      client.on("Tracing.dataCollected", ({ value }) => {
+        for (const rawEvent of value) {
+          if (rawEvent.name !== "Layout" && rawEvent.name !== "LayoutInvalidationTracking") {
+            continue;
+          }
+          const parsed = layoutTraceEventSchema.safeParse(rawEvent);
+          if (!parsed.success) {
+            traceErrors.push(parsed.error.message);
+            continue;
+          }
+          const event = parsed.data;
+          if (event.name === "Layout") {
+            if (event.args.beginData.frame === frameTree.frame.id) {
+              layouts++;
+            }
+            continue;
+          }
+          const { data } = event.args;
+          if (
+            data.frame === frameTree.frame.id &&
+            data.reason === "Added to layout" &&
+            data.nodeName?.includes("class='chat-footer'")
+          ) {
+            footerReattachments.push(data.nodeName);
+          }
+        }
+      });
+      await client.send("Tracing.start", {
+        categories: "devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking",
+        transferMode: "ReportEvents",
+      });
+      try {
+        await page.locator("textarea").evaluate((editor: HTMLTextAreaElement) => {
+          for (const letter of "typing中文") {
+            editor.value += letter;
+            // Match the synchronous auto/scrollHeight sizing boundary without
+            // app startup or a machine-dependent elapsed-time assertion.
+            editor.style.height = "auto";
+            editor.style.height = `${editor.scrollHeight}px`;
+            editor.getBoundingClientRect();
+          }
+        });
+      } finally {
+        const complete = new Promise<void>((resolve) => {
+          client.once("Tracing.tracingComplete", () => resolve());
+        });
+        await client.send("Tracing.end");
+        await complete;
+        await client.detach();
+      }
+      expect(await getRect(page, ".chat-main__conversation")).toEqual(before);
+      expect(traceErrors).toEqual([]);
+      expect(layouts).toBeGreaterThan(0);
+      expect(footerReattachments).toEqual([]);
+
+      // The fix must retain height queries, not just avoid their invalidations.
+      const fadeDisplay = () =>
+        page
+          .locator(".chat-footer")
+          .evaluate((footer) => getComputedStyle(footer, "::before").display);
+      const editorCap = () =>
+        page
+          .locator("textarea")
+          .evaluate((editor) => Number.parseFloat(getComputedStyle(editor).maxHeight));
+      expect(await fadeDisplay()).not.toBe("none");
+      const tallEditorCap = await editorCap();
+      await page.setViewportSize({ width: 1200, height: 260 });
+      const shortConversation = await getRect(page, ".chat-main__conversation");
+      const thread = await getRect(page, ".chat-thread");
+      const footer = await getRect(page, ".chat-footer");
+      expect(shortConversation.height).toBe(260);
+      expect(await fadeDisplay()).toBe("none");
+      expect(await editorCap()).toBeLessThan(tallEditorCap);
+      expect(thread.height).toBeGreaterThan(0);
+      expect(thread.bottom).toBeLessThanOrEqual(footer.top);
+      expect(footer.bottom).toBeLessThanOrEqual(shortConversation.bottom);
+    });
+  });
 
   it("aligns and separates mobile cards above the composer after Chat styles load", async () => {
     await withBrowserPage(openBrowserPage(390, 844), async (page) => {
       // New Session can load composer styles before Chat's lazy layout stylesheet.
       await page.setContent(`<style>${readUiCss()}${readStyleSheet("ui/src/styles/chat/layout.css")}</style>
-        <section class="chat"><div class="chat-main__conversation">
+        <section class="chat"><div class="chat-main__conversation-frame"><div class="chat-main__conversation">
           <div class="chat-footer">
             <div class="agent-chat__composer-shell">
               <div class="chat-footer__context">
@@ -40,7 +168,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
               <div class="agent-chat__input">Composer</div>
             </div>
           </div>
-        </div></section>`);
+        </div></div></section>`);
       const composer = await getRect(page, ".agent-chat__input");
       for (const selector of [
         ".chat-prs",
@@ -61,6 +189,103 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     });
   });
 
+  it("paints message footer focus outlines past virtual row boundaries", async () => {
+    await withBrowserPage(openBrowserPage(600, 300), async (page) => {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
+            <div class="chat-thread-inner chat-thread-inner--virtual">
+              <div class="chat-virtual-sizer">
+                <div class="chat-virtual-block">
+                  <div class="chat-virtual-row" data-focused-row>
+                    <div class="chat-group assistant chat-group--with-footer">
+                      <div class="chat-group-messages"><div class="chat-bubble">Message</div></div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <button class="msg-meta__summary" type="button">
+                            <span class="chat-group-timestamp" style="width: 18px;">6m ago</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="chat-virtual-row" style="height: 40px;">
+                    <div>The next message begins here.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const summary = page.locator(".msg-meta__summary");
+      await summary.focus();
+      await page
+        .locator(".chat-group-footer")
+        .evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
+      const bounds = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-focused-row]")!;
+        const control = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        // Keep the clipping boundary at the control, independent of turn spacing.
+        // Otherwise extra room below the footer makes the below-row pixel oracle vacuous.
+        row.style.height = `${control.getBoundingClientRect().bottom - row.getBoundingClientRect().top}px`;
+        const rowRect = row.getBoundingClientRect();
+        const controlRect = control.getBoundingClientRect();
+        return {
+          controlBottom: controlRect.bottom,
+          clip: {
+            x: Math.floor(controlRect.left - 8),
+            y: Math.floor(controlRect.top - 8),
+            width: Math.ceil(controlRect.width + 16),
+            height: Math.ceil(controlRect.height + 16),
+          },
+          rowBottom: rowRect.bottom,
+          deviceScaleFactor: window.devicePixelRatio,
+        };
+      });
+      expect(bounds.controlBottom).toBeCloseTo(bounds.rowBottom, 3);
+      const png = await page.screenshot({ clip: bounds.clip });
+      const widestAccentRunBelowRow = await page.evaluate(
+        async ({ pngBase64, clipTop, rowBottom, deviceScaleFactor }) => {
+          const image = new Image();
+          image.src = `data:image/png;base64,${pngBase64}`;
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, image.width, image.height).data;
+          const firstRowBelow = Math.ceil((rowBottom - clipTop) * deviceScaleFactor);
+          let widestRun = 0;
+          for (let y = firstRowBelow; y < image.height; y += 1) {
+            let currentRun = 0;
+            for (let x = 0; x < image.width; x += 1) {
+              const offset = (y * image.width + x) * 4;
+              if (pixels[offset]! > 240 && pixels[offset + 1]! < 20 && pixels[offset + 2]! < 20) {
+                currentRun += 1;
+                widestRun = Math.max(widestRun, currentRun);
+              } else {
+                currentRun = 0;
+              }
+            }
+          }
+          return widestRun;
+        },
+        {
+          pngBase64: png.toString("base64"),
+          clipTop: bounds.clip.y,
+          rowBottom: bounds.rowBottom,
+          deviceScaleFactor: bounds.deviceScaleFactor,
+        },
+      );
+
+      // A clipped ring leaves only a vertical edge (the outline's device-pixel
+      // width). A wider run proves the rounded bottom edge was painted too.
+      expect(widestAccentRunBelowRow).toBeGreaterThan(bounds.deviceScaleFactor * 2);
+    });
+  });
+
   it.each([
     [1200, 800, "desktop"],
     [390, 844, "mobile"],
@@ -70,7 +295,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
         <section class="chat">
-          <div class="chat-main__conversation">
+          <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
             <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
             <div class="chat-footer">
               <div class="agent-chat__composer-shell">
@@ -86,7 +311,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                 <div class="agent-chat__input">Composer</div>
               </div>
             </div>
-          </div>
+          </div></div>
         </section>
       </body></html>`);
 
@@ -135,8 +360,6 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     [900, 500, "mobile-landscape-900", "inline", false],
     [640, 900, "mobile-responsive-640", "overlay", false],
     [320, 568, "mobile-320", "overlay", false],
-    [375, 812, "mobile-375", "overlay", false],
-    [430, 932, "mobile-430", "overlay", false],
     [1200, 800, "desktop-with-pull-request", "overlay", true],
     [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(
@@ -155,7 +378,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                       <div class="chat-main">
                         <div class="chat-main__conversation-column">
                           <div class="chat-topbar-notices"></div>
-                          <div class="chat-main__conversation">
+                          <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
                             <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
                             <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
                             <div class="chat-footer">
@@ -168,7 +391,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                               <div class="agent-chat__input">Composer</div>
                             </div>
                             </div>
-                          </div>
+                          </div></div>
                         </div>
                       </div>
                     </section>

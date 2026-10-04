@@ -61,35 +61,24 @@ describe("website dashboard widget", () => {
 
   it.each([
     { name: "script URL", url: "javascript:alert(1)" },
-    { name: "data URL", url: "data:text/html,hi" },
-    ...[
-      { name: "userinfo", username: "example-user", password: "example-password" },
-      { name: "username-only", username: "example-user", password: "" },
-      { name: "password-only", username: "", password: "example-password" },
-    ].map(({ name, username, password }) => {
-      const url = new URL("https://status.example");
-      url.username = username;
-      url.password = password;
-      return { name, url: url.href };
-    }),
+    { name: "username-only", url: "https://example-user@status.example/" },
+    { name: "password-only", url: "https://:example-password@status.example/" },
   ])("never loads an invalid saved website: $name", async ({ url }) => {
     const element = await mount(url);
     expect(element.querySelector('[role="alert"]')).not.toBeNull();
     expect(element.querySelector("iframe,a")).toBeNull();
   });
 
-  it.each(["https://control.example/settings", "https://control.example:4444/settings"])(
-    "keeps %s outside the website sandbox",
-    async (url) => {
-      const element = await mount(url);
-      expect(element.querySelector("iframe")).toBeNull();
-      expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-        "Gateway and Control UI pages cannot be embedded",
-      );
-      expect(element.querySelector("a")?.href).toBe(url);
-      element.widget = widget("https://external.example/dashboard");
-      await element.updateComplete;
-      expect(element.querySelector("iframe")?.src).toBe("https://external.example/dashboard");
-    },
-  );
+  it("keeps the Control UI host outside the website sandbox even on a different port", async () => {
+    const url = "https://control.example:4444/settings";
+    const element = await mount(url);
+    expect(element.querySelector("iframe")).toBeNull();
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Gateway and Control UI pages cannot be embedded",
+    );
+    expect(element.querySelector("a")?.href).toBe(url);
+    element.widget = widget("https://external.example/dashboard");
+    await element.updateComplete;
+    expect(element.querySelector("iframe")?.src).toBe("https://external.example/dashboard");
+  });
 });

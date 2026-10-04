@@ -13,9 +13,11 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: () => "/tmp/queue-health-sessions",
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
-}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../../config/sessions/session-store-summary.test-support.js");
+  return { withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub() };
+});
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => [],
@@ -52,10 +54,10 @@ describe("queue health collector", () => {
     const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
     const countIngress = vi
       .spyOn(ingressHealth, "countFailedChannelIngressQueueEntries")
-      .mockReturnValue(failed);
+      .mockResolvedValue(failed);
     const countPressure = vi
       .spyOn(ingressHealth, "countChannelIngressQueuePressure")
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
     try {
       const pending = collectHealth();
       expect(capture).toHaveBeenCalledTimes(1);

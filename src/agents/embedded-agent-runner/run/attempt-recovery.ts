@@ -1,14 +1,20 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
-import { findCliTerminalStopError, resolveFailoverReasonFromError } from "../../failover-error.js";
+import {
+  findCliTerminalStopError,
+  resolveFailoverClassificationFromError,
+} from "../../failover-error.js";
+import { failoverReasonFromClassification } from "../../failover/classification-rules.js";
 import { classifyFailoverSignal } from "../../failover/classify.js";
+import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
@@ -117,6 +123,42 @@ export async function recoverEmbeddedRunAttempt(input: {
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  // Project decisions at their existing return points; diagnostics never decide
+  // replay safety or imply that recorded tool results prove settled side effects.
+  const recordRecoveryDecision = (
+    decision: "accepted" | "rejected",
+    reason:
+      | "hook_block"
+      | "live_model_switch"
+      | "timeout_recovery"
+      | "transient_retry"
+      | "replay_unsafe"
+      | "overflow_recovery"
+      | "overflow_unrecoverable"
+      | "harness_retry"
+      | "harness_retry_unavailable"
+      | "prompt_failure"
+      | "prompt_recovery"
+      | "no_recovery",
+  ) => {
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "model.recovery.decision",
+        runId: params.runId,
+        attributes: {
+          decision,
+          reason,
+          replaySafe: currentAttemptReplaySafe,
+          allToolCallsRecorded: settledEvidence.allToolCallsRecorded,
+          allToolsProvenSettled: settledEvidence.allToolsProvenSettled,
+          parkedCodeModeRun: settledEvidence.parkedCodeModeRun,
+          intentionalTermination: settledEvidence.intentionalTermination,
+        },
+      },
+      { config: params.config },
+    );
+  };
   const asyncActivity = hasAsyncActivity(attempt.toolMetas);
   const toolsAllowContinuation =
     !settledEvidence.intentionalTermination &&
@@ -194,24 +236,34 @@ export async function recoverEmbeddedRunAttempt(input: {
       currentAttemptAssistant,
     });
 
-  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
-    const errorText = formatErrorMessage(promptError);
+  const completeBlocked = (
+    errorKind: Parameters<typeof buildEmbeddedRunBlockedResult>[0]["errorKind"],
+    errorMessage: string,
+    text = errorMessage,
+    finalPromptText?: string,
+  ) => {
     const replayInvalid = resolveReplayInvalidForAttempt();
     setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
     return {
-      action: "complete",
+      action: "complete" as const,
       result: buildEmbeddedRunBlockedResult({
-        text: errorText,
-        errorKind: "hook_block",
-        errorMessage: errorText,
+        text,
+        errorKind,
+        errorMessage,
         durationMs: Date.now() - runInput.startedAtMs,
         agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
+        finalPromptText,
       }),
     };
+  };
+
+  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
+    recordRecoveryDecision("rejected", "hook_block");
+    return completeBlocked("hook_block", formatErrorMessage(promptError));
   }
-  const requestedSelection = shouldSwitchToLiveModel({
+  const requestedSelection = await shouldSwitchToLiveModel({
     cfg: params.config,
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
@@ -234,11 +286,15 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      expectedSelection: requestedSelection,
     });
     log.info(
       `live session model switch requested during active attempt for ${params.sessionId}: ` +
         `${preparedRuntime.provider}/${preparedRuntime.modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
     );
+    recordRecoveryDecision("accepted", "live_model_switch");
     throw new LiveSessionModelSwitchError(requestedSelection);
   }
   const assistantSignal =
@@ -258,8 +314,11 @@ export async function recoverEmbeddedRunAttempt(input: {
             providerPlugin: runtime.providerRuntimeHandle?.plugin,
           })
         : null;
+  const retryFailure = promptError
+    ? resolveFailoverClassificationFromError(promptError, preparedRuntime.provider)
+    : assistantFailure;
   const failureReason = promptError
-    ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
+    ? failoverReasonFromClassification(retryFailure)
     : assistantFailure?.kind === "reason"
       ? assistantFailure.reason
       : idleTimedOut ||
@@ -283,6 +342,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     requested: currentAttemptReplaySafe ? requestedSelection : undefined,
   });
   const commonRecoveryInput = {
+    runInput,
     runParams: params,
     state: input.contextRecoveryState,
     contextEngine: input.contextEngine,
@@ -322,6 +382,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       lastRunPromptUsage: input.lastRunPromptUsage,
     }))
   ) {
+    recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
   const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
@@ -343,13 +404,19 @@ export async function recoverEmbeddedRunAttempt(input: {
     (!promptError || promptErrorSource === "prompt") &&
     !isTerminalAssistantError(attemptAssistant) &&
     (!outputLimitFailure || canContinueOutputLimit) &&
+    (retryFailure?.kind !== "reason" || retryFailure.sameModelRetry !== false) &&
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
+      code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
       message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
+      maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+      // Fallback and rotation both require a replay-safe attempt; without one the
+      // only recovery left is to wait out the floor and continue the transcript.
+      failoverEligible: currentAttemptReplaySafe,
       onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
         const event = {
           stream: "run_status",
@@ -373,10 +440,29 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
+    if (outputLimitFailure) {
+      sessionPromptState.markOwnedTranscriptRetry();
+      await sessionPromptState.settleOwnedTranscriptProjection(
+        sessionPromptState.sessionTarget,
+        params.abortSignal,
+      );
+      runInput.laneController.throwIfAborted();
+      const terminalDetails = recoveryAssistant?.diagnostics?.find(
+        (diagnostic) => diagnostic.type === "openai_responses_terminal",
+      )?.details;
+      const toolCallId = terminalDetails?.incompleteToolCallId;
+      await sessionPromptState.withSessionWriterContext(() =>
+        sessionPromptState.recordOutputLimitNotice(
+          typeof toolCallId === "string" ? toolCallId : undefined,
+        ),
+      );
+      runInput.laneController.throwIfAborted();
+    }
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
     });
+    recordRecoveryDecision("accepted", "transient_retry");
     return retry({
       lastRetryFailoverReason: outputLimitFailure ? input.lastRetryFailoverReason : failureReason,
     });
@@ -386,6 +472,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !canContinueSettledMidTurnOverflow &&
     !canRecoverSettledToolResults
   ) {
+    recordRecoveryDecision("rejected", "replay_unsafe");
     return { action: "proceed" };
   }
 
@@ -406,27 +493,21 @@ export async function recoverEmbeddedRunAttempt(input: {
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
   });
   if (overflowRecovery.action === "retry") {
+    recordRecoveryDecision("accepted", "overflow_recovery");
     return retry();
   }
   if (overflowRecovery.action === "surface") {
-    const replayInvalid = resolveReplayInvalidForAttempt();
-    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-    return {
-      action: "complete",
-      result: buildEmbeddedRunBlockedResult({
-        text: overflowRecovery.userText,
-        errorKind: overflowRecovery.kind,
-        errorMessage: overflowRecovery.errorText,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildAttemptErrorMeta(),
-        attempt,
-        replayInvalid,
-        finalPromptText: attempt.finalPromptText,
-      }),
-    };
+    recordRecoveryDecision("rejected", "overflow_unrecoverable");
+    return completeBlocked(
+      overflowRecovery.kind,
+      overflowRecovery.errorText,
+      overflowRecovery.userText,
+      attempt.finalPromptText,
+    );
   }
   // Profile rotation and original-prompt replay still require replay-safe evidence.
   if (!currentAttemptReplaySafe) {
+    recordRecoveryDecision("rejected", "replay_unsafe");
     return { action: "proceed" };
   }
   const hasCodexAppServerTimeoutOutcome = Boolean(
@@ -445,9 +526,11 @@ export async function recoverEmbeddedRunAttempt(input: {
         `codex app-server replay-safe failure; retrying once failureKind=${attempt.codexAppServerFailure?.kind} ` +
           `runId=${params.runId} sessionId=${params.sessionId}`,
       );
+      recordRecoveryDecision("accepted", "harness_retry");
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
     }
     if (!hasCodexAppServerTimeoutOutcome) {
+      recordRecoveryDecision("rejected", "harness_retry_unavailable");
       throw toErrorObject(promptError, "Prompt failed");
     }
   }
@@ -491,14 +574,17 @@ export async function recoverEmbeddedRunAttempt(input: {
       previousRetryFailoverReason: input.lastRetryFailoverReason,
     });
     if (promptFailureOutcome.action === "complete") {
+      recordRecoveryDecision("rejected", "prompt_failure");
       return { action: "complete", result: promptFailureOutcome.result };
     }
     preparedRuntime.setThinkLevel(promptFailureOutcome.thinkLevel);
+    recordRecoveryDecision("accepted", "prompt_recovery");
     return retry({
       authRetryPending: promptFailureOutcome.authRetryPending,
       lastRetryFailoverReason: promptFailureOutcome.lastRetryFailoverReason,
       thinkLevel: promptFailureOutcome.thinkLevel,
     });
   }
+  recordRecoveryDecision("rejected", "no_recovery");
   return { action: "proceed" };
 }

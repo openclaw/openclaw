@@ -7,10 +7,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelOutboundAdapter,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
@@ -25,7 +22,10 @@ import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { NormalizedOutboundPayload } from "./deliver.js";
-import type { ResolvedActionContext } from "./message-action-contracts.js";
+import {
+  createChannelActionContext,
+  type ResolvedActionContext,
+} from "./message-action-contracts.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
@@ -72,10 +72,11 @@ export function hasCorePresentationDelivery(outbound?: ChannelOutboundAdapter): 
   return Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText);
 }
 
-async function sendCoreMessage(params: {
+type SendActionParams = {
   ctx: OutboundSendContext;
   to: string;
   message: string;
+  payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
   buffer?: string;
@@ -87,9 +88,14 @@ async function sendCoreMessage(params: {
   bestEffort?: boolean;
   reply?: OutboundReplyFacts;
   threadId?: string | number;
-  queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
-  payloads?: SendMessageParams["payloads"];
-}): Promise<{ result: MessageSendResult; deliveredText?: string }> {
+};
+
+async function sendCoreMessage(
+  params: SendActionParams & {
+    queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
+    payloads?: SendMessageParams["payloads"];
+  },
+): Promise<{ result: MessageSendResult; deliveredText?: string }> {
   const deliveredPayloads: NormalizedOutboundPayload[] = [];
   const result = await sendMessage({
     cfg: params.ctx.cfg,
@@ -217,93 +223,8 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-function createChannelActionContext(params: {
-  ctx: OutboundSendContext;
-  action: "send" | "poll";
-  mediaAccess?: ReturnType<typeof resolveAgentScopedOutboundMediaAccess>;
-  reply?: OutboundReplyFacts;
-}): ChannelMessageActionContext {
-  const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
-  return {
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    ...(params.reply ? { reply: params.reply } : {}),
-    ...(mediaAccess ? { mediaAccess } : {}),
-    mediaLocalRoots: mediaAccess?.localRoots,
-    mediaReadFile: mediaAccess?.readFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterAccountId: params.ctx.input.requesterAccountId ?? undefined,
-    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
-    senderIsOwner: params.ctx.input.senderIsOwner,
-    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-      params.ctx.input.conversationReadOrigin,
-    ),
-    sessionKey: params.ctx.input.sessionKey,
-    sessionId: params.ctx.input.sessionId,
-    inboundEventKind: params.ctx.input.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.input.toolContext,
-    dryRun: params.ctx.dryRun,
-    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
-    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
-    ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),
-  };
-}
-
-type PluginSendPayloadPreparation =
-  | { kind: "unavailable" }
-  | { kind: "declined" }
-  | { kind: "prepared"; payload: ReplyPayload };
-
-async function preparePluginSendPayload(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  payload: ReplyPayload;
-  reply?: OutboundReplyFacts;
-  threadId?: string | number;
-}): Promise<PluginSendPayloadPreparation> {
-  const plugin = params.ctx.channelPlugin;
-  if (!plugin?.outbound) {
-    return { kind: "unavailable" };
-  }
-  const prepareSendPayload = plugin?.actions?.prepareSendPayload;
-  if (!prepareSendPayload) {
-    return { kind: "unavailable" };
-  }
-  const payload = await prepareSendPayload({
-    ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
-    to: params.to,
-    payload: params.payload,
-    replyToId: params.reply?.replyToId,
-    replyToIdSource: params.reply?.source,
-    threadId: params.threadId,
-  });
-  // A null result is an ownership decision: the provider-native payload cannot
-  // use durable core delivery, so even a presentation must stay on the action path.
-  return payload ? { kind: "prepared", payload } : { kind: "declined" };
-}
-
 /** Executes a message-tool send through plugin handlers or the core outbound path. */
-export async function executeSendAction(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  message: string;
-  payload?: ReplyPayload;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  buffer?: string;
-  filename?: string;
-  contentType?: string;
-  asVoice?: boolean;
-  gifPlayback?: boolean;
-  forceDocument?: boolean;
-  bestEffort?: boolean;
-  reply?: OutboundReplyFacts;
-  threadId?: string | number;
-}): Promise<{
+export async function executeSendAction(params: SendActionParams): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
   /** Exact text handed to the direct transport after core normalization and hooks. */
@@ -327,26 +248,30 @@ export async function executeSendAction(params: {
   const requiresCoreDelivery =
     params.ctx.input.forceCoreDelivery === true ||
     params.ctx.input.requireQueuePersistence === true;
-  const pluginPreparation = requiresCoreDelivery
-    ? ({ kind: "unavailable" } as const)
-    : await preparePluginSendPayload({
-        ctx: params.ctx,
+  const preparationPlugin = params.ctx.channelPlugin;
+  const prepareSendPayload =
+    !requiresCoreDelivery && preparationPlugin?.outbound
+      ? preparationPlugin.actions?.prepareSendPayload
+      : undefined;
+  const preparedPayload = prepareSendPayload
+    ? await prepareSendPayload({
+        ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
         to: params.to,
         payload: defaultPayload,
-        reply: params.reply,
+        replyToId: params.reply?.replyToId,
+        replyToIdSource: params.reply?.source,
         threadId: params.threadId,
-      });
+      })
+    : undefined;
   const channelPlugin = params.ctx.channelPlugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
+  // A hook that declines owns the plugin action path, including presentations.
   const corePayload = requiresCoreDelivery
     ? defaultPayload
-    : pluginPreparation.kind === "prepared"
-      ? pluginPreparation.payload
-      : pluginPreparation.kind === "unavailable" &&
-          presentation &&
-          hasCorePresentationDelivery(channelPlugin?.outbound)
+    : preparedPayload ||
+      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin?.outbound)
         ? defaultPayload
-        : null;
+        : null);
   if (!corePayload) {
     const pluginMessage = presentation
       ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })
@@ -476,19 +401,11 @@ export async function executePollAction(params: {
 
   const corePoll = params.resolveCorePoll();
   const result: MessagePollResult = await sendPoll({
+    ...corePoll,
     cfg: params.ctx.cfg,
-    to: corePoll.to,
-    question: corePoll.question,
-    content: corePoll.content,
-    options: corePoll.options,
-    maxSelections: corePoll.maxSelections,
-    durationSeconds: corePoll.durationSeconds ?? undefined,
-    durationHours: corePoll.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: corePoll.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,

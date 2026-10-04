@@ -1,5 +1,5 @@
 import type { CDPSession } from "playwright-core";
-/** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
+/** Native accessibility node fields used by browser snapshots. */
 export type RawAXNode = {
   nodeId?: string;
   ignored?: boolean;
@@ -9,6 +9,7 @@ export type RawAXNode = {
   description?: { value?: string };
   childIds?: string[];
   backendDOMNodeId?: number;
+  frameId?: string;
   properties?: { name: string; value: { value?: unknown } }[];
 };
 
@@ -35,3 +36,13 @@ export type CdpProtocolSend = <Method extends CdpMethod>(
   params?: Parameters<typeof playwrightCdpSend<Method>>[1],
   sessionId?: string,
 ) => Promise<unknown>;
+/** Normalized accessibility tree node returned by ARIA snapshots. */
+export type AriaSnapshotNode = {
+  ref: string;
+  role: string;
+  name: string;
+  value?: string;
+  description?: string;
+  backendDOMNodeId?: number;
+  depth: number;
+};

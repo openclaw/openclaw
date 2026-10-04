@@ -25,15 +25,13 @@ export const linkReaderPanelStyles = css`
     min-height: 0;
     flex: 1;
   }
-  .bp-actions {
-    padding-left: 0;
-  }
   .bp-icon {
     cursor: default;
     flex: none;
     text-decoration: none;
   }
-  .bp-icon svg {
+  .bp-icon svg,
+  .lr-external svg {
     width: 15px;
     height: 15px;
   }
@@ -90,10 +88,6 @@ export const linkReaderPanelStyles = css`
   .lr-external:hover {
     text-decoration: underline;
   }
-  .lr-external svg {
-    width: 15px;
-    height: 15px;
-  }
   .lr-panels {
     display: flex;
     flex: 1;
@@ -107,7 +101,7 @@ export const linkReaderPanelStyles = css`
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: 20px;
+    padding: 24px;
     font-size: 13px;
     line-height: 1.6;
     overflow-wrap: anywhere;
@@ -116,14 +110,16 @@ export const linkReaderPanelStyles = css`
     outline: none;
   }
   h1 {
-    margin: 8px 0 12px;
-    font-size: 21px;
-    line-height: 1.3;
+    margin: 10px 0 16px;
+    font-size: 25px;
+    line-height: 1.25;
     font-weight: 650;
+    letter-spacing: -0.025em;
   }
   h2 {
-    margin: 20px 0 10px;
+    margin: 24px 0 12px;
     font-size: 14px;
+    font-weight: 650;
   }
   a {
     color: var(--accent);
@@ -157,7 +153,7 @@ export const linkReaderPanelStyles = css`
     color: var(--warn);
   }
   .lr-description {
-    margin-top: 20px;
+    margin-top: 24px;
   }
   .lr-note {
     padding: 9px 12px;
@@ -166,8 +162,10 @@ export const linkReaderPanelStyles = css`
     font-size: 12px;
   }
   .lr-comment {
-    border-top: 1px solid var(--border);
-    padding: 14px 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
   }
   .lr-comment header {
     display: flex;
@@ -179,13 +177,13 @@ export const linkReaderPanelStyles = css`
   }
   .lr-file {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 9px;
     margin-bottom: 8px;
     overflow: hidden;
   }
   .lr-file summary {
     cursor: default;
-    padding: 8px 10px;
+    padding: 12px;
     background: color-mix(in srgb, var(--text) 4%, transparent);
   }
   .lr-filename {
@@ -197,12 +195,10 @@ export const linkReaderPanelStyles = css`
     margin-left: 10px;
     font-size: 11px;
   }
-  .lr-add,
-  .lr-item-meta [data-tone="positive"] {
+  .lr-add {
     color: var(--ok);
   }
-  .lr-delete,
-  .lr-item-meta [data-tone="negative"] {
+  .lr-delete {
     color: var(--danger);
   }
   .lr-file > p {
@@ -294,15 +290,6 @@ export const linkReaderPanelStyles = css`
   }
   .lr-markdown img {
     max-width: 100%;
-  }
-  .lr-markdown .markdown-link-github__icon {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-  }
-  .lr-markdown .markdown-code-block__lang {
-    color: var(--muted);
-    font-size: 11px;
   }
   @media (max-width: 768px) {
     .bp--right {

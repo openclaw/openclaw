@@ -1,6 +1,6 @@
 // Mattermost tests cover slash commands plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { MattermostClient } from "./client.js";
+import { createMattermostClient, type MattermostClient } from "./client.js";
 import {
   DEFAULT_COMMAND_SPECS,
   MATTERMOST_SLASH_POST_METHOD,
@@ -275,5 +275,83 @@ describe("slash-commands", () => {
       },
     ]);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("recreates a drifted command when its accepted delete body cannot be read", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url.replace("https://chat.example.com/api/v4", "")}`);
+      if (method === "GET") {
+        return Response.json([
+          {
+            id: "cmd-1",
+            token: "tok-old",
+            team_id: "team-1",
+            creator_id: "bot-user",
+            trigger: "oc_status",
+            method: "G",
+            url: "http://gateway/callback",
+            auto_complete: true,
+          },
+        ]);
+      }
+      if (method === "PUT") {
+        return Response.json({ message: "update rejected" }, { status: 500 });
+      }
+      if (method === "DELETE") {
+        // Mattermost already deleted the command; its 200 {"status":"OK"} body is lost.
+        const body = new ReadableStream<Uint8Array>({
+          pull() {
+            throw new TypeError("terminated");
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return Response.json(
+        {
+          id: "cmd-2",
+          token: "tok-new",
+          team_id: "team-1",
+          creator_id: "bot-user",
+          trigger: "oc_status",
+          method: MATTERMOST_SLASH_POST_METHOD,
+          url: "http://gateway/callback",
+          auto_complete: true,
+        },
+        { status: 201 },
+      );
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "bot-token",
+      fetchImpl,
+    });
+
+    const result = await registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [{ trigger: "oc_status", description: "status", autoComplete: true }],
+    });
+
+    expect(calls).toEqual([
+      "GET /commands?team_id=team-1&custom_only=true",
+      "PUT /commands/cmd-1",
+      "DELETE /commands/cmd-1",
+      "POST /commands",
+    ]);
+    expect(result).toEqual([
+      {
+        id: "cmd-2",
+        trigger: "oc_status",
+        teamId: "team-1",
+        token: "tok-new",
+        url: "http://gateway/callback",
+        managed: true,
+      },
+    ]);
   });
 });

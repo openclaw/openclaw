@@ -10,8 +10,10 @@ const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 type WorkingPhraseElement = HTMLElement & {
   startMs: number | null;
   seed: string;
+  phrases: readonly string[] | undefined;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  render: () => unknown;
 };
 
 const NOW = 2_000_000_000;
@@ -35,49 +37,92 @@ async function textAt(element: WorkingPhraseElement, elapsedMs: number): Promise
 
 describe("openclaw-working-phrase", () => {
   let element: WorkingPhraseElement;
+  let visibility: DocumentVisibilityState;
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW });
+    visibility = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
     element = mountPhrase();
   });
 
   afterEach(() => {
     element.remove();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("stays silent before the quiet threshold", async () => {
-    expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS - 5_000)).toBe("");
-  });
+  it("renders only when the grace period or a phrase rotation changes its text", async () => {
+    await element.updateComplete;
+    const render = vi.spyOn(element, "render");
 
-  it("is stable within a rotation and changes across rotations", async () => {
-    const first = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_SHOW_AFTER_MS - 1_000);
+    expect(element.textContent?.trim()).toBe("");
+    expect(render).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const first = element.textContent?.replace(/\s+/g, " ").trim();
     expect(first).toMatch(PHRASE_TEXT);
-    const stillFirst = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 10_000);
-    expect(stillFirst).toBe(first);
+    expect(render).toHaveBeenCalledOnce();
 
-    // Adjacent rotations must differ even when raw hashes collide, across
-    // many buckets (the displayed word feeds the next bucket's dodge).
-    let previous = first;
-    for (let bucket = 1; bucket <= 8; bucket++) {
-      const next = await textAt(
-        element,
-        WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS + 1_000,
-      );
-      expect(next).toMatch(PHRASE_TEXT);
-      expect(next).not.toBe(previous);
-      previous = next;
-    }
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS - 1_000);
+    expect(render).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(element.textContent?.replace(/\s+/g, " ").trim()).not.toBe(first);
   });
 
-  it("is deterministic per seed", async () => {
-    const twin = mountPhrase();
-    try {
-      const a = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
-      const b = await textAt(twin, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
-      expect(b).toBe(a);
-    } finally {
-      twin.remove();
-    }
+  it("pauses hidden polling, catches up on return, and stops after removal", async () => {
+    element.startMs = NOW - WORKING_PHRASE_SHOW_AFTER_MS;
+    await element.updateComplete;
+    const first = element.textContent;
+    const render = vi.spyOn(element, "render");
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS);
+    expect(render).not.toHaveBeenCalled();
+    expect(element.textContent).toBe(first);
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await element.updateComplete;
+    expect(render).toHaveBeenCalledOnce();
+    expect(element.textContent).not.toBe(first);
+
+    element.remove();
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS);
+    expect(render).toHaveBeenCalledOnce();
   });
+
+  it.each([0, 1, 6])(
+    "walks all %i authored phrases without translation and restores the default vocabulary",
+    async (length) => {
+      const defaultPhrase = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS);
+      const phrases = Array.from({ length }, (_, index) => `Phrase ${index + 1}`);
+      element.phrases = phrases;
+      const displayed = new Set<string>();
+      for (let bucket = 0; bucket < Math.max(1, length); bucket++) {
+        displayed.add(
+          await textAt(
+            element,
+            WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+          ),
+        );
+      }
+      expect(displayed).toEqual(new Set(length ? phrases.map((phrase) => `· ${phrase}…`) : [""]));
+      if (length === 1) {
+        for (const bucket of [1, 100_000]) {
+          expect(
+            await textAt(
+              element,
+              WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+            ),
+          ).toBe("· Phrase 1…");
+        }
+      }
+      element.phrases = undefined;
+      expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS)).toBe(defaultPhrase);
+    },
+  );
 });

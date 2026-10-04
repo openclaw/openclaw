@@ -13,6 +13,7 @@ import {
   isVideoTranscriptMediaPath,
   labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
+import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 
 export type ImageBlock = {
   factIndex?: number;
@@ -24,13 +25,14 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
-export type ArtifactDownloadResolver = (params: {
-  sessionKey: string;
-  artifactId: string;
-}) => Promise<{ url: string; expiresAt?: string } | null>;
+export type ArtifactDownloadResolver = (
+  params: { sessionKey: string; artifactId: string; variant?: "full" | "thumbnail" },
+  signal?: AbortSignal,
+) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];
+  galleryVideos?: (item: AttachmentItem) => { index: number; items: readonly AttachmentItem[] };
   sessionKey?: string;
   agentId?: string;
   policyKey?: string;
@@ -93,6 +95,7 @@ export type ChatMediaResource<Value> = {
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
   retainUntil: number | undefined;
+  retainedImage?: HTMLImageElement;
   releaseAuthRecovery?: () => void;
 };
 
@@ -163,6 +166,16 @@ function detachChatMediaResourceSubscriber(
   resource.abortController = undefined;
 }
 
+export function readChatMediaResource<Value>(
+  kind: ChatMediaResourceKind,
+  cacheKey: string,
+): ChatMediaResource<Value> | undefined {
+  // SAFETY: Each namespaced key is created and read by the same typed resource owner.
+  return chatMediaResources.get(chatMediaResourceKey(kind, cacheKey)) as
+    | ChatMediaResource<Value>
+    | undefined;
+}
+
 export function observeChatMediaResource<Value>(
   kind: ChatMediaResourceKind,
   cacheKey: string,
@@ -171,7 +184,7 @@ export function observeChatMediaResource<Value>(
   cacheScope?: string,
 ): ChatMediaResource<Value> {
   const resourceKey = chatMediaResourceKey(kind, cacheKey);
-  let resource = chatMediaResources.get(resourceKey) as ChatMediaResource<Value> | undefined;
+  let resource = readChatMediaResource<Value>(kind, cacheKey);
   if (
     resource &&
     resource.subscribers.size === 0 &&
@@ -236,7 +249,7 @@ function trimIdleChatMediaResources() {
   }
 }
 
-export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Value>): boolean {
+export function isChatMediaResourceCurrent(resource: ChatMediaResource<unknown>): boolean {
   return (
     chatMediaResources.get(chatMediaResourceKey(resource.kind, resource.cacheKey)) === resource
   );
@@ -246,7 +259,7 @@ export function getChatMediaRenderVersion(): number {
   return chatMediaRenderVersion;
 }
 
-export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaResource<Value>) {
+export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<unknown>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
@@ -267,8 +280,8 @@ export function clearChatMediaResourceRefresh(resource: ChatMediaResource<unknow
   }
 }
 
-export function scheduleChatMediaResourceRefresh<Value>(
-  resource: ChatMediaResource<Value>,
+export function scheduleChatMediaResourceRefresh(
+  resource: ChatMediaResource<unknown>,
   refreshAt: number | undefined,
   onRefresh: () => void,
 ) {
@@ -482,18 +495,11 @@ export function projectMessageMedia(
     return false;
   };
   const projectSvgAttachment = (source: MessageImageSource): AttachmentItem | undefined => {
-    if (!source.url || !isSvgImageMediaPath(source.url, source.mimeType)) {
-      return undefined;
-    }
-    try {
-      const url = new URL(source.url, window.location.href);
-      if (
-        (url.protocol !== "http:" && url.protocol !== "https:") ||
-        url.origin === window.location.origin
-      ) {
-        return undefined;
-      }
-    } catch {
+    if (
+      !source.url ||
+      !isSvgImageMediaPath(source.url, source.mimeType) ||
+      !isCrossOriginHttpSource(source.url)
+    ) {
       return undefined;
     }
     return {

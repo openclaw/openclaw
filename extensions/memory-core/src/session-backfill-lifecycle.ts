@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
+import {
   deleteMemoryCoreWorkspaceEntry,
   readMemoryCoreWorkspaceEntries,
   SESSION_BACKFILL_REWIND_NAMESPACE,
@@ -9,7 +13,6 @@ import type {
   SessionBackfillExecution,
   SessionBackfillResult,
 } from "./session-backfill-contract.js";
-import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 
 // Batch keys are SHA-256 hex digests, so this colon-delimited marker cannot collide.
 const SESSION_BACKFILL_BASELINE_KEY_PREFIX = "complete-baseline:";
@@ -159,19 +162,19 @@ async function deleteSessionBackfillRewindBatches(
   workspaceDir: string,
   entries: Array<{ key: string }>,
 ): Promise<void> {
-  await Promise.all(
-    entries.map((entry) =>
-      deleteMemoryCoreWorkspaceEntry({
-        namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-        workspaceDir,
-        key: entry.key,
-      }),
-    ),
+  const deletions = entries.map((entry) =>
+    deleteMemoryCoreWorkspaceEntry({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+      key: entry.key,
+    }),
   );
-}
-
-function belongsToAgentFileState(key: string, agentId: string): boolean {
-  return key.startsWith(`${agentId}:`);
+  try {
+    await Promise.all(deletions);
+  } finally {
+    // A failed deletion cannot leave journal mutations running after rollback returns.
+    await Promise.allSettled(deletions);
+  }
 }
 
 function belongsToAgentSeenState(key: string, agentId: string): boolean {
@@ -194,7 +197,7 @@ export async function resetSessionBackfillIngestionState(params: {
   await writeSessionIngestionState(params.workspaceDir, {
     ...state,
     files: Object.fromEntries(
-      Object.entries(state.files).filter(([key]) => !belongsToAgentFileState(key, params.agentId)),
+      Object.entries(state.files).filter(([key]) => !key.startsWith(`${params.agentId}:`)),
     ),
     seenMessages: Object.fromEntries(
       Object.entries(state.seenMessages).filter(

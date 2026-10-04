@@ -1,5 +1,4 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,21 +19,24 @@ import {
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
+  createManager,
   environment,
   manifestCaptureOutput,
   seedNodeWorkspaceRepositories,
   startRequest,
   transport,
+  unchangedWorkspaceUpload,
   withWorkspaceDrain,
   workspaceCommandPayload,
   workspaceTransfer,
+  workspaceSnapshot,
 } from "./node-worker-tunnel.test-support.js";
-import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
 const workspaceDebug = vi.hoisted(() => vi.fn());
@@ -85,9 +87,8 @@ describe("node worker tunnel manager", () => {
       await fs.writeFile(path.join(localPath, "tracked.txt"), "gateway change\n");
     }
     const baseCommit = localGit(["rev-parse", "HEAD"]);
-    const manifest = { version: 1 as const, baseCommit, entries: [] };
-    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const snapshot = workspaceSnapshot(localPath, { version: 1, baseCommit, entries: [] });
+    const { manifestRef } = snapshot;
     const nodeTransport = transport();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async ({ command, params }) => {
       if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
@@ -121,26 +122,13 @@ describe("node worker tunnel manager", () => {
       }
       return {
         ok: true,
-        payloadJSON: JSON.stringify({
-          workspaceDir: remoteWorkspaceDir,
-          stdout,
-          stderr,
-          code,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        }),
+        payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, { stdout, stderr, code }),
       };
     });
     nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: { manifest, manifestRef, rawManifest, root: localPath },
-        token: "download-token",
-      })),
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
+    const transfer = workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
+    });
     const handle = await createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
       getEnvironment: environment,
@@ -206,15 +194,7 @@ describe("node worker tunnel manager", () => {
     const record = environment();
     const workspaceBinding = createDeferred<undefined>();
     const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: workspaceTransfer(),
-    });
+    const manager = createManager(record);
     manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
 
     const first = manager.start(startRequest());
@@ -237,15 +217,9 @@ describe("node worker tunnel manager", () => {
       const transfer = {
         ...workspaceTransfer(),
         closeAll: vi.fn(async () => {}),
-      } as unknown as NodeWorkspaceTransferService;
+      };
       const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
-        getTransport: transport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
+      const manager = createManager(record, {
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
@@ -288,7 +262,7 @@ describe("node worker tunnel manager", () => {
         ...workspaceTransfer(),
         close,
         closeAll,
-      } as unknown as NodeWorkspaceTransferService,
+      },
     });
     await manager.start(startRequest());
     await manager.start({
@@ -318,6 +292,50 @@ describe("node worker tunnel manager", () => {
     }
   });
 
+  it("releases live tunnels and transfer state when shutdown cannot read the inventory", async () => {
+    const inventoryClosed = new Error("Worker environment inventory has closed");
+    let inventoryOpen = true;
+    const readInventory = <T>(value: T) => {
+      if (!inventoryOpen) {
+        throw inventoryClosed;
+      }
+      return value;
+    };
+    const record = environment();
+    const close = vi.fn(async () => {});
+    const closeAll = vi.fn(async () => {});
+    const manager = createManager(record, {
+      getEnvironment: () => readInventory(record),
+      listEnvironments: () => readInventory([record]),
+      workspaceTransfer: { ...workspaceTransfer(), close, closeAll },
+    });
+    await manager.start(startRequest());
+    // A terminal state-database failure revokes the inventory before Gateway shutdown.
+    inventoryOpen = false;
+
+    await expect(manager.stopAll()).rejects.toBe(inventoryClosed);
+    expect(manager.status(record.environmentId)).toBe("stopped");
+    expect(close).toHaveBeenCalledWith(record.environmentId);
+    expect(closeAll).toHaveBeenCalledOnce();
+  });
+
+  it.each(["current", "retiring"] as const)(
+    "rejects an owner epoch older than the %s owner",
+    async (owner) => {
+      const cleanup = createDeferred();
+      const manager = createManager(environment(), {
+        workspaceTransfer: { ...workspaceTransfer(), close: vi.fn(() => cleanup.promise) },
+      });
+      await manager.start(startRequest());
+      const stopping = owner === "retiring" ? manager.stop("environment-1", 2) : undefined;
+
+      const stale = manager.start({ ...startRequest(), ownerEpoch: 1 });
+      cleanup.resolve();
+      await expect(stale).rejects.toThrow("node worker tunnel owner epoch is stale");
+      await stopping;
+    },
+  );
+
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();
     const record = environment();
@@ -325,13 +343,7 @@ describe("node worker tunnel manager", () => {
     transfer.close = vi.fn(async () => {
       throw new Error("workspace cleanup failed");
     });
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
+    const manager = createManager(record, {
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => {
@@ -356,21 +368,12 @@ describe("node worker tunnel manager", () => {
     async (outcome) => {
       const record = environment();
       const validation = createDeferred();
-      const manifest = { version: 1 as const, baseCommit: null, entries: [] };
-      const rawManifest = serializeWorkerWorkspaceManifest(manifest);
-      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      const snapshot = workspaceSnapshot("/gateway/workspace");
+      const { manifestRef } = snapshot;
       const nodeTransport = transport();
       const invoke = vi.fn(async () => ({
         ok: true,
-        payloadJSON: JSON.stringify({
-          workspaceDir: "/node/workspace",
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        }),
+        payloadJSON: workspaceCommandPayload("/node/workspace"),
       }));
       nodeTransport.invoke = withWorkspaceDrain(invoke);
       const prepareSync = vi.fn(async () => {
@@ -379,19 +382,14 @@ describe("node worker tunnel manager", () => {
           throw new Error("restored workspace validation failed");
         }
         return {
-          snapshot: { manifest, manifestRef, rawManifest, root: "/gateway/workspace" },
+          snapshot,
           token: "restore-token",
         };
       });
       const transfer = workspaceTransfer();
       transfer.prepareSync = prepareSync;
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(async () => ({
@@ -420,9 +418,8 @@ describe("node worker tunnel manager", () => {
 
   it("keeps concurrent workspace commands on the admitted build while launch capacity is full", async () => {
     const record = environment();
-    const manifest = { version: 1 as const, baseCommit: null, entries: [] };
-    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const snapshot = workspaceSnapshot("/gateway/workspace");
+    const { manifestRef } = snapshot;
     let launchEligible = true;
     const invoke = vi.fn(
       async (request: Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]) => {
@@ -433,36 +430,13 @@ describe("node worker tunnel manager", () => {
         });
         return {
           ok: true,
-          payloadJSON: JSON.stringify({
-            workspaceDir: "/node/workspace",
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          }),
+          payloadJSON: workspaceCommandPayload("/node/workspace"),
         };
       },
     );
-    const prepareSync = vi.fn(async () => ({
-      snapshot: {
-        manifest,
-        manifestRef,
-        rawManifest,
-        root: "/gateway/workspace",
-      },
-      token: "restore-token",
-    }));
-    const transfer = {
-      prepareSync,
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const prepareSync = vi.fn(async () => ({ snapshot, token: "restore-token" }));
+    const transfer = workspaceTransfer({ prepareSync });
+    const manager = createManager(record, {
       getTransport: () => {
         const nodeTransport = transport();
         return {
@@ -485,8 +459,6 @@ describe("node worker tunnel manager", () => {
           invoke: withWorkspaceDrain(invoke),
         };
       },
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const resolveWorkspaceBinding = vi.fn(async () => ({
@@ -530,9 +502,8 @@ describe("node worker tunnel manager", () => {
 
   it("keeps node command deadlines and rechecks turn authority after discovery", async () => {
     const record = environment();
-    const manifest = { version: 1 as const, baseCommit: null, entries: [] };
-    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const snapshot = workspaceSnapshot("/gateway/workspace");
+    const { manifestRef } = snapshot;
     let commandTimeoutMs: number | undefined;
     let transportTimeoutMs: number | undefined;
     const nodeTransport = transport();
@@ -544,10 +515,7 @@ describe("node worker tunnel manager", () => {
           transportTimeoutMs = request.timeoutMs;
           return {
             ok: true,
-            payloadJSON: JSON.stringify({
-              workspaceDir: "/node/workspace",
-              stdout: "",
-              stderr: "",
+            payloadJSON: workspaceCommandPayload("/node/workspace", {
               code: null,
               signal: "SIGTERM",
               killed: true,
@@ -557,35 +525,15 @@ describe("node worker tunnel manager", () => {
         }
         return {
           ok: true,
-          payloadJSON: JSON.stringify({
-            workspaceDir: "/node/workspace",
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          }),
+          payloadJSON: workspaceCommandPayload("/node/workspace"),
         };
       }),
     );
-    const transfer = workspaceTransfer();
-    transfer.prepareSync = vi.fn(async () => ({
-      snapshot: {
-        manifest,
-        manifestRef,
-        rawManifest,
-        root: "/gateway/workspace",
-      },
-      token: "restore-token",
-    }));
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const transfer = workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
+    });
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => ({
@@ -633,12 +581,7 @@ describe("node worker tunnel manager", () => {
     workspaceInfo.mockClear();
     const record = environment();
     const localPath = tempDirs.make("node-worker-transfer-error-");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-    });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const snapshot = workspaceSnapshot(localPath);
     const nodeTransport = transport();
     nodeTransport.invoke = vi.fn(async () => ({
       ok: false,
@@ -648,26 +591,11 @@ describe("node worker tunnel manager", () => {
           "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
       },
     }));
-    const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: {
-          manifest: { version: 1 as const, baseCommit: null, entries: [] },
-          manifestRef,
-          rawManifest,
-          root: localPath,
-        },
-        token: "download-token",
-      })),
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const transfer = workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
+    });
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
@@ -722,8 +650,8 @@ describe("node worker tunnel manager", () => {
     const localPath = tempDirs.make("node-worker-verify-stable-");
     const remoteWorkspaceDir = path.join(localPath, "remote");
     await fs.mkdir(remoteWorkspaceDir);
-    const raw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
-    const baseManifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+    const snapshot = workspaceSnapshot(localPath);
+    const { manifestRef: baseManifestRef } = snapshot;
     const nodeTransport = transport();
     nodeTransport.invoke = vi.fn(async ({ params }) => {
       const input = params as { transfer?: { direction?: string } };
@@ -735,36 +663,15 @@ describe("node worker tunnel manager", () => {
         }),
       };
     });
-    const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: {
-          manifest: { version: 1 as const, baseCommit: null, entries: [] },
-          manifestRef: baseManifestRef,
-          rawManifest: raw,
-          root: localPath,
-        },
-        token: "download-token",
-      })),
+    const transfer = workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
       prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() => ({
-        base: { version: 1 as const, baseCommit: null, entries: [] },
-        baseManifestRef,
-        baseRaw: raw,
-        current: { version: 1 as const, baseCommit: null, entries: [] },
-        currentManifestRef: baseManifestRef,
-        currentRaw: raw,
-        stagingRoot: localPath,
-      })),
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+      takeUpload: vi.fn(() =>
+        unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-reconcile-error-staging-")),
+      ),
+    });
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
@@ -779,7 +686,13 @@ describe("node worker tunnel manager", () => {
         source: {
           kind: "local",
           path: localPath,
-          journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+          journal: {
+            load: async () => undefined,
+            begin: vi.fn(async () => {}),
+            commit: vi.fn(async () => {}),
+            abort: vi.fn(async () => {}),
+          },
+          stagedResult: { ref: workerWorkspaceResultRef("node-error"), record: () => {} },
         },
         remoteWorkspaceDir,
         baseManifestRef,
@@ -803,9 +716,15 @@ describe("node worker tunnel manager", () => {
         files.map((file) => fs.writeFile(path.join(localPath, file), "cross turn\n")),
       );
       const baseCommit = seedNodeWorkspaceRepositories(localPath, remoteWorkspaceDir);
-      const actual = await readActualWorkspaceManifest({ root: localPath, baseCommit });
+      const actual = await captureWorkspaceManifest({ root: localPath, baseCommit });
       const raw = serializeWorkerWorkspaceManifest(actual.manifest);
       const manifestRef = actual.manifestRef;
+      const snapshot = {
+        manifest: actual.manifest,
+        manifestRef,
+        rawManifest: raw,
+        root: localPath,
+      };
       const remoteManifests = path.join(remoteHome, ".openclaw-worker", "manifests");
       await fs.mkdir(remoteManifests, { recursive: true });
       await fs.writeFile(path.join(remoteManifests, `${manifestRef.slice(7)}.json`), raw);
@@ -854,31 +773,13 @@ describe("node worker tunnel manager", () => {
           }),
         };
       });
-      const transfer = {
-        prepareSync: vi.fn(async () => ({
-          snapshot: { manifest: actual.manifest, manifestRef, rawManifest: raw, root: localPath },
-          token: "download-token",
-        })),
+      const transfer = workspaceTransfer({
+        prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
         prepareUpload: vi.fn(() => "upload-token"),
-        takeUpload: vi.fn(() => ({
-          base: actual.manifest,
-          baseManifestRef: manifestRef,
-          baseRaw: raw,
-          current: actual.manifest,
-          currentManifestRef: manifestRef,
-          currentRaw: raw,
-          stagingRoot,
-        })),
-        close: vi.fn(async () => {}),
-        revoke: vi.fn(),
-      } as unknown as NodeWorkspaceTransferService;
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
+        takeUpload: vi.fn(() => unchangedWorkspaceUpload(snapshot, stagingRoot)),
+      });
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
         workspaceTransfer: transfer,
       });
       const handle = await manager.start(startRequest());
@@ -888,12 +789,22 @@ describe("node worker tunnel manager", () => {
         generation: 1,
       });
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
-      const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+      const journal = {
+        load: async () => undefined,
+        begin: vi.fn(async () => {}),
+        commit: vi.fn(async () => {}),
+        abort: vi.fn(async () => {}),
+      };
       workspaceDebug.mockClear();
 
       for (let turn = 0; turn < 2; turn += 1) {
         const reconciliation = await handle.reconcileWorkspace({
-          source: { kind: "local", path: localPath, journal },
+          source: {
+            kind: "local",
+            path: localPath,
+            journal,
+            stagedResult: { ref: workerWorkspaceResultRef(`node-memo-${turn}`), record: () => {} },
+          },
           remoteWorkspaceDir,
           baseManifestRef: manifestRef,
         });
@@ -913,15 +824,15 @@ describe("node worker tunnel manager", () => {
       const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
       expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 3,
-        remoteContentHashCount: fileCount + 2 * uncached,
+        remoteManifestCalls: 1,
+        remoteContentHashCount: fileCount,
       });
       expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 3,
-        remoteContentHashCount: 3 * uncached,
-        remoteMemoHitCount: 3 * retained,
+        remoteManifestCalls: 1,
+        remoteContentHashCount: uncached,
+        remoteMemoHitCount: retained,
       });
-      expect(memoInputs).toHaveLength(6);
+      expect(memoInputs).toHaveLength(2);
       expect(memoInputs[0]).toEqual([]);
       expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
       expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
@@ -944,11 +855,18 @@ describe("node worker tunnel manager", () => {
         new Date(Date.now() + 1_000),
       );
       await expect(
-        handle.reconcileWorkspace({
-          source: { kind: "local", path: localPath, journal },
-          remoteWorkspaceDir,
-          baseManifestRef: manifestRef,
-        }),
+        handle
+          .reconcileWorkspace({
+            source: {
+              kind: "local",
+              path: localPath,
+              journal,
+              stagedResult: { ref: workerWorkspaceResultRef("node-memo-late"), record: () => {} },
+            },
+            remoteWorkspaceDir,
+            baseManifestRef: manifestRef,
+          })
+          .then((reconciliation) => verifyReconciledWorkspaceFinal(reconciliation, quiescence)),
       ).rejects.toThrow("changed during final reconciliation");
       await handle.stop();
     },
@@ -958,9 +876,8 @@ describe("node worker tunnel manager", () => {
     const record = environment();
     const localPath = tempDirs.make("node-worker-accepted-current-");
     const remoteWorkspaceDir = tempDirs.make("node-worker-accepted-current-remote-");
-    const manifest = { version: 1 as const, baseCommit: null, entries: [] };
-    const raw = serializeWorkerWorkspaceManifest(manifest);
-    const baseManifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+    const snapshot = workspaceSnapshot(localPath);
+    const { manifestRef: baseManifestRef } = snapshot;
     const transferDirections: string[] = [];
     const nodeTransport = transport();
     const invoke = vi.fn(async ({ params }) => {
@@ -977,33 +894,17 @@ describe("node worker tunnel manager", () => {
     });
     nodeTransport.invoke = withWorkspaceDrain(invoke);
     const publishSnapshot = vi.fn(() => "accepted-download-token");
-    const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: { manifest, manifestRef: baseManifestRef, rawManifest: raw, root: localPath },
-        token: "download-token",
-      })),
+    const transfer = workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
       prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() => ({
-        base: manifest,
-        baseManifestRef,
-        baseRaw: raw,
-        current: manifest,
-        currentManifestRef: baseManifestRef,
-        currentRaw: raw,
-        stagingRoot: localPath,
-      })),
-      getSnapshot: vi.fn(() => ({ manifest, manifestRef: baseManifestRef, rawManifest: raw })),
+      takeUpload: vi.fn(() =>
+        unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-accepted-staging-")),
+      ),
+      getSnapshot: vi.fn(() => snapshot),
       publishSnapshot,
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    });
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
@@ -1017,10 +918,20 @@ describe("node worker tunnel manager", () => {
       source: {
         kind: "local",
         path: localPath,
-        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+        journal: {
+          load: async () => undefined,
+          begin: vi.fn(async () => {}),
+          commit: vi.fn(async () => {}),
+          abort: vi.fn(async () => {}),
+        },
+        stagedResult: { ref: workerWorkspaceResultRef("node-current"), record: () => {} },
       },
       remoteWorkspaceDir,
       baseManifestRef,
+    });
+    await verifyReconciledWorkspaceFinal(reconciliation, {
+      assertActive: async () => {},
+      resume: async () => {},
     });
 
     expect(reconciliation.manifestRef).toBe(baseManifestRef);

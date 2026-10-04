@@ -1,7 +1,5 @@
-// Normalizes payloads and applies post-send presentation/media effects.
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
 import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,11 +12,9 @@ import type {
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
+import { payloadMediaSources } from "./delivery-queue-media-paths.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
-import {
-  summarizeOutboundPayloadForTransport,
-  type NormalizedOutboundPayload,
-} from "./payloads.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
@@ -53,6 +49,24 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
   return payload;
 }
 
+export function normalizeTransformedPayloadForDelivery(
+  payload: ReplyPayload,
+  handler: ChannelHandler,
+  copyMetadata: (
+    source: ReplyPayload,
+    payload: ReplyPayload,
+  ) => ReplyPayload = copyReplyPayloadMetadata,
+): ReplyPayload | null {
+  const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
+  if (!normalizedPayload) {
+    return null;
+  }
+  const normalized = copyMetadata(payload, normalizedPayload);
+  const stripped = copyMetadata(normalized, stripInternalRuntimeScaffoldingFromPayload(normalized));
+  const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
+  return nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+}
+
 export function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
@@ -85,18 +99,11 @@ export function normalizePayloadsForChannelDelivery(
         }
       }
     }
-    const normalizedPayload = handler.normalizePayload
-      ? handler.normalizePayload(sanitizedPayload)
-      : sanitizedPayload;
-    let normalized = normalizedPayload ? copyMetadata(sanitizedPayload, normalizedPayload) : null;
-    if (normalized) {
-      const stripped = copyMetadata(
-        normalized,
-        stripInternalRuntimeScaffoldingFromPayload(normalized),
-      );
-      const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
-      normalized = nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
-    }
+    const normalized = normalizeTransformedPayloadForDelivery(
+      sanitizedPayload,
+      handler,
+      copyMetadata,
+    );
     if (normalized) {
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }
@@ -146,22 +153,12 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
     changed ||= stripped !== entry[1];
     entry[1] = stripped;
   }
-  if (!changed) {
-    return value;
-  }
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of entries) {
-    next[key] = entry;
-  }
-  return next;
+  return changed ? Object.fromEntries(entries) : value;
 }
 
 /** Every media reference a payload set carries, in payload order. */
 export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
-  return payloads.flatMap((payload) => [
-    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim() ? [payload.mediaUrl] : []),
-    ...(payload.mediaUrls ?? []).filter((url) => typeof url === "string" && url.trim()),
-  ]);
+  return payloads.flatMap(payloadMediaSources);
 }
 
 /**
@@ -203,13 +200,7 @@ export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload
     : payload;
 }
 
-export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
-  return summarizeOutboundPayloadForTransport(payload);
-}
-
-export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return resolveReceiptSourceId(result) !== undefined;
-}
+export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
@@ -222,14 +213,11 @@ function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | 
   if (!pin.enabled) {
     return undefined;
   }
-  const normalized: ReplyPayloadDeliveryPin = { enabled: true };
-  if (pin.notify === true) {
-    normalized.notify = true;
-  }
-  if (pin.required === true) {
-    normalized.required = true;
-  }
-  return normalized;
+  return {
+    enabled: true,
+    ...(pin.notify === true ? { notify: true } : {}),
+    ...(pin.required === true ? { required: true } : {}),
+  };
 }
 
 export async function maybePinDeliveredMessage(params: {

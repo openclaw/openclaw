@@ -215,8 +215,8 @@ describe("attempt prompt preflight", () => {
     },
   );
 
-  it("routes a mid-turn compaction request with its measured budget", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("routes a mid-turn compaction request with its measured budget", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request,
@@ -238,12 +238,12 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("admits a retry without changing history when persisted truncation cannot help", () => {
+  it("admits a retry without changing history when persisted truncation cannot help", async () => {
     const toolResult = makeToolResultMessage("already capped tool output");
     const sessionManager = createSessionManagerWithMessage(toolResult);
     const messagesBefore = sessionManager.buildSessionContext().messages;
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
@@ -266,8 +266,8 @@ describe("attempt prompt preflight", () => {
     expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
   });
 
-  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("keeps the compaction fallback when persisted truncation cannot inspect history", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
@@ -281,12 +281,12 @@ describe("attempt prompt preflight", () => {
     expect(outcome.promptError?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
   });
 
-  it("handles successful mid-turn tool-result truncation without a prompt error", () => {
+  it("handles successful mid-turn tool-result truncation without a prompt error", async () => {
     const sessionManager = createSessionManagerWithMessage(
       makeToolResultMessage("large tool output ".repeat(5_000)),
     );
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt: { ...attempt, contextTokenBudget: 100 },
       request: { ...request, route: "truncate_tool_results_only" },

@@ -10,7 +10,7 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -34,6 +34,7 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import {
   isCodexAppServerStartSelectionChangedError,
   type createIsolatedCodexAppServerClient,
@@ -234,7 +235,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
-  let retrySelection = false;
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -410,10 +410,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
-      retrySelection = true;
-    } else {
-      throw error;
+    if (
+      !ownsClient ||
+      !isCodexAppServerStartSelectionChangedError(error) ||
+      selectionAttempt !== 0
+    ) {
+      throw codexPrewriteRejectionCause(error);
     }
   } finally {
     clearTimeout(timeout);
@@ -423,16 +425,13 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await closeCodexStartupClientBestEffort(client);
     }
   }
-  if (retrySelection) {
-    return await runBoundedCodexAppServerTurnInWorkspace(
-      params,
-      appServer,
-      workspace,
-      selectionAttempt + 1,
-      { deadline, timeoutMs: totalTimeoutMs },
-    );
-  }
-  throw new Error("Codex bounded turn selection retry exited unexpectedly");
+  return await runBoundedCodexAppServerTurnInWorkspace(
+    params,
+    appServer,
+    workspace,
+    selectionAttempt + 1,
+    { deadline, timeoutMs: totalTimeoutMs },
+  );
 }
 
 function resolveBoundedThreadConfig(

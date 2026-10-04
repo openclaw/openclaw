@@ -2,16 +2,18 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
-import { createRetainedCache } from "./retained-cache.js";
+import { pruneMapToMaxSize } from "./map-size.js";
+
+const MAX_CACHED_CHECKOUTS = 1_000;
 
 export type GitReadOptions = {
+  /** Refresh unversioned layouts; known revisions are always revalidated. */
   refresh?: boolean;
   signal?: AbortSignal;
-  /** Subscription lifetime pins freshness state; it does not cancel an active caller. */
-  cacheSignal?: AbortSignal;
 };
 
 type ReadEntry<T> = {
+  revision: string;
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
@@ -59,19 +61,59 @@ function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
   freshnessMs: number,
   clone: (value: Output) => Output = structuredClone,
+  revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
+  keyOf: (input: Input) => string = JSON.stringify,
 ) {
-  const entries = createRetainedCache<ReadEntry<Output>>();
+  // Versioned reads retain only the current inputs/revision per checkout. LRU
+  // eviction and Gateway shutdown own their lifetime, independently of viewers.
+  const entries = new Map<string, ReadEntry<Output>>();
   const pending = new Set<ReadEntry<Output>>();
+  const revisions = new Map<AbortController, Promise<string | null>>();
+  let closed = false;
+  const remove = (key: string, entry: ReadEntry<Output>) => {
+    if (entries.get(key) === entry) {
+      entries.delete(key);
+    }
+  };
   return {
     async read(input: Input, options: GitReadOptions = {}): Promise<Output> {
       options.signal?.throwIfAborted();
       const prepared = structuredClone(input);
-      const key = JSON.stringify(prepared);
-      let entry = entries.get(key, options.cacheSignal);
-      if (options.refresh || !entry || entry.expiresAt <= Date.now()) {
+      const key = keyOf(prepared);
+      let currentRevision: string | null | undefined;
+      if (revision) {
+        const controller = new AbortController();
+        const check = revision(
+          prepared,
+          options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
+        );
+        revisions.set(controller, check);
+        try {
+          currentRevision = await check;
+        } finally {
+          revisions.delete(controller);
+        }
+      }
+      const revisionKey = JSON.stringify([prepared, currentRevision]);
+      options.signal?.throwIfAborted();
+      if (closed) {
+        throw new Error("Git reads are unavailable while the Gateway is restarting");
+      }
+      let entry = entries.get(key);
+      if (
+        (options.refresh && currentRevision === null) ||
+        !entry ||
+        entry.revision !== revisionKey ||
+        entry.expiresAt <= Date.now()
+      ) {
         const controller = new AbortController();
         const next: ReadEntry<Output> = {
-          expiresAt: freshnessMs === 0 ? Number.POSITIVE_INFINITY : Date.now() + freshnessMs,
+          revision: revisionKey,
+          expiresAt:
+            freshnessMs === 0
+              ? Number.POSITIVE_INFINITY
+              : Date.now() +
+                (currentRevision === null ? Math.min(freshnessMs, 75_000) : freshnessMs),
           controller,
           subscribers: 0,
           pending: true,
@@ -84,7 +126,7 @@ function createReadCache<Input, Output>(
             pending.delete(next);
             controller.signal.throwIfAborted();
             if (freshnessMs === 0) {
-              entries.delete(key, next);
+              remove(key, next);
             }
             return value;
           },
@@ -92,42 +134,71 @@ function createReadCache<Input, Output>(
             next.pending = false;
             pending.delete(next);
             next.expiresAt = 0;
-            entries.delete(key, next);
+            remove(key, next);
             throw error;
           },
         );
         // Replace at admission. An older completion updates only its own entry.
-        entries.set(key, next, options.cacheSignal);
         entry = next;
       }
+      entries.delete(key);
+      entries.set(key, entry);
+      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
       return subscribe(entry, clone, options.signal);
     },
     async close(): Promise<void> {
+      closed = true;
+      for (const controller of revisions.keys()) {
+        controller.abort();
+      }
       const retiring = [...pending];
       for (const entry of retiring) {
         entry.expiresAt = 0;
         entry.controller.abort();
       }
       entries.clear();
-      await Promise.allSettled(retiring.map((entry) => entry.promise));
+      await Promise.allSettled([...revisions.values(), ...retiring.map((entry) => entry.promise)]);
     },
-    release: entries.release,
   };
 }
 
-// Existing sidebar freshness spans its 60-second poll. Mutable checkout facts
-// otherwise live only for concurrent readers and retire with the Gateway.
+// Every read checks ref/index metadata. A five-minute fallback observes
+// unstaged working-tree edits, which do not advance that revision.
 function createReadCaches() {
   return {
+    identities: createReadCache(
+      (input: GitReadOperations["repository.identities"]["input"], signal) =>
+        runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
+      // Identity includes Git config and worktree relocation inputs without a complete revision.
+      // Share only pending passes so later discovery always sees external changes.
+      0,
+    ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
-      75_000,
+      Number.POSITIVE_INFINITY,
+      structuredClone,
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.root, includeIndex: false } },
+          { signal },
+        ),
+      (input) => input.root,
     ),
     branchFacts: createReadCache(
       (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) =>
         runGitWorkerOperation({ type: "pull-request.branch-facts", input }, { signal }),
-      75_000,
+      5 * 60_000,
+      structuredClone,
+      (input, signal) =>
+        runGitWorkerOperation(
+          {
+            type: "checkout.revision",
+            input: { ...input, includeIndex: true },
+          },
+          { signal },
+        ),
+      (input) => input.root,
     ),
     diff: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
@@ -177,16 +248,6 @@ function runtime(): GitReadRuntime {
   );
 }
 
-export function releaseGitReadCache(
-  type: "checkout.context" | "pull-request.branch-facts",
-  signal?: AbortSignal,
-): void {
-  const caches = runtime().caches;
-  if (caches) {
-    (type === "checkout.context" ? caches.context : caches.branchFacts).release(signal);
-  }
-}
-
 export function runGitReadOperation<K extends keyof GitReadOperations>(
   operation: { type: K; input: GitReadOperations[K]["input"] },
   options?: GitReadOptions,
@@ -196,8 +257,13 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline } = (state.caches ??= createReadCaches());
+  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
+    createReadCaches());
   switch (operation.type) {
+    case "repository.identities":
+      return identities.read(operation.input, options);
+    case "checkout.revision":
+      return runGitWorkerOperation(operation, options);
     case "checkout.context":
       return context.read(operation.input, options);
     case "pull-request.branch-facts":

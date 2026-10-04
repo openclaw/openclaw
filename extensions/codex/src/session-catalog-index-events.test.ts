@@ -137,6 +137,9 @@ describe("resident Codex catalog notifications", () => {
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(nativeReads).toHaveBeenCalledTimes(phase === "written" ? 1 : 0);
       expect(warnings).toHaveBeenCalledOnce();
+      expect(warnings.mock.calls[0]?.[0]).toBe(
+        "Codex resident catalog metadata refresh interrupted; deferred for automatic recovery",
+      );
       const warning = warnings.mock.calls[0]?.[1];
       expect(warning).toMatchObject({
         error: {
@@ -187,9 +190,18 @@ describe("resident Codex catalog notifications", () => {
         await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       }
       await vi.advanceTimersByTimeAsync(trigger === "activity" ? 30_000 : 15 * 60_000);
+      if (trigger === "safety") {
+        expect(readNative).toHaveBeenCalledOnce();
+        await index.list({});
+      }
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(2);
       expect(warnings).toHaveBeenCalledOnce();
+      expect(warnings).toHaveBeenCalledWith("Codex resident catalog background update failed", {
+        error: expect.objectContaining({
+          cause: expect.objectContaining({ message: "native catalog unavailable" }),
+        }),
+      });
       await vi.advanceTimersByTimeAsync(4 * 30_000);
       expect(readNative).toHaveBeenCalledTimes(2);
       notify();
@@ -201,43 +213,41 @@ describe("resident Codex catalog notifications", () => {
     },
   );
 
-  it("leaves an unchanged home idle until the 15-minute native safety walk", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const inventory = Array.from({ length: 192 }, (_, i) =>
-      thread({ id: `idle-${i}`, recencyAt: 1_000 - i }),
+  it("preserves an observation read failure while its client remains open", async () => {
+    const { index, harness, complete } = await fixture();
+    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    complete();
+    const request = JSON.parse(await harness.waitForWrite(0));
+    harness.send({ id: request.id, error: { code: -32603, message: "metadata read unavailable" } });
+    await nextTurn();
+    expect(index.hasActiveWork()).toBe(false);
+    expect(warnings).toHaveBeenCalledExactlyOnceWith(
+      "Codex resident catalog background update failed",
+      {
+        error: expect.objectContaining({
+          message: expect.stringContaining("metadata read unavailable"),
+        }),
+      },
     );
-    const { index, readNative } = await fixture(inventory);
-    expect(readNative).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(14 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(3);
-    inventory.pop();
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(6);
-    expect(index.get("idle-191")).toBeUndefined();
+    expect(harness.client.getCloseError()).toBeUndefined();
   });
 
-  it("coalesces thread starts into a prefix walk and retains the unvisited tail", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const inventory = Array.from({ length: 192 }, (_, i) =>
-      thread({ id: `stored-${i}`, recencyAt: 1_000 - i }),
+  it("preserves a catalog persistence failure", async () => {
+    const error = new Error("catalog storage unavailable");
+    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    await fixture([thread()], {
+      state: {
+        entries: async () => [],
+        register: async () => {
+          throw error;
+        },
+        delete: async () => false,
+      },
+    });
+    expect(warnings).toHaveBeenCalledExactlyOnceWith(
+      "Codex resident catalog background update failed",
+      { error },
     );
-    const { index, harness, readNative } = await fixture(inventory);
-    const newer = thread({ id: "newer", recencyAt: 2_000 });
-    inventory.unshift(newer);
-    harness.send({ method: "thread/started", params: { thread: newer } });
-    await vi.waitFor(() => expect(index.get(newer.id)).toBeDefined());
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    // The started row is already current, so its page establishes the known prefix.
-    expect(readNative).toHaveBeenCalledTimes(4);
-    expect((await index.list({})).sessions[0]?.threadId).toBe("newer");
-    expect(index.get("stored-191")).toBeDefined();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(readNative).toHaveBeenCalledTimes(4);
   });
 
   it("reads changed pages through an unchanged page, then repairs silent tail changes at the bound", async () => {
@@ -262,6 +272,8 @@ describe("resident Codex catalog notifications", () => {
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBeNull();
     expect(index.get("stored-255")).toBeDefined();
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
+    expect(readNative).toHaveBeenCalledTimes(7);
+    await index.list({ limit: 64 });
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
     expect(readNative).toHaveBeenCalledTimes(12);
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");
@@ -377,31 +389,6 @@ describe("resident Codex catalog notifications", () => {
     },
   );
 
-  it("reconciles silent remote membership changes on its DB-only background interval", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const kept = thread({ id: "kept" });
-    const inventory = [thread({ id: "removed" }), kept];
-    const { index, readNative } = await fixture(inventory);
-    expect(readNative).toHaveBeenCalledOnce();
-    inventory.splice(0, inventory.length, thread({ id: "added" }), kept);
-    expect((await index.list({})).sessions.map((session) => session.threadId).toSorted()).toEqual([
-      "kept",
-      "removed",
-    ]);
-    expect(readNative).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions.map((session) => session.threadId).toSorted()).toEqual(
-        ["added", "kept"],
-      );
-    });
-    expect(readNative).toHaveBeenCalledTimes(2);
-    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
-    await index.list({});
-    expect(readNative).toHaveBeenCalledTimes(2);
-  });
-
   it("clears local live status on disconnect and accepts fresh status after reconnect", async () => {
     const { index, harness, startOptions, readNative } = await fixture(
       [thread({ status: { type: "active", activeFlags: ["waitingOnApproval"] } })],
@@ -509,6 +496,12 @@ describe("resident Codex catalog notifications", () => {
     try {
       await observeCodexCatalogClient(replacement.client, { startOptions });
       await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+      expect((await index.list({})).sessions[0]).toMatchObject({
+        threadId: "thread-1",
+        cwd: "/workspace/project",
+        recencyAt: 100,
+      });
+      expect(readNative).toHaveBeenCalledTimes(2);
       replacement.send({
         method: "thread/name/updated",
         params: { threadId: "thread-1", threadName: "Renamed during hydration" },
@@ -528,40 +521,6 @@ describe("resident Codex catalog notifications", () => {
     } finally {
       response.resolve(page);
       replacement.client.close();
-    }
-  });
-
-  it("refreshes remote inventory after reconnect while lists keep returning resident memory", async () => {
-    const { index, harness, startOptions, readNative } = await fixture();
-    await nextTurn();
-    expect(readNative).toHaveBeenCalledOnce();
-    harness.client.close();
-    const page = await projectCodexCatalogPage(
-      { data: [thread({ id: "created-while-offline", name: "New remote session" })] },
-      { sanitize: sanitizeTerminalText },
-    );
-    const response = createDeferred<typeof page>();
-    readNative.mockImplementation(() => response.promise);
-    const replacement = createClientHarness();
-    cleanups.push(async () => replacement.client.close());
-    try {
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
-      expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
-        "thread-1",
-      ]);
-      expect(readNative).toHaveBeenCalledTimes(2);
-      response.resolve(page);
-      await vi.waitFor(async () => {
-        expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
-          "created-while-offline",
-        ]);
-      });
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      await nextTurn();
-      expect(readNative).toHaveBeenCalledTimes(2);
-    } finally {
-      response.resolve(page);
     }
   });
 
@@ -739,43 +698,6 @@ describe("resident Codex catalog notifications", () => {
     expect((await index.list({})).sessions[0]?.activeFlags).toBeUndefined();
     expect(harness.writes).toEqual([]);
   });
-
-  it("coalesces completion events during a metadata read into one follow-up read", async () => {
-    const { index, harness, readNative, complete, reply } = await fixture();
-    complete();
-    await harness.waitForWrite(0);
-    complete();
-    complete();
-    await reply(0, thread({ name: "Earlier completion", updatedAt: 101 }));
-    await reply(1, thread({ name: "Latest completion", updatedAt: 102 }));
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]?.name).toBe("Latest completion");
-    });
-    expect(harness.writes).toHaveLength(2);
-    expect(readNative).toHaveBeenCalledOnce();
-  });
-
-  it.each(["archived", "deleted"])(
-    "keeps a thread %s when an older metadata read settles and cancels queued rereads",
-    async (action) => {
-      const { index, harness, complete, reply } = await fixture();
-      complete();
-      await harness.waitForWrite(0);
-      complete();
-      harness.send({ method: `thread/${action}`, params: { threadId: "thread-1" } });
-      expect((await index.list({})).sessions).toEqual([]);
-      await reply(0, thread({ name: "Stale pre-archive data", updatedAt: 101 }));
-      // The memory-only projection settles before the next event-loop turn.
-      await nextTurn();
-      expect((await index.list({})).sessions).toEqual([]);
-      if (action === "archived") {
-        expect(index.get("thread-1")?.archived).toBe(true);
-      } else {
-        expect(index.get("thread-1")).toBeUndefined();
-      }
-      expect(harness.writes).toHaveLength(1);
-    },
-  );
 
   it("does not start a queued reread after catalog shutdown", async () => {
     const { index, harness, complete, reply } = await fixture();

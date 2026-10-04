@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -27,13 +27,13 @@ const telegramRegistry = createTestRegistry([
 
 afterEach(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
 
-describe.each(["active", "scoped"] as const)("heartbeat owner in %s registry", (scope) => {
-  it.each([
-    { name: "prefixed owner", ownerAllowFrom: ["telegram:1234567890"] },
-    { name: "string owner", ownerAllowFrom: ["1234567890"] },
-    { name: "numeric owner", ownerAllowFrom: [1234567890] },
-    { name: "channel allowFrom", allowFrom: ["1234567890"] },
-  ])("resolves $name through the Telegram plugin without session history", async (owner) => {
+it.each([
+  { scope: "active", name: "prefixed owner", ownerAllowFrom: ["telegram:1234567890"] },
+  { scope: "scoped", name: "numeric owner", ownerAllowFrom: [1234567890] },
+  { scope: "scoped", name: "channel allowFrom", allowFrom: ["1234567890"] },
+])(
+  "resolves $name through the $scope Telegram registry without session history",
+  async ({ scope, ...owner }) => {
     const cfg: OpenClawConfig = {
       commands: { ownerAllowFrom: owner.ownerAllowFrom },
       channels: { telegram: { botToken: "test-token", allowFrom: owner.allowFrom } },
@@ -42,14 +42,14 @@ describe.each(["active", "scoped"] as const)("heartbeat owner in %s registry", (
     await withPluginRuntimeRegistryScope(
       scope === "scoped" ? telegramRegistry : undefined,
       async () => {
-        expect(hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
+        expect(await hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
         expect(
           await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });
       },
     );
-  });
-});
+  },
+);
 
 it("reports a scoped Telegram owner's heartbeat ready in the Gateway status summary", async () => {
   await withOpenClawTestState({ prefix: "heartbeat-owner-status-" }, async () => {

@@ -17,10 +17,12 @@ struct DeviceSettingsBridgeTests {
         ("app.nativeExperienceEnabled", .nativeExperienceEnabled),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
+        ("app.keepGatewayRunning", .keepGatewayRunning),
         ("app.quickChatEnabled", .quickChatEnabled),
         ("app.debugPaneEnabled", .debugPaneEnabled),
         ("capabilities.canvasEnabled", .canvasEnabled),
         ("capabilities.cameraEnabled", .cameraEnabled),
+        ("capabilities.desktopSharingEnabled", .desktopSharingEnabled),
         ("capabilities.computerControlEnabled", .computerControlEnabled),
         ("capabilities.unattendedDesktopEnabled", .unattendedDesktopEnabled),
         ("capabilities.peekabooBridgeEnabled", .peekabooBridgeEnabled),
@@ -100,6 +102,7 @@ struct DeviceSettingsBridgeTests {
             ("app.iconStyle", ["paper"]),
             ("app.quickChatShortcut", "⌥Space"),
             ("app.launchAtLoginAvailable", true),
+            ("app.keepGatewayRunningAvailable", true),
             ("capabilities.cuaDriverBundled", true),
             ("voice.supported", true),
             ("voice.triggerWords", ["computer"]),
@@ -141,8 +144,22 @@ struct DeviceSettingsBridgeTests {
     @Test func `action requests retain the closed panel and permission identities`() {
         #expect(DeviceSettingsRequest(body: ["type": "status"]) == .status)
         #expect(DeviceSettingsRequest(body: ["type": "check-for-updates"]) == .checkForUpdates)
+        for action in ChromeExtensionSetupAction.allCases {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": action.rawValue,
+            ]) == .chromeExtensionSetup(action))
+        }
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
-        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup", "action": "pair"]) == nil)
+        for field in ["command", "profile", "url", "host"] {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "install-chrome-extension", field: "other",
+            ]) == nil)
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": "install", field: "other",
+            ]) == nil)
+        }
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
             ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),

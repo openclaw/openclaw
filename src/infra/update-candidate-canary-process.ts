@@ -1,6 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
+import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
   entry: string;
@@ -11,30 +16,48 @@ export function launchCanary(params: {
   stateDir: string;
   assertCurrent?: () => void;
   capture: (line: string) => void;
-  onSpawn: () => void;
+  onLine?: (line: string) => void;
+  onStdout?: (stdout: string) => void;
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
-  const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
+  const runtime = params.nodeRunner ?? process.execPath;
+  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  params.onSpawn();
   let stdout = "";
-  let firstStderrLine: string | undefined;
+  let lastStderrLine: string | undefined;
+  const stderrLines: string[] = [];
+  let fatalHeader: string | undefined;
+  const stderrTail = () => (fatalHeader ? [fatalHeader, ...stderrLines] : stderrLines).join("\n");
   let cliReason: string | undefined;
   const captureStderr = (line: string) => {
-    if (!line.trim()) {
+    if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
     }
-    const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
-    firstStderrLine ??= safe;
+    const safe = redactSupportDiagnosticLine(
+      line,
+      { env, stateDir: params.stateDir },
+      Number.MAX_SAFE_INTEGER,
+    );
+    lastStderrLine = sliceUtf16Safe(safe, -200);
+    if (safe.startsWith("FATAL ERROR:")) {
+      // A long native stack must not evict the fatal cause with earlier warnings.
+      fatalHeader = sliceUtf16Safe(safe, 0, 512);
+      stderrLines.length = 0;
+    } else {
+      stderrLines.push(sliceUtf16Safe(safe, 0, 512));
+    }
+    while (stderrLines.length > (fatalHeader ? 79 : 80) || stderrTail().length > 8192) {
+      stderrLines.shift();
+    }
     // The CLI prints a generic heading before its actual failure reason.
     if (line.startsWith("[openclaw] Reason: ")) {
-      cliReason ??= safe.replace(/^\[openclaw\] Reason: /u, "");
+      cliReason = sliceUtf16Safe(safe.replace(/^\[openclaw\] Reason: /u, ""), -200);
     }
   };
   let stdoutBytes = 0;
@@ -44,6 +67,13 @@ export function launchCanary(params: {
     stream.setEncoding("utf8");
     let pending = "";
     let droppingLine = false;
+    const captureLine = (line: string) => {
+      if (stream === child.stderr) {
+        captureStderr(line);
+      }
+      capture(line);
+      params.onLine?.(line);
+    };
     stream.on("data", (chunk: string) => {
       let text = chunk;
       if (droppingLine) {
@@ -58,27 +88,21 @@ export function launchCanary(params: {
       const lines = pending.split(/\r?\n/u);
       pending = lines.pop() ?? "";
       for (const line of lines) {
-        if (stream === child.stderr) {
-          captureStderr(line);
-        }
-        capture(line);
+        captureLine(line);
       }
       if (pending.length > 64 * 1024) {
         // Discard an oversized unterminated line whole, never through a secret.
         pending = "";
         droppingLine = true;
         if (stream === child.stderr) {
-          firstStderrLine ??= "[oversized log line omitted]";
+          lastStderrLine ??= "[oversized log line omitted]";
         }
         capture("[oversized log line omitted]");
       }
     });
     return () => {
       if (pending) {
-        if (stream === child.stderr) {
-          captureStderr(pending);
-        }
-        capture(pending);
+        captureLine(pending);
         pending = "";
       }
     };
@@ -87,18 +111,21 @@ export function launchCanary(params: {
     stdoutBytes += Buffer.byteLength(chunk);
     if (stdoutBytes <= 1024 * 1024) {
       stdout += chunk;
+      params.onStdout?.(stdout);
     } else {
       outputExceeded = true;
     }
   });
   let exited = false;
   let processExited = false;
-  let killed = false;
-  child.once("exit", (_code, signal) => {
-    processExited = true;
-    killed = Boolean(signal);
-  });
   const result = new Promise<number | null>((resolve) => {
+    child.once("exit", (code) => {
+      processExited = true;
+      // A failed leader cannot become a successful timeout while inherited pipes stay open.
+      if (code !== 0) {
+        resolve(code);
+      }
+    });
     child.once("error", (error) => {
       captureStderr(error.message);
       capture(error.message);
@@ -113,7 +140,7 @@ export function launchCanary(params: {
       resolve(code);
     });
   });
-  // An error can settle validation without proving that the child and its pipes closed.
+  // Failed processes can settle validation before their inherited pipes close.
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
@@ -123,9 +150,9 @@ export function launchCanary(params: {
     closed,
     hasExited: () => exited,
     processExited: () => processExited,
-    wasKilled: () => killed,
     stdout: () => stdout,
-    firstStderrLine: () => cliReason ?? firstStderrLine,
+    stderrDiagnostic: () => fatalHeader ?? cliReason ?? lastStderrLine,
+    stderrTail,
     outputExceeded: () => outputExceeded,
   };
 }
@@ -181,4 +208,41 @@ export async function terminateCanary(
     Math.min(1_000, Math.max(0, deadline - Date.now())),
   );
   return outcome.status === "completed";
+}
+
+export async function stopCanary(params: {
+  running: Pick<ReturnType<typeof launchCanary>, "child" | "closed">;
+  name: string;
+  root: string;
+  deadline: number;
+  recordStep: (step: UpdateStepResult) => Promise<void>;
+  primaryFailure?: unknown;
+}): Promise<void> {
+  const cleanupStarted = Date.now();
+  try {
+    if (await terminateCanary(params.running.child, params.running.closed, params.deadline)) {
+      return;
+    }
+    await params.recordStep({
+      name: `${params.name}-cleanup`,
+      command: "SIGTERM, SIGKILL",
+      cwd: params.root,
+      durationMs: Date.now() - cleanupStarted,
+      exitCode: null,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message:
+          "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
+      },
+    });
+  } catch (cleanupError) {
+    if (hasCommandProcessCleanupError(params.primaryFailure)) {
+      throw new AggregateError(
+        [params.primaryFailure, cleanupError],
+        "Candidate startup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw cleanupError;
+  }
 }

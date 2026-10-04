@@ -8,11 +8,11 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
   it("creates one stable seven-day job for every agent", () => {
     const cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/tmp/openclaw-shared" },
-          { id: "ops", workspace: "/tmp/openclaw-shared" },
-          { id: "solo", workspace: "/tmp/openclaw-solo" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/openclaw-shared" },
+          ops: { workspace: "/tmp/openclaw-shared" },
+          solo: { workspace: "/tmp/openclaw-solo" },
+        },
         defaults: { model: "anthropic/claude-sonnet-4-6" },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
@@ -83,7 +83,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
 
   it("retains monitor rows while autonomous review is disabled", () => {
     const cfg = {
-      agents: { list: [{ id: "main", workspace: "/tmp/openclaw-disabled" }] },
+      agents: { entries: { main: { workspace: "/tmp/openclaw-disabled" } } },
       skills: { workshop: { autonomous: { mode: "propose" } } },
     } as OpenClawConfig;
 
@@ -98,32 +98,34 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     const cfg = {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
-        list: [
-          {
-            id: "blocked",
+        entries: {
+          blocked: {
             model: {
               primary: "openai/gpt-blocked",
               fallbacks: ["openai/gpt-still-blocked"],
             },
             models: {
-              "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
-              "openai/gpt-still-blocked": { agentRuntime: { id: "codex" } },
+              "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } },
+              "openai/gpt-still-blocked": { agentRuntime: { id: "unsupported" } },
             },
           },
-          {
-            id: "fallback",
+          fallback: {
             model: {
               primary: "openai/gpt-blocked",
               fallbacks: ["anthropic/claude-sonnet-4-6"],
             },
             models: {
-              "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
+              "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } },
             },
           },
-          { id: "embedded", model: "anthropic/claude-sonnet-4-6" },
-          { id: "implicit", model: "openai/gpt-5.2" },
-          { id: "cli", model: "claude-cli/claude-opus-4-6" },
-        ],
+          codex: {
+            model: "openai/gpt-codex",
+            models: { "openai/gpt-codex": { agentRuntime: { id: "codex" } } },
+          },
+          embedded: { model: "anthropic/claude-sonnet-4-6" },
+          implicit: { model: "openai/gpt-5.2" },
+          cli: { model: "claude-cli/claude-opus-4-6" },
+        },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
@@ -139,7 +141,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       enabled: false,
       displayName: expect.stringContaining("no-rooted-runtime"),
     });
-    for (const agentId of ["fallback", "embedded", "implicit", "cli"]) {
+    for (const agentId of ["fallback", "embedded", "implicit", "cli", "codex"]) {
       expect(byAgent.get(agentId)?.enabled).toBe(true);
       expect(byAgent.get(agentId)?.displayName).not.toContain("no-rooted-runtime");
     }
@@ -153,7 +155,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
           entries: {
             main: {
               model: "openai/gpt-blocked",
-              models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } },
+              models: { "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } } },
             },
           },
         },
@@ -186,9 +188,8 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     const cfg = {
       agents: {
         defaults: { model: "openai/gpt-blocked" },
-        list: [
-          {
-            id: "reviewer",
+        entries: {
+          reviewer: {
             subagents: { model: "review" },
             models: {
               "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
@@ -196,7 +197,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
               "anthropic/claude-sonnet-4-6": { alias: "review" },
             },
           },
-        ],
+        },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
@@ -209,14 +210,13 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     const cfg = {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
-        list: [
-          {
-            id: "reviewer",
+        entries: {
+          reviewer: {
             subagents: { model: "openai/gpt-blocked" },
             modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
             models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;

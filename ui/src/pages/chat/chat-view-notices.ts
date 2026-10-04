@@ -1,5 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementWorkerRuntimeInstall,
+} from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
@@ -10,6 +13,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
+import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -20,21 +24,19 @@ export type ChatPlacementStartupNoticeProps = {
   onRetrySessionPlacementStartup?: () => void;
 };
 
-type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
+type ChatViewNoticesProps = {
   diskSpace?: SessionPlacementDiskSpace;
+  workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
   error?: string | null;
-  focusMode?: boolean;
   onDismissError?: () => void;
-  onDismissWorkspaceConflict?: () => void;
-  onToggleFocusMode?: () => void;
-  workspaceConflict?: WorkspaceResultConflict | null;
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   connected?: boolean;
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
-  runError?: { summary: string } | null;
+  providerReviewNotice?: TemplateResult | typeof nothing;
+  runError?: ChatRunError | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
@@ -74,23 +76,61 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   `;
 }
 
+function renderWorkerRuntimeInstallNotice(
+  install: SessionPlacementWorkerRuntimeInstall | undefined,
+) {
+  if (!install) {
+    return nothing;
+  }
+  const progress = {
+    transferred: formatBytes(install.transferredBytes),
+    total: formatBytes(install.totalBytes),
+    percent: String(Math.round((install.transferredBytes / install.totalBytes) * 100)),
+  };
+  const installing = install.phase === "installing";
+  const body = installing
+    ? t("chat.workerRuntimeInstall.installingBody")
+    : t("chat.workerRuntimeInstall.transferringBody", progress);
+  // Topbar notices render as compact pills that hide the body, so the title carries progress.
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--info chat-worker-runtime-install-notice"
+      role="status"
+      title=${body}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">${icons.info}</span>
+      <div class="chat-composer-neighbor-card__copy">
+        <strong
+          >${
+            installing
+              ? t("chat.workerRuntimeInstall.installingTitle")
+              : t("chat.workerRuntimeInstall.transferringTitle", progress)
+          }</strong
+        >
+        <span>${body}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderErrorNotice(
   error: string,
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
+  tone: "danger" | "warn" = "danger",
+  summary?: string,
 ) {
   const lines = displayError
     .trim()
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Keep the bounded summary readable without opening the technical details.
+  // Local action errors already contain recovery instructions; keep those visible.
+  const title = summary ?? clampText(lines[0] ?? "");
+  const hasDetails = lines.some((line) => line !== "" && line !== title);
   return html`
     <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
-      role="alert"
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
+      role=${tone === "warn" ? "status" : "alert"}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
@@ -99,7 +139,7 @@ function renderErrorNotice(
         hasDetails
           ? html`<details class="chat-error__content">
               <summary class="chat-error__summary">
-                <strong>${summary}</strong>
+                <strong>${title}</strong>
                 <span>${t("chat.details")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
                 ${renderCopyButton(error, t("chat.copyError"))}
@@ -108,7 +148,7 @@ function renderErrorNotice(
 ${displayError}</pre>
             </details>`
           : html`<span class="chat-error__content"
-              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+              ><strong>${title}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
             >`
       }
       ${action}
@@ -134,28 +174,14 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   return html`
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
+      ${renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
       ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
-      ${
-        props.focusMode && props.onToggleFocusMode
-          ? html`
-              <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-                <button
-                  class="chat-focus-exit"
-                  type="button"
-                  @click=${props.onToggleFocusMode}
-                  aria-label=${t("chat.actions.exitFocusMode")}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing
-      }
     </div>
   `;
 }
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  const contention = props.runError?.kind === "state_contention";
   const refresh = props.onRefresh
     ? html`<button
         class="btn btn--sm chat-error__refresh"
@@ -163,12 +189,13 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         ?disabled=${!props.connected}
         @click=${props.onRefresh}
       >
-        ${t("common.refresh")}
+        ${t(contention ? "chat.checkStatus" : "common.refresh")}
       </button>`
     : nothing;
   return html`
+    ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh) : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -244,5 +271,15 @@ function renderPlacementStartupError(
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, action, displayError);
+  return renderErrorNotice(
+    error,
+    action,
+    displayError,
+    "danger",
+    checking
+      ? t("chat.queue.checkDeliveryHelp")
+      : status.discardAndReload
+        ? displayError
+        : t("chat.errorStartSummary"),
+  );
 }

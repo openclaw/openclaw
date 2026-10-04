@@ -17,15 +17,17 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isRecord } from "../../utils.js";
 import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient } from "./types.js";
@@ -54,7 +56,10 @@ async function withWebchatTool(
       createTestRegistry(
         ["discord", "telegram"].map((id) => ({
           pluginId: id,
-          plugin: createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+          plugin: {
+            ...createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+            outbound: createDirectOutboundTestAdapter({ channel: id }),
+          },
           source: "test:webchat-cron",
         })),
       ),
@@ -69,6 +74,8 @@ async function withWebchatTool(
     );
     const storePath = state.statePath("cron", "jobs.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
@@ -169,64 +176,61 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
-  it.each([false, true])(
-    "persists current-session announce (explicit delivery: %s)",
-    async (explicit) => {
-      await withWebchatTool(async ({ add, cron }) => {
-        await add(explicit ? { mode: "announce" } : undefined);
-        expect(await cron.list({ includeDisabled: true })).toEqual([
-          expect.objectContaining({
-            sessionTarget: "current",
-            sessionKey,
-            enabled: false,
-            delivery: { mode: "announce" },
-            payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
-            trigger: { script: "return { fire: false };", once: true },
-          }),
-        ]);
-      });
+  it.each([
+    { name: "default current session", delivery: undefined, storedContext: undefined },
+    {
+      name: "ignores stale external route",
+      delivery: { mode: "announce" },
+      storedContext: { channel: "discord", to: "channel:stored" },
     },
-  );
-
-  it("does not pin an older stored external route onto a live WebChat job", async () => {
-    await withWebchatTool(
-      async ({ add, cron }) => {
-        await add({ mode: "announce" });
-        const [job] = await cron.list({ includeDisabled: true });
-        expect(job?.delivery).toEqual({ mode: "announce" });
-      },
-      { channel: "discord", to: "channel:stored" },
-    );
+    {
+      name: "explicit external override",
+      delivery: { mode: "announce", channel: "telegram", to: "recipient" },
+      storedContext: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    delivery: CronDelivery | undefined;
+    storedContext: DeliveryContext | undefined;
+  }>)("persists $name delivery", async ({ delivery, storedContext }) => {
+    await withWebchatTool(async ({ add, cron }) => {
+      await add(delivery);
+      const jobs = await cron.list({ includeDisabled: true });
+      expect(jobs).toEqual([
+        expect.objectContaining({
+          sessionTarget: "current",
+          sessionKey,
+          enabled: false,
+          delivery: delivery ?? { mode: "announce" },
+          payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
+          trigger: { script: "return { fire: false };", once: true },
+        }),
+      ]);
+      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
+    }, storedContext);
   });
 
-  it.each(["webchat", "not-a-channel"])(
-    "rejects an explicit %s channel before persistence",
-    async (channel) => {
-      await withWebchatTool(async ({ add, cron }) => {
-        await expect(add({ mode: "announce", channel })).rejects.toThrow(
-          "delivery.channel must be one of: discord, telegram",
-        );
+  it.each([
+    {
+      revoked: false,
+      delivery: { mode: "announce", channel: "webchat" },
+      error: "delivery.channel must be one of: discord, telegram",
+    },
+    {
+      revoked: true,
+      delivery: { mode: "announce" },
+      error: "agent runtime authority is no longer active",
+    },
+  ] satisfies Array<{ revoked: boolean; delivery: CronDelivery; error: string }>)(
+    "rejects invalid delivery or revoked authority before persistence: $revoked",
+    async ({ revoked, delivery, error }) => {
+      await withWebchatTool(async ({ add, cron, revoke }) => {
+        if (revoked) {
+          revoke();
+        }
+        await expect(add(delivery)).rejects.toThrow(error);
         expect(await cron.list({ includeDisabled: true })).toEqual([]);
       });
     },
   );
-
-  it("preserves an explicit configured external delivery override", async () => {
-    await withWebchatTool(async ({ add, cron }) => {
-      const delivery: CronDelivery = { mode: "announce", channel: "telegram", to: "recipient" };
-      await add(delivery);
-      const [job] = await cron.list({ includeDisabled: true });
-      expect(job?.delivery).toEqual(delivery);
-    });
-  });
-
-  it("does not persist a route-less announce after creator authority is revoked", async () => {
-    await withWebchatTool(async ({ add, cron, revoke }) => {
-      revoke();
-      await expect(add({ mode: "announce" })).rejects.toThrow(
-        "agent runtime authority is no longer active",
-      );
-      expect(await cron.list({ includeDisabled: true })).toEqual([]);
-    });
-  });
 });

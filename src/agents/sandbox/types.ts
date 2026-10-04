@@ -1,16 +1,15 @@
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
-/**
- * Sandbox runtime configuration and context types.
- *
- * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
- */
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
 
+/** In-process provenance, bound to the original resolved allowlist; never serialized. */
+export const SANDBOX_DEFAULT_TOOL_ALLOW = Symbol.for("openclaw.sandbox.defaultToolAllow");
+
 export type SandboxToolPolicy = {
+  [SANDBOX_DEFAULT_TOOL_ALLOW]?: readonly string[];
   allow?: string[];
   deny?: string[];
 };
@@ -24,7 +23,7 @@ export type SandboxToolPolicySource = {
   key: string;
 };
 
-export type SandboxToolPolicyResolved = {
+export type SandboxToolPolicyResolved = SandboxToolPolicy & {
   allow: string[];
   deny: string[];
   sources: {

@@ -1,16 +1,21 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
-import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
 import { runPluginsSearchCommand } from "./plugins-search-command.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
-const servers: Array<ChildProcessByStdio<null, Readable, Readable>> = [];
+type FixtureServer = {
+  child: ChildProcess;
+  closed: Promise<void>;
+};
+const servers: FixtureServer[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const previousClawHubUrl = process.env.OPENCLAW_CLAWHUB_URL;
 const previousClawHubConfigPath = process.env.CLAWHUB_CONFIG_PATH;
@@ -41,49 +46,60 @@ afterEach(async () => {
   }
 });
 
-async function stopServer(child: ChildProcessByStdio<null, Readable, Readable>) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-  });
-  child.kill("SIGTERM");
-  await Promise.race([exited, delay(1_000, undefined, { ref: false })]);
+async function stopServer({ child, closed }: FixtureServer) {
   if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-    await exited;
+    child.kill("SIGTERM");
+    // This grace owns signal escalation, not an assertion deadline for native retirement.
+    await Promise.race([closed, delay(1_000, undefined, { ref: false })]);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
   }
+  await closed;
 }
 
-async function startFixtureServer() {
+async function startFixtureServer(signal: AbortSignal) {
   const root = tempDirs.make("clawhub-search-e2e-");
   const portFile = path.join(root, "port");
   const child = spawn(process.execPath, [SCRIPT_PATH, "catalog-search", portFile], {
     cwd: process.cwd(),
     env: { ...process.env },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  servers.push(child);
+  const closed = once(child, "close").then(() => {});
+  servers.push({ child, closed });
+  // Node's IPC overload does not retain the configured stdio tuple types.
+  assert(child.stderr, "Fixture server stderr must be piped");
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
 
-  for (let attempt = 0; attempt < 500; attempt += 1) {
-    if (existsSync(portFile)) {
-      const port = Number(readFileSync(portFile, "utf8"));
-      if (Number.isInteger(port) && port > 0) {
-        return { baseUrl: `http://127.0.0.1:${port}`, root };
-      }
+  const listening = once(child, "message").then(([message]: unknown[]) => {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("port" in message) ||
+      typeof message.port !== "number" ||
+      !Number.isInteger(message.port) ||
+      message.port <= 0
+    ) {
+      throw new Error(`fixture server did not write a port: ${stderr}`);
     }
-    if (child.exitCode !== null) {
-      throw new Error(`fixture server exited early: ${stderr}`);
-    }
-    await delay(5);
-  }
-  throw new Error(`fixture server did not write a port: ${stderr}`);
+    return message.port;
+  });
+  const port = await withinTest(
+    awaitGateBeforeSettlement(
+      listening,
+      closed.then(() => {
+        throw new Error(`fixture server exited early: ${stderr}`);
+      }),
+      "fixture server did not write a port",
+    ),
+    signal,
+  );
+  return { baseUrl: `http://127.0.0.1:${port}`, root };
 }
 
 function createRuntime() {
@@ -115,8 +131,10 @@ async function readRequestLog(baseUrl: string): Promise<string[]> {
 }
 
 describe("openclaw plugins search ClawHub E2E", () => {
-  it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async () => {
-    const { baseUrl, root } = await startFixtureServer();
+  it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async ({
+    signal,
+  }) => {
+    const { baseUrl, root } = await startFixtureServer(signal);
     process.env.OPENCLAW_CLAWHUB_URL = baseUrl;
     process.env.CLAWHUB_CONFIG_PATH = path.join(root, "missing-config.json");
     delete process.env.CLAWHUB_TOKEN;

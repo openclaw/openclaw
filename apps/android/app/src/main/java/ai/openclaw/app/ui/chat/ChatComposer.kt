@@ -187,8 +187,6 @@ internal class ChatComposerTextDraftStore(
     records += retainedNewestFirst.asReversed()
     return ArrayList(records.flatten())
   }
-
-  internal fun size(): Int = drafts.size
 }
 
 private fun pendingSendCheckpointEntry(
@@ -212,15 +210,9 @@ internal fun chatComposerTextDraftsFromSnapshot(values: List<String>?): ChatComp
         if (entry[7].isNotEmpty()) restored[owner] = entry[7]
       }
 
-      CHAT_COMPOSER_PENDING_SEND_RECORD -> {
+      CHAT_COMPOSER_PENDING_SEND_RECORD, CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD -> {
         if (entry[6].isNotEmpty()) {
-          pending += PendingChatComposerSend(entry[6], owner, entry[7])
-        }
-      }
-
-      CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD -> {
-        if (entry[6].isNotEmpty()) {
-          pending += PendingChatComposerSend(entry[6], owner, null)
+          pending += PendingChatComposerSend(entry[6], owner, entry[7].takeIf { entry[0] == CHAT_COMPOSER_PENDING_SEND_RECORD })
         }
       }
     }
@@ -268,10 +260,8 @@ internal class ChatComposerMediaCheckpoint(
   }
 
   fun consume(requestId: String? = null): ChatComposerMediaLease? {
-    if (this.requestId != requestId) return null
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+    if (this.requestId != requestId || owner == null || mediaAuthorizationId == null) return null
+    return clear()
   }
 
   fun clear(): ChatComposerMediaLease? {
@@ -506,15 +496,6 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
-
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

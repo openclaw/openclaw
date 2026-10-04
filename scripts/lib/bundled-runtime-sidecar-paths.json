@@ -2,6 +2,7 @@
   "dist/extensions/a2a/runtime-api.js",
   "dist/extensions/browser/runtime-api.js",
   "dist/extensions/canvas/runtime-api.js",
+  "dist/extensions/cloudflare/runtime-api.js",
   "dist/extensions/copilot-proxy/runtime-api.js",
   "dist/extensions/google/runtime-api.js",
   "dist/extensions/lmstudio/runtime-api.js",
@@ -10,6 +11,5 @@
   "dist/extensions/reef/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/telegram/runtime-setter-api.js",
-  "dist/extensions/webhooks/runtime-api.js",
   "dist/extensions/workboard/runtime-api.js"
 ]

@@ -1,4 +1,3 @@
-// Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
@@ -9,7 +8,7 @@ import {
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
 import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
 
 type DashboardOptions = {
@@ -45,14 +44,10 @@ async function ensureDashboardTargetReady(params: {
   yes?: boolean;
   allowRecovery?: boolean;
 }) {
-  return ensureGatewayReadyForOperation({
+  return ensureDashboardGatewayReady({
     runtime: params.runtime,
-    operation: "open the dashboard",
     yes: params.yes,
     probeUrl: params.target.probeUrl,
-    // First-time CLI probes intentionally lack paired operator scope. Gateway
-    // handshake evidence plus the same-PID alias check below proves the target.
-    readyWhenReachable: true,
     ...(params.allowRecovery === false ? { allowInstall: false, interactive: false } : {}),
   });
 }
@@ -117,7 +112,6 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
   }
 }
 
-/** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},

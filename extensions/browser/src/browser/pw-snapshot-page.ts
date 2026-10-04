@@ -1,12 +1,8 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import {
-  getPageForTargetId,
-  ensurePageState,
-  assertPageNavigationCompletedSafely,
-} from "./pw-session.js";
+import { getPageForTargetId, assertPageNavigationCompletedSafely } from "./pw-session.js";
 import type { SnapshotUrlEntry } from "./snapshot-urls.js";
 
 export function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
@@ -54,7 +50,6 @@ export async function prepareSnapshotPageViaPlaywright(opts: {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
   });
-  ensurePageState(page);
   if (opts.ssrfPolicy) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -67,17 +62,14 @@ export async function prepareSnapshotPageViaPlaywright(opts: {
   return page;
 }
 
-export function assertSnapshotFrameCurrent(isFrameCurrent: () => boolean): void {
-  if (!isFrameCurrent()) {
-    throw new Error("Frame changed while its browser snapshot was being captured; retry.");
-  }
-}
-
 export async function withSnapshotFrameGuard<T>(opts: {
   page: Page;
   /** Omit for page-wide AI snapshots, whose refs can include every frame. */
   frame?: Frame;
-  run: (isFrameCurrent: () => boolean) => Promise<T>;
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  assertCurrent?: () => void;
+  run: (assertCurrent: () => void) => Promise<T>;
 }): Promise<T> {
   let frameCurrent = true;
   const onFrameChanged = (frame: Frame) => {
@@ -87,9 +79,21 @@ export async function withSnapshotFrameGuard<T>(opts: {
   };
   opts.page.on("framenavigated", onFrameChanged);
   opts.page.on("framedetached", onFrameChanged);
+  const assertCurrent = () => {
+    opts.signal?.throwIfAborted();
+    opts.assertCurrent?.();
+    if (!frameCurrent) {
+      throw new Error("Frame changed while its browser snapshot was being captured; retry.");
+    }
+    if (opts.deadlineMs !== undefined && performance.now() >= opts.deadlineMs) {
+      throw new Error("Browser snapshot capture timed out.");
+    }
+  };
   try {
-    return await opts.run(() => frameCurrent);
+    assertCurrent();
+    return await opts.run(assertCurrent);
   } finally {
+    frameCurrent = false;
     opts.page.off("framenavigated", onFrameChanged);
     opts.page.off("framedetached", onFrameChanged);
   }

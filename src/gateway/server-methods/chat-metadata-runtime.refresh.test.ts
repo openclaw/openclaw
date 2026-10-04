@@ -84,7 +84,7 @@ describe("gateway chat metadata runtime", () => {
   test.each(["commands", "projection"] as const)(
     "publishes without fleet preparation and serves health and another agent during slow %s",
     async (phase) => {
-      const config = { agents: { list: [{ id: "main", default: true }, { id: "second" }] } };
+      const config = { agents: { entries: { main: {}, second: {} } } };
       const harness = createChatMetadataHarness(config);
       const mainOwner = createChatMetadataOwner(config, "main-model");
       let secondOwner = createChatMetadataOwner(config, "second-model");
@@ -161,7 +161,7 @@ describe("gateway chat metadata runtime", () => {
     "rechecks %s publication before returning a suspended agent projection",
     async (changed) => {
       const harness = createChatMetadataHarness({
-        agents: { list: [{ id: "main", default: true }, { id: "second" }] },
+        agents: { entries: { main: {}, second: {} } },
       });
       const mainEntered = createDeferred();
       const releaseMain = createDeferred();
@@ -235,6 +235,61 @@ describe("gateway chat metadata runtime", () => {
     }
   });
 
+  test.each([false, true])(
+    "notifies settled catalog status without rebuilding metadata (beforeRefresh: %s)",
+    async (prepareBeforeRefresh) => {
+      const onChanged = vi.fn();
+      const harness = createChatMetadataHarness(undefined, {
+        onChanged,
+        ...(prepareBeforeRefresh ? { beforeRefresh: async () => {} } : {}),
+      });
+      const owner = harness.getPreparedOwner()!;
+      const catalog = owner.modelCatalog;
+      try {
+        await harness.runtime.refresh();
+        const original = await harness.runtime.read({ agentId: "main" });
+        onChanged.mockClear();
+        catalog.pendingProviders = ["test"];
+        await harness.runtime.refresh();
+        expect(onChanged).not.toHaveBeenCalled();
+
+        catalog.pendingProviders = undefined;
+        // The settlement signal must survive joining an unrelated, already-pending refresh.
+        await Promise.all([
+          harness.runtime.refresh(),
+          harness.runtime.refresh({ notifyIfUnchanged: true }),
+        ]);
+        expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+          modelCatalogChanged: true,
+          authChanged: false,
+        });
+        expect(await harness.runtime.read({ agentId: "main" })).toEqual(original);
+        expect(harness.getPreparedOwner()).toBe(owner);
+        expect(owner.modelCatalog).toBe(catalog);
+        expect(harness.buildCommands).toHaveBeenCalledOnce();
+        expect(harness.buildProjection).toHaveBeenCalledOnce();
+        await harness.runtime.refresh();
+        expect(onChanged).toHaveBeenCalledOnce();
+
+        catalog.refreshFailed = true;
+        await Promise.all([
+          harness.runtime.refresh(),
+          harness.runtime.refresh({ notifyIfUnchanged: true }),
+        ]);
+        expect(onChanged).toHaveBeenCalledTimes(2);
+        expect(onChanged).toHaveBeenLastCalledWith({
+          modelCatalogChanged: true,
+          authChanged: false,
+        });
+        await harness.runtime.read({ agentId: "main" });
+        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+        expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+      } finally {
+        await harness.runtime.stop();
+      }
+    },
+  );
+
   test.each([
     { settlement: "resolve", explicitInvalidation: true },
     { settlement: "reject", explicitInvalidation: true },
@@ -273,7 +328,7 @@ describe("gateway chat metadata runtime", () => {
       await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
 
       const nextConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         tools: { swarm: { enabled: true } },
       };
       harness.setConfig(nextConfig);

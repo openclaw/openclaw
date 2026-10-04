@@ -4,22 +4,9 @@ import type { CallMode } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import type { CallRecord } from "./types.js";
 
-type VoiceCallStatus = Pick<
-  CallRecord,
-  | "callId"
-  | "providerCallId"
-  | "provider"
-  | "direction"
-  | "state"
-  | "startedAt"
-  | "answeredAt"
-  | "endedAt"
-  | "endReason"
->;
-
 export class VoiceCallCommandInputError extends Error {}
 
-function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
+function toVoiceCallStatus(call: CallRecord) {
   return {
     callId: call.callId,
     ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),
@@ -79,7 +66,6 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
     const request = await resolveCallMessage(callId, message);
     return {
       rt: request.rt,
-      callId: request.callId,
       run: async () => {
         const result = await request.rt.manager.continueCall(request.callId, request.message);
         requireSuccess(result, "continue failed");

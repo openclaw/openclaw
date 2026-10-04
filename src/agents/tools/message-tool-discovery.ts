@@ -28,9 +28,7 @@ import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-poli
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import { appendMessageToolReadHint } from "./message-tool-description.js";
-import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping.js";
-import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
+import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChatType?: ChatType;
@@ -345,14 +343,6 @@ function resolveIncludeCapability(
   );
 }
 
-function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
-  return resolveIncludeCapability(params, "presentation");
-}
-
-function resolveIncludeDeliveryPin(params: MessageToolDiscoveryParams): boolean {
-  return resolveIncludeCapability(params, "delivery-pin");
-}
-
 function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
   const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   if (!currentChannel) {
@@ -376,8 +366,8 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
 }
 
 export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actions: string[]) {
-  const includePresentation = resolveIncludePresentation(params);
-  const includeDeliveryPin = resolveIncludeDeliveryPin(params);
+  const includePresentation = resolveIncludeCapability(params, "presentation");
+  const includeDeliveryPin = resolveIncludeCapability(params, "delivery-pin");
   const includeBestEffort = resolveIncludeBestEffort(params);
   const extraProperties = resolveChannelMessageToolSchemaProperties({
     ...buildMessageActionDiscoveryInput(
@@ -389,19 +379,15 @@ export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actio
           resolveDiscoveryAccountId(params, channel, contextualAccountId)
       : undefined,
   });
-  return buildMessageToolSchemaFromActions(
-    actions.length > 0 ? actions : ["send"],
-    {
-      includeClawHub:
-        normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
-      includePresentation,
-      includeDeliveryPin,
-      includeBestEffort,
-      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
-      extraProperties,
-    },
-    MESSAGE_TOOL_SCHEMA_BUILDERS,
-  );
+  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
+    includeClawHub:
+      normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
+    includePresentation,
+    includeDeliveryPin,
+    includeBestEffort,
+    scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+    extraProperties,
+  });
 }
 
 export function resolveAgentAccountId(value?: string): string | undefined {
@@ -415,11 +401,11 @@ export function resolveAgentAccountId(value?: string): string | undefined {
 export function buildMessageToolDescription(actions: string[] | undefined): string {
   const baseDescription = "Send/manage channel messages.";
   if (actions && actions.length > 0) {
-    const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
-    return appendMessageToolReadHint(
-      `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
-      sortedActions,
-    );
+    const sortedActions = sortUniqueStrings(actions);
+    const description = `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`;
+    return sortedActions.includes("read")
+      ? `${description} Missing thread context: action="read" + threadId.`
+      : description;
   }
   return `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`;
 }

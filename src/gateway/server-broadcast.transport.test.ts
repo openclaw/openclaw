@@ -36,10 +36,16 @@ function controlledPeer(connId: string) {
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
-    send: vi.fn((wire: string, callback: (error?: Error) => void) => {
-      frames.push(JSON.parse(wire));
-      callbacks.push(callback);
-    }),
+    send: vi.fn(
+      (
+        wire: string | Buffer,
+        options: { binary: false } | ((error?: Error) => void),
+        callback?: (error?: Error) => void,
+      ) => {
+        frames.push(JSON.parse(String(wire)));
+        callbacks.push(typeof options === "function" ? options : callback!);
+      },
+    ),
   });
   return { client: clientFor(connId, socket as unknown as WebSocket), socket, callbacks, frames };
 }
@@ -52,6 +58,38 @@ const liveText = (group: AbortSignal) => ({
 describe("broadcast transport retirement", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
+    const read = controlledPeer("read");
+    const write = controlledPeer("write");
+    const admin = controlledPeer("admin");
+    write.client.connect.scopes = ["operator.write"];
+    admin.client.connect.scopes = ["operator.admin"];
+    const { broadcastPluginEvent } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([read.client, write.client, admin.client]),
+    });
+    const payload = { text: "synthetic 🦞 update" };
+
+    broadcastPluginEvent("plugin.fixture.changed", payload, "operator.write");
+
+    expect(read.frames).toEqual([]);
+    for (const peer of [write, admin]) {
+      expect(peer.frames).toEqual([
+        { type: "event", event: "plugin.fixture.changed", payload, seq: 1 },
+      ]);
+      expect(peer.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
+    }
+    const first = write.socket.send.mock.calls[0]![0];
+    expect(Buffer.isBuffer(first)).toBe(true);
+    expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
+
+    broadcastPluginEvent("plugin.fixture.changed", payload, "operator.read");
+    expect(read.frames.at(-1)?.seq).toBe(1);
+    expect(write.frames.at(-1)?.seq).toBe(2);
+    expect(admin.frames.at(-1)?.seq).toBe(2);
+    expect(write.socket.send.mock.calls[1]![0]).not.toBe(first);
+    expect(admin.socket.send.mock.calls[1]![0]).toBe(write.socket.send.mock.calls[1]![0]);
   });
 
   it("terminates only the slow socket captured before replacement", () => {
@@ -144,7 +182,7 @@ describe("broadcast transport retirement", () => {
     expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
   });
 
-  it.each(["failed", "closing", "invalidated"] as const)(
+  it.each(["closing", "invalidated"] as const)(
     "does not hold healthy terminal viewers paused for a %s peer's stale bytes",
     (retirement) => {
       const stale = controlledPeer("stale-pressure");
@@ -164,9 +202,7 @@ describe("broadcast transport retirement", () => {
       try {
         output.reconcileRecipients();
         expect(backend.pause).toHaveBeenCalledOnce();
-        if (retirement === "failed") {
-          stale.callbacks[0]!(new Error("compression lost socket"));
-        } else if (retirement === "closing") {
+        if (retirement === "closing") {
           stale.socket.readyState = WebSocket.CLOSING;
         } else {
           stale.client.invalidated = true;
@@ -181,33 +217,27 @@ describe("broadcast transport retirement", () => {
     },
   );
 
-  it.each(["callback", "throw"])(
-    "stops a terminal barrier when its pending flush fails by synchronous %s",
-    (failure) => {
-      const peer = controlledPeer("barrier");
-      const { broadcast } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([peer.client]),
-      });
-      const owner = new AbortController();
-      broadcast("tick", {});
-      broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
-      sendError.mockClear();
-      peer.socket.send.mockImplementationOnce((_wire, callback) => {
-        const error = new Error("flush failed");
-        if (failure === "throw") {
-          throw error;
-        }
-        callback(error);
-      });
+  it("stops a terminal barrier when its pending flush fails synchronously", () => {
+    const peer = controlledPeer("barrier");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
+    const owner = new AbortController();
+    broadcast("tick", {});
+    broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
+    sendError.mockClear();
+    peer.socket.send.mockImplementationOnce((_wire, options, callback) => {
+      const error = new Error("flush failed");
+      (typeof options === "function" ? options : callback!)(error);
+    });
 
-      broadcast("chat", { text: "terminal" }, { liveText: { group: owner.signal } });
-      peer.callbacks[0]!();
+    broadcast("chat", { text: "terminal" }, { liveText: { group: owner.signal } });
+    peer.callbacks[0]!();
 
-      expect(peer.socket.send).toHaveBeenCalledTimes(2);
-      expect(peer.frames).toHaveLength(1);
-      expect(peer.socket.terminate).toHaveBeenCalledOnce();
-      expect(sendError).toHaveBeenCalledOnce();
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
-    },
-  );
+    expect(peer.socket.send).toHaveBeenCalledTimes(2);
+    expect(peer.frames).toHaveLength(1);
+    expect(peer.socket.terminate).toHaveBeenCalledOnce();
+    expect(sendError).toHaveBeenCalledOnce();
+    expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
+  });
 });

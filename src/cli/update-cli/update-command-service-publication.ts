@@ -10,36 +10,37 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  type OpenClawDatabaseMaintenanceScope,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
   observedSystemdManagerUid,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 
-export async function isManagedGatewayServiceOffline(
-  service: ReturnType<typeof resolveGatewayService>,
-  state: GatewayServiceState,
-  timeoutMs: number | undefined,
-): Promise<boolean> {
-  // Enabled systemd units may be manually stopped; loaded LaunchAgents can
-  // respawn. Windows needs the live numeric task state, not its last result.
+export async function isManagedGatewayServiceOffline(state: GatewayServiceState): Promise<boolean> {
+  // Loaded LaunchAgents can respawn even while disabled. Windows needs the live
+  // numeric task state; enabled systemd units may be manually stopped.
   return (
     state.runtime?.status === "stopped" &&
     (process.platform === "darwin"
-      ? state.loadState.status === "not-loaded" ||
-        (state.loadState.status === "loaded" &&
-          (await service.isEnabled?.({ env: state.env, timeoutMs }).catch(() => undefined)) ===
-            false)
+      ? state.loadState.status === "not-loaded"
       : process.platform === "win32"
         ? isScheduledTaskDefinitelyNotRunning(resolveTaskName(state.env)) ||
           (await readWindowsStartupFallbackRuntimeForUpdate(state.env).catch(() => null))
@@ -56,22 +57,37 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
     assertCurrent: () => void;
+    outputPaths?: readonly string[];
   },
   publish: (assertPublicationCurrent: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
   const assertCaller = params.assertCurrent;
   assertCaller();
   return await withGatewayServiceOperationLock(params.env, async (assertNative) => {
+    let processOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+    let maintenance: OpenClawDatabaseMaintenanceScope | undefined;
     const assertCurrent = () => {
       assertCaller();
       assertNative();
+      processOwner?.assertCurrent();
     };
     const refuse = (cause?: unknown): never => {
+      const inspectionDetail =
+        cause instanceof ServiceInspectionError && cause.reason === "windows-task-inspection-failed"
+          ? `${cause.message} `
+          : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        "Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run `openclaw gateway status --deep`, stop the affected Gateway through its service owner, and retry the update.",
+        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
         { cause },
       );
+    };
+    const inspectionFailed = (error: unknown): never => {
+      assertCurrent();
+      if (error instanceof UpdatePreMutationError) {
+        throw error;
+      }
+      return refuse(error);
     };
     const service = resolveGatewayService();
     type PathIdentity = { real: string; stat?: Stats };
@@ -110,21 +126,24 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     const same = (a: PathIdentity, b: PathIdentity) =>
       a.real === b.real ||
       Boolean(a.stat && b.stat && a.stat.dev === b.stat.dev && a.stat.ino === b.stat.ino);
-    const outputPaths = [
+    const outputPaths = params.outputPaths ?? [
       "dist-runtime",
       path.join("dist", "extensions", "node_modules", "openclaw"),
     ];
+    const parentPaths = new Set([""]);
+    for (const output of outputPaths) {
+      for (let parent = path.dirname(output); parent !== "."; parent = path.dirname(parent)) {
+        if (!outputPaths.some((replaced) => isPathInside(replaced, parent))) {
+          parentPaths.add(parent);
+        }
+      }
+    }
     const readInspection = async () => {
       assertCurrent();
       // Parents are stable across publication; output roots themselves are renamed.
       // Record missing descendants too, so creating them cannot redirect a later effect.
       const parents = await Promise.all(
-        [
-          "",
-          "dist",
-          path.join("dist", "extensions"),
-          path.join("dist", "extensions", "node_modules"),
-        ].map((relative) =>
+        [...parentPaths].map((relative) =>
           relative ? outputIdentity(path.join(params.root, relative)) : identity(params.root),
         ),
       );
@@ -144,8 +163,6 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         timeoutMs: params.timeoutMs,
       });
       assertCurrent();
-      const layout = await summarizeGatewayServiceLayout(state.command);
-      assertCurrent();
       const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
       assertCurrent();
       const serviceName =
@@ -160,20 +177,22 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         profile: resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE),
         managerUid: observedSystemdManagerUid(state),
       });
-      let serving: { root: PathIdentity; entrypoint: PathIdentity } | undefined;
-      let disjoint = false;
-      if (layout?.packageRootReal && layout.entrypointReal) {
+      const inspectServing = async (command: GatewayServiceState["command"]) => {
+        const layout = await summarizeGatewayServiceLayout(command);
+        assertCurrent();
+        if (!layout?.packageRootReal || !layout.entrypointReal) {
+          return undefined;
+        }
         const [installed, entrypoint] = await Promise.all([
           identity(layout.packageRootReal),
           outputIdentity(layout.entrypointReal),
         ]);
         assertCurrent();
-        serving = { root: installed, entrypoint };
         const servingOutputs = await Promise.all(
           outputPaths.map((output) => outputIdentity(path.join(installed.real, output))),
         );
         assertCurrent();
-        disjoint =
+        const disjoint =
           !same(target, installed) &&
           !destinations.some(
             (destination) =>
@@ -186,11 +205,17 @@ export async function withGatewayRuntimeArtifactPublication<T>(
                   isPathInside(output.real, destination.real),
               ),
           );
-      } else if (
-        state.command ||
-        state.installed ||
-        state.loadState.status !== "not-loaded" ||
-        !state.runtime?.missingUnit
+        return { serving: { root: installed, entrypoint }, disjoint };
+      };
+      const inspected = await inspectServing(state.command);
+      const serving = inspected?.serving;
+      const disjoint = inspected?.disjoint ?? false;
+      if (
+        !inspected &&
+        (state.command ||
+          state.installed ||
+          state.loadState.status !== "not-loaded" ||
+          !state.runtime?.missingUnit)
       ) {
         refuse();
       }
@@ -205,7 +230,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           (!absent &&
             (state.loadState.status === "unknown" ||
               (process.platform === "linux" && observedSystemdManagerUid(state) === undefined) ||
-              !(await isManagedGatewayServiceOffline(service, state, params.timeoutMs)))))
+              !(await isManagedGatewayServiceOffline(state)))))
       ) {
         refuse();
       }
@@ -230,19 +255,21 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           refuse();
         }
       }
+      await assertManagedGatewayArtifactPublication({
+        roots: [params.root],
+        env: params.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent,
+        updateInstallKind: "git",
+        shouldRestart: false,
+        inspectOverlap: async (_root, command) => {
+          const consumer = await inspectServing(command);
+          return consumer ? !consumer.disjoint : null;
+        },
+      });
       return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
     };
-    const inspect = async () => {
-      try {
-        return await readInspection();
-      } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        return refuse(error);
-      }
-    };
+    const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();
     assertCurrent();
     if (before.serving && !before.serving.entrypoint.stat) {
@@ -280,32 +307,60 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       }
       assertCurrent();
     };
-    let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator> | undefined;
+    const publicationFailures: unknown[] = [];
+    let publicationResult!: T;
     try {
       try {
         assertCurrent();
         if (!before.disjoint) {
-          coordinator = acquireGatewayLifecycleCoordinator({
-            databasePath: before.database.real,
-            busyTimeoutMs: 0,
+          const owner = acquireGatewayStateOwner({ databasePath: before.database.real });
+          processOwner = owner;
+          maintenance = createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => {
+              assertNative();
+              owner.assertCurrent();
+            },
+            assertDatabaseAccess: owner.assertDatabaseAccess,
           });
         }
-        await assertPublicationCurrent();
-        assertCurrent();
       } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        refuse(error);
+        inspectionFailed(error);
       }
-      assertCurrent();
-      // The publisher joins its rollback before settling, keeping both exclusions held.
-      const result = await publish(assertPublicationCurrent);
-      assertCurrent();
-      return result;
-    } finally {
-      coordinator?.release();
+      const publishOwned = async () => {
+        try {
+          await assertPublicationCurrent();
+          assertCurrent();
+        } catch (error) {
+          inspectionFailed(error);
+        }
+        // The publisher joins its rollback before settling, keeping both exclusions held.
+        const result = await publish(assertPublicationCurrent);
+        assertCurrent();
+        return result;
+      };
+      publicationResult = await (maintenance ? maintenance.run(publishOwned) : publishOwned());
+    } catch (error) {
+      publicationFailures.push(error);
     }
+    try {
+      await maintenance?.close();
+    } catch (error) {
+      if (!publicationFailures.includes(error)) {
+        publicationFailures.push(error);
+      }
+    }
+    try {
+      processOwner?.release();
+    } catch (error) {
+      if (!publicationFailures.includes(error)) {
+        publicationFailures.push(error);
+      }
+    }
+    throwSqliteLifecycleErrors(
+      publicationFailures,
+      "Runtime publication and maintenance cleanup failed.",
+    );
+    return publicationResult;
   });
 }

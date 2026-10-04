@@ -1,4 +1,7 @@
-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import {
+  CompactionError,
+  SummaryOutputBudgetError,
+} from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
@@ -13,7 +16,6 @@ import {
   buildStageSplitPlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
-import "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
@@ -25,14 +27,7 @@ import type {
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
-export {
-  BASE_CHUNK_RATIO,
-  computeAdaptiveChunkRatio,
-  estimateMessagesTokens,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-} from "./compaction-planning.js";
+export { estimateMessagesTokens, SUMMARIZATION_OVERHEAD_TOKENS } from "./compaction-planning.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -81,24 +76,18 @@ type CompactionSummaryParams = {
   usageSink?: SessionModelUsageSink;
 };
 
-function resolveIdentifierPreservationInstructions(
-  instructions?: CompactionSummarizationInstructions,
-): string | undefined {
-  if (instructions?.identifierPolicy === "off") {
-    return undefined;
-  }
-  return instructions?.identifierPolicy === "custom"
-    ? instructions.identifierInstructions?.trim() || IDENTIFIER_PRESERVATION_INSTRUCTIONS
-    : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
-}
-
 /** Combines identifier-preservation and caller-provided compaction instructions. */
 function buildCompactionSummarizationInstructions(
   customInstructions?: string,
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
   const custom = customInstructions?.trim();
-  const identifierPreservation = resolveIdentifierPreservationInstructions(instructions);
+  const identifierPreservation =
+    instructions?.identifierPolicy === "off"
+      ? undefined
+      : instructions?.identifierPolicy === "custom"
+        ? instructions.identifierInstructions?.trim() || IDENTIFIER_PRESERVATION_INSTRUCTIONS
+        : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
   if (!custom) {
     return identifierPreservation;
   }
@@ -152,7 +141,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // Caller aborts and transport timeouts are terminal; provider-side
           // AbortErrors without caller cancellation remain retryable.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {
@@ -166,10 +157,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
       ) {
         throw err;
       }
-      // At least one chunk succeeded — throw with the partial summary
-      // attached so summarizeWithFallback can try the oversized-message
-      // retry first and only fall back to the partial summary if that
-      // also fails.
+      // Preserve partial progress if the oversized-message retry also fails.
       log.warn("chunk summarization failed after retries; partial summary available", {
         err,
         completedChunks,
@@ -192,11 +180,6 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
 async function summarizeWithFallback(params: CompactionSummaryParams): Promise<string> {
   const { messages, contextWindow } = params;
 
-  if (messages.length === 0) {
-    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
-  }
-
-  // Try full summarization first
   let partialSummaryFallback: string | undefined;
   let lastError: unknown;
   try {
@@ -210,7 +193,6 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
     partialSummaryFallback = (lastError as PartialSummaryError).partialSummary;
   }
 
-  // Fallback 1: Summarize only small messages, note oversized ones.
   const { smallMessages, oversizedNotes } = await buildOversizedFallbackPlanWithWorker({
     messages,
     contextWindow,
@@ -243,7 +225,6 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
     }
   }
 
-  // Final fallback: use best available partial summary, otherwise throw error
   if (partialSummaryFallback) {
     return partialSummaryFallback;
   }
@@ -318,27 +299,15 @@ export async function summarizeInStages(
       });
       partialSummaries.push(summary);
     } catch (err) {
-      // A chunk summarization failed — fail the whole stages compaction.
-      // This prevents silent infinite retry loops where compaction reports
-      // success but no tokens are reclaimed.
       if (err instanceof CompactionError) {
         throw err;
       }
-      // Wrap non-CompactionError failures for consistent error handling
       throw new CompactionError(
         "summarization_failed",
         `Chunk ${index + 1} summarization failed: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err : undefined,
       );
     }
-  }
-
-  if (partialSummaries.length === 1) {
-    const summary = partialSummaries.at(0);
-    if (summary === undefined) {
-      throw new Error("Compaction summary plan produced no summary");
-    }
-    return summary;
   }
 
   // Capture once so timestamps are strictly monotonic across

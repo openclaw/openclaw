@@ -1,5 +1,7 @@
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
@@ -11,7 +13,7 @@ import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
 /** Capture light policy with the private catalog owner; published row reads cannot load plugins. */
-export function createModelFastModeResolver(params: {
+export function createModelSpeedPolicyResolver(params: {
   cfg: OpenClawConfig;
   agentId: string;
   catalog: readonly ModelCatalogEntry[];
@@ -23,15 +25,22 @@ export function createModelFastModeResolver(params: {
     () =>
       new Map(
         [...new Set(params.catalog.map((entry) => normalizeProviderId(entry.provider)))].map(
-          (provider) => [
-            provider,
-            params.pluginRegistry?.providers.find(({ provider: candidate }) =>
+          (provider) => {
+            const registered = params.pluginRegistry?.providers.find(({ provider: candidate }) =>
               matchesProviderPluginRef(candidate, provider),
-            )?.provider.resolveFastModeSupport ??
-              resolveProviderPolicySurface(provider, {
-                manifestRegistry: params.metadataSnapshot.manifestRegistry,
-              })?.resolveFastModeSupport,
-          ],
+            )?.provider;
+            const policy = resolveProviderPolicySurface(provider, {
+              manifestRegistry: params.metadataSnapshot.manifestRegistry,
+            });
+            return [
+              provider,
+              {
+                resolveFastModeSupport:
+                  registered?.resolveFastModeSupport ?? policy?.resolveFastModeSupport,
+                resolveServiceTiers: registered?.resolveServiceTiers ?? policy?.resolveServiceTiers,
+              },
+            ] as const;
+          },
         ),
       ),
   );
@@ -39,10 +48,14 @@ export function createModelFastModeResolver(params: {
     entry: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
     runtimeId?: string,
-  ): boolean | undefined => {
+  ): {
+    supportsFastMode?: boolean;
+    serviceTiers?: readonly string[];
+    supportsServiceTierRecovery?: boolean;
+  } => {
     const policy = policies.get(normalizeProviderId(entry.provider));
     if (!policy || (evaluation.routeResolution !== null && !evaluation.selectedRoute)) {
-      return undefined;
+      return {};
     }
     const route = evaluation.selectedRoute ?? entry;
     const { defaultParams, modelParams, agentModelParams, agentParams } =
@@ -52,7 +65,7 @@ export function createModelFastModeResolver(params: {
         modelId: entry.id,
         agentId: params.agentId,
       });
-    return policy({
+    const context: ProviderFastModePolicyContext = {
       provider: entry.provider,
       modelId: entry.id,
       api: route.api,
@@ -68,6 +81,17 @@ export function createModelFastModeResolver(params: {
         baseUrl: route.baseUrl,
         providerMetadataOwners: params.metadataSnapshot.owners,
       }),
-    });
+    };
+    return {
+      supportsFastMode: policy.resolveFastModeSupport?.(context),
+      serviceTiers: policy.resolveServiceTiers?.(context),
+      supportsServiceTierRecovery:
+        context.runtimeId === "openclaw" &&
+        supportsNativeOpenAIResponsesEndpoint({
+          provider: entry.provider,
+          api: route.api ?? "",
+          baseUrl: route.baseUrl,
+        }),
+    };
   };
 }

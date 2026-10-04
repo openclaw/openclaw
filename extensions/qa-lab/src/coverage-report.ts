@@ -2,8 +2,8 @@ import {
   normalizeOptionalString as stringifyConfigValue,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 import {
   resolveQaScenarioRequiredProviderMode,
   type QaSeedScenarioWithSource,
@@ -48,18 +48,7 @@ type QaCoverageIdSummary = {
   scenarios: QaCoverageScenarioReference[];
 };
 
-type QaCoverageInventory = {
-  scenarioCount: number;
-  coverageIdCount: number;
-  primaryCoverageIdCount: number;
-  secondaryCoverageIdCount: number;
-  coverageIds: QaCoverageIdSummary[];
-  overlappingCoverage: QaCoverageIdSummary[];
-  missingCoverage: QaCoverageScenarioSummary[];
-  byTheme: Record<string, QaCoverageIdSummary[]>;
-  bySurface: Record<string, QaCoverageIdSummary[]>;
-  scorecardTaxonomy: QaScorecardTaxonomyReport;
-};
+type QaCoverageInventory = ReturnType<typeof buildQaCoverageInventory>;
 
 function assertUniqueQaScenarioIds(
   scenarios: readonly QaSeedScenarioWithSource[],
@@ -188,41 +177,30 @@ function sortCoverageIds(coverageIds: readonly QaCoverageIdSummary[]) {
 export function buildQaCoverageInventory(
   scenarios: readonly QaSeedScenarioWithSource[],
   params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
-): QaCoverageInventory {
+) {
   assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();
   const secondaryCoverageIds = new Set<string>();
   const missingCoverage: QaCoverageScenarioSummary[] = [];
 
-  const addFeatureCoverage = (
-    scenario: QaSeedScenarioWithSource,
-    coverageIds: readonly string[] | undefined,
-    intent: QaCoverageIntent,
-  ) => {
-    const summary = summarizeScenario(scenario);
-    for (const coverageId of coverageIds ?? []) {
-      const coverage = byCoverageId.get(coverageId) ?? {
-        id: coverageId,
-        scenarios: [],
-      };
-      coverage.scenarios.push({ ...summary, intent });
-      byCoverageId.set(coverageId, coverage);
-      if (intent === "primary") {
-        primaryCoverageIds.add(coverageId);
-      } else {
-        secondaryCoverageIds.add(coverageId);
-      }
-    }
-  };
-
   for (const scenario of scenarios) {
+    const summary = summarizeScenario(scenario);
     if (!scenario.coverage) {
-      missingCoverage.push(summarizeScenario(scenario));
+      missingCoverage.push(summary);
       continue;
     }
-    addFeatureCoverage(scenario, scenario.coverage.primary, "primary");
-    addFeatureCoverage(scenario, scenario.coverage.secondary, "secondary");
+    for (const [intent, collected] of [
+      ["primary", primaryCoverageIds],
+      ["secondary", secondaryCoverageIds],
+    ] as const) {
+      for (const coverageId of scenario.coverage[intent] ?? []) {
+        const coverage = byCoverageId.get(coverageId) ?? { id: coverageId, scenarios: [] };
+        coverage.scenarios.push({ ...summary, intent });
+        byCoverageId.set(coverageId, coverage);
+        collected.add(coverageId);
+      }
+    }
   }
 
   const coverageIds = sortCoverageIds([...byCoverageId.values()]);
@@ -348,18 +326,16 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
     "",
   ];
 
-  lines.push("## By Theme", "");
-  for (const theme of Object.keys(inventory.byTheme).toSorted()) {
-    lines.push(`### ${theme}`, "");
-    pushCoverageIdLines(lines, inventory.byTheme[theme] ?? []);
-    lines.push("");
-  }
-
-  lines.push("## By Surface", "");
-  for (const surface of Object.keys(inventory.bySurface).toSorted()) {
-    lines.push(`### ${surface}`, "");
-    pushCoverageIdLines(lines, inventory.bySurface[surface] ?? []);
-    lines.push("");
+  for (const [title, groups] of [
+    ["Theme", inventory.byTheme],
+    ["Surface", inventory.bySurface],
+  ] as const) {
+    lines.push(`## By ${title}`, "");
+    for (const key of Object.keys(groups).toSorted()) {
+      lines.push(`### ${key}`, "");
+      pushCoverageIdLines(lines, groups[key] ?? []);
+      lines.push("");
+    }
   }
 
   pushScorecardTaxonomyLines(lines, inventory.scorecardTaxonomy);

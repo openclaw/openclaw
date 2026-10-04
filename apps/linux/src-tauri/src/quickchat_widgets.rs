@@ -1,5 +1,8 @@
 use crate::gateway_ws::{CanvasSurfaceState, GatewayClient, GatewayGeneration};
-use crate::quickchat::{position_quickchat, require_quickchat_webview, QuickChatState};
+use crate::quickchat::{
+    position_quickchat, require_quickchat_webview, QuickChatState, QUICKCHAT_COMPACT_WINDOW_HEIGHT,
+    QUICKCHAT_TEXT_WINDOW_HEIGHT, QUICKCHAT_WIDGET_WINDOW_HEIGHT, QUICKCHAT_WIDTH,
+};
 #[cfg(target_os = "linux")]
 use gtk::prelude::*;
 use serde::Deserialize;
@@ -14,10 +17,6 @@ use tauri::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-const QUICKCHAT_WIDTH: f64 = 640.0;
-const QUICKCHAT_COMPACT_WINDOW_HEIGHT: f64 = 92.0;
-const QUICKCHAT_TEXT_WINDOW_HEIGHT: f64 = 360.0;
-const QUICKCHAT_WIDGET_WINDOW_HEIGHT: f64 = 440.0;
 const QUICKCHAT_WIDGET_HEIGHT: f64 = 160.0;
 const QUICKCHAT_WIDGET_LABEL_PREFIX: &str = "quickchat-widget-";
 const QUICKCHAT_WIDGET_MAX_COUNT: usize = 32;
@@ -101,12 +100,12 @@ struct WidgetState {
 }
 
 fn quickchat_window_height(has_widgets: bool, expanded: bool) -> f64 {
-    if has_widgets {
-        QUICKCHAT_WIDGET_WINDOW_HEIGHT
-    } else if expanded {
-        QUICKCHAT_TEXT_WINDOW_HEIGHT
-    } else {
+    if !expanded {
         QUICKCHAT_COMPACT_WINDOW_HEIGHT
+    } else if has_widgets {
+        QUICKCHAT_WIDGET_WINDOW_HEIGHT
+    } else {
+        QUICKCHAT_TEXT_WINDOW_HEIGHT
     }
 }
 
@@ -638,11 +637,8 @@ fn percent_decode_once(raw: &str) -> Option<String> {
             index += 1;
             continue;
         }
-        if index + 2 >= bytes.len() {
-            return None;
-        }
-        let byte = u8::from_str_radix(&raw[index + 1..index + 3], 16).ok()?;
-        decoded.push(byte);
+        let digits = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+        decoded.push(u8::from_str_radix(digits, 16).ok()?);
         index += 3;
     }
     String::from_utf8(decoded).ok()
@@ -847,7 +843,7 @@ mod tests {
         );
         assert_eq!(
             quickchat_window_height(true, false),
-            QUICKCHAT_WIDGET_WINDOW_HEIGHT
+            QUICKCHAT_COMPACT_WINDOW_HEIGHT
         );
         assert_eq!(
             quickchat_window_height(true, true),
@@ -881,6 +877,8 @@ mod tests {
             "http://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/status/index.html",
             "https://gateway.example/__openclaw__/canvas/documents/status/index.html",
             "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%252e%252e/private-file",
+            "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%25a%C3%A9/index.html",
+            "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%25%E2%82%AC/index.html",
         ] {
             assert!(validate_widget_layout(&test_widget("status", url, "scripts")).is_err());
         }

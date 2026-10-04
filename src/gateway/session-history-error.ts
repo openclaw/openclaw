@@ -3,7 +3,9 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 
 export function resolveSessionHistoryUnavailableMessage(error: unknown): string | undefined {
   if (isSessionTranscriptProjectionUnavailableError(error)) {
-    return "session history is rebuilding; retry shortly";
+    return error.reason === "window-changed"
+      ? "session history window changed; reload the conversation"
+      : "session history is rebuilding; retry shortly";
   }
   if (!(error instanceof WorkerTaskError)) {
     return undefined;

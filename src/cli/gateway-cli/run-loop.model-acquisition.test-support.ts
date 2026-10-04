@@ -7,10 +7,15 @@ import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-mode
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { startGatewayServerCore } from "../../gateway/server-start.js";
 import { publishConfiguredModelRuntimeSnapshots } from "../../gateway/server-startup-model-runtime.js";
+import { ensureOpenClawCliOnPath } from "../../infra/path-env.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 const root = process.argv[2]!;
+// Prime CLI PATH setup before installing the native-query fixture so Gateway
+// startup cannot replace its manager between budget observations.
+ensureOpenClawCliOnPath();
+process.env.PATH = `${path.join(root, "bin")}${path.delimiter}${process.env.PATH ?? ""}`;
 const ignoresCancellation = process.argv[3] === "pending";
 const trace = (message: string) => process.stdout.write(`process proof: ${message}\n`);
 const entered = createDeferredCore();
@@ -67,11 +72,16 @@ await fs.writeFile(
 );
 const config: OpenClawConfig = {
   agents: {
-    defaults: { workspace: path.join(root, "workspace"), model: `${provider}/model` },
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+      workspace: path.join(root, "workspace"),
+      model: `${provider}/model`,
+    },
     entries: Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [
         index === 0 ? "main" : `agent-${index}`,
-        { default: index === 0, workspace: path.join(root, `workspace-${index}`) },
+        { workspace: path.join(root, `workspace-${index}`) },
       ]),
     ),
   },

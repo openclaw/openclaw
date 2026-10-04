@@ -1,4 +1,3 @@
-/** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
 import crypto from "node:crypto";
 import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -12,7 +11,6 @@ import {
 } from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -55,9 +53,7 @@ import {
   enqueueCliRun,
   isClaudeCliBackendId,
   prepareCliPromptImagePayload,
-  resolveCliNoOutputTimeoutMs,
   resolveCliRunQueueKey,
-  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -65,13 +61,8 @@ import {
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
+import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-function normalizeCliBackendThinkingLevel(
-  level: PreparedCliRunContext["params"]["thinkLevel"],
-): CliBackendThinkingLevel | undefined {
-  return level === "ultra" ? "max" : level;
-}
 
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
@@ -81,10 +72,10 @@ function exactToolAvailabilityError(params: {
   if (!params.isolatedCompletion) {
     return new Error(params.message);
   }
-  const error = new Error(params.message) as Error & { code: typeof params.code };
-  error.name = "IsolatedCompletionRuntimeError";
-  error.code = params.code;
-  return error;
+  return Object.assign(new Error(params.message), {
+    name: "IsolatedCompletionRuntimeError",
+    code: params.code,
+  });
 }
 
 function assertExactToolAvailabilityRuntimeVersion(params: {
@@ -125,7 +116,6 @@ type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
   mediaImageLayout?: MediaImageLayout;
 };
 
-/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   inputContext: PreparedCliRunContext,
   cliSessionIdToUse?: string,
@@ -217,7 +207,7 @@ export async function executePreparedCliRun(
     ? params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId
     : undefined;
   const imagePayload = nodePlacement
-    ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
+    ? { prompt, imagePaths: [] as string[] }
     : await prepareCliPromptImagePayload({
         backend,
         prompt,
@@ -304,27 +294,6 @@ export async function executePreparedCliRun(
       throw error;
     }
   };
-  const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
-    try {
-      await runCliCleanup(params, "cli-outer-resource", async () => {
-        await cleanup?.();
-      });
-    } catch (error) {
-      if (completedOutput?.didSendViaMessagingTool) {
-        cliBackendLog.warn(
-          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
-        );
-        return;
-      }
-      if (executionError !== undefined) {
-        cliBackendLog.warn(
-          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
-        );
-        return;
-      }
-      throw error;
-    }
-  };
   const executeAttempt = async (): Promise<CliOutput> => {
     assertCurrent();
     await context.preparedBackend.beforeExecution?.();
@@ -403,9 +372,9 @@ export async function executePreparedCliRun(
       const nodeRuntimeClearEnv = nodePlacement
         ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
         : [];
-      const nodeClearEnv = [...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv].filter(
-        (key, index, values) => values.indexOf(key) === index,
-      );
+      const nodeClearEnv = [
+        ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
+      ];
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
@@ -504,7 +473,8 @@ export async function executePreparedCliRun(
           provider: params.provider,
           modelId: context.modelId,
           authProfileId: context.effectiveAuthProfileId,
-          thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+          thinkingLevel:
+            params.thinkLevel === "ultra" ? context.providerThinkingLevel : params.thinkLevel,
           fastMode:
             params.fastMode === undefined
               ? undefined
@@ -520,6 +490,7 @@ export async function executePreparedCliRun(
             params.cliToolAvailability && nodePlacement
               ? { native: params.cliToolAvailability.native, openClaw: [] }
               : params.cliToolAvailability,
+          hostOwnedTools: context.hostOwnedTools,
           useResume,
           baseArgs: baseArgsWithSkills,
         });
@@ -702,21 +673,27 @@ export async function executePreparedCliRun(
     throw failure;
   } finally {
     try {
-      await cleanupOuterResource(systemPromptFile?.cleanup);
-      await cleanupOuterResource(imagePayload.cleanupImages);
+      await runCliCleanup(params, "cli-outer-resource", async () => {
+        await systemPromptFile?.cleanup();
+      });
     } catch (error) {
-      outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
+      if (completedOutput?.didSendViaMessagingTool) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
+        );
+      } else if (executionError !== undefined) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
+        );
+      } else {
+        outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
+      }
     }
   }
   if (outerCleanupError) {
     options?.onPhase?.("cleanup");
     diagnostics?.emitError(outerCleanupError);
     throw outerCleanupError;
-  }
-  if (!completedOutput) {
-    const error = new Error("CLI run completed without output");
-    diagnostics?.emitError(error);
-    throw error;
   }
   // Success stays provisional until persistence and cleanup finish; otherwise
   // a rejected turn would be exported as completed.

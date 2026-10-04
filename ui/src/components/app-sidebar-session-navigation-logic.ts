@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
@@ -14,7 +15,6 @@ import {
 } from "../lib/session-display.ts";
 import { resolveSessionRenameValue } from "../lib/session-rename.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
-import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -22,7 +22,6 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -41,33 +40,13 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
-  summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionAttentionController } from "./session-attention-controller.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
-
-export function resolveSidebarHomeAttention(
-  attention: SessionAttentionController,
-  sessionKey: string,
-  row: GatewaySessionRow | null,
-) {
-  const known = summarizeSidebarSessionAttention(
-    attention
-      .knownSessionAttention()
-      .filter((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey))
-      .map((entry) => entry.attention),
-  );
-  return known.kind !== "none"
-    ? known
-    : row
-      ? attention.resolveSessionAttention(row)
-      : SIDEBAR_SESSION_NO_ATTENTION;
-}
 
 type SidebarSessionSortOptions = {
   sortMode: SidebarSessionSortMode;
@@ -118,14 +97,8 @@ function compareSidebarSessionRowsByCreatedAt(
   b: SessionRow,
   createdOrder: ReadonlyMap<string, number>,
 ): number {
-  const createdAtA =
-    typeof a.createdAt === "number" && Number.isFinite(a.createdAt) && a.createdAt >= 0
-      ? a.createdAt
-      : null;
-  const createdAtB =
-    typeof b.createdAt === "number" && Number.isFinite(b.createdAt) && b.createdAt >= 0
-      ? b.createdAt
-      : null;
+  const createdAtA = asNonNegativeFiniteNumber(a.createdAt) ?? null;
+  const createdAtB = asNonNegativeFiniteNumber(b.createdAt) ?? null;
   if (createdAtA !== null || createdAtB !== null) {
     if (createdAtA === null) {
       return 1;
@@ -221,7 +194,7 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
@@ -236,8 +209,10 @@ export function buildSidebarSessionNavigationState(input: {
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
+      sharingRole: row.sharingRole,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
@@ -275,7 +250,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
@@ -335,7 +310,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);
@@ -397,33 +372,6 @@ export function extendSidebarSessionSelection(input: {
   };
 }
 
-function latestVisibleAgentSessionRow(input: {
-  agentId: string;
-  sessionsAgentId: string | null;
-  sessionsResult: SessionsListResult | null;
-  sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-  defaultAgentId: string;
-}): SessionRow | null {
-  const normalized = normalizeAgentId(input.agentId);
-  const rows =
-    normalized === normalizeAgentId(input.sessionsAgentId ?? "")
-      ? (input.sessionsResult?.sessions ?? [])
-      : (input.sessionResultsByAgent[normalized]?.sessions ?? []);
-  // Unprefixed keys belong to the system default agent. Keeping them for
-  // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(rows, {
-    agentId: normalized,
-    defaultAgentId: input.defaultAgentId,
-    filterByAgent: true,
-    archivedFilter: "active",
-  });
-  return visible.reduce<SessionRow | null>(
-    (latest, row) =>
-      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
-    null,
-  );
-}
-
 export function resolveActiveSidebarAgent(input: {
   activeId: string;
   roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]>["agents"];
@@ -450,32 +398,37 @@ export function resolveLatestSidebarAgentSession(input: {
   };
   context: ApplicationContext | undefined;
 }): SessionRow | null {
-  return latestVisibleAgentSessionRow({
-    agentId: input.agentId,
-    sessionsAgentId: input.sessionData.sessionsAgentId,
-    sessionsResult: input.sessionData.sessionsResult,
-    sessionResultsByAgent: input.sessionData.sessionResultsByAgent,
+  const { sessionData } = input;
+  const normalized = normalizeAgentId(input.agentId);
+  const rows =
+    normalized === normalizeAgentId(sessionData.sessionsAgentId ?? "")
+      ? (sessionData.sessionsResult?.sessions ?? [])
+      : (sessionData.sessionResultsByAgent[normalized]?.sessions ?? []);
+  // Unprefixed keys belong to the system default agent. Keeping them for
+  // another agent would resume the wrong conversation with the raw key.
+  const visible = filterVisibleSessionRows(rows, {
+    agentId: normalized,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,
       hello: input.context?.gateway.snapshot.hello,
     }),
+    filterByAgent: true,
+    archivedFilter: "active",
   });
+  return visible.reduce<SessionRow | null>(
+    (latest, row) =>
+      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
+    null,
+  );
 }
 
 export function collectSidebarSessionRowsByKey(input: {
   rows: readonly GatewaySessionRow[];
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
 }): ReadonlyMap<string, GatewaySessionRow> {
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  for (const rows of Object.values(input.childRowsByParent)) {
-    for (const row of rows) {
-      rowsByKey.set(row.key, row);
-    }
-  }
-  for (const row of input.rows) {
-    rowsByKey.set(row.key, row);
-  }
-  return rowsByKey;
+  return new Map(
+    [...Object.values(input.childRowsByParent).flat(), ...input.rows].map((row) => [row.key, row]),
+  );
 }
 
 export function collectCategorizedChildRootRows(input: {
@@ -492,14 +445,6 @@ export function collectCategorizedChildRootRows(input: {
       resolveUiSessionNavigationParentKey(row) != null &&
       sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
   );
-}
-
-export function resolveSidebarAgentResumeKey(
-  latest: SessionRow | null,
-  agentId: string,
-  mainKey: string,
-): string {
-  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
 export function collectKnownSidebarSessionCatalogIds(input: {
@@ -535,38 +480,19 @@ export function resolveSidebarMainSessionKey(input: {
   });
 }
 
-export function findSidebarMainSessionRow(
-  rows: readonly GatewaySessionRow[],
-  mainKey: string,
-): GatewaySessionRow | null {
-  return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
-}
-
-export function collectKnownSidebarSessionGroups(
-  catalog: readonly string[],
-  rows: readonly GatewaySessionRow[],
-): string[] {
-  return collectKnownSessionGroups(catalog, rows);
-}
-
-/** Depth-first search across a projected session tree, including descendants.
- *  Both callers ask "does any row match", so this short-circuits rather than
- *  flattening: the answer usually resolves in the first few rows. */
-export function someSidebarSessionInTree(
+/** Search the projected tree without flattening folded descendant state. */
+export function findSidebarSessionInTree(
   roots: readonly SidebarRecentSession[],
   predicate: (row: SidebarRecentSession) => boolean,
-): boolean {
+): SidebarRecentSession | undefined {
   const pending = [...roots];
-  while (pending.length > 0) {
-    const row = pending.pop();
-    if (row) {
-      if (predicate(row)) {
-        return true;
-      }
-      pending.push(...row.children);
+  for (let row = pending.pop(); row; row = pending.pop()) {
+    if (predicate(row)) {
+      return row;
     }
+    pending.push(...row.children);
   }
-  return false;
+  return undefined;
 }
 
 export function findProjectedSidebarSession(input: {

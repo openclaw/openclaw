@@ -1,9 +1,4 @@
-/**
- * Normalizes and applies custom provider settings captured by onboarding.
- *
- * Interactive and non-interactive setup share this module so validation,
- * endpoint probing, and config mutation stay in one command boundary.
- */
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -28,7 +23,6 @@ import { applyAgentModelDefaults, type OnboardingAgentTarget } from "./onboard-a
  * room above the default compaction reserve floor in `agent-settings.ts`.
  */
 const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
-const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API, which supports larger generated defaults.
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
@@ -36,7 +30,6 @@ const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
 type CustomAliasManifestPlugin = Pick<PluginManifestRecord, "modelIdNormalization">;
 
-/** Result of best-effort image-input inference for custom model ids. */
 type CustomModelImageInputInference = {
   supportsImageInput: boolean;
   confidence: "known" | "unknown";
@@ -45,10 +38,7 @@ type CustomModelImageInputInference = {
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
   // The hard minimum is a guardrail sentinel, not a useful custom model window.
-  if (parsed <= 0 || parsed === CONTEXT_WINDOW_HARD_MIN_TOKENS) {
-    return CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
-  }
-  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS
+  return parsed > CONTEXT_WINDOW_HARD_MIN_TOKENS
     ? parsed
     : CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 }
@@ -57,7 +47,6 @@ function customModelInputs(supportsImageInput: boolean): CustomModelInput[] {
   return supportsImageInput ? ["text", "image"] : ["text"];
 }
 
-/** Infers image-input support from common custom model naming conventions. */
 export function resolveCustomModelImageInputInference(
   modelId: string,
 ): CustomModelImageInputInference {
@@ -87,80 +76,30 @@ export function resolveCustomModelImageInputInference(
   return { supportsImageInput: false, confidence: "unknown" };
 }
 
-function resolveCustomModelSupportsImageInput(params: {
-  modelId: string;
-  explicit?: boolean;
-  fallback: boolean;
-  inferKnownModels: boolean;
-}): boolean {
-  return (
-    params.explicit ??
-    ((): boolean => {
-      if (!params.inferKnownModels) {
-        return params.fallback;
-      }
-      const inference = resolveCustomModelImageInputInference(params.modelId);
-      return inference.confidence === "known" ? inference.supportsImageInput : params.fallback;
-    })()
-  );
-}
-
-function isAzureFoundryUrl(baseUrl: string): boolean {
+function isAzureUrl(baseUrl: string, openAiOnly = false): boolean {
   try {
-    const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".services.ai.azure.com");
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host.endsWith(".openai.azure.com") || (!openAiOnly && host.endsWith(".services.ai.azure.com"))
+    );
   } catch {
     return false;
   }
 }
 
-function isAzureOpenAiUrl(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".openai.azure.com");
-  } catch {
-    return false;
-  }
-}
-
-function isAzureUrl(baseUrl: string): boolean {
-  return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
-}
-
-/**
- * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
- * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
- * But we can't add query params here, so we just add the path prefix.
- * The api-version will be handled by the Azure OpenAI client or as a query param.
- *
- * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5.4-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5.4-nano
- */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  // Check if the URL already includes the deployment path
   if (normalizedUrl.includes("/openai/deployments/")) {
     return normalizedUrl;
   }
   return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
-/**
- * Transforms an Azure URL into the base URL stored in config.
- *
- * Example:
- *   https://my-resource.openai.azure.com
- *   => https://my-resource.openai.azure.com/openai/v1
- */
 function transformAzureConfigUrl(baseUrl: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   if (normalizedUrl.endsWith("/openai/v1")) {
     return normalizedUrl;
   }
-  // Strip a full deployment path back to the base origin
   const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
   const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
   return `${base}/openai/v1`;
@@ -179,7 +118,6 @@ function hasSameHost(a: string, b: string): boolean {
 
 export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic";
 
-/** Config mutation result for a custom API setup pass. */
 export type CustomApiResult = {
   config: OpenClawConfig;
   providerId: string;
@@ -187,7 +125,6 @@ export type CustomApiResult = {
   providerIdRenamedFrom?: string;
 };
 
-/** Inputs used to persist a custom provider in the OpenClaw config. */
 type ApplyCustomApiConfigParams = {
   config: OpenClawConfig;
   baseUrl: string;
@@ -202,7 +139,6 @@ type ApplyCustomApiConfigParams = {
   manifestPlugins?: readonly CustomAliasManifestPlugin[];
 };
 
-/** Raw CLI flag values for non-interactive custom API setup. */
 type ParseNonInteractiveCustomApiFlagsParams = {
   baseUrl?: string;
   modelId?: string;
@@ -212,7 +148,6 @@ type ParseNonInteractiveCustomApiFlagsParams = {
   supportsImageInput?: boolean;
 };
 
-/** Validated non-interactive custom API setup flags. */
 type ParsedNonInteractiveCustomApiFlags = {
   baseUrl: string;
   modelId: string;
@@ -247,13 +182,11 @@ type ResolveCustomProviderIdParams = {
   providerId?: string;
 };
 
-/** Provider id selected for a custom endpoint, with collision rename metadata. */
 type ResolvedCustomProviderId = {
   providerId: string;
   providerIdRenamedFrom?: string;
 };
 
-/** Converts arbitrary endpoint labels into provider-id-safe tokens. */
 export function normalizeEndpointId(raw: string): string {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
@@ -310,7 +243,6 @@ function configuredAliasModelKey(
   );
 }
 
-/** Returns a human-readable alias collision error for a custom model ref. */
 export function resolveCustomModelAliasError(params: {
   raw: string;
   cfg: OpenClawConfig;
@@ -348,32 +280,6 @@ export function resolveCustomModelAliasError(params: {
     return undefined;
   }
   return `Alias ${normalized} already points to ${existingKey}.`;
-}
-
-function buildAzureOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers["api-key"] = apiKey;
-  }
-  return headers;
-}
-
-function buildOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
-  }
-  return headers;
-}
-
-function buildAnthropicHeaders(apiKey: string) {
-  const headers: Record<string, string> = {
-    "anthropic-version": "2023-06-01",
-  };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  return headers;
 }
 
 type VerificationRequest = {
@@ -418,10 +324,12 @@ export function buildOpenAiVerificationProbeRequest(params: {
   responsesApi?: boolean;
 }): VerificationRequest {
   const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
-  const headers = isBaseUrlAzureUrl
-    ? buildAzureOpenAiHeaders(params.apiKey)
-    : buildOpenAiHeaders(params.apiKey);
-  if (isAzureOpenAiUrl(params.baseUrl) || params.responsesApi === true) {
+  const headers: Record<string, string> = params.apiKey
+    ? isBaseUrlAzureUrl
+      ? { "api-key": params.apiKey }
+      : { Authorization: `Bearer ${params.apiKey}` }
+    : {};
+  if (isAzureUrl(params.baseUrl, true) || params.responsesApi === true) {
     const endpoint = new URL(
       "responses",
       (isBaseUrlAzureUrl ? transformAzureConfigUrl(params.baseUrl) : params.baseUrl).replace(
@@ -477,7 +385,10 @@ export function buildAnthropicVerificationProbeRequest(params: {
   });
   return {
     endpoint,
-    headers: buildAnthropicHeaders(params.apiKey),
+    headers: {
+      "anthropic-version": "2023-06-01",
+      ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
+    },
     body: {
       model: params.modelId,
       max_tokens: 1,
@@ -514,7 +425,6 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   return compatibilityRaw;
 }
 
-/** Resolves the provider id that should own a custom endpoint in config. */
 export function resolveCustomProviderId(
   params: ResolveCustomProviderIdParams,
 ): ResolvedCustomProviderId {
@@ -544,7 +454,6 @@ export function resolveCustomProviderId(
   };
 }
 
-/** Validates non-interactive custom API flags before config mutation. */
 export function parseNonInteractiveCustomApiFlags(
   params: ParseNonInteractiveCustomApiFlagsParams,
 ): ParsedNonInteractiveCustomApiFlags {
@@ -583,8 +492,11 @@ export function parseNonInteractiveCustomApiFlags(
 /** Applies custom provider config and optionally makes its model the primary model. */
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
-  if (!URL.canParse(baseUrl)) {
-    throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
+  if (!isHttpUrl(baseUrl)) {
+    throw new CustomApiError(
+      "invalid_base_url",
+      "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    );
   }
 
   if (
@@ -604,7 +516,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   }
 
   const isAzure = isAzureUrl(baseUrl);
-  const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
+  const isAzureOpenAi = isAzureUrl(baseUrl, true);
   const resolvedBaseUrl = isAzure ? transformAzureConfigUrl(baseUrl) : baseUrl;
 
   const providerIdResult = resolveCustomProviderId({
@@ -638,18 +550,19 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     params.supportsImageInput === undefined
       ? undefined
       : customModelInputs(params.supportsImageInput);
-  const generatedInput = customModelInputs(
-    resolveCustomModelSupportsImageInput({
-      modelId,
-      explicit: params.supportsImageInput,
-      fallback: isAzure && isLikelyReasoningModel,
-      inferKnownModels: !isAzure,
-    }),
-  );
+  const generatedInput =
+    explicitInput ??
+    customModelInputs(
+      isAzure
+        ? isLikelyReasoningModel
+        : resolveCustomModelImageInputInference(modelId).supportsImageInput,
+    );
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,
-    contextWindow: isAzure ? AZURE_DEFAULT_CONTEXT_WINDOW : DEFAULT_CONTEXT_WINDOW,
+    contextWindow: isAzure
+      ? AZURE_DEFAULT_CONTEXT_WINDOW
+      : CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     maxTokens: isAzure ? AZURE_DEFAULT_MAX_TOKENS : DEFAULT_MAX_TOKENS,
     input: generatedInput,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -698,61 +611,40 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
           ...(isAzure ? { authHeader: false } : {}),
           ...(azureHeaders ? { headers: azureHeaders } : {}),
-          models: mergedModels.length > 0 ? mergedModels : [nextModel],
+          models: mergedModels,
         },
       },
     },
   };
 
   const applyModelDefaults = (modelConfig: OpenClawConfig): OpenClawConfig => {
-    let updated =
+    const updated =
       params.setAsPrimary === false ? modelConfig : applyPrimaryModel(modelConfig, modelRef);
-    if (isAzure && isLikelyReasoningModel) {
-      const existingPerModelThinking =
-        updated.agents?.defaults?.models?.[modelRef]?.params?.thinking;
-      if (!existingPerModelThinking) {
-        // Seed a conservative reasoning effort only when the user has not already
-        // configured per-model thinking for this exact custom deployment.
-        updated = {
-          ...updated,
-          agents: {
-            ...updated.agents,
-            defaults: {
-              ...updated.agents?.defaults,
-              models: {
-                ...updated.agents?.defaults?.models,
-                [modelRef]: {
-                  ...updated.agents?.defaults?.models?.[modelRef],
-                  params: {
-                    ...updated.agents?.defaults?.models?.[modelRef]?.params,
-                    thinking: "medium",
-                  },
-                },
-              },
-            },
-          },
-        };
-      }
+    const existingModelConfig = updated.agents?.defaults?.models?.[modelRef];
+    // Seed reasoning only when this Azure deployment has no authored effort.
+    const seedThinking = isLikelyReasoningModel && !existingModelConfig?.params?.thinking;
+    if (!seedThinking && !alias) {
+      return updated;
     }
-    if (alias) {
-      updated = {
-        ...updated,
-        agents: {
-          ...updated.agents,
-          defaults: {
-            ...updated.agents?.defaults,
-            models: {
-              ...updated.agents?.defaults?.models,
-              [modelRef]: {
-                ...updated.agents?.defaults?.models?.[modelRef],
-                alias,
-              },
+    return {
+      ...updated,
+      agents: {
+        ...updated.agents,
+        defaults: {
+          ...updated.agents?.defaults,
+          models: {
+            ...updated.agents?.defaults?.models,
+            [modelRef]: {
+              ...existingModelConfig,
+              ...(seedThinking
+                ? { params: { ...existingModelConfig?.params, thinking: "medium" } }
+                : {}),
+              ...(alias ? { alias } : {}),
             },
           },
         },
-      };
-    }
-    return updated;
+      },
+    };
   };
 
   return {

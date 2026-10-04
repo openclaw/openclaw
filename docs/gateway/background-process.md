@@ -28,7 +28,9 @@ Parameters:
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
+- Set `required: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `required: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
+- Launch failures return the operating-system error and release worker cleanup even when no process starts.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
 - With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
 - Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
@@ -37,7 +39,10 @@ Behavior:
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
+- Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
+- Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures still notify.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
 - Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
@@ -105,13 +110,27 @@ Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.
 
+## Control UI
+
+The chat side panel offers a separate **Processes** tab through its **+** menu
+and the chat header's **Panels** menu. **Subagents** remains its own tab.
+Processes shows the current conversation's background exec commands and retained
+finished records, including status, duration, exit information, and recent output.
+Reading the output does not drain pending agent output or acknowledge completion
+notifications. **Stop** requests termination of the exact observed process instance.
+
+The list is bounded, prioritizes running processes, and follows the existing
+in-memory retention limits. It refreshes while visible; disconnected or
+unavailable workers show an error rather than an empty list. It does not provide
+an interactive terminal or enumerate unrelated operating-system processes.
+
 ## Child process bridging
 
-After a host exec command finishes, OpenClaw releases its retained service-child
-group before reporting completion. Children left behind by shell backgrounding
-(`&`) are stopped with that group. To continue work across turns, start the
+After a host exec command finishes, OpenClaw releases its retained process
+scope before reporting completion. Children left behind by shell backgrounding
+(`&`) are stopped with that scope. To continue work across turns, start the
 long-running command with `background: true` and use `process` to collect its
-result. Its group stays owned until the command finishes; sandbox runtime
+result. Its scope stays owned until the command finishes; sandbox runtime
 lifetimes remain with the sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
@@ -145,13 +164,30 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-For owned POSIX process groups, cleanup also waits for the operating system to
-confirm that the group has disappeared after graceful shutdown. A completed
-command or closed output pipe alone does not establish that its descendants have
-stopped. Forced termination without confirmed cleanup remains uncertain. Local
-TUI shell shutdown uses the same cleanup owner for its own commands.
-Permission-denied group probes still count as present; cleanup continues waiting
-within its original deadline for confirmed disappearance.
+Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
+child subreaper. It acquires kernel child ownership before launch, adopts orphaned
+descendants, and stops and reaps them even if they create another process group
+or session. Completion requires the kernel to report no remaining children, the
+matching owner receipt, and output drain. It does not depend on group-directed
+signals, a process-table census, or inherited-pipe closure alone.
+
+Portable workers use the native helper supplied by their admitted Node host; the
+portable archive does not acquire native dependencies. Use matching current host
+and worker builds in environments that prohibit process-group signaling. An
+unsupported ownership contract fails before launch instead of downgrading to
+transport-only cleanup. Source installations must build their process helpers; a
+source loader with an independent child reaper cannot share this ownership.
+
+The node journal records Linux descendant extinction separately from older
+lineage receipts. A surviving owner can publish that fact after its host stops.
+After restart, a missing certificate or uncertain owner identity retains the
+physical reservation; restarting is not proof that old descendants stopped.
+Older builds do not reinterpret the new certificate as lineage completion.
+
+macOS and retained Bun process-group owners still require kernel group
+disappearance. Permission-denied probes never prove absence. A completed command
+or closed output pipe alone does not establish that its descendants stopped.
+Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
 
@@ -209,10 +245,10 @@ message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 
-Run a long task and poll later:
+Run a task longer than the default 10000 ms yield window and poll later:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 30 && echo done" }
 ```
 
 ```json

@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentEntries } from "../../agents/agent-scope.js";
+import { listAgentEntries } from "../../agents/agent-roster.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshotFromInspection,
@@ -11,7 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
@@ -84,14 +85,11 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const ordered: Array<{ id: string; name?: string }> = [];
 
   for (const entry of entries) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
     if (typeof entry.id !== "string" || !entry.id.trim()) {
       continue;
     }
     const id = normalizeAgentId(entry.id);
-    if (!id || seen.has(id)) {
+    if (seen.has(id)) {
       continue;
     }
     seen.add(id);
@@ -110,12 +108,9 @@ async function createHealthSessionStoreReader(
   projection?: SessionRowProjection,
 ) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { readSessionStoreSummaryReadOnly } =
-    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, {
     projection,
-    readSummary: readSessionStoreSummaryReadOnly,
     recoverReadError(error) {
       if (!isTransientSqliteError(error)) {
         throw error;
@@ -359,22 +354,16 @@ async function buildHealthAccountRecord(params: {
         timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
         cfg: params.cfg,
       });
-      lastProbeAt = Date.now();
     } catch (error) {
       probe = { ok: false, error: formatErrorMessage(error) };
-      lastProbeAt = Date.now();
     }
+    lastProbeAt = Date.now();
   }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
 
-  const probeRecord =
-    probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-  const bot =
-    probeRecord && typeof probeRecord.bot === "object"
-      ? (probeRecord.bot as { username?: string | null })
-      : null;
+  const bot = asNullableObjectRecord(asNullableObjectRecord(probe)?.bot);
   if (bot?.username) {
     debugHealth(params.cfg, "probe.bot", {
       channel: params.plugin.id,
@@ -555,7 +544,6 @@ export async function collectGatewayHealthSnapshot(params: {
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
     const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
       defaultAccountId,
       boundAccounts,
     });
@@ -643,7 +631,7 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = buildContextEngineHealthSummary();
+  const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,

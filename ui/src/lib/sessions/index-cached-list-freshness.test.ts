@@ -10,7 +10,89 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
+const background: GatewaySessionRow = {
+  key: "agent:main:background",
+  sessionId: "background-session",
+  kind: "direct",
+  updatedAt: 10,
+  snapshotAt: 100,
+  status: "done",
+  hasActiveRun: false,
+  activeRunIds: [],
+};
+
+function emitRuntime(harness: ReturnType<typeof createGatewayHarness>, session: GatewaySessionRow) {
+  harness.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      agentId: "main",
+      reason: "run-capacity",
+      session,
+      ancestorSessions: [],
+      ts: session.snapshotAt,
+    },
+  });
+}
+
 describe("cached session list freshness", () => {
+  it("orders runtime events and cached list pages by their sampling clock", async () => {
+    const row = background;
+    const running: GatewaySessionRow = {
+      ...row,
+      snapshotAt: 200,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["background-run"],
+    };
+    let page = sessionsResult([row], 100);
+    const harness = createGatewayHarness(
+      createTestGatewayClient(async () => structuredClone(page)),
+    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      emitRuntime(harness, running);
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+      });
+
+      // Runtime projection changed without a persisted-row write. Request order
+      // does not make this completed Gateway cache entry a fresh observation.
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["background-run"],
+        snapshotAt: 200,
+      });
+
+      const completed = { ...row, snapshotAt: 300 };
+      page = sessionsResult([completed], 300);
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "done",
+        hasActiveRun: false,
+        activeRunIds: [],
+        snapshotAt: 300,
+      });
+      emitRuntime(harness, running);
+      expect(sessions.state.result?.sessions[0]).toMatchObject(completed);
+
+      page = sessionsResult([{ ...running, snapshotAt: 400 }], 400);
+      await sessions.refresh({ agentId: "main", force: true });
+      const settled: GatewaySessionRow = {
+        ...row,
+        snapshotAt: 500,
+      };
+      emitRuntime(harness, settled);
+      expect(sessions.state.result?.sessions[0]).toMatchObject(settled);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("keeps fresh child facts when a later root request returns an older cached page", async () => {
     const parentKey = "agent:main:parent";
     const childKey = "agent:main:subagent:child";

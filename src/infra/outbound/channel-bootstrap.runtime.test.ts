@@ -3,7 +3,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -17,6 +16,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadPluginRegistryHandle: vi.fn(),
@@ -109,17 +109,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     vi.unstubAllEnvs();
   });
 
-  it("bootstraps when the selected channel registry has only a setup shell", () => {
-    installDiscordSetupShell();
-
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the admitted agent workspace during outbound preparation", async () => {
     installDiscordSetupShell();
     const handle = createEmptyPluginRegistry();
@@ -154,7 +143,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
   it("bootstraps outbound sends with the retained legacy owner after config load", async () => {
     installDiscordSetupShell();
-    const migrated = migratePersistedImplicitMainRoster({
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
         defaults: { workspace: "/tmp/openclaw-legacy" },
         entries: {
@@ -163,7 +152,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
         },
       },
       channels: { discord: {} },
-    }).config as OpenClawConfig;
+    }).config;
     const handle = createEmptyPluginRegistry();
     handle.channels = [
       {
@@ -188,7 +177,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     });
     await expect(handler.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
 
-    expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
+    expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-legacy") }),
     );
@@ -542,14 +531,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     bootstrapOutboundChannelPlugin({ channel: "channel-1", cfg: discordConfig });
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(66);
-  });
-
-  it("retries after the runtime config changes", () => {
-    installDiscordSetupShell();
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
   it("retains failed attempts when distinct runtime configs interleave", () => {

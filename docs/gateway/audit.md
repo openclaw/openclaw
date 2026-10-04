@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Metadata-only activity history plus durable run identity and decision receipts"
 read_when:
   - You need a durable record of what the Gateway did without storing content
@@ -44,31 +45,38 @@ platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
-Scheduled runs, background tasks, and task flows are owner-native sources too.
-After exact run admission, a lazy lifecycle metadata table binds the admitted
-context and execution ids to the canonical `cron_run_receipts`, `task_runs`, or
-`flow_runs` row. Inspection joins that metadata to the owner row directly and
-preserves its status, including skipped, failed, timed-out, cancelled, blocked,
-and lost outcomes. A `runId` alone never joins one of these rows to an
-execution. Legacy, missing, deleted, corrupt, or mismatched bindings remain
-unknown or absent; they never change task behavior and are never copied into
-`execution_decision_facts`.
+Scheduled runs are an owner-native source too. After exact run admission, a lazy
+lifecycle metadata table binds the admitted context and execution ids to the
+canonical `cron_run_receipts` row. Inspection joins that metadata to the receipt
+directly and preserves its recorded status. New task and flow lifecycle binding
+writes and inspection joins are retired, but their existing tables and rows are
+not dropped or migrated. This removal leaves the database schemas unchanged;
+see the [versioning contract](/reference/database-schemas/versioning).
+Independent audit events and decision facts retain their existing retention
+policies; they are not reconstructed from retained Task or TaskFlow rows. A
+`runId` alone never joins an owner row to an execution. Missing, deleted, corrupt, or
+mismatched bindings remain unknown or absent; they never change execution
+behavior and are never copied into `execution_decision_facts`.
 
 ## Run identity inspection
 
 Execution identity recording is off by default, including on fresh installs
-and upgrades. Enable it explicitly, then restart the Gateway:
+and upgrades. Enable it explicitly for newly admitted runs:
 
 ```bash
 openclaw config set logging.audit.executionIdentity true
-openclaw gateway restart
 ```
 
 Collection requires both `logging.audit.enabled` and
 `logging.audit.executionIdentity` to be true. Setting either to `false`
-stops new contexts after restart; no environment-variable alias or silent
+stops new contexts immediately; no environment-variable alias or silent
 migration enables the feature. Retained contexts remain inspectable until
 their 30-day expiry.
+
+Audit settings apply without restarting the Gateway. Changes affect subsequent
+events and admissions; accepted writes still drain through the same queue, and
+previously admitted identity contexts remain immutable. Enabling collection
+does not backfill earlier activity or add identity to an already admitted run.
 
 After session work admission succeeds, OpenClaw validates and freezes
 one bounded identity envelope, immediately offers it to the existing audit
@@ -195,6 +203,13 @@ remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
 
+Control UI `chat.send`, including queued replies and ACP turns, carries the
+original prepared attach facts into execution admission. Later profile changes
+or reconnects do not rewrite an admitted context. Collected replies retain
+attribution only when every source supplies equivalent attach facts; conflicting
+or missing evidence remains unknown. These facts do not grant sender or tool
+authority and do not create a channel-admission enforcement receipt.
+
 Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is
@@ -251,11 +266,13 @@ message-policy, or turn-capability denial that changed the result is
 `enforced`. Portable actions and early suppressions without a durable owner
 record use the generic fact owner on the same audit-writer FIFO.
 
-Cron, task, and flow lifecycle receipts are `attribution-only` and have a
-`not-applicable` decision outcome. They report what the authoritative lifecycle
-owner retained; they do not claim an authorization decision. Their cursors are
-opaque and source-specific. Existing numeric cursors and `a:`, `m:`, and `g:`
-cursors remain accepted; newer owner stages use `c:`, `t:`, and `f:`.
+Cron lifecycle receipts are `attribution-only` and have a `not-applicable`
+decision outcome. They report what the authoritative lifecycle owner retained;
+they do not claim an authorization decision. Cursors are opaque and
+source-specific. Existing numeric cursors and `a:`, `m:`, and `g:` cursors
+remain accepted; cron uses `c:`. Well-formed historical `t:` and `f:` cursors
+return `decision cursor is no longer retained; restart inspection without --cursor`.
+They never alias another source or restart pagination silently.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`
@@ -354,8 +371,8 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 ## Message lifecycle events
 
 Choose message audit metadata in **Settings → Advanced → Logging**, or set
-[`logging.audit.messages`](/gateway/config-observability#audit), then restart
-the Gateway:
+[`logging.audit.messages`](/gateway/config-observability#audit). Changes apply
+to subsequent message lifecycle events:
 
 - `off` (default): no message records.
 - `direct`: only messages in direct conversations.

@@ -11,12 +11,16 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
+
+const log = createSubsystemLogger("auto-reply/commands-btw");
 
 /** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -163,11 +167,11 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
         reply: reply ? { ...reply, btw: { question } } : reply,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message.trim() : "";
+      log.warn(`Side question failed: ${formatErrorMessage(error)}`);
       return {
         shouldContinue: false,
         reply: {
-          text: `⚠️ /btw failed${message ? `: ${message}` : "."}`,
+          text: "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
           btw: { question },
           isError: true,
         },

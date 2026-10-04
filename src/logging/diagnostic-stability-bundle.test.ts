@@ -12,7 +12,6 @@ import {
   readLatestDiagnosticStabilityBundleSync,
   uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
-  writeDiagnosticStabilityBundleSync,
   type DiagnosticStabilityBundle,
 } from "./diagnostic-stability-bundle.js";
 import {
@@ -95,12 +94,14 @@ describe("diagnostic stability bundles", () => {
       ),
       { code: "ERR_TEST" },
     );
-    const result = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
       error,
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
 
     expect(result.status).toBe("written");
     const file = result.status === "written" ? result.path : "";
@@ -124,16 +125,6 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain("message body");
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain(os.hostname());
-  });
-
-  it("skips empty recorder snapshots by default", () => {
-    const result = writeDiagnosticStabilityBundleSync({
-      reason: "uncaught_exception",
-      stateDir: tempDir,
-    });
-
-    expect(result).toEqual({ status: "skipped", reason: "empty" });
-    expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
   });
 
   it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
@@ -240,27 +231,29 @@ describe("diagnostic stability bundles", () => {
     );
     error.cause = error;
     error.stack = "a".repeat(7_999) + "😀" + "b".repeat(1_000);
-    const result = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.stop_close_failed",
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.stop_close_failed",
       error,
-      shutdownStep: "gateway-server-close",
-      stateDir: tempDir,
-      includeEmpty: true,
-    });
+      {
+        shutdownStep: "gateway-server-close",
+        stateDir: tempDir,
+      },
+    );
     expect(result.status).toBe("written");
     if (result.status !== "written") {
       return;
     }
-    expect(result.bundle.evidence?.shutdown?.errors.length).toBeLessThanOrEqual(32);
-    expect(result.bundle.evidence?.shutdown?.errors[0]?.stack).toBe("a".repeat(7_999));
-    const nonError = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.stop_close_failed",
-      error: "fixture string failure",
-      shutdownStep: "startup-operations",
-      stateDir: tempDir,
-      includeEmpty: true,
-    });
-    expect(nonError.status === "written" && nonError.bundle.evidence?.shutdown).toEqual({
+    expect(readBundle(result.path).evidence?.shutdown?.errors.length).toBeLessThanOrEqual(32);
+    expect(readBundle(result.path).evidence?.shutdown?.errors[0]?.stack).toBe("a".repeat(7_999));
+    const nonError = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.stop_close_failed",
+      "fixture string failure",
+      {
+        shutdownStep: "startup-operations",
+        stateDir: tempDir,
+      },
+    );
+    expect(nonError.status === "written" && readBundle(nonError.path).evidence?.shutdown).toEqual({
       step: "startup-operations",
       errors: [{ message: "fixture string failure" }],
     });
@@ -311,78 +304,81 @@ describe("diagnostic stability bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
-    for (let index = 0; index < 4; index += 1) {
-      const result = writeDiagnosticStabilityBundleSync({
-        reason: "gateway.restart_respawn_failed",
-        stateDir: tempDir,
-        now: new Date(`2026-04-22T12:00:0${index}.000Z`),
-        retention: 2,
-      });
+    for (let index = 0; index < 22; index += 1) {
+      const result = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.restart_respawn_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+        },
+      );
       expect(result.status).toBe("written");
     }
 
     const bundleDir = path.join(tempDir, "logs", "stability");
     const files = fs.readdirSync(bundleDir).toSorted();
-    expect(files).toHaveLength(2);
+    expect(files).toHaveLength(20);
     expect(files[0]).toContain("12-00-02");
-    expect(files[1]).toContain("12-00-03");
+    expect(files[19]).toContain("12-00-21");
   });
 
-  it.each([1, 2])(
-    "keeps the published bundle within retention %i despite future mtimes",
-    (retention) => {
-      for (let index = 0; index < retention; index++) {
-        const older = writeDiagnosticStabilityBundleForFailureSync(
-          "gateway.startup_failed",
-          undefined,
-          {
-            stateDir: tempDir,
-            retention,
-            now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
-          },
-        );
-        expect(older.status).toBe("written");
-        if (older.status !== "written") {
-          throw new Error("Fixture publication failed");
-        }
-        const future = new Date(Date.UTC(2036, 3, 22, 12, 0, index));
-        fs.utimesSync(older.path, future, future);
-      }
-
-      const current = writeDiagnosticStabilityBundleForFailureSync(
-        "gateway.restart_respawn_failed",
+  it("keeps the published bundle within retention despite future mtimes", () => {
+    for (let index = 0; index < 20; index++) {
+      const older = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.startup_failed",
         undefined,
         {
           stateDir: tempDir,
-          retention,
-          now: new Date("2026-04-22T12:01:00.000Z"),
+          now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
         },
       );
-      expect(current.status).toBe("written");
-      if (current.status !== "written") {
-        throw new Error("Current publication failed");
+      expect(older.status).toBe("written");
+      if (older.status !== "written") {
+        throw new Error("Fixture publication failed");
       }
-      expect(current.message).toContain(current.path);
-      expect(fs.existsSync(current.path)).toBe(true);
-      expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
-      expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(retention);
-    },
-  );
+      const future = new Date(Date.UTC(2036, 3, 22, 12, 0, index));
+      fs.utimesSync(older.path, future, future);
+    }
+
+    const current = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_respawn_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:01:00.000Z"),
+      },
+    );
+    expect(current.status).toBe("written");
+    if (current.status !== "written") {
+      throw new Error("Current publication failed");
+    }
+    expect(current.message).toContain(current.path);
+    expect(fs.existsSync(current.path)).toBe(true);
+    expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
+    expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(20);
+  });
 
   it("reads the newest retained bundle", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
-    const older = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
-    const newer = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_respawn_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-    });
+    const older = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+    const newer = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_respawn_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:01.000Z"),
+      },
+    );
 
     expect(older.status).toBe("written");
     expect(newer.status).toBe("written");
@@ -394,6 +390,79 @@ describe("diagnostic stability bundles", () => {
     expect(latest.status === "found" ? latest.bundle.reason : "").toBe(
       "gateway.restart_respawn_failed",
     );
+  });
+
+  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "diagnostic.memory.sample",
+      uptimeMs: 1000,
+      memory: {
+        rssBytes: 4096,
+        heapTotalBytes: 1024,
+        heapUsedBytes: 512,
+        externalBytes: 32,
+        arrayBuffersBytes: 16,
+        workerCount: 2,
+        workerHeapSampledCount: 1,
+        workerHeapTotalBytes: 2048,
+        workerHeapUsedBytes: 1024,
+        workerExternalBytes: 1024,
+        workerArrayBuffersBytes: 512,
+        workerArrayBuffersSampledCount: 1,
+        workerMemoryScope: "direct",
+        workerMemoryCoverage: "partial",
+        workerHeaps: [
+          {
+            script: "prepared-model-catalog.worker.js",
+            threadId: 2,
+            heapUsed: 1024,
+            heapTotal: 2048,
+            external: 1024,
+            arrayBuffers: 512,
+            sampleAgeMs: 20,
+          },
+        ],
+        workerMemoryMissing: [
+          { script: "/private/secret-worker.js", threadId: 3, reason: "stale" },
+        ],
+      },
+    });
+    const written = writeDiagnosticStabilityBundleForFailureSync("uncaught_exception", undefined, {
+      stateDir: tempDir,
+    });
+    expect(written.status).toBe("written");
+    if (written.status !== "written") {
+      throw new Error("Expected exported diagnostics");
+    }
+    const readback = readDiagnosticStabilityBundleFileSync(written.path);
+    expect(readback.status).toBe("found");
+    if (readback.status !== "found") {
+      throw new Error("Expected readable diagnostics");
+    }
+    expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      workerCount: 2,
+      workerHeapSampledCount: 1,
+      workerHeapUsedBytes: 1024,
+      workerExternalBytes: 1024,
+      workerArrayBuffersBytes: 512,
+      workerArrayBuffersSampledCount: 1,
+      workerMemoryScope: "direct",
+      workerMemoryCoverage: "partial",
+      workerHeaps: [
+        {
+          script: "prepared-model-catalog.worker.js",
+          threadId: 2,
+          heapUsed: 1024,
+          heapTotal: 2048,
+          external: 1024,
+          arrayBuffers: 512,
+          sampleAgeMs: 20,
+        },
+      ],
+      workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
+    });
+    expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");
   });
 
   it("sanitizes imported bundles before returning them", () => {

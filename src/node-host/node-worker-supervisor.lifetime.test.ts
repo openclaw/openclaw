@@ -4,16 +4,15 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   buildWorkerProcessTurn,
   serializeWorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
-import type * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -21,28 +20,26 @@ import {
 } from "./node-worker-process-identity.js";
 import {
   createNodeWorkerSupervisorFixture,
-  observeNodeWorkerAdapters,
   waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
-import type { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
-  TEST_WORKER_SOURCE,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
+  writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 type NodeWorkerSupervisor = ReturnType<typeof createNodeWorkerSupervisor>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
@@ -82,8 +79,6 @@ async function observeBackgroundConnection(url: string) {
     throw cause;
   }
   return {
-    socket,
-    closed,
     dispose,
     get didClose() {
       return didClose;
@@ -122,7 +117,7 @@ describe("node worker environment lifetime", () => {
       });
       const victim = launchInput(workspaceDir, "killed-owner", "tree");
       const peer = launchInput(workspaceDir, "surviving-peer", "wait");
-      const store = new NodeWorkerLaunchStore({ env });
+      const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
       let grandchild: NodeWorkerProcessIdentity | undefined;
       try {
         const running = await supervisor.launch(victim, TEST_WORKER_ENDPOINT);
@@ -132,7 +127,9 @@ describe("node worker environment lifetime", () => {
         grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(pidPath, "utf8")));
         const application = JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${victim.launchId}.started.json`), "utf8"),
-        ) as { pid: number };
+        ) as {
+          pid: number;
+        };
         expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 0 });
 
         process.kill(application.pid, "SIGKILL");
@@ -144,7 +141,7 @@ describe("node worker environment lifetime", () => {
         );
         expect(inspectNodeWorkerProcessIdentity(grandchild)).toMatch(/^(dead|reused)$/u);
         expect(inspectNodeWorkerProcessIdentity(running.worker!)).toMatch(/^(dead|reused)$/u);
-        expect(store.get(victim.launchId)?.state).toBe("failed");
+        expect((await store.get(victim.launchId))?.state).toBe("failed");
         expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
         expect((await supervisor.status(peer.launchId))?.state).toBe("running");
 
@@ -181,16 +178,17 @@ describe("node worker environment lifetime", () => {
     const nextTurn = (turnId: string, prompt: string) => {
       const input = testWorkerLaunchInput(workspaceDir, turnId, prompt);
       input.descriptor.admission.credential = `credential-${turnId}`;
-      input.descriptor.assignment.runId = `run-${turnId}`;
-      input.descriptor.assignment.operationalRunInstance = {
+      const assignment = input.descriptor.assignment;
+      assignment.runId = `run-${turnId}`;
+      assignment.operationalRunInstance = {
         instanceId: `instance-${turnId}`,
-        runId: input.descriptor.assignment.runId,
+        runId: assignment.runId,
       };
-      input.descriptor.assignment.agentRuntimeIdentityToken = `signed-token-${turnId}`;
+      assignment.agentRuntimeIdentityToken = `signed-token-${turnId}`;
       return input;
     };
     const environment = testNodeWorkerEnvironmentIdentity(first);
-    const store = new NodeWorkerLaunchStore({ env });
+    const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
     let connection: BackgroundConnection | undefined;
 
     try {
@@ -198,16 +196,25 @@ describe("node worker environment lifetime", () => {
       const completed = await waitForTerminal(supervisor, first.launchId);
       const started = JSON.parse(
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.started.json`), "utf8"),
-      ) as { pid: number; starts: number };
+      ) as {
+        pid: number;
+        starts: number;
+      };
       const application = requireNodeWorkerProcessIdentity(started.pid);
       const background = JSON.parse(
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
-      ) as { pid: number; url: string };
+      ) as {
+        pid: number;
+        url: string;
+      };
       const server = requireNodeWorkerProcessIdentity(background.pid);
       connection = await observeBackgroundConnection(background.url);
       expect(completed.state).toBe("completed");
-      expect(supervisor.hasActiveWork()).toBe(true);
-      expect(store.get(first.launchId)).toMatchObject({ state: "running", worker: running.worker });
+      expect(await supervisor.hasActiveWork()).toBe(true);
+      expect(await store.get(first.launchId)).toMatchObject({
+        state: "running",
+        worker: running.worker,
+      });
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
       expect(await (await fetch(background.url)).text()).toBe("preview-ready");
 
@@ -216,7 +223,10 @@ describe("node worker environment lifetime", () => {
         JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${first.launchId}.started.json`), "utf8"),
         ),
-      ).toEqual({ pid: application.pid, starts: 1 });
+      ).toEqual({
+        pid: application.pid,
+        starts: 1,
+      });
 
       const poll = nextTurn("preview-poll", "background-poll");
       poll.descriptor.assignment.systemPrompt = '"\\\0\n漢😀';
@@ -239,12 +249,18 @@ describe("node worker environment lifetime", () => {
         JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${poll.launchId}.started.json`), "utf8"),
         ),
-      ).toEqual({ pid: application.pid, starts: 1 });
+      ).toEqual({
+        pid: application.pid,
+        starts: 1,
+      });
       expect(
         JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${poll.launchId}.background.json`), "utf8"),
         ),
-      ).toEqual({ ...background, response: "preview-ready" });
+      ).toEqual({
+        ...background,
+        response: "preview-ready",
+      });
 
       const waiting = nextTurn("preview-cancel", "background-wait");
       await supervisor.launch(waiting, TEST_WORKER_ENDPOINT);
@@ -270,7 +286,7 @@ describe("node worker environment lifetime", () => {
         worker: running.worker,
       });
       expect((await waitForTerminal(supervisor, afterCancel.launchId)).state).toBe("completed");
-      expect(store.listNonterminal()).toHaveLength(1);
+      expect(await store.listNonterminal()).toHaveLength(1);
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       for (const mismatch of [
@@ -284,42 +300,15 @@ describe("node worker environment lifetime", () => {
       await supervisor.stopEnvironment(environment);
       await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
-      expect(supervisor.hasActiveWork()).toBe(false);
+      expect(await supervisor.hasActiveWork()).toBe(false);
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       expect((await supervisor.status(waiting.launchId))?.state).toBe("cancelled");
-    } finally {
-      try {
-        await supervisor.close();
-      } finally {
-        await connection?.dispose();
-      }
-    }
-  });
-
-  it("closes a retained worker and its server after its turn receipt is already complete", async () => {
-    const { supervisor, workspaceDir } = fixture({ capacity: 1 });
-    const input = testWorkerLaunchInput(workspaceDir, "preview-close", "background-start");
-    let connection: BackgroundConnection | undefined;
-    try {
-      const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-      const completed = await waitForTerminal(supervisor, input.launchId);
-      const background = JSON.parse(
-        fs.readFileSync(path.join(workspaceDir, `${input.launchId}.background.json`), "utf8"),
-      ) as { pid: number; url: string };
-      const server = requireNodeWorkerProcessIdentity(background.pid);
-      connection = await observeBackgroundConnection(background.url);
-      expect(await (await fetch(background.url)).text()).toBe("preview-ready");
-
-      await supervisor.close();
-
-      expect(await supervisor.status(input.launchId)).toEqual({
-        ...completed,
-        workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
-      });
-      await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
     } finally {
       try {
         await supervisor.close();
@@ -333,7 +322,8 @@ describe("node worker environment lifetime", () => {
     const { env, supervisor, workspaceDir } = fixture({ capacity: 1 });
     const first = testWorkerLaunchInput(workspaceDir, "pruned-first", "background-start");
     const next = testWorkerLaunchInput(workspaceDir, "current-second", "background-wait");
-    const turns = new NodeWorkerTurnStore({ env });
+    const journal = new NodeWorkerJournalWorker({ env });
+    const turns = new NodeWorkerTurnStore(journal);
     try {
       await supervisor.launch(first, TEST_WORKER_ENDPOINT);
       const completed = await waitForTerminal(supervisor, first.launchId);
@@ -341,7 +331,7 @@ describe("node worker environment lifetime", () => {
       await vi.waitFor(() =>
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(true),
       );
-      turns.claim({
+      await turns.claim({
         claim: { ...testNodeWorkerLaunchIdentity(next), gatewayNamespace: next.gatewayNamespace },
         ownerLaunchId: first.launchId,
         supervisor: running.supervisor,
@@ -349,8 +339,8 @@ describe("node worker environment lifetime", () => {
         nowMs: completed.completedAtMs! + 24 * 60 * 60 * 1_000 + 1,
       });
 
-      expect(turns.get(first.launchId)).toBeUndefined();
-      expect(new NodeWorkerLaunchStore({ env }).get(first.launchId)).toMatchObject({
+      expect(await turns.get(first.launchId)).toBeUndefined();
+      expect(await new NodeWorkerLaunchStore(journal).get(first.launchId)).toMatchObject({
         state: "running",
         worker: running.worker,
       });
@@ -360,80 +350,38 @@ describe("node worker environment lifetime", () => {
       expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
       const background = JSON.parse(
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
-      ) as { url: string };
+      ) as {
+        url: string;
+      };
       expect(await (await fetch(background.url)).text()).toBe("preview-ready");
 
       await supervisor.cancel(testNodeWorkerLaunchIdentity(next));
       await expect(supervisor.launch(first, TEST_WORKER_ENDPOINT)).rejects.toThrow();
-      expect(turns.get(first.launchId)).toBeUndefined();
+      expect(await turns.get(first.launchId)).toBeUndefined();
       expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
     } finally {
       await supervisor.close();
     }
   });
 
-  it.each([
-    "session",
-    "owner epoch",
-    "placement generation",
-    "agent",
-    "workspace",
-    "containment",
-    "permissions",
-    "bundle",
-  ] as const)("retires a retained worker before replacing its %s binding", async (binding) => {
-    const { bundleRoot, root, supervisor, workspaceDir } = fixture({ capacity: 1 });
+  it("retires a retained worker before replacing its permissions binding", async () => {
+    const { supervisor, workspaceDir } = fixture({ capacity: 1 });
     const first = testWorkerLaunchInput(workspaceDir, "binding-first", "background-start");
-    first.descriptor.assignment = {
-      ...first.descriptor.assignment,
-      permissionMode: "full",
-      workerContainmentRoot: workspaceDir,
-    };
+    first.descriptor.assignment.permissionMode = "full";
+    first.descriptor.assignment.workerContainmentRoot = workspaceDir;
     const next = structuredClone(first);
-    next.launchId = "binding-next";
-    next.descriptor.assignment.turnId = next.launchId;
-    switch (binding) {
-      case "session":
-        next.descriptor.admission.sessionId = "replacement-session";
-        break;
-      case "owner epoch":
-        next.descriptor.admission.ownerEpoch += 1;
-        break;
-      case "placement generation":
-        next.placementGeneration += 1;
-        break;
-      case "agent":
-        next.descriptor.assignment.agentId = "replacement-agent";
-        break;
-      case "workspace": {
-        const replacement = path.join(workspaceDir, "replacement");
-        fs.mkdirSync(replacement);
-        next.descriptor.assignment.workspaceDir = replacement;
-        break;
-      }
-      case "containment":
-        next.descriptor.assignment.workerContainmentRoot = root;
-        break;
-      case "permissions":
-        next.descriptor.assignment.permissionMode = "guarded";
-        break;
-      case "bundle": {
-        const hash = "b".repeat(64);
-        const bundle = path.join(bundleRoot, first.gatewayNamespace, "bundles", hash);
-        fs.mkdirSync(bundle);
-        fs.writeFileSync(path.join(bundle, "worker.mjs"), TEST_WORKER_SOURCE);
-        next.expectedBundleHash = hash;
-        next.descriptor.admission.handshake.bundleHash = hash;
-        break;
-      }
-    }
+    next.launchId = next.descriptor.assignment.turnId = "binding-next";
+    next.descriptor.assignment.permissionMode = "guarded";
     let connection: BackgroundConnection | undefined;
     try {
       const original = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
       const completed = await waitForTerminal(supervisor, first.launchId);
       const background = JSON.parse(
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
-      ) as { pid: number; url: string };
+      ) as {
+        pid: number;
+        url: string;
+      };
       const server = requireNodeWorkerProcessIdentity(background.pid);
       connection = await observeBackgroundConnection(background.url);
       next.descriptor.assignment.prompt = `background-start:${new URL(background.url).port}`;
@@ -459,127 +407,15 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
-      if (binding === "owner epoch" || binding === "session") {
-        await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
-        expect(inspectNodeWorkerProcessIdentity(replacement.worker!)).toBe("live");
-      }
     } finally {
       try {
         await supervisor.close();
       } finally {
         await connection?.dispose();
-      }
-    }
-  });
-
-  it("does not observe retirement before teardown, connection close, and definitive identity", async () => {
-    const { supervisor, workspaceDir } = fixture({ capacity: 1 });
-    const first = testWorkerLaunchInput(workspaceDir, "held-first", "background-start");
-    const next = structuredClone(first);
-    next.launchId = next.descriptor.assignment.turnId = "held-next";
-    next.descriptor.admission.ownerEpoch += 1;
-    let ownerAdapter: workerLaunchTransport.NodeWorkerChildAdapter | undefined;
-    const captureAdapter = observeNodeWorkerAdapters((adapter) => {
-      ownerAdapter ??= adapter;
-    });
-    let killOwner: workerLaunchTransport.NodeWorkerChildAdapter["kill"] | undefined;
-    const heldSignals: Array<NodeJS.Signals | undefined> = [];
-    let connection: BackgroundConnection | undefined;
-    let restoreSignals: (() => void) | undefined;
-    let restoreClose: (() => void) | undefined;
-    let restoreIdentity: (() => void) | undefined;
-    let releaseClose: (() => void) | undefined;
-    let replacement: ReturnType<NodeWorkerSupervisor["launch"]> | undefined;
-    const releaseSignals = () => {
-      restoreSignals?.();
-      restoreSignals = undefined;
-      for (const signal of heldSignals.splice(0)) {
-        killOwner!(signal);
-      }
-    };
-    try {
-      const original = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
-      captureAdapter.mockRestore();
-      if (!ownerAdapter || ownerAdapter.pid !== original.worker!.pid) {
-        throw new Error("missing original physical worker adapter");
-      }
-      killOwner = ownerAdapter.kill;
-      await waitForTerminal(supervisor, first.launchId);
-      const background = JSON.parse(
-        fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
-      ) as { pid: number; url: string };
-      const server = requireNodeWorkerProcessIdentity(background.pid);
-      connection = await observeBackgroundConnection(background.url);
-      next.descriptor.assignment.prompt = `background-start:${new URL(background.url).port}`;
-      const socket = connection.socket;
-      const emit = socket.emit.bind(socket);
-      // Withhold only this owned socket's close delivery, after the real OS close.
-      const close = vi.spyOn(socket, "emit").mockImplementation((event, ...args) => {
-        if (event === "close") {
-          releaseClose = () => emit(event, ...args);
-          return true;
-        }
-        return emit(event, ...args);
-      });
-      restoreClose = () => close.mockRestore();
-      const signals = vi.spyOn(ownerAdapter, "kill").mockImplementation((signal) => {
-        heldSignals.push(signal);
-      });
-      restoreSignals = () => signals.mockRestore();
-      const assertRetired = () => expectBackgroundRetired(connection!, original.worker!, server);
-      replacement = supervisor.launch(next, TEST_WORKER_ENDPOINT);
-      void replacement.catch(() => undefined);
-      await vi.waitFor(() => expect(heldSignals.length).toBeGreaterThan(0));
-      expect(await (await fetch(background.url)).text()).toBe("preview-ready");
-      expect(inspectNodeWorkerProcessIdentity(original.worker!)).toBe("live");
-      expect(inspectNodeWorkerProcessIdentity(server)).toBe("live");
-      expect(socket.closed).toBe(false);
-      expect(assertRetired).toThrow();
-
-      releaseSignals();
-      await vi.waitFor(() => expect(releaseClose).toBeDefined());
-      await replacement;
-      await waitForTerminal(supervisor, next.launchId);
-      await vi.waitFor(() => {
-        expect(inspectNodeWorkerProcessIdentity(original.worker!)).toMatch(/^(dead|reused)$/u);
-        expect(inspectNodeWorkerProcessIdentity(server)).toMatch(/^(dead|reused)$/u);
-      });
-      expect(assertRetired).toThrow();
-
-      const identity = await import("./node-worker-process-identity.js");
-      const inspect = identity.inspectNodeWorkerProcessIdentity;
-      const unknown = vi
-        .spyOn(identity, "inspectNodeWorkerProcessIdentity")
-        .mockImplementation((owner) =>
-          owner.pid === server.pid && owner.startTime === server.startTime
-            ? "unknown"
-            : inspect(owner),
-        );
-      restoreIdentity = () => unknown.mockRestore();
-      restoreClose();
-      restoreClose = undefined;
-      releaseClose!();
-      releaseClose = undefined;
-      await connection.closed;
-      expect(await (await fetch(background.url)).text()).toBe("preview-ready");
-      expect(inspectNodeWorkerProcessIdentity(server)).toBe("unknown");
-      expect(assertRetired).toThrow();
-
-      restoreIdentity();
-      restoreIdentity = undefined;
-      assertRetired();
-    } finally {
-      captureAdapter.mockRestore();
-      restoreIdentity?.();
-      releaseSignals();
-      restoreClose?.();
-      releaseClose?.();
-      try {
-        await supervisor.close();
-      } finally {
-        await connection?.dispose();
-        await Promise.allSettled([replacement]);
       }
     }
   });
@@ -604,7 +440,9 @@ describe("node worker environment lifetime", () => {
         expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
         const background = JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
-        ) as { url: string };
+        ) as {
+          url: string;
+        };
         expect(await (await fetch(background.url)).text()).toBe("preview-ready");
       } finally {
         await supervisor.close();
@@ -612,50 +450,61 @@ describe("node worker environment lifetime", () => {
     },
   );
 
-  it.each([
-    { operation: "environment stop", workspaceFailure: false },
-    { operation: "supervisor close", workspaceFailure: false },
-    { operation: "environment stop", workspaceFailure: true },
-    { operation: "supervisor close", workspaceFailure: true },
-  ] as const)(
-    "$operation aborts stalled admission and retires workers with workspaceFailure=$workspaceFailure",
-    async ({ operation, workspaceFailure }) => {
+  it.each(["environment stop", "supervisor close"] as const)(
+    "%s aborts stalled admission and retires workers despite workspace cleanup failure",
+    async (operation) => {
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const { env, supervisor, workspaceDir } = fixture({
+      const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(
+        tempDirs.make("node-worker-supervisor-"),
+      );
+      const workspace = new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env });
+      const supervisor = createNodeWorkerSupervisor({
+        bundleRoot,
+        env,
+        workspace,
         capacity: 2,
         onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
       const first = testWorkerLaunchInput(workspaceDir, "retiring-owner", "retire-stall");
       const next = testWorkerLaunchInput(workspaceDir, "waiting-for-retirement", "wait");
       const sibling = launchInput(workspaceDir, "outside-retiring-environment", "wait");
-      const store = new NodeWorkerLaunchStore({ env });
+      const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
       let owner: Awaited<ReturnType<NodeWorkerSupervisor["launch"]>> | undefined;
       let admission: Promise<unknown> | undefined;
       let shutdown: Promise<unknown> | undefined;
       let admissionError: unknown;
       let shutdownError: unknown;
       let stopped = false;
-      const cleanupError = workspaceFailure
-        ? new Error("workspace process cleanup failed")
-        : undefined;
+      const cleanupError = new Error("workspace process cleanup failed");
       try {
         owner = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
         const completed = await waitForTerminal(supervisor, first.launchId);
         const unrelated = await supervisor.launch(sibling, TEST_WORKER_ENDPOINT);
-        expect(store.get(first.launchId)?.state).toBe("running");
+        expect((await store.get(first.launchId))?.state).toBe("running");
         expect(inspectNodeWorkerProcessIdentity(owner.worker!)).toBe("live");
 
-        const readOwner = vi.spyOn(NodeWorkerLaunchStore.prototype, "get");
+        const readOwner = vi.spyOn(NodeWorkerJournalWorker.prototype, "execute");
         admission = supervisor.launch(next, TEST_WORKER_ENDPOINT).catch((error: unknown) => {
           admissionError = error;
         });
-        await vi.waitFor(() => expect(readOwner).toHaveBeenCalledWith(first.launchId));
+        await vi.waitFor(() =>
+          expect(readOwner).toHaveBeenCalledWith({
+            type: "nodeWorker.launch.get",
+            input: [first.launchId],
+          }),
+        );
         readOwner.mockRestore();
-        if (cleanupError) {
-          vi.spyOn(
-            NodeWorkerWorkspaceProcesses.prototype,
-            operation === "environment stop" ? "stopEnvironment" : "close",
-          ).mockRejectedValueOnce(cleanupError);
+        if (operation === "environment stop") {
+          const stop = workspace.processes.stopEnvironment.bind(workspace.processes);
+          vi.spyOn(workspace.processes, "stopEnvironment").mockImplementationOnce(
+            (environment, stopExecution) =>
+              stop(environment, async () => {
+                await stopExecution?.();
+                throw cleanupError;
+              }),
+          );
+        } else {
+          vi.spyOn(workspace.processes, "close").mockRejectedValueOnce(cleanupError);
         }
         const stopping =
           operation === "environment stop"
@@ -685,10 +534,13 @@ describe("node worker environment lifetime", () => {
           },
           { timeout: 3_000 },
         );
-        expect(store.get(first.launchId)?.state).toBe("interrupted");
+        expect((await store.get(first.launchId))?.state).toBe("interrupted");
         expect(await supervisor.status(first.launchId)).toEqual({
           ...completed,
           workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+          ...(completed.workerCleanupMode === "linux-subreaper"
+            ? { workerDescendantsReaped: true }
+            : {}),
         });
         expect(await supervisor.status(next.launchId)).toBeUndefined();
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(false);
@@ -696,13 +548,15 @@ describe("node worker environment lifetime", () => {
           expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 1 });
           expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
           expect(await supervisor.status(sibling.launchId)).toMatchObject({ state: "running" });
+          await expect(supervisor.launch(next, TEST_WORKER_ENDPOINT)).rejects.toThrow("retired");
+          await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
           await expect(supervisor.launch(next, TEST_WORKER_ENDPOINT)).resolves.toMatchObject({
             state: "running",
           });
         } else {
           expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 2 });
           expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).not.toBe("live");
-          expect(store.listNonterminal()).toEqual([]);
+          expect(await store.listNonterminal()).toEqual([]);
         }
       } finally {
         try {

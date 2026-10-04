@@ -1,4 +1,4 @@
-type ContextWindowCacheState = {
+export type ContextWindowCacheState = {
   configuredTokenCache: Map<string, number>;
   discoveredTokenCache: Map<string, number>;
   contextWindowCache: Map<string, number>;
@@ -31,13 +31,6 @@ export function replaceContextWindowCaches(params: ContextWindowCacheState): voi
 /** Publish one complete discovered-metadata generation. */
 export function replaceDiscoveredContextTokenCache(cache: Map<string, number>): void {
   CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache = cache;
-}
-
-/** Clear the current process-global cache generation. */
-export function clearContextWindowCaches(): void {
-  CONTEXT_WINDOW_CACHE_STATE.configuredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.contextWindowCache.clear();
 }
 
 const PROVIDER_CONTEXT_TOKEN_CACHE_PREFIX = "\0provider:";

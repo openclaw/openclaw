@@ -1,15 +1,25 @@
-import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { readPackageVersion } from "../../infra/package-json.js";
 import {
-  readGatewayServiceState,
-  resolveGatewayService,
-  type GatewayService,
-} from "../../daemon/service.js";
-import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+  readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
+} from "../../infra/update-candidate-state.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import {
+  getUpdateRun,
+  recordUpdateRunDiagnostics,
+  recordUpdateRunRepairAttempt,
+} from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -17,6 +27,7 @@ import {
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
@@ -28,34 +39,27 @@ import {
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   isPackageManagerUpdateMode,
   restartRetainedUpdateGatewayService,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
+  readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
-const QUIET_SERVICE_STDOUT = new Writable({
-  write(_chunk, _encoding, callback) {
-    callback();
-  },
-});
-
-type PostUpdateGatewayHealthRecoveryDeps = {
-  recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
-  waitForHealthy?: typeof waitForGatewayHealthyRestart;
-};
+const QUIET_SERVICE_STDOUT = createNullWriter();
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   assertCurrent?: () => void;
   preserveDefinition?: boolean;
@@ -67,7 +71,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   expectedBuildId?: string;
   requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
-  deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
@@ -82,8 +85,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery: null };
   }
 
-  const recoverLaunchAgent =
-    params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
   const startedAtMs = Date.now();
   const launchAgentRecovery = await withGatewayServiceOperationLock(
     params.env ?? process.env,
@@ -93,7 +94,8 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
         assertNative();
       };
       assertRecovery();
-      const recovery = await recoverLaunchAgent({
+      const recovery = await recoverInstalledLaunchAgentAfterUpdate({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
         env: params.env,
         assertCurrent: assertRecovery,
@@ -126,8 +128,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery };
   }
 
-  const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
-  const health = await waitForHealthy({
+  const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
     timeoutMs: params.timeoutMs,
@@ -142,37 +143,205 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
-  const restartCommand = formatCliCommand("openclaw gateway restart");
-  const installCommand = formatCliCommand("openclaw gateway install --force");
-  const statusCommand = formatCliCommand("openclaw gateway status --deep");
-  if (platform === "darwin") {
-    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "linux") {
-    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "win32") {
-    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-}
-
 export function formatPostUpdateGatewayRecoveryInstructions(
   result: UpdateRunResult,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  const lines = [formatPostUpdateGatewayRecoveryLine(platform)];
+  const restartCommand = formatCliCommand("openclaw gateway restart");
+  const installCommand = formatCliCommand("openclaw gateway install --force");
+  const statusCommand = formatCliCommand("openclaw gateway status --deep");
+  const condition =
+    platform === "darwin"
+      ? "LaunchAgent is installed but not loaded"
+      : platform === "linux"
+        ? "systemd user service is missing, stale, or not active"
+        : platform === "win32"
+          ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
+          : "local service manager reports the gateway service is missing, stale, or not running";
+  const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
+  const lines = [
+    `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
+  ];
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${formatCliCommand("openclaw gateway install --force")}\`.`,
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
     );
   }
   return lines;
 }
 
+export function refuseUnsettledDoctorRecovery(
+  result: UpdateRunResult,
+  root: string,
+  assertCurrent: () => void,
+): boolean {
+  // A failed or foreign receipt cannot inherit an earlier settlement or rollback refusal.
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  if (
+    settlement &&
+    (settlement.exitCode !== 0 ||
+      settlement.command !== "settle doctor process groups" ||
+      settlement.cwd !== root)
+  ) {
+    assertCurrent();
+    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    return true;
+  }
+  return false;
+}
+
+export async function admitMigratedGatewayRecovery(
+  params: Pick<
+    FinishUpdateParams,
+    | "root"
+    | "opts"
+    | "shouldRestart"
+    | "preManagedServiceStop"
+    | "packageTransaction"
+    | "originalManagedServiceRuntime"
+    | "candidateSchemaVersions"
+    | "configSnapshot"
+    | "ownedManagedUpdateEnv"
+    | "packageUpdateNodeRunner"
+    | "updateStepTimeoutMs"
+  >,
+  result: UpdateRunResult,
+  assertCurrent: () => void,
+): Promise<boolean> {
+  const root = result.root ?? params.root;
+  if (refuseUnsettledDoctorRecovery(result, root, assertCurrent)) {
+    return false;
+  }
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
+  if (
+    result.reason !== "state-migrated-no-rollback" ||
+    params.originalManagedServiceRuntime ||
+    !params.shouldRestart ||
+    !params.preManagedServiceStop?.stopped ||
+    databaseRollback?.exitCode === 0 ||
+    (!settlement && !databaseRollback) ||
+    (result.recovery?.serviceRestartSafe === false &&
+      result.recovery.reason === "source-rollback-failed")
+  ) {
+    return false;
+  }
+  assertCurrent();
+  await params.packageTransaction?.assertRollbackSafe?.();
+  const version = await readPackageVersion(root);
+  const buildId = await readBuiltGatewayBuildId(root);
+  assertCurrent();
+  if (!version) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Migrated Gateway runtime identity is unavailable.",
+    );
+  }
+  const candidate = params.candidateSchemaVersions;
+  if (candidate) {
+    const env =
+      params.ownedManagedUpdateEnv ??
+      params.preManagedServiceStop.serviceEnv ??
+      params.opts.run?.env ??
+      process.env;
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const inspect = async () => {
+      const databases = await readUpdateStateSchemaVersions({
+        stateDir: resolveStateDir(env),
+        config: params.configSnapshot.config,
+        env,
+        root,
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+      });
+      assertCurrent();
+      return databases.flatMap((database) => {
+        const observed = resolveUpdateStateContentVersion(database);
+        const expected = database.path === sharedPath ? candidate.state : candidate.agent;
+        return observed !== null && observed !== expected
+          ? [{ ...database, observed, expected }]
+          : [];
+      });
+    };
+    const startedAt = Date.now();
+    try {
+      let pending = await inspect();
+      if (pending.length && pending.every((database) => database.observed < database.expected)) {
+        // Settlement proves the old Doctor stopped, not that its migrations finished.
+        // Doctor retains exclusive maintenance and verified backups for this forward repair.
+        const { runUpdateFinalizationDoctorInFreshProcess } =
+          await import("./update-command-fresh-doctor.js");
+        assertCurrent();
+        await withOwnedManagedUpdateEnv(env, () =>
+          runUpdateFinalizationDoctorInFreshProcess({
+            phase: "pre-plugin",
+            root,
+            opts: params.opts,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            nodeRunner: params.packageUpdateNodeRunner,
+            timeoutMs: params.updateStepTimeoutMs,
+            assertCurrent,
+            onDoctorStep: (step) => result.steps.push(step),
+          }),
+        );
+        assertCurrent();
+        pending = await inspect();
+        if (!pending.length) {
+          result.steps.push({
+            name: "gateway migration recovery",
+            command: "openclaw doctor --fix",
+            cwd: root,
+            durationMs: Date.now() - startedAt,
+            exitCode: 0,
+            stdoutTail: "Required database migrations completed before Gateway recovery.",
+          });
+        }
+      }
+      if (pending.length) {
+        throw new Error(
+          pending
+            .map(
+              (database) =>
+                `${database.path}: expected schema ${database.expected}, found ${database.observed}`,
+            )
+            .join("; "),
+        );
+      }
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      assertCurrent();
+      const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
+      result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      result.steps.push({
+        name: "gateway migration recovery",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stderrTail: message,
+      });
+      defaultRuntime.error(message);
+      return false;
+    }
+  }
+  // Preserve later writes; the installed candidate's native startup still owns state admission.
+  result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
+  if (params.opts.run) {
+    recordUpdateRunDiagnostics(
+      params.opts.run.runId,
+      { recovery: result.recovery },
+      (message) => defaultRuntime.error(message),
+      { env: params.opts.run.env },
+    );
+  }
+  return true;
+}
+
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
@@ -232,6 +401,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await restoreOriginalManagedServiceDefinition({
         original,
         run,
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         assertCurrent: assertOriginal,
         stdout: params.jsonMode ? QUIET_SERVICE_STDOUT : process.stdout,
         timeoutMs: params.timeoutMs,
@@ -245,12 +415,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
-      const state = await readGatewayServiceState(service, {
-        env: serviceEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
+      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {
+        managerUid: expectedService.serviceManagerUid,
+        assertCurrent: assertOriginal,
       });
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
@@ -284,6 +451,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // under its final native-operation lock while retaining both A/B authorities.
     if (original && run) {
       const restart = await restartRetainedUpdateGatewayService({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         run,
         root: original.root,
         env: serviceEnv,
@@ -305,8 +473,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     } else {
       await runUpdatedInstallGatewayCommand(
         {
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           result: { root: original?.root ?? verdict.root },
-          opts: { json: params.jsonMode, run },
+          opts: { run },
           invocationEnv: serviceEnv,
           serviceEnv: current.env,
           nodeRunner: original?.nodeRunner ?? params.nodeRunner,
@@ -348,8 +517,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       if (!ready) {
         throw new Error("Original service independent readiness was not verified.");
       }
-    }
-    if (original) {
       try {
         // Settle A's native restoration independently of B's failed activation.
         await before.windowsTaskAutoStartRecovery?.complete(true);
@@ -370,6 +537,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     return "healthy";
   } catch (err) {
+    if (hasCommandProcessCleanupError(err)) {
+      throw err;
+    }
     assertCurrent();
     if (err instanceof UpdateCommandRecoveryPendingError) {
       throw err;
@@ -388,6 +558,7 @@ export async function compensateOriginalManagedService(
     preManagedServiceStop?: PreManagedServiceStop;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
     allowGatewayRestart?: boolean;
+    onGatewayStartAttempted?: () => void;
     timeoutMs: number;
     invocationCwd?: string;
   },
@@ -409,6 +580,7 @@ export async function compensateOriginalManagedService(
     params.allowGatewayRestart === false
       ? undefined
       : await maybeRestartServiceAfterFailedMutableUpdate({
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: run,
           preManagedServiceStop: before,
           originalManagedServiceRuntime: original,
@@ -417,6 +589,15 @@ export async function compensateOriginalManagedService(
           invocationCwd: params.invocationCwd,
         });
   assertCurrent();
+  const healthy = service === "healthy";
+  const summary = [
+    healthy
+      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+      : "Original managed service compensation was not verified; package and current state were retained.",
+    original.packageFingerprintWarning,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     result: {
       ...result,
@@ -431,32 +612,16 @@ export async function compensateOriginalManagedService(
       steps: [
         ...result.steps,
         {
-          name: "original managed service compensation",
+          name: "original-managed-service-compensation",
           command: "openclaw gateway restart --preserve-definition",
           cwd: original.root,
           durationMs: 0,
-          exitCode: service === "healthy" ? 0 : 1,
-          ...(service === "healthy"
-            ? {
-                stdoutTail: [
-                  `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`,
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }
-            : {
-                stderrTail: [
-                  "Original managed service compensation was not verified; package and current state were retained.",
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }),
+          exitCode: healthy ? 0 : 1,
+          ...(healthy ? { stdoutTail: summary } : { stderrTail: summary }),
         },
       ],
     },
     rolledBack: false,
-    originalServiceRecovery: service === "healthy" ? "healthy" : "failed",
+    originalServiceRecovery: healthy ? "healthy" : "failed",
   };
 }

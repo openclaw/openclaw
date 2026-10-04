@@ -56,14 +56,9 @@ enum TailscaleServeGatewayDiscovery {
                 index += 1
                 group.addTask {
                     let remaining = deadline.timeIntervalSinceNow
-                    if remaining <= 0 {
-                        return nil
-                    }
+                    guard remaining > 0 else { return nil }
                     let timeout = min(perProbeTimeout, remaining)
-                    let reachable = await context.probeHost(candidate.dnsName, timeout)
-                    if !reachable {
-                        return nil
-                    }
+                    guard await context.probeHost(candidate.dnsName, timeout) else { return nil }
                     return TailscaleServeGatewayBeacon(
                         displayName: candidate.displayName,
                         tailnetDns: candidate.dnsName,
@@ -100,19 +95,11 @@ enum TailscaleServeGatewayDiscovery {
         var seen = Set<String>()
 
         for node in status.peer.values {
-            if node.online == false {
-                continue
-            }
-            guard let dnsName = normalizeDnsName(node.dnsName) else {
-                continue
-            }
-            if dnsName == selfDns {
-                continue
-            }
-            if seen.contains(dnsName) {
-                continue
-            }
-            seen.insert(dnsName)
+            guard node.online != false,
+                  let dnsName = normalizeDnsName(node.dnsName),
+                  dnsName != selfDns,
+                  seen.insert(dnsName).inserted
+            else { continue }
 
             out.append(Candidate(
                 dnsName: dnsName,
@@ -127,14 +114,7 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func displayName(hostName: String?, dnsName: String) -> String {
-        if let hostName {
-            let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return dnsName
-            .split(separator: ".")
-            .first
-            .map(String.init) ?? dnsName
+        hostName?.trimmedNonEmpty ?? dnsName.split(separator: ".").first.map(String.init) ?? dnsName
     }
 
     private static func normalizeDnsName(_ raw: String?) -> String? {
@@ -177,14 +157,11 @@ enum TailscaleServeGatewayDiscovery {
         guard !trimmed.isEmpty else { return nil }
 
         let fileManager = FileManager.default
-        let hasPathSeparator = trimmed.contains("/")
-        if hasPathSeparator {
+        if trimmed.contains("/") {
             return fileManager.isExecutableFile(atPath: trimmed) ? trimmed : nil
         }
 
-        let pathRaw = env["PATH"] ?? ""
-        let entries = pathRaw.split(separator: ":").map(String.init)
-        for entry in entries {
+        for entry in (env["PATH"] ?? "").split(separator: ":") {
             let dir = entry.trimmingCharacters(in: .whitespacesAndNewlines)
             if dir.isEmpty { continue }
             let fullPath = URL(fileURLWithPath: dir)
@@ -212,8 +189,7 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func parseStatus(_ raw: String) -> TailscaleStatus? {
-        guard let data = raw.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
+        try? JSONDecoder().decode(TailscaleStatus.self, from: Data(raw.utf8))
     }
 }
 
@@ -304,22 +280,19 @@ final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked 
         case let .data(value):
             data = value
         case let .string(value):
-            guard let encoded = value.data(using: .utf8) else { return false }
-            data = encoded
+            data = Data(value.utf8)
         @unknown default:
             return false
         }
 
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any],
-              let type = dict["type"] as? String,
-              type == "event",
-              let event = dict["event"] as? String
+              dict["type"] as? String == "event"
         else {
             return false
         }
 
-        return event == "connect.challenge"
+        return dict["event"] as? String == "connect.challenge"
     }
 }
 

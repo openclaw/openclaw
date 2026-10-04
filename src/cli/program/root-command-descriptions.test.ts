@@ -1,5 +1,6 @@
 // Root help renders catalog placeholders while command help and completion use
 // registered Commander commands. Keep those user-facing descriptions aligned.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
@@ -20,6 +21,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  "browser extension": "registered and covered by the browser plugin",
   "browser extension native-host": "registered and covered by the browser plugin",
   memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
@@ -161,11 +163,6 @@ const JSON_NOT_APPLICABLE = {
       "mcp unset",
       "onboard recommendations acknowledge",
       "onboard recommendations refresh",
-      "tasks notify",
-      "tasks cancel",
-      "tasks retry",
-      "tasks dismiss",
-      "tasks flow cancel",
       "models set",
       "models set-image",
       "models aliases add",
@@ -221,8 +218,8 @@ const JSON_NOT_APPLICABLE = {
   },
 } as const;
 
-// Route-first parsing accepts JSON before Commander registration is reached.
-const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
+// Route-first commands own JSON output before Commander registration.
+const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents", "update admit"]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
@@ -323,6 +320,7 @@ describe("root command descriptions", () => {
       }
     }
 
+    expect(registeredCommands.has("tasks")).toBe(false);
     expect(missing, "catalog entries with no registered command or alias").toEqual([]);
     expect(mismatches, "root help vs registered command description drift").toEqual([]);
   });

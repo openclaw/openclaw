@@ -8,10 +8,6 @@ import {
 /** Operator scopes required to approve a pending node pairing surface. */
 export type NodeApprovalScope = "operator.pairing" | "operator.write" | "operator.admin";
 
-const OPERATOR_PAIRING_SCOPE: NodeApprovalScope = "operator.pairing";
-const OPERATOR_WRITE_SCOPE: NodeApprovalScope = "operator.write";
-const OPERATOR_ADMIN_SCOPE: NodeApprovalScope = "operator.admin";
-
 function isAdminPairApprovalCommand(command: string): boolean {
   return (
     isAdminOnlyNodeInvokeCommand(command) ||
@@ -26,10 +22,10 @@ export function resolveNodePairApprovalScopes(commands: unknown): NodeApprovalSc
     ? commands.filter((command): command is string => typeof command === "string")
     : [];
   if (normalized.some(isAdminPairApprovalCommand)) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_ADMIN_SCOPE];
+    return ["operator.pairing", "operator.admin"];
   }
   if (normalized.length > 0) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_WRITE_SCOPE];
+    return ["operator.pairing", "operator.write"];
   }
-  return [OPERATOR_PAIRING_SCOPE];
+  return ["operator.pairing"];
 }

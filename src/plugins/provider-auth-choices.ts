@@ -16,6 +16,7 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import { parseProviderPluginMethodChoice } from "./provider-plugin-choice.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export type ProviderAuthChoiceMetadata = Omit<
   PluginManifestProviderAuthChoice,
@@ -71,10 +72,7 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
-function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
-  if (!origin) {
-    return Number.MAX_SAFE_INTEGER;
-  }
+function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin): number {
   return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
@@ -133,20 +131,6 @@ function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
-function toSetupProviderAuthChoiceCandidate(params: {
-  plugin: PluginManifestRecord;
-  providerId: string;
-  methodId: string;
-}): ProviderAuthChoiceCandidate {
-  return {
-    pluginId: params.plugin.id,
-    origin: params.plugin.origin,
-    providerId: params.providerId,
-    methodId: params.methodId,
-    choiceId: `${params.providerId}-${params.methodId}`,
-  };
-}
-
 function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
@@ -163,13 +147,13 @@ function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
       .map(normalizeManifestAuthDescriptorId)
       .filter(Boolean)
       .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
-      .map((methodId) =>
-        toSetupProviderAuthChoiceCandidate({
-          plugin,
-          providerId,
-          methodId,
-        }),
-      );
+      .map((methodId) => ({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        providerId,
+        methodId,
+        choiceId: `${providerId}-${methodId}`,
+      }));
   });
 }
 
@@ -261,16 +245,8 @@ function pickPreferredManifestAuthChoice(
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate[] {
-  const byChoiceId = new Map<string, ProviderAuthChoiceCandidate[]>();
-  for (const candidate of candidates) {
-    const normalizedChoiceId = candidate.choiceId.trim();
-    if (!normalizedChoiceId) {
-      continue;
-    }
-    const group = byChoiceId.get(normalizedChoiceId) ?? [];
-    group.push(candidate);
-    byChoiceId.set(normalizedChoiceId, group);
-  }
+  const byChoiceId = groupPluginRecords(candidates, (candidate) => candidate.choiceId.trim());
+  byChoiceId.delete("");
   return [...byChoiceId.values()].flatMap((group) => {
     const preferred = pickPreferredManifestAuthChoice(group);
     return preferred ? [preferred] : [];

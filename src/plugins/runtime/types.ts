@@ -6,6 +6,7 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -14,6 +15,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 // ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
+  /** Revalidate command authority at the host's run admission boundary. */
+  assertCurrent?: () => void;
   sessionKey: string;
   message: string;
   /** Run with an exact empty tool surface. */
@@ -141,6 +144,28 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
+    /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
+    readSessionFacts: (params: {
+      sessionKeys: readonly string[];
+    }) => Promise<RuntimeSessionFactsResult>;
+    /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
+    subscribeSessionChanges: (
+      listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
+    ) => () => void;
+    withUserProfileIdentity?: <T>(
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
+      run: (assertCurrent: () => void) => Promise<T>,
+    ) => Promise<T>;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
@@ -177,20 +202,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       workspaceAccess: "none" | "ro" | "rw";
       confinementError?: string;
     };
-    prepareWorkspaceAuthority: (params: {
-      config: OpenClawConfig;
-      agentId?: string;
-      confinedToolNames?: readonly string[];
-      requiredToolNames?: readonly string[];
-      modelProvider?: string;
-      modelId?: string;
-      sessionKey: string;
-      workspaceDir: string;
-    }) => Promise<{
-      sandboxed: boolean;
-      workspaceAccess: "none" | "ro" | "rw";
-      confinementError?: string;
-    }>;
+    prepareWorkspaceAuthority: (
+      params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0] & {
+        workspaceDir: string;
+      },
+    ) => Promise<ReturnType<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>>;
   };
   worktrees: {
     resolveCheckoutRoot: (params: { path: string }) => Promise<string | undefined>;
@@ -201,6 +217,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       baseRef?: string;
       ownerKind: "workboard";
       ownerId: string;
+      commitGuard?: () => void;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
     removeIfLossless: (params: {

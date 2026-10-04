@@ -1,14 +1,8 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { telegramMessageToolHints } from "./channel-actions.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
-
-function isTelegramRichMessagesEnabled(cfg: OpenClawConfig, accountId?: string | null): boolean {
-  const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
-}
+import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
   messageToolHints: telegramMessageToolHints,
@@ -17,15 +11,12 @@ export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
       cfg,
       accountId: accountId ?? undefined,
     });
-    return [
-      ...(inlineButtonsScope === "off" ? [] : ["inlineButtons"]),
-      ...(isTelegramRichMessagesEnabled(cfg, accountId) ? ["markdownDetails"] : []),
-    ];
+    return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
   },
-  // Every runtime receives the channel authoring contract via inbound-meta response_format.
+  // The only Telegram formatting contract, including `<details>`. Core delivers it to
+  // every turn whose output reaches this account: replies, heartbeats, cron, announces.
   inboundFormattingHints: ({ cfg, accountId }) => {
-    const richMessages = isTelegramRichMessagesEnabled(cfg, accountId);
-    if (richMessages) {
+    if (resolveTelegramRichMessages({ cfg, accountId })) {
       return {
         text_markup: "markdown_telegram_rich",
         rules: [

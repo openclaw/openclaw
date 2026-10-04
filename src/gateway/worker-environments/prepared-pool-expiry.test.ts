@@ -1,20 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { PROJECT_KEY, RECEIPT, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
-
-class TestWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 describe("prepared worker expiry during admitted work", () => {
   const fixture = usePreparedPoolFixture();
@@ -22,7 +13,7 @@ describe("prepared worker expiry during admitted work", () => {
   it.each(["enrollment", "readiness"] as const)(
     "retains capacity until cleanup and refuses late %s without aborting admitted work",
     async (boundary) => {
-      const reserve = fixture.seed("admitted-reserve", { reserve: true });
+      const reserve = await fixture.seed("admitted-reserve", { reserve: true });
       const entered = createDeferred();
       const releaseWork = createDeferred();
       const destroyEntered = createDeferred();
@@ -44,32 +35,24 @@ describe("prepared worker expiry during admitted work", () => {
         now: () => fixture.nowMs,
         prepareInstallation,
         isStopping: () => false,
-        inState: (record, ...states) => states.includes(record.state),
         withLock: async (_environmentId, task) => await task(),
-        serviceError: (code, message) => new TestWorkerServiceError(code, message),
-        move: (record, to, patch) =>
-          fixture.store.transition({
+        move: async (record, to, patch, assertCurrent) =>
+          await fixture.store.transition({
             environmentId: record.environmentId,
             from: record.state,
             expectedOwnerEpoch: record.ownerEpoch,
             to,
             patch,
+            assertCurrent,
           }),
       } satisfies Pick<
         WorkerProviderLifecycleOptions,
-        | "store"
-        | "now"
-        | "prepareInstallation"
-        | "isStopping"
-        | "inState"
-        | "withLock"
-        | "serviceError"
-        | "move"
+        "store" | "now" | "prepareInstallation" | "isStopping" | "withLock" | "move"
       >;
       const prepareNodeEnrollment = vi.fn<
         NonNullable<WorkerProviderLifecycleOptions["prepareNodeEnrollment"]>
       >(async (record) => {
-        const enrolled = fixture.store.ensureNodeEnrollment(record.environmentId);
+        const enrolled = await fixture.store.ensureNodeEnrollment(record.environmentId);
         return {
           mode: "connect",
           setupCode: "synthetic-setup",
@@ -105,13 +88,11 @@ describe("prepared worker expiry during admitted work", () => {
         registerPreparedWorkspace,
         credentialBroker: createWorkerCredentialBroker({
           ...shared,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callProvider: async (_environmentId, run) => await run(),
         callBootstrap: async (_installation, run) => await run(fixture.abort.signal),
         bootstrapWorker: async () => RECEIPT,
-        isServiceError: (error, code) =>
-          error instanceof TestWorkerServiceError && error.code === code,
         saveError: (record, error) =>
           fixture.store.recordError({
             environmentId: record.environmentId,
@@ -141,15 +122,20 @@ describe("prepared worker expiry during admitted work", () => {
           entered.resolve();
           await releaseWork.promise;
         } else {
+          const preparedWorkspace = {
+            workspaceDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/workspace`,
+            homeDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/home`,
+            sourceManifestRef: `sha256:${"1".repeat(64)}`,
+            preparedManifestRef: `sha256:${"2".repeat(64)}`,
+          };
           await options!.project!.prepare({
             runScript: async () =>
               JSON.stringify({
                 ready: true,
-                preparedWorkspace: {
-                  workspaceDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/workspace`,
-                  homeDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/home`,
-                  sourceManifestRef: `sha256:${"1".repeat(64)}`,
-                  preparedManifestRef: `sha256:${"2".repeat(64)}`,
+                preparedWorkspace,
+                retainedWorkspace: {
+                  ...preparedWorkspace,
+                  baseCommit: options?.project?.baseCommit,
                 },
               }),
             runScriptWithBudget: async () => {
@@ -164,13 +150,12 @@ describe("prepared worker expiry during admitted work", () => {
         if (enrollment.mode !== "connect") {
           throw new Error("Fresh reserve must use its pending enrollment");
         }
-        bindCloudWorkerSetupCompletion({
-          db: fixture.database.db,
-          completion: {
-            setupId: enrollment.setupId,
-            deviceId: "expiry-node",
-            completedAtMs: fixture.nowMs,
-          },
+        await completeWorkerNodeSetupForTest({
+          baseDir: fixture.root,
+          store: fixture.store,
+          setupId: enrollment.setupId,
+          deviceId: "expiry-node",
+          completedAtMs: fixture.nowMs,
         });
         return { leaseId: "expiry-lease", node: { deviceId: "expiry-node" }, sharedHost: false };
       });

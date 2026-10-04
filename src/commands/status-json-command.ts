@@ -4,6 +4,7 @@
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { reportStatusScanFailure } from "./status-runtime-shared.ts";
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
 type StatusJsonCommandOptions = {
@@ -21,7 +22,6 @@ export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): voi
   }
 }
 
-/** Runs the fast status scan, resolves optional deep fields, and writes JSON through the runtime. */
 export async function runStatusJsonCommand(params: {
   opts: StatusJsonCommandOptions & StatusGatewayProbeBudget;
   runtime: RuntimeEnv;
@@ -34,15 +34,19 @@ export async function runStatusJsonCommand(params: {
   ) => Promise<Parameters<typeof resolveStatusJsonOutput>[0]["scan"]>;
 }) {
   assertStatusUsageAgentScope(params.opts);
-  const scan = await params.scanStatusJsonFast(
-    {
-      timeoutMs: params.opts.timeoutMs,
-      gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
-      all: params.opts.all,
-    },
-    params.runtime,
-  );
-  const updateRunStatus = readUpdateRunStatus();
+  const scan = await params
+    .scanStatusJsonFast(
+      {
+        timeoutMs: params.opts.timeoutMs,
+        gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
+        all: params.opts.all,
+      },
+      params.runtime,
+    )
+    .catch((error: unknown) =>
+      reportStatusScanFailure(error, params.runtime, params.opts.timeoutMs),
+    );
+  const updateRunStatus = await readUpdateRunStatus();
   writeRuntimeJson(params.runtime, {
     ...(await resolveStatusJsonOutput({
       scan,

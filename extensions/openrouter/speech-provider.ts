@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 import {
   createOpenAiCompatibleSpeechProvider,
   type SpeechProviderPlugin,
@@ -16,12 +15,8 @@ const OPENROUTER_TTS_MODELS = [
 ] as const;
 const OPENROUTER_TTS_RESPONSE_FORMATS = ["mp3", "pcm"] as const;
 
-type OpenRouterTtsExtraConfig = {
-  provider?: Record<string, unknown>;
-};
-
 export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
-  return createOpenAiCompatibleSpeechProvider<OpenRouterTtsExtraConfig>({
+  return createOpenAiCompatibleSpeechProvider({
     id: "openrouter",
     label: "OpenRouter",
     autoSelectOrder: 35,
@@ -35,10 +30,6 @@ export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
     defaultResponseFormat: "mp3",
     voiceCompatibleResponseFormats: ["mp3"],
     baseUrlPolicy: { kind: "canonical", aliases: ["https://openrouter.ai/v1"], allowCustom: true },
-    extraHeaders: {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-    },
     apiErrorLabel: "OpenRouter TTS API error",
     missingApiKeyError: "OpenRouter API key missing",
     readExtraConfig: (raw) => ({ provider: asOptionalRecord(raw?.provider) }),

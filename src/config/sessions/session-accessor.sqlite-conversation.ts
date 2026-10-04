@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -21,35 +21,6 @@ type PreparedSessionConversation = {
   role: SessionConversationRole;
   routeContext?: ConversationRouteContext | null;
 };
-
-/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
-function prepareSessionConversation(params: {
-  entry: SessionEntry;
-  routeContext?: ConversationRouteContext | null;
-  sessionScope: string;
-}): PreparedSessionConversation | null {
-  const routeContext =
-    params.routeContext === null
-      ? null
-      : params.routeContext === undefined
-        ? undefined
-        : parseConversationRouteContext(params.routeContext);
-  if (params.routeContext !== undefined && params.routeContext !== null && !routeContext) {
-    throw new Error("Invalid conversation route context");
-  }
-  const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
-  if (!identity) {
-    return null;
-  }
-  return {
-    identity,
-    role:
-      params.sessionScope === "shared-main" && identity.kind === "direct"
-        ? "participant"
-        : "primary",
-    ...(routeContext !== undefined ? { routeContext } : {}),
-  };
-}
 
 /** Keeps a previously observed route peer when a generic session writer has no route facts. */
 function preserveSessionConversationIdentity(params: {
@@ -90,15 +61,7 @@ function preserveSessionConversationIdentity(params: {
       .orderBy("sc.last_seen_at", "desc")
       .limit(1),
   ).rows[0];
-  let metadata: Record<string, unknown> | undefined;
-  if (row?.metadata_json) {
-    try {
-      const parsed = JSON.parse(row.metadata_json) as unknown;
-      metadata = isRecord(parsed) ? parsed : undefined;
-    } catch {
-      metadata = undefined;
-    }
-  }
+  const metadata = row?.metadata_json ? safeParseJsonRecord(row.metadata_json) : undefined;
   return row
     ? {
         conversationRef: row.conversation_id,
@@ -121,6 +84,7 @@ function preserveSessionConversationIdentity(params: {
     : params.identity;
 }
 
+/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
 export function prepareSessionConversationForWrite(params: {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
@@ -128,18 +92,36 @@ export function prepareSessionConversationForWrite(params: {
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
 }): PreparedSessionConversation | null {
-  const conversation = prepareSessionConversation(params);
-  if (!conversation || params.routeContext !== undefined) {
-    return conversation;
+  const routeContext =
+    params.routeContext === null
+      ? null
+      : params.routeContext === undefined
+        ? undefined
+        : parseConversationRouteContext(params.routeContext);
+  if (params.routeContext !== undefined && params.routeContext !== null && !routeContext) {
+    throw new Error("Invalid conversation route context");
   }
-  conversation.identity = preserveSessionConversationIdentity({
-    database: params.database,
-    identity: conversation.identity,
-    sessionIds: [params.entry.sessionId, params.previousEntry?.sessionId].filter(
-      (sessionId): sessionId is string => Boolean(sessionId),
-    ),
-  });
-  return conversation;
+  const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
+  if (!identity) {
+    return null;
+  }
+  return {
+    identity:
+      routeContext === undefined
+        ? preserveSessionConversationIdentity({
+            database: params.database,
+            identity,
+            sessionIds: [params.entry.sessionId, params.previousEntry?.sessionId].filter(
+              (sessionId): sessionId is string => Boolean(sessionId),
+            ),
+          })
+        : identity,
+    role:
+      params.sessionScope === "shared-main" && identity.kind === "direct"
+        ? "participant"
+        : "primary",
+    ...(routeContext !== undefined ? { routeContext } : {}),
+  };
 }
 
 /** Upserts the address before the session row so its primary-conversation FK is always valid. */
@@ -149,39 +131,32 @@ export function upsertConversationIdentity(
   updatedAt: number,
 ): void {
   const db = getSessionKysely(database.db);
+  const identityColumns = () => ({
+    channel: identity.channel,
+    account_id: identity.accountId,
+    kind: identity.kind,
+    peer_id: identity.peerId,
+    delivery_target: identity.deliveryTarget,
+    parent_conversation_id: identity.parentConversationRef ?? null,
+    thread_id: identity.threadId ?? null,
+    native_channel_id: identity.nativeChannelId ?? null,
+    native_direct_user_id: identity.nativeDirectUserId ?? null,
+    label: identity.label ?? null,
+    metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+  });
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
       .values({
         conversation_id: identity.conversationRef,
-        channel: identity.channel,
-        account_id: identity.accountId,
-        kind: identity.kind,
-        peer_id: identity.peerId,
-        delivery_target: identity.deliveryTarget,
-        parent_conversation_id: identity.parentConversationRef ?? null,
-        thread_id: identity.threadId ?? null,
-        native_channel_id: identity.nativeChannelId ?? null,
-        native_direct_user_id: identity.nativeDirectUserId ?? null,
-        label: identity.label ?? null,
-        metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+        ...identityColumns(),
         created_at: updatedAt,
         updated_at: updatedAt,
       })
       .onConflict((conflict) =>
         conflict.column("conversation_id").doUpdateSet({
-          channel: identity.channel,
-          account_id: identity.accountId,
-          kind: identity.kind,
-          peer_id: identity.peerId,
-          delivery_target: identity.deliveryTarget,
-          parent_conversation_id: identity.parentConversationRef ?? null,
-          thread_id: identity.threadId ?? null,
-          native_channel_id: identity.nativeChannelId ?? null,
-          native_direct_user_id: identity.nativeDirectUserId ?? null,
-          label: identity.label ?? null,
-          metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+          ...identityColumns(),
           updated_at: updatedAt,
         }),
       ),

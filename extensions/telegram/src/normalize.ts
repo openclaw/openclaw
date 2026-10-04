@@ -1,4 +1,3 @@
-// Telegram helper module supports normalize behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
 
@@ -6,10 +5,6 @@ const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
 
 function normalizeTelegramTargetBody(raw: string): string | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
   const prefixStripped = trimmed.replace(TELEGRAM_PREFIX_RE, "").trim();
   if (!prefixStripped) {
     return undefined;
@@ -50,10 +45,7 @@ function resolveTelegramTargetIdentity(raw: string) {
 
 export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
   const normalizedBody = normalizeTelegramTargetBody(raw);
-  if (!normalizedBody) {
-    return undefined;
-  }
-  return normalizeLowercaseStringOrEmpty(`telegram:${normalizedBody}`);
+  return normalizedBody ? `telegram:${normalizedBody}` : undefined;
 }
 
 export function looksLikeTelegramTargetId(raw: string): boolean {

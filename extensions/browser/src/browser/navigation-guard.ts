@@ -7,11 +7,12 @@
 import { isIP } from "node:net";
 import {
   isPrivateNetworkAllowedByPolicy,
+  matchesHostnameAllowlist,
+  normalizeHostname,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
-} from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+} from "openclaw/plugin-sdk/security-runtime";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -38,10 +39,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
     throw new InvalidBrowserNavigationUrlError("url is required");
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     const diagnostic = rawUrl.includes("@") ? "[redacted credential-bearing URL]" : rawUrl;
     throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${diagnostic}`);
   }
@@ -93,12 +92,7 @@ export function requiresInspectableBrowserNavigationRedirectsForUrl(
   if (!requiresInspectableBrowserNavigationRedirects(ssrfPolicy)) {
     return false;
   }
-  try {
-    const parsed = new URL(url);
-    return NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
+  return NETWORK_NAVIGATION_PROTOCOLS.has(URL.parse(url)?.protocol ?? "");
 }
 
 function isIpLiteralHostname(hostname: string): boolean {
@@ -188,10 +182,8 @@ export async function assertBrowserNavigationResultAllowed(
   if (!rawUrl) {
     return;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return;
   }
   if (

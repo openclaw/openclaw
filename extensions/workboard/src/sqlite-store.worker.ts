@@ -74,6 +74,16 @@ export function createSqliteWorkerBackend(
         return kernel.boards.delete(...command.input.args);
       case "boards.entries":
         return kernel.boards.entries(...command.input.args);
+      case "sessionsBoard.get":
+        return kernel.sessionsBoard.get(...command.input.args);
+      case "sessionsBoard.update":
+        return kernel.sessionsBoard.update(...command.input.args);
+      case "sessionsBoard.listPlacements":
+        return kernel.sessionsBoard.listPlacements(...command.input.args);
+      case "sessionsBoard.repairPlacements":
+        return kernel.sessionsBoard.repairPlacements(...command.input.args);
+      case "sessionsBoard.writePlacement":
+        return kernel.sessionsBoard.writePlacement(...command.input.args);
       case "subscriptions.register":
         return kernel.subscriptions.register(...command.input.args);
       case "subscriptions.lookup":

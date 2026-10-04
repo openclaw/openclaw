@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
-import { afterEach, describe, expect, it } from "vitest";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as durability from "./directory-durability.js";
 import {
   assertLegacyMigrationSourceUnchanged,
   claimAndRemoveLegacyMigrationSource,
@@ -17,7 +21,12 @@ import {
 
 describe("doctor legacy migration source contract", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(cleanup);
+    afterEach(() => {
+      configureFsSafeNative({ mode: "auto" });
+      __setFsSafeTestHooksForTest(undefined);
+      vi.restoreAllMocks();
+      cleanup();
+    });
   });
 
   function createSource(content = '{"version":1}\n') {
@@ -42,6 +51,12 @@ describe("doctor legacy migration source contract", () => {
           label: "test",
         }),
     });
+  }
+
+  async function createRootSource() {
+    const source = createSource();
+    const stateRoot = await root(source.stateDir, { hardlinks: "reject", symlinks: "reject" });
+    return { ...source, stateRoot };
   }
 
   it("detects an interrupted claim without accepting absent source state", () => {
@@ -73,8 +88,7 @@ describe("doctor legacy migration source contract", () => {
   });
 
   it("shares the same pinned source identity across root-bound and sync readers", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const bounded = await readLegacyMigrationSourceSnapshot({
       stateRoot,
       stateDir,
@@ -108,8 +122,7 @@ describe("doctor legacy migration source contract", () => {
   });
 
   it("recovers interrupted claims without discarding a matching active source", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     fs.copyFileSync(sourcePath, claim.claimPath);
 
@@ -125,9 +138,190 @@ describe("doctor legacy migration source contract", () => {
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   });
 
-  it("rejects an inode replacement with matching bytes and restores its source", async () => {
+  it.each([
+    {
+      message: "native no-replace move is unavailable",
+      cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+    },
+    {
+      message: "native no-replace move is unavailable",
+      cause: Object.assign(new Error("unsupported rename flags"), { code: "ENOTSUP" }),
+    },
+    { message: "native fs-safe helper is unavailable", cause: undefined },
+    {
+      message: "native fs-safe helper is unavailable",
+      cause: Object.assign(new Error("Cannot find module @openclaw/fs-safe-platform"), {
+        code: "MODULE_NOT_FOUND",
+      }),
+    },
+  ])("claims and restores the same inode after $message ($cause)", async ({ message, cause }) => {
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", message, { cause }),
+    );
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+    const claimed = await claim.claim({ snapshot, mismatchMessage: "source changed" });
+    expect(legacyMigrationSourceSnapshotsMatch(claimed, snapshot)).toBe(true);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.statSync(claim.claimPath).nlink).toBe(1);
+    expect(await claim.restore()).toBeNull();
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+    expect(fs.existsSync(claim.claimPath)).toBe(false);
+  });
+
+  it.each([
+    { code: "EIO", required: false, guarded: false },
+    { code: "ERR_DLOPEN_FAILED", required: true, guarded: false },
+    { code: "EINVAL", required: false, guarded: true },
+  ])(
+    "leaves source untouched when fallback is forbidden: %j",
+    async ({ code, required, guarded }) => {
+      const { sourcePath, stateDir } = createSource();
+      const stateRoot = await root(stateDir, {
+        hardlinks: "reject",
+        symlinks: "reject",
+        ...(guarded ? { assertBeforeMutation: () => {} } : {}),
+      });
+      const refusal = new FsSafeError(
+        "helper-unavailable",
+        required ? "native fs-safe helper is unavailable" : "native no-replace move is unavailable",
+        { cause: Object.assign(new Error("native operation failed"), { code }) },
+      );
+      vi.spyOn(stateRoot, "move").mockRejectedValue(refusal);
+      if (required) {
+        configureFsSafeNative({ mode: "require" });
+      }
+      const claim = createClaim(stateRoot, stateDir, sourcePath);
+      const snapshot = await claim.read();
+      await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toBe(
+        refusal,
+      );
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.existsSync(claim.claimPath)).toBe(false);
+    },
+  );
+
+  it("preserves a competing claim created before portable publication", async () => {
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+    vi.spyOn(stateRoot, "move").mockImplementationOnce(async () => {
+      fs.writeFileSync(claim.claimPath, "another generation");
+      throw new FsSafeError("helper-unavailable", "native no-replace move is unavailable", {
+        cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+      });
+    });
+
+    await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toThrow();
+
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.readFileSync(claim.claimPath, "utf8")).toBe("another generation");
+  });
+
+  it("retains the source when portable publication cannot sync its directory", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", "unsupported rename", {
+        cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+      }),
+    );
+    const publish = durability.publishFileExclusive;
+    vi.spyOn(durability, "publishFileExclusive").mockImplementation(async (params) => ({
+      ...(await publish(params)),
+      directorySync: { status: "unsupported", code: "ENOTSUP" },
+    }));
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+
+    await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toThrow(
+      "crash-durable directory synchronization",
+    );
+
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
+  });
+
+  it("preserves a linked claim when the Root revokes recovery authority", async () => {
     const { sourcePath, stateDir } = createSource();
+    const refusal = new Error("Migration authority was revoked.");
+    const stateRoot = await root(stateDir, {
+      hardlinks: "reject",
+      symlinks: "reject",
+      assertBeforeMutation: () => {
+        throw refusal;
+      },
+    });
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+    fs.linkSync(sourcePath, claim.claimPath);
+
+    await expect(claim.recoverLinkedMove()).rejects.toBe(refusal);
+
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.statSync(sourcePath).nlink).toBe(2);
+    expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
+  });
+
+  it("preserves both generations if the migration root is rebound before source removal", async () => {
+    const { sourcePath, stateDir } = createSource();
+    const moved = path.join(tempDirs.make("openclaw-moved-source-"), "original");
+    const outside = tempDirs.make("openclaw-outside-source-");
+    fs.writeFileSync(path.join(outside, "legacy.json"), "outside generation");
     const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", "unsupported rename", {
+        cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+      }),
+    );
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+    let rebound = false;
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: (operation) => {
+        if (operation === "remove" && !rebound) {
+          rebound = true;
+          fs.renameSync(stateDir, moved);
+          fs.symlinkSync(outside, stateDir, process.platform === "win32" ? "junction" : "dir");
+        }
+      },
+    });
+
+    await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toThrow();
+
+    expect(rebound).toBe(true);
+    expect(fs.readFileSync(path.join(moved, "legacy.json"))).toEqual(snapshot.buffer);
+    expect(fs.readFileSync(path.join(outside, "legacy.json"), "utf8")).toBe("outside generation");
+  });
+
+  it.each([false, true])(
+    "recovers only the interrupted source/claim hardlink pair (extra alias=%s)",
+    async (extraAlias) => {
+      const { sourcePath, stateDir } = createSource();
+      const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+      const claim = createClaim(stateRoot, stateDir, sourcePath);
+      const snapshot = await claim.read();
+      fs.linkSync(sourcePath, claim.claimPath);
+      if (extraAlias) {
+        fs.linkSync(sourcePath, path.join(stateDir, "unrelated-alias"));
+        await expect(claim.recover("conflicting source")).rejects.toThrow();
+        expect(fs.statSync(claim.claimPath).nlink).toBe(3);
+      } else {
+        await claim.recover("conflicting source");
+        expect(fs.existsSync(claim.claimPath)).toBe(false);
+        expect(fs.statSync(sourcePath).nlink).toBe(1);
+      }
+      expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+    },
+  );
+
+  it("rejects an inode replacement with matching bytes and restores its source", async () => {
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     const snapshot = await claim.read();
     const replacementPath = path.join(stateDir, "replacement.json");

@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
+import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
@@ -26,6 +27,7 @@ const coverageInputs = {
   npm_telegram_provider_mode: "npmTelegramProviderMode",
   npm_telegram_scenario: "npmTelegramScenario",
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
+  extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   telegram_waiver: "telegramWaiver",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
@@ -124,9 +126,12 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
     ],
     "publication selection",
   );
+  if (selected.route === "alpha" || selected.npmDistTag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (
-    !["normal", "prepared", "extended-stable", "alpha"].includes(selected.route) ||
-    !["alpha", "beta", "latest", "extended-stable"].includes(selected.npmDistTag) ||
+    !["normal", "prepared", "extended-stable"].includes(selected.route) ||
+    !["beta", "latest", "extended-stable"].includes(selected.npmDistTag) ||
     typeof selected.publishOpenclawNpm !== "boolean" ||
     !["selected", "all-publishable"].includes(selected.pluginPublishScope) ||
     !Array.isArray(selected.plugins) ||
@@ -142,10 +147,7 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
   if (selected.publishOpenclawNpm && selected.pluginPublishScope !== "all-publishable") {
     throw new Error("core publication requires all-publishable plugins");
   }
-  if (
-    (selected.route === "extended-stable") !== (selected.npmDistTag === "extended-stable") ||
-    (selected.route === "alpha") !== (selected.npmDistTag === "alpha")
-  ) {
+  if ((selected.route === "extended-stable") !== (selected.npmDistTag === "extended-stable")) {
     throw new Error("publication route and npm dist-tag disagree");
   }
   if (
@@ -158,9 +160,6 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
   if (selected.windowsNodeTag !== undefined || selected.windowsNodeInstallerDigests !== undefined) {
     if (selected.route === "extended-stable") {
       throw new Error("extended-stable does not select Windows assets");
-    }
-    if (!["beta", "latest"].includes(selected.npmDistTag)) {
-      throw new Error("Windows assets require a stable publication");
     }
     windows.windowsNodeTag = text(selected.windowsNodeTag, "Windows source tag", 256);
     if (
@@ -215,16 +214,36 @@ export function publicationIntentInputs(intent) {
   };
 }
 
+export function normalizePublicationLaneInputs(value) {
+  object(value, ["extension_test_exclude_patterns_json"], "source-admission lane inputs");
+  return Object.fromEntries(
+    Object.entries(value).map(([key, raw]) => {
+      if (typeof raw !== "string" || raw.length > 4096) {
+        throw new Error(`invalid ${key}`);
+      }
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
+        throw new Error(`${key} must be a JSON array of strings`);
+      }
+      return [key, JSON.stringify(entries)];
+    }),
+  );
+}
+
 export function decodePublicationDispatchEnvelope(raw) {
   if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > maximumBytes) {
     throw new Error("trusted_workflow_json requires a bounded source-admission envelope");
   }
   const value = object(
     JSON.parse(raw),
-    ["trustedWorkflow", "validationPurpose", "publicationSelection"],
+    ["trustedWorkflow", "validationPurpose", "publicationSelection", "laneInputs"],
     "source-admission envelope",
   );
-  if (Object.keys(value).length !== 3) {
+  if (
+    ["trustedWorkflow", "validationPurpose", "publicationSelection"].some(
+      (key) => !Object.hasOwn(value, key),
+    )
+  ) {
     throw new Error("source-admission envelope requires identity, purpose and selection");
   }
   const trustedWorkflow = value.trustedWorkflow;
@@ -243,8 +262,11 @@ export function decodePublicationDispatchEnvelope(raw) {
       throw new Error("invalid source-admission tooling identity");
     }
   }
+  const laneInputs =
+    value.laneInputs === undefined ? undefined : normalizePublicationLaneInputs(value.laneInputs);
   return {
     trustedWorkflow,
+    ...(laneInputs === undefined ? {} : { laneInputs }),
     ...normalizePublicationIntent(
       value.validationPurpose,
       value.publicationSelection === null ? "" : publicationSourceJson(value.publicationSelection),
@@ -252,16 +274,19 @@ export function decodePublicationDispatchEnvelope(raw) {
   };
 }
 
-export function publicationDispatchEnvelope(trustedWorkflow, intent) {
+export function publicationDispatchEnvelope(trustedWorkflow, intent, laneInputs) {
   return publicationSourceJson(
-    decodePublicationDispatchEnvelope(publicationSourceJson({ trustedWorkflow, ...intent })),
+    decodePublicationDispatchEnvelope(
+      publicationSourceJson({ trustedWorkflow, ...intent, ...(laneInputs ? { laneInputs } : {}) }),
+    ),
   );
 }
 
 function dispatchEnvelopeFromInputs(inputs) {
   if (
     Object.hasOwn(inputs, "validation_purpose") ||
-    Object.hasOwn(inputs, "publication_selection_json")
+    Object.hasOwn(inputs, "publication_selection_json") ||
+    Object.hasOwn(inputs, "extension_test_exclude_patterns_json")
   ) {
     throw new Error("source intent must use only the trusted_workflow_json envelope");
   }
@@ -270,7 +295,8 @@ function dispatchEnvelopeFromInputs(inputs) {
 
 export function publicationSourceRequest(env) {
   const inputs = JSON.parse(env.PUBLICATION_INPUTS_JSON);
-  const { trustedWorkflow, ...intent } = dispatchEnvelopeFromInputs(inputs);
+  const { trustedWorkflow, laneInputs, ...intent } = dispatchEnvelopeFromInputs(inputs);
+  const coverageSource = { ...inputs, extension_test_exclude_patterns_json: "[]", ...laneInputs };
   const tooling = JSON.parse(env.PUBLICATION_TOOLING_JSON);
   if (
     trustedWorkflow &&
@@ -287,7 +313,7 @@ export function publicationSourceRequest(env) {
     "fail_fast",
     "dispatch_release_evidence",
   ]) {
-    coverage[key] = text(String(inputs[key] ?? ""), key);
+    coverage[key] = text(String(coverageSource[key] ?? ""), key);
   }
   coverage.live_suite_filter = env.PUBLICATION_LIVE_FILTER ?? coverage.live_suite_filter;
   coverage.cross_os_suite_filter =
@@ -389,8 +415,20 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  object(value.coverage, coverageKeys, "source admission coverage");
-  if (coverageKeys.some((key) => !Object.hasOwn(value.coverage, key))) {
+  // Published admissions bind this retired empty field into their digest.
+  object(value.coverage, [...coverageKeys, "known_flaky_jobs_json"], "source admission coverage");
+  if (
+    Object.hasOwn(value.coverage, "known_flaky_jobs_json") &&
+    value.coverage.known_flaky_jobs_json !== "[]"
+  ) {
+    throw new Error("source admission known_flaky_jobs_json must be empty");
+  }
+  if (
+    coverageKeys.some(
+      (key) =>
+        key !== "extension_test_exclude_patterns_json" && !Object.hasOwn(value.coverage, key),
+    )
+  ) {
     throw new Error("source admission coverage is incomplete");
   }
   for (const entry of Object.values(value.coverage)) {
@@ -555,7 +593,11 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       }
     }
     for (const [input, key] of Object.entries(coverageInputs)) {
-      if (String(record.validationInputs[key] ?? "") !== fact.coverage[input]) {
+      const historicalDefault = input === "extension_test_exclude_patterns_json" ? "[]" : "";
+      if (
+        String(record.validationInputs[key] ?? historicalDefault) !==
+        (fact.coverage[input] ?? historicalDefault)
+      ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
     }
@@ -638,14 +680,30 @@ function observationNames(rows, label, maximum = 1024) {
 }
 
 function validateObservationPlan(plan, registry, required, observations) {
+  // Retained v1 artifacts keep their original boolean-only, digest-bound shape.
+  const publicationGroups =
+    registry === "clawhub" &&
+    (Object.hasOwn(plan, "pendingPublication") || Object.hasOwn(plan, "failedPublication"))
+      ? ["pendingPublication", "failedPublication"]
+      : [];
   const groups =
     registry === "npm"
       ? ["candidates", "skippedPublished"]
-      : ["candidates", "skippedPublished", "bootstrapCandidates", "missingTrustedPublisher"];
+      : [
+          "candidates",
+          "skippedPublished",
+          "bootstrapCandidates",
+          "missingTrustedPublisher",
+          ...publicationGroups,
+        ];
   closedObject(plan, ["all", ...groups, "warnings"], "publication planning summary");
   observationNames(plan.all, "planning", 512);
   for (const entry of plan.all) {
-    closedObject(entry, ["name", "version", "alreadyPublished"], "publication planning entry");
+    closedObject(
+      entry,
+      ["name", "version", "alreadyPublished", ...(publicationGroups.length ? ["publication"] : [])],
+      "publication planning entry",
+    );
     if (
       !required.some((row) => row.name === entry.name && row.version === entry.version) ||
       typeof entry.alreadyPublished !== "boolean"
@@ -671,15 +729,31 @@ function validateObservationPlan(plan, registry, required, observations) {
       registry === "npm" ? observed?.selectedVersionExists : observed?.alreadyPublished;
     const candidate =
       !published &&
-      (registry === "npm" || (observed?.packageExists && observed?.hasTrustedPublisher));
+      (registry === "npm" ||
+        (observed?.packageExists &&
+          observed?.hasTrustedPublisher &&
+          (!observed.publication || observed.publication.state === "absent")));
     if (
       entry.alreadyPublished !== published ||
       plan.skippedPublished.includes(entry.name) !== entry.alreadyPublished ||
       plan.candidates.includes(entry.name) !== candidate ||
       (registry === "clawhub" &&
-        (plan.bootstrapCandidates.includes(entry.name) !== !observed.packageExists ||
+        (Boolean(publicationGroups.length) !== Object.hasOwn(observed, "publication") ||
+          (publicationGroups.length > 0 &&
+            publicationObservationJson(entry.publication) !==
+              publicationObservationJson(observed.publication)) ||
+          publicationGroups.some(
+            (group) =>
+              plan[group].includes(entry.name) !==
+              (observed.publication.state ===
+                (group === "pendingPublication" ? "pending" : "failed")),
+          ) ||
+          plan.bootstrapCandidates.includes(entry.name) !== !observed.packageExists ||
           plan.missingTrustedPublisher.includes(entry.name) !==
-            (observed.packageExists && !observed.hasTrustedPublisher)))
+            (observed.packageExists &&
+              !observed.hasTrustedPublisher &&
+              (!observed.publication ||
+                ["absent", "published"].includes(observed.publication.state)))))
     ) {
       throw new Error("publication planning outcome mismatch");
     }
@@ -732,6 +806,9 @@ export function publicationPendingAuthority(source, registry, row) {
     }
     action = "owner-preparation-and-access";
   } else if (registry === "clawhub") {
+    if (["pending", "failed"].includes(row.state.publication?.state)) {
+      return null;
+    }
     if (
       selection.route === "prepared" &&
       (!row.state.packageExists ||
@@ -868,13 +945,31 @@ function validatePublicationObservations(source, value) {
         );
         closedObject(
           row.state,
-          ["packageExists", "alreadyPublished", "hasTrustedPublisher", "trustedPublisher"],
+          [
+            "packageExists",
+            "alreadyPublished",
+            "hasTrustedPublisher",
+            "trustedPublisher",
+            ...(Object.hasOwn(row.state, "publication") ? ["publication"] : []),
+          ],
           "publication ClawHub state",
         );
+        const publication = Object.hasOwn(row.state, "publication")
+          ? classifyClawHubPublication(
+              { name: row.name, version: row.version, ...row.state.publication },
+              row,
+            )
+          : undefined;
         if (
           ["packageExists", "alreadyPublished", "hasTrustedPublisher"].some(
             (key) => typeof row.state[key] !== "boolean",
           ) ||
+          (publication !== undefined &&
+            (!publication ||
+              publicationObservationJson(publication) !==
+                publicationObservationJson(row.state.publication) ||
+              row.state.alreadyPublished !== (publication.state === "published") ||
+              (!row.state.packageExists && publication.state !== "absent"))) ||
           (!row.state.packageExists &&
             (row.state.alreadyPublished ||
               row.state.hasTrustedPublisher ||
@@ -1093,6 +1188,10 @@ if (invokedAsMain) {
       const identity =
         envelope.trustedWorkflow === null ? "" : publicationSourceJson(envelope.trustedWorkflow);
       appendFileSync(process.env.GITHUB_OUTPUT, `trusted_workflow_json=${identity}\n`);
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `extension_test_exclude_patterns_json=${envelope.laneInputs?.extension_test_exclude_patterns_json ?? "[]"}\n`,
+      );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);
       const normalized = publicationIntentInputs(request);

@@ -7,6 +7,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -41,10 +42,6 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type TrajectorySnapshot = {
-  events: TrajectoryEvent[];
-  maxStorageSeq: number;
-};
 type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
@@ -143,19 +140,6 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
-  const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-    agentId: selection.agentId,
-    sessionId: selection.sessionId,
-    storePath: selection.storePath,
-    tailEvents,
-  });
-  return {
-    events: rows.map((row) => row.event),
-    maxStorageSeq: rows.at(-1)?.seq ?? -1,
-  };
-}
-
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
     runtime.log(formatProgressLine(event));
@@ -194,9 +178,8 @@ function buildTailSelection(params: {
 }
 
 function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
-  const requested = sessionKey?.trim();
-  if (requested) {
-    return selections.filter((selection) => selection.key === requested);
+  if (sessionKey) {
+    return selections.filter((selection) => selection.key === sessionKey);
   }
 
   const running = selections.filter((selection) => isRunningSession(selection));
@@ -225,18 +208,9 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 }
 
 function followSelections(
-  selections: TailSelection[],
+  states: SqliteFollowState[],
   runtime: RuntimeEnv,
-  initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
 ): Promise<FollowOutcome> {
-  const states = selections.map((selection): SqliteFollowState => {
-    const snapshot = initialSnapshots.get(selection);
-    return {
-      lastStorageSeq: snapshot?.maxStorageSeq ?? -1,
-      selection,
-    };
-  });
-
   return new Promise((resolve) => {
     let finished = false;
     const interval = setInterval(() => {
@@ -270,12 +244,15 @@ function followSelections(
   });
 }
 
-function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
+function resolveTailTargetAgent(
+  opts: SessionsTailOptions,
+  sessionKey: string | undefined,
+): string | undefined {
   // Keep explicit blanks for the selector to reject instead of inferring a different owner.
   if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
     return opts.agent;
   }
-  return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
+  return sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
 }
 
 /** Tails recent trajectory events for the selected session(s). */
@@ -289,13 +266,19 @@ export async function sessionsTailCommand(
     runtime.exit(1);
     return;
   }
+  const requestedKey = opts.sessionKey?.trim();
+  if (opts.sessionKey !== undefined && !requestedKey) {
+    runtime.error("--session-key must not be empty. Omit it to tail active sessions.");
+    runtime.exit(1);
+    return;
+  }
 
   const cfg = getRuntimeConfig();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
       store: opts.store,
-      agent: resolveTailTargetAgent(opts),
+      agent: resolveTailTargetAgent(opts, requestedKey),
       allAgents: opts.allAgents,
     },
   });
@@ -318,22 +301,33 @@ export async function sessionsTailCommand(
       }
     }
   }
-  const selected = selectSessionsToTail(selections, opts.sessionKey);
+  const selected = selectSessionsToTail(selections, requestedKey);
   if (selected.length === 0) {
-    const suffix = opts.sessionKey ? ` for ${opts.sessionKey}` : "";
-    runtime.log(`No sessions found${suffix}.`);
+    if (requestedKey) {
+      runtime.error(
+        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+      );
+      runtime.exit(1);
+    } else {
+      runtime.log("No sessions found.");
+    }
     return;
   }
 
-  const followSnapshots = new Map<TailSelection, TrajectorySnapshot>();
+  const followStates: SqliteFollowState[] = [];
   for (const selection of selected) {
-    const snapshot = readTailSnapshot(selection, Math.max(tailCount, opts.follow ? 1 : 0));
-    followSnapshots.set(selection, snapshot);
-    renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: selection.agentId,
+      sessionId: selection.sessionId,
+      storePath: selection.storePath,
+      tailEvents: Math.max(tailCount, opts.follow ? 1 : 0),
+    });
+    followStates.push({ selection, lastStorageSeq: rows.at(-1)?.seq ?? -1 });
+    renderEvents(tailCount > 0 ? rows.slice(-tailCount).map((row) => row.event) : [], runtime);
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(followStates, runtime);
     runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

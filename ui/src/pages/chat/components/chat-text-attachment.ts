@@ -2,26 +2,22 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
-import {
-  renderAttachmentPreviewSkeleton,
-  renderCompactAttachmentCard,
-} from "./chat-attachment-card.ts";
+import { renderAttachmentPreviewSkeleton } from "./chat-attachment-card.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
-import {
-  htmlPreviewElement,
-  isHtmlDocument,
-  LazyCustomElementRequestController,
-  renderHtmlPreview,
-} from "./chat-html-preview.ts";
+import { htmlPreviewElement, isHtmlDocument, renderHtmlPreview } from "./chat-html-preview.ts";
+
+registerFilePreviewEnglish();
 
 export function isTextAttachment(rawMimeType: string, filename: string): boolean {
   const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -42,7 +38,6 @@ export function isTextAttachment(rawMimeType: string, filename: string): boolean
 }
 
 class ChatTextAttachment extends OpenClawLightDomContentsElement {
-  @property({ type: Boolean }) compact = false;
   @property({ type: Boolean }) plainText = false;
   @property({ attribute: false }) actions: TemplateResult | typeof nothing = nothing;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -197,51 +192,40 @@ ${this.text}</pre>`,
             )}`,
           )}`;
     return html`
-      ${
-        this.compact
-          ? html`<div class="sidebar-file-toolbar">
-              <span class="sidebar-file-toolbar__type" title=${this.mimeType}
-                >${this.mimeType || this.label.split(".").at(-1)}</span
-              >
-              ${this.sizeBytes === undefined ? nothing : html`<span>${formatBytes(this.sizeBytes)}</span>`}
-              <span class="sidebar-file-toolbar__actions">
-                ${this.text !== null && !this.failed ? keyed(this.loadVersion, renderCopyButton(this.text, t("common.copy"))) : nothing}
-                ${this.actions}
-                ${this.failed ? html`<button class="btn btn--sm" type="button" @click=${() => this.retry()}>${t("common.retry")}</button>` : nothing}
-                ${
-                  (markdown || htmlDocument) && this.text !== null
-                    ? html`<button
-                        class="btn btn--sm"
-                        type="button"
-                        aria-pressed=${String(this.source)}
-                        @click=${() => {
-                          this.source = !this.source;
-                        }}
-                      >
-                        ${this.source ? t("chat.workspaceFiles.preview") : htmlDocument ? t("chat.detailPanel.viewSource") : t("chat.detailPanel.viewRawText")}
-                      </button>`
-                    : nothing
-                }
-                <a
-                  class="rail-header__action"
-                  href=${this.src || nothing}
-                  download=${this.label}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-                  >${icons.download}</a
+      <div class="sidebar-file-toolbar">
+        <span class="sidebar-file-toolbar__type" title=${this.mimeType}
+          >${this.mimeType || this.label.split(".").at(-1)}</span
+        >
+        ${this.sizeBytes === undefined ? nothing : html`<span>${formatBytes(this.sizeBytes)}</span>`}
+        <span class="sidebar-file-toolbar__actions">
+          ${this.text !== null && !this.failed ? keyed(this.loadVersion, renderCopyButton(this.text, t("common.copy"))) : nothing}
+          ${this.actions}
+          ${this.failed ? html`<button class="btn btn--sm" type="button" @click=${() => this.retry()}>${t("common.retry")}</button>` : nothing}
+          ${
+            (markdown || htmlDocument) && this.text !== null
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  aria-pressed=${String(this.source)}
+                  @click=${() => {
+                    this.source = !this.source;
+                  }}
                 >
-              </span>
-            </div>`
-          : renderCompactAttachmentCard({
-              kind: "document",
-              label: this.label,
-              mimeType: this.mimeType,
-              sizeBytes: this.sizeBytes,
-              downloadHref: this.src,
-              downloadPending: !this.src,
-            })
-      }
+                  ${this.source ? t("chat.workspaceFiles.preview") : htmlDocument ? t("chat.detailPanel.viewSource") : t("chat.detailPanel.viewRawText")}
+                </button>`
+              : nothing
+          }
+          <a
+            class="rail-header__action"
+            href=${this.src || nothing}
+            download=${this.label}
+            target="_blank"
+            rel="noreferrer"
+            aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
+            >${icons.download}</a
+          >
+        </span>
+      </div>
       ${
         this.failed
           ? html`<p class="muted" role="status">

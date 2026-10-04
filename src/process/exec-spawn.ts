@@ -2,28 +2,31 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa } from "execa";
+import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import {
-  brokerExecaOptions,
-  spawnBrokerCommand,
-  type CommandSubprocess,
-} from "./spawn-broker/execa-client.js";
-import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { brokerExecaOptions, spawnBrokerCommand } from "./spawn-broker/execa-client.js";
+import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+const commandAdmissions = new WeakMap<ChildProcess, Promise<void>>();
 
 /** Remote PID and pipes arrive together before admission or stream subscription. */
 export async function waitForCommandSpawn(
@@ -37,6 +40,7 @@ export async function waitForCommandSpawn(
       await child;
     }
   }
+  await commandAdmissions.get(child.nodeChildProcess);
 }
 
 type ScopedCommand = {
@@ -49,6 +53,7 @@ type CommandProcessScope = {
   children: Set<ScopedCommand>;
   cleanups: Set<Promise<void>>;
   failure?: { error: unknown };
+  custody?: CommandProcessCustody;
 };
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
@@ -87,6 +92,7 @@ export function retainCommandProcessCleanup(cleanup: Promise<SpawnResult["cleanu
 export async function withCommandProcessScope<T>(
   run: (stop: () => void) => Promise<T>,
   signal?: AbortSignal,
+  custody?: CommandProcessCustody,
 ): Promise<T> {
   const parent = commandProcessScope.getStore();
   const controller = new AbortController();
@@ -95,6 +101,7 @@ export async function withCommandProcessScope<T>(
     signal: inherited ? AbortSignal.any([inherited, controller.signal]) : controller.signal,
     children: new Set(),
     cleanups: new Set(),
+    custody: custody ?? parent?.custody,
   };
   const stop = () => {
     controller.abort();
@@ -179,10 +186,26 @@ export async function withCommandProcessScope<T>(
 function retainCommandProcess(
   scope: CommandProcessScope,
   child: { pid?: number; nodeChildProcess: ChildProcess } & PromiseLike<unknown>,
+  reservation?: ReturnType<CommandProcessCustody["reserve"]>,
 ): void {
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let groupExtinct = false;
+  let bindingFailed = false;
+  let custodySettled = false;
+  const settleCustody = () => {
+    if (!reservation || bindingFailed || custodySettled) {
+      return;
+    }
+    try {
+      reservation.settled();
+      custodySettled = true;
+    } catch (error) {
+      bindingFailed = true;
+      throw error;
+    }
+  };
   const nativeChild = child.nodeChildProcess;
   let observedExit = nativeChild.exitCode != null || nativeChild.signalCode != null;
   const onExit = () => {
@@ -197,26 +220,53 @@ function retainCommandProcess(
     stopped = true;
     // A live direct child holds PID custody even when its optional timestamp probe failed.
     if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+      // Descendants can exit after pipe closure retained this command. An absent
+      // group has settled even if another process now owns the retired root PID.
+      if (!isChildProcessTreeAlive({ pid })) {
+        groupExtinct = true;
+        return;
+      }
       const currentStart = getFileLockProcessStartTime(pid);
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
       }
     }
     killProcessTree(pid, { detached: true, force: true });
+    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
   };
   const initialize = () => {
     pid = child.pid;
-    if (pid !== undefined && process.platform !== "win32") {
-      startedAt = getFileLockProcessStartTime(pid);
-      if (scope.signal.aborted) {
+    if (pid !== undefined) {
+      try {
+        if (process.platform !== "win32") {
+          startedAt = getFileLockProcessStartTime(pid);
+        }
+        reservation?.spawned({ pid, startedAt: getProcessInstanceStartTime(pid) });
+        if (scope.signal.aborted) {
+          stop();
+        }
+      } catch (error) {
+        bindingFailed = true;
+        scope.failure ??= { error };
         stop();
+        throw error;
       }
     }
   };
-  const readiness =
-    child.nodeChildProcess instanceof BrokerChild && child.pid === undefined
-      ? child.nodeChildProcess.ready().then(initialize)
-      : Promise.resolve(initialize());
+  let bindingError: { error: unknown } | undefined;
+  let readiness: Promise<void>;
+  if (nativeChild instanceof BrokerChild && child.pid === undefined) {
+    readiness = nativeChild.ready().then(initialize);
+  } else {
+    try {
+      initialize();
+      readiness = Promise.resolve();
+    } catch (error) {
+      bindingError = { error };
+      readiness = Promise.reject(toErrorObject(error, "Command process custody admission failed"));
+    }
+  }
+  commandAdmissions.set(nativeChild, readiness);
   // Admission is retained before remote readiness, and rejection is observed immediately.
   const completed = Promise.resolve(child)
     .then(
@@ -237,10 +287,15 @@ function retainCommandProcess(
     async settle() {
       await initialized;
       await completed;
+      if (groupExtinct) {
+        settleCustody();
+        return;
+      }
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
         }
+        settleCustody();
         return;
       }
       // Windows executable finalizers retain a Job until process exit. POSIX
@@ -249,6 +304,7 @@ function retainCommandProcess(
         if (!observedExit) {
           throw new CommandProcessCleanupError();
         }
+        settleCustody();
         return;
       }
       const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
@@ -258,18 +314,31 @@ function retainCommandProcess(
         if ((currentStart !== null && currentStart !== startedAt) || remaining <= 0) {
           throw new CommandProcessCleanupError();
         }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, Math.min(25, remaining));
-        });
+        await sleep(Math.min(25, remaining));
       }
+      settleCustody();
     },
   };
   scope.children.add(owned);
   void completed.then(() => {
-    if (pid !== undefined && process.platform !== "win32" && !isChildProcessTreeAlive({ pid })) {
-      scope.children.delete(owned);
+    // Failed launches must retire before a later command can strand the enclosing scope.
+    const neverStarted =
+      pid === undefined && (!(nativeChild instanceof BrokerChild) || nativeChild.notStarted);
+    if (
+      neverStarted ||
+      (pid !== undefined && process.platform !== "win32" && !isChildProcessTreeAlive({ pid }))
+    ) {
+      try {
+        settleCustody();
+        scope.children.delete(owned);
+      } catch (error) {
+        scope.failure ??= { error };
+      }
     }
   });
+  if (bindingError) {
+    throw bindingError.error;
+  }
 }
 
 export function shouldSpawnWithShell(params: {
@@ -287,6 +356,7 @@ export function shouldSpawnWithShell(params: {
 
 type SpawnCommandOptions = CommandSpawnOptions & {
   baseEnv?: NodeJS.ProcessEnv;
+  executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
 };
@@ -310,6 +380,7 @@ export function spawnCommandWithInvocation<
     env,
     windowsVerbatimArguments,
     cancelSignal,
+    executionTimeoutMs,
     inheritScopeCancellation = true,
     ...execaOptions
   } = sourceOptions;
@@ -336,6 +407,11 @@ export function spawnCommandWithInvocation<
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
   const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  if (remoteOptions && executionTimeoutMs !== undefined) {
+    // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
+    remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
+  }
+  const reservation = scope?.custody?.reserve([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
@@ -345,8 +421,9 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
+  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
   if (scope) {
-    retainCommandProcess(scope, child);
+    retainCommandProcess(scope, child, reservation);
   }
   return { child: child as CommandSubprocess<OptionsType>, invocation };
 }
@@ -367,27 +444,26 @@ export function resolveCommandEnv(params: {
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
   const platform = params.platform ?? process.platform;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(params.argv[0] ?? "");
+  const shouldSuppressNpmFund =
+    cmd === "npm" ||
+    cmd === "npm.cmd" ||
+    cmd === "npm.exe" ||
+    ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
-  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const runtime = params.argv[0] ?? "";
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  const explicitPackageManager =
+    paths.isAbsolute(runtime) &&
+    /^(?:node|node\.exe)$/iu.test(paths.basename(runtime)) &&
+    /^(?:npm-cli\.js|npx-cli\.js|pnpm\.(?:cjs|js))$/iu.test(paths.basename(params.argv[1] ?? ""));
+  const mergedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const resolvedEnv = explicitPackageManager
+    ? withNodeRuntimePath(mergedEnv, runtime, platform)
+    : mergedEnv;
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
+    resolvedEnv.NPM_CONFIG_FUND ??= "false";
+    resolvedEnv.npm_config_fund ??= "false";
   }
   return markOpenClawExecEnv(resolvedEnv);
 }

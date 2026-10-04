@@ -91,13 +91,9 @@ Set `enabled: false` to disable threshold-driven auto-compaction inside the embe
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
 
-OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Branch/restore checkpoint actions use a returned successor when present; legacy pre-compaction checkpoint files remain readable while referenced.
+OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Compaction summaries and token savings remain in transcript history; ordinary session forking remains available.
 
-Recovery follows the active successor's tool-result projections and timeout state.
-A checkpoint branch or restore preserves its selected model and workspace and
-follows the normal creator and isolation rules. It starts without the source run's writer claim,
-native CLI binding, pending delivery, or recovery work. Starting a checkpoint
-branch does not interrupt its source conversation.
+Compaction checkpoint browsing, branching, and restoration are no longer available. OpenClaw does not create new checkpoint metadata or snapshot files. Existing transcript generations and files are not deleted by this change. A read-only legacy metadata reader preserves historical token measurements and existing cleanup protections while older records still refer to those transcripts. Removing that reader requires a separately approved migration that preserves those facts; this removal changes no retention policy or database schema version.
 
 ## Pluggable compaction providers
 
@@ -105,6 +101,7 @@ Plugins register a compaction provider via `registerCompactionProvider()` on the
 
 - `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization. Setting a `provider` forces `mode: "safeguard"`.
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Safeguard recovery stays within the latest reset or compaction replay window, even when retained messages precede the stored compaction marker. Older transcript entries remain stored but are not sent to the summarizer again.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
 - Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Provider-local failures, including timeouts, stay in that guarded fallback and use the built-in quality audit when enabled. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.

@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
-  evictPullRequestCache,
+  createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
   requestUrl,
@@ -11,10 +10,18 @@ import {
 } from "./control-ui-session-prs.test-support.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
+const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
+
 vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 const resolveGitContext = async () => context;
 let cacheEpochMs = Date.now();
+
+function localGitReads() {
+  return vi
+    .mocked(runGitWorkerOperation)
+    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
+}
 
 function paginatedChecksFetch(checkRuns: Record<string, unknown>[], laterStatus?: number) {
   return vi.fn<typeof fetch>(async (input) => {
@@ -54,6 +61,19 @@ describe("parseGitHubRemoteUrl", () => {
     expect(parseGitHubRemoteUrl("ssh://git@github.com/openclaw/openclaw.git")).toEqual(expected);
   });
 
+  it("parses the configured GitHub Enterprise host without admitting another host", () => {
+    const expected = { owner: "acme", repo: "private-repo" };
+    expect(
+      parseGitHubRemoteUrl("https://ghe.example.test/acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("git@ghe.example.test:acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("https://github.com/acme/private-repo.git", "ghe.example.test"),
+    ).toBeNull();
+  });
+
   it("rejects non-GitHub and malformed remotes", () => {
     expect(parseGitHubRemoteUrl("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();
@@ -72,8 +92,7 @@ describe("loadControlUiSessionPullRequests", () => {
     vi.setSystemTime(cacheEpochMs);
   });
 
-  afterEach(async () => {
-    await evictPullRequestCache();
+  afterEach(() => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });
@@ -229,10 +248,12 @@ describe("loadControlUiSessionPullRequests", () => {
         "Bearer github-token-a",
       );
       expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+      // The current credential's PR cache is the only retained lookup here.
       expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(1);
     } finally {
       cacheLifetime.abort();
     }
+    expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(0);
   });
 
   it("skips diff and check fetches for merged PRs", async () => {
@@ -545,6 +566,9 @@ describe("loadControlUiSessionPullRequests", () => {
       },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type !== "checkout.context") {
         throw new Error("Unexpected local Git operation");
       }
@@ -566,25 +590,25 @@ describe("loadControlUiSessionPullRequests", () => {
       status: "unavailable",
     });
     await expect(load()).resolves.toMatchObject({ status: "unavailable" });
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(1);
+    expect(localGitReads()).toHaveLength(1);
     expect(fetchImpl.mock.calls).toHaveLength(1);
 
     await expect(load("/repo/other-context")).resolves.toMatchObject({ status: "unavailable" });
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(2);
+    expect(localGitReads()).toHaveLength(2);
 
     vi.advanceTimersByTime(60_000);
     await expect(load()).resolves.toMatchObject({ status: "unavailable" });
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(2);
+    expect(localGitReads()).toHaveLength(2);
     expect(fetchImpl.mock.calls).toHaveLength(2);
 
     vi.advanceTimersByTime(15_001);
     await expect(load()).resolves.toMatchObject({ status: "unavailable" });
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(3);
-    // GitHub's shorter failure backoff stays independent of local Git expiry.
+    expect(localGitReads()).toHaveLength(2);
+    // GitHub's failure backoff stays independent of unchanged checkout metadata.
     expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
-  it("caches local facts across a poll while forced refresh bypasses them", async () => {
+  it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson(pulls) },
@@ -592,6 +616,9 @@ describe("loadControlUiSessionPullRequests", () => {
     ]);
     let additions = 1;
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type !== "pull-request.branch-facts") {
         throw new Error("Unexpected local Git operation");
       }
@@ -621,9 +648,9 @@ describe("loadControlUiSessionPullRequests", () => {
     expect((await load("agent:main:a")).branch?.additions).toBe(1);
     additions = 2;
     expect((await load("agent:main:a")).branch?.additions).toBe(1);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(1);
-    expect((await load("agent:main:a", true)).branch?.additions).toBe(2);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(2);
+    expect(localGitReads()).toHaveLength(1);
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
+    expect(localGitReads()).toHaveLength(1);
     expect(
       fetchImpl.mock.calls.filter((call) =>
         requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
@@ -633,31 +660,35 @@ describe("loadControlUiSessionPullRequests", () => {
     pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
     additions = 4;
     expect((await load("agent:main:a", true)).branch?.additions).toBe(4);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(3);
+    expect(localGitReads()).toHaveLength(2);
 
     const githubRequests = fetchImpl.mock.calls.length;
     vi.advanceTimersByTime(60_000);
     additions = 5;
     expect((await load("agent:main:a")).branch?.additions).toBe(4);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(3);
+    expect(localGitReads()).toHaveLength(2);
     expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
 
-    vi.advanceTimersByTime(15_001);
+    vi.advanceTimersByTime(240_001);
     additions = 5;
     expect((await load("agent:main:a")).branch?.additions).toBe(5);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(4);
+    expect(localGitReads()).toHaveLength(3);
 
     expect((await load("agent:main:b")).branch?.additions).toBe(3);
-    expect(runGitWorkerOperation).toHaveBeenCalledTimes(5);
+    expect(localGitReads()).toHaveLength(4);
   });
 
-  it("forced refresh bypasses cached checkout branch context", async () => {
+  it("refreshes branch context on metadata changes without repeating it for working-tree activity", async () => {
     let branch = "feature-a";
+    let revision: string | null = "initial";
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson([]) },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return revision;
+      }
       if (operation.type === "checkout.context") {
         return { ...context, branch, root: operation.input.root, defaultBranch: "main" };
       }
@@ -678,7 +709,17 @@ describe("loadControlUiSessionPullRequests", () => {
     expect((await load()).branch?.branch).toBe("feature-a");
     branch = "feature-b";
     expect((await load()).branch?.branch).toBe("feature-a");
-    expect((await load(true)).branch?.branch).toBe("feature-b");
+    expect((await load(true)).branch?.branch).toBe("feature-a");
+    revision = "changed-head";
+    expect((await load()).branch?.branch).toBe("feature-b");
+    expect(
+      localGitReads().filter(([operation]) => operation.type === "checkout.context"),
+    ).toHaveLength(2);
+    // Unsupported layouts retain immediate explicit branch discovery.
+    revision = null;
+    expect((await load()).branch?.branch).toBe("feature-b");
+    branch = "feature-c";
+    expect((await load(true)).branch?.branch).toBe("feature-c");
   });
 
   it("refreshes a cached empty result after the assistant creates a PR", async () => {

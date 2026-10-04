@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 
 const require = createRequire(import.meta.url);
 type PrivatePathCreators = {
@@ -110,7 +111,7 @@ function loadPrivatePathCreators(): PrivatePathCreators {
     directory: (directoryPath) =>
       withPrivateAttributes(true, (security) => {
         if (!createDirectory(path.toNamespacedPath(path.resolve(directoryPath)), security)) {
-          throw failure(`CreateDirectoryW(${directoryPath})`);
+          throw markPrivateDirectoryCreationRefused(failure(`CreateDirectoryW(${directoryPath})`));
         }
       }),
     file: (filePath) =>

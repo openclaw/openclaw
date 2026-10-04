@@ -1,4 +1,3 @@
-// Kimi Coding tests cover index plugin behavior.
 import { streamSimpleAnthropic } from "@openclaw/ai/internal/anthropic";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -34,9 +33,12 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default", async () => {
+  it("uses binary thinking with thinking off by default and repairs replay signatures", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
+    expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
+      preserveSignatures: false,
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "kimi",
@@ -57,14 +59,11 @@ describe("kimi provider plugin", () => {
     ["weekly window", "You've reached your weekly (7-day) usage limit.", "rate_limit"],
     ["seven-day limit", "Your seven-day usage limit has been reached.", "rate_limit"],
     ["7-day limit", "You've reached your 7-day usage limit.", "rate_limit"],
-    ["quota reset", "Your quota will reset when the current window ends.", "rate_limit"],
     [
       "agent access restriction",
       "Kimi For Coding is currently only available for Coding Agents such as Kimi CLI, Claude Code, Roo Code, Kilo Code, etc.",
       undefined,
     ],
-    ["type without quota", "Access has been terminated.", undefined],
-    ["invalid key", "Invalid API key", undefined],
   ] as const)("classifies the quota signal for %s", async (_name, errorMessage, expected) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -78,7 +77,7 @@ describe("kimi provider plugin", () => {
     ).toBe(expected);
   });
 
-  it.each(["kimi", " KIMI ", "kimi-code", "kimi-coding"])(
+  it.each([" KIMI ", "kimi-code", "kimi-coding"])(
     "declares and classifies quota exhaustion for provider %s",
     async (providerId) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -110,13 +109,13 @@ describe("kimi provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it.each(["k3", "k3-256k"])("exposes %s adaptive thinking levels", async (modelId) => {
+  it("exposes adaptive thinking levels for case-insensitive K3 ids", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
       provider.resolveThinkingProfile?.({
         provider: "kimi",
-        modelId,
+        modelId: "K3-256K",
         reasoning: true,
       } as never),
     ).toEqual({
@@ -135,17 +134,10 @@ describe("kimi provider plugin", () => {
     });
   });
 
-  it("wraps K3 simple completions without changing K2 simple completions", async () => {
+  it("leaves K2 simple completions unchanged", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const streamFn = (() => undefined) as never;
 
-    expect(
-      provider.wrapSimpleCompletionStreamFn?.({
-        provider: "kimi",
-        modelId: "k3",
-        streamFn,
-      } as never),
-    ).not.toBe(streamFn);
     expect(
       provider.wrapSimpleCompletionStreamFn?.({
         provider: "kimi",

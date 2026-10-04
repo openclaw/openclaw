@@ -11,7 +11,7 @@ import type {
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
-import type { ChannelPlugin } from "../../types.js";
+import type { ChannelPlugin } from "../../types.plugin.js";
 
 type ChannelReplyTransport = NonNullable<
   ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
@@ -86,13 +86,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-/** Asserts that a plugin declares the threading adapter under test. */
-export function expectChannelThreadingBaseContract(
-  plugin: Pick<ChannelPlugin, "id" | "threading">,
-) {
-  expect(plugin.threading).toBeDefined();
 }
 
 /** Exercises optional threading hooks and checks normalized return shapes. */

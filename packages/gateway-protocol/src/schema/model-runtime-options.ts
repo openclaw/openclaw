@@ -3,7 +3,14 @@ import { closedObject } from "./closed-object.js";
 import { WorkerExecutionModeSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 
-/** Model option shown in selectors and model catalog results. */
+/** Where a completion runs: the built-in HTTP runtime, a CLI backend, or a plugin harness. */
+export const GatewayCompletionRouteSchema = closedObject({
+  id: NonEmptyString,
+  kind: Type.Union([Type.Literal("api"), Type.Literal("cli"), Type.Literal("harness")]),
+  /** Operator-facing runtime name, e.g. "Claude CLI" or "OpenAI Codex". */
+  label: NonEmptyString,
+});
+
 export const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),

@@ -26,6 +26,7 @@ export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): bo
 
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
+  startupFailure?: { error?: Error; complete(): void };
   maxFrameBytes?: number;
   stdin: {
     write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
@@ -81,12 +82,7 @@ function beginCodexAppServerTransportClose(
       finishCodexAppServerTransportClose(child, options, forceKill);
       return "uncertain";
     }
-    let contained;
-    try {
-      contained = await terminateCodexAppServerDescendants(child);
-    } catch {
-      contained = undefined;
-    }
+    const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
     if (contained === "exited") {
       return "natural";
     }
@@ -182,9 +178,7 @@ export async function closeCodexAppServerTransportAndWait(
 }
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
-  return child.exitCode !== null && child.exitCode !== undefined
-    ? true
-    : child.signalCode !== null && child.signalCode !== undefined;
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForCodexAppServerTransportExit(

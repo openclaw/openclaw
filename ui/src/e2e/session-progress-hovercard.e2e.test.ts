@@ -94,12 +94,6 @@ suite.define(() => {
   it.each([
     {
       open: async (_page: Page, row: Locator) => {
-        await row.locator("[data-session-menu]").click();
-      },
-      source: "More",
-    },
-    {
-      open: async (_page: Page, row: Locator) => {
         await row.click({ button: "right" });
       },
       source: "context menu",
@@ -147,7 +141,6 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-        const trigger = row.locator("[data-session-menu]");
         const card = page.locator(".session-progress-hovercard");
         const menu = page.getByRole("menu", { name: "Actions for Hovered session" });
         await row.waitFor({ state: "visible" });
@@ -159,7 +152,6 @@ suite.define(() => {
         await menu.waitFor({ state: "visible" });
         await expect.poll(() => card.count()).toBe(0);
         await expect.poll(() => menu.isVisible()).toBe(true);
-        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
       },
     );
   });
@@ -668,9 +660,7 @@ suite.define(() => {
         await first.hover();
         await page.clock.runFor(450);
         await card.waitFor({ state: "visible" });
-        await first
-          .getByRole("button", { name: "Open session menu: First timing row" })
-          .dispatchEvent("click");
+        await first.click({ button: "right" });
         await expect.poll(() => card.count()).toBe(0);
         await expect
           .poll(() => page.locator("openclaw-session-menu").getByRole("menuitem").count())

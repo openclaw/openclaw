@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkAndroidVersioning } from "../../scripts/lib/android-version.ts";
 import {
   applyReleaseVersionPlan,
   parseReleaseVersionArgs,
@@ -28,13 +27,6 @@ function writeFixture(params?: {
     recursive: true,
   });
   fs.mkdirSync(path.join(root, "apps", "android", "Config"), { recursive: true });
-  fs.mkdirSync(path.join(root, "apps", "mobile"), { recursive: true });
-  fs.mkdirSync(path.join(root, "apps", "ios"), { recursive: true });
-  fs.writeFileSync(path.join(root, "apps", "mobile", "version.json"), '{"version":"2026.7.1"}\n');
-  fs.writeFileSync(
-    path.join(root, "apps", "ios", "CHANGELOG.md"),
-    "# iOS Changelog\n\n## Unreleased\n\n- Shared mobile release notes.\n",
-  );
   fs.mkdirSync(path.join(root, "apps", "android", "fastlane", "metadata", "android", "en-US"), {
     recursive: true,
   });
@@ -111,6 +103,12 @@ function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+it("rejects alpha release preparation before reading or changing packages", () => {
+  expect(() => planReleaseVersion({ version: "2026.9.24-alpha.1" })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("release version argument parsing", () => {
   it("defaults to check mode and keeps Android opt-in", () => {
     expect(parseReleaseVersionArgs(["--version", "2026.7.2-beta.1"])).toMatchObject({
@@ -118,6 +116,26 @@ describe("release version argument parsing", () => {
       mode: "check",
       version: "2026.7.2-beta.1",
     });
+  });
+
+  it("keeps last-value ordering and rejects incomplete options after help", () => {
+    expect(
+      parseReleaseVersionArgs([
+        "--write",
+        "--version",
+        "2026.7.1",
+        "--",
+        "--check",
+        "--version",
+        "2026.7.2",
+      ]),
+    ).toMatchObject({ mode: "check", version: "2026.7.2" });
+    expect(() => parseReleaseVersionArgs(["--help", "--root", "-h"])).toThrow(
+      "Missing value for --root.",
+    );
+    expect(() => parseReleaseVersionArgs(["--version=2026.7.2"])).toThrow(
+      "Unknown argument: --version=2026.7.2",
+    );
   });
 });
 
@@ -202,7 +220,7 @@ describe("release version planning", () => {
         ),
         "utf8",
       ),
-    ).toBe("- Shared mobile release notes.\n");
+    ).toBe("- Previous release notes.\n");
   });
 
   it("starts a new Android train at its canonical build code", () => {
@@ -232,13 +250,7 @@ describe("release version planning", () => {
         ),
         "utf8",
       ),
-    ).toBe("- Shared mobile release notes.\n");
-    expect(readJson(path.join(root, "apps", "mobile", "version.json"))).toEqual({
-      version: "2026.7.2",
-    });
-    expect(() =>
-      checkAndroidVersioning({ requireMobileRelease: true, rootDir: root }),
-    ).not.toThrow();
+    ).toBe("- New release notes.\n");
   });
 
   it("validates every selected file before writing any changes", () => {
@@ -261,12 +273,11 @@ describe("release version planning", () => {
 });
 
 describe("release version CLI", () => {
-  it.each([false, true])("reports drift, writes once, then passes with Android=%s", (android) => {
+  it("reports drift in check mode, writes it once, then passes", () => {
     const root = writeFixture();
-    const androidArgs = android ? ["--android"] : [];
     const check = spawnSync(
       process.execPath,
-      ["--import", "tsx", SCRIPT, "--root", root, "--version", "2026.7.2-beta.1", ...androidArgs],
+      ["--import", "tsx", SCRIPT, "--root", root, "--version", "2026.7.2-beta.1"],
       { encoding: "utf8" },
     );
     expect(check.status).toBe(1);
@@ -275,33 +286,15 @@ describe("release version CLI", () => {
 
     const write = spawnSync(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        SCRIPT,
-        "--root",
-        root,
-        "--version",
-        "2026.7.2-beta.1",
-        ...androidArgs,
-        "--write",
-      ],
+      ["--import", "tsx", SCRIPT, "--root", root, "--version", "2026.7.2-beta.1", "--write"],
       { encoding: "utf8" },
     );
     expect(write.status).toBe(0);
     expect(write.stdout).toContain("Updated release version 2026.7.2-beta.1:");
-    expect(readJson(path.join(root, "apps", "mobile", "version.json"))).toEqual({
-      version: android ? "2026.7.2" : "2026.7.1",
-    });
-    if (android) {
-      expect(() =>
-        checkAndroidVersioning({ requireMobileRelease: true, rootDir: root }),
-      ).not.toThrow();
-    }
 
     const recheck = spawnSync(
       process.execPath,
-      ["--import", "tsx", SCRIPT, "--root", root, "--version", "2026.7.2-beta.1", ...androidArgs],
+      ["--import", "tsx", SCRIPT, "--root", root, "--version", "2026.7.2-beta.1"],
       { encoding: "utf8" },
     );
     expect(recheck.status).toBe(0);

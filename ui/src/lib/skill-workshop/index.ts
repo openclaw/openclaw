@@ -1,10 +1,11 @@
 import type {
   SkillProposalEvaluation,
+  SkillsProposalRecordResult,
   SkillsProposalsListResult,
 } from "@openclaw/gateway-protocol";
 import type { computeSkillWorkshopDiff } from "./diff.ts";
 
-export type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
+type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
 
 type SkillWorkshopFile = {
   path: string;
@@ -49,12 +50,7 @@ export type SkillWorkshopProposal = {
   bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
   degradedState?: SkillsProposalsListResult["proposals"][number]["degradedState"];
-  origin?: {
-    agentId?: string;
-    sessionKey?: string;
-    runId?: string;
-    messageId?: string;
-  };
+  origin?: SkillsProposalRecordResult["origin"];
   version: number;
   revisionHash: string | null;
   evaluation?: SkillWorkshopEvaluation;

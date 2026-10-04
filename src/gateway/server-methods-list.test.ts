@@ -11,6 +11,21 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
+const mcpAppExtensionMethods = [
+  "mcp.app.onboard",
+  "mcp.app.discover",
+  "mcp.app.launch",
+  "mcp.app.settings",
+  "mcp.app.mention",
+  "mcp.app.formResource",
+  "mcp.app.modelContext",
+  "mcp.app.removeModelContext",
+  "mcp.app.writeResource",
+  "mcp.app.subscribeResource",
+  "mcp.app.unsubscribeResource",
+  "mcp.app.openFile",
+];
+
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
     expect(GATEWAY_EVENTS).toContain("talk.event");
@@ -78,6 +93,8 @@ describe("listGatewayMethods", () => {
     "session.suggestions.add",
     "session.suggestions.list",
     "session.suggestions.resolve",
+    "session.reactions.set",
+    "session.reactions.list",
     "session.typing",
     "sessions.companion.ask",
     "sessions.companion.state",
@@ -86,8 +103,6 @@ describe("listGatewayMethods", () => {
     "skills.proposals.events.list",
     "skills.proposals.evaluate",
     "hooks.status",
-    "tasks.retry",
-    "tasks.dismiss",
     "audit.run.inspect",
     "sessions.patchMany",
     "update.hold",
@@ -185,7 +200,7 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends new methods after model probing without shifting older method indices", () => {
+  it("appends new methods after model probing while preserving retained older method order", () => {
     const expectedSuffix = [
       ...expectedMethodsAfterModelProbe,
       "canvas.document.view",
@@ -203,7 +218,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -232,10 +246,42 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
+      "presence.activity",
+      "presence.query",
+      "users.merge",
+      "gateway.stop.request",
+      "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
+    expect(methods.some((method) => method.startsWith("tasks."))).toBe(false);
 
     expect(methods.slice(0, legacyCount)).toEqual(LEGACY_ADVERTISED_GATEWAY_METHODS);
     expect(methods.slice(legacyCount, legacyCount + 4)).toEqual([
@@ -255,7 +301,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -284,6 +329,37 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
+      "presence.activity",
+      "presence.query",
+      "users.merge",
+      "gateway.stop.request",
+      "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
     ]);
   });
 
@@ -354,7 +430,7 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs"]) {
+    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs", "cron.history"]) {
       expect(
         descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
       ).toBeUndefined();
@@ -436,7 +512,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -465,11 +540,42 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
+      "presence.activity",
+      "presence.query",
+      "users.merge",
+      "gateway.stop.request",
+      "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
-    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("hooks.status") + 1);
     expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
     expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
     expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(

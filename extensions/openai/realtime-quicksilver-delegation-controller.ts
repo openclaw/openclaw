@@ -5,23 +5,20 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
-  canonicalizeBase64,
   extractErrorCode,
   readErrorName,
   rawDataToString,
   toErrorObject,
   truncateUtf16Safe,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
-import {
-  buildOpenAIQuicksilverDelegationPrompt,
-  type OpenAIQuicksilverTranscriptEntry,
-} from "./realtime-quicksilver-instructions.js";
+import { buildOpenAIQuicksilverDelegationPrompt } from "./realtime-quicksilver-instructions.js";
 import { buildOpenAIQuicksilverContextAppend } from "./realtime-quicksilver-protocol.js";
 import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { OpenAIQuicksilverTranscript } from "./realtime-quicksilver-transcript.js";
 import {
   boundOpenAIQuicksilverDelegationResult,
@@ -61,7 +58,6 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   model: string;
   onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
-  onAudio?: (audio: Buffer) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onSessionClosed?: (
     reason: Extract<OpenAIQuicksilverInboundEvent, { kind: "session-closed" }>["reason"],
@@ -179,7 +175,13 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   handleEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (this.stopped || event.kind === "ignored" || event.kind === "audio-cleared") {
+    // Media workers and browser WebRTC own audio; this controller owns delegation events.
+    if (
+      this.stopped ||
+      event.kind === "ignored" ||
+      event.kind === "audio-cleared" ||
+      event.kind === "audio"
+    ) {
       return;
     }
     if (
@@ -231,19 +233,6 @@ export class OpenAIQuicksilverDelegationController {
       } else {
         this.options.onError?.(error);
       }
-      return;
-    }
-    if (event.kind === "audio") {
-      if (!this.options.onAudio) {
-        // Browser and OAuth Gateway sessions negotiate audio over WebRTC.
-        return;
-      }
-      const audio = canonicalizeBase64(event.data);
-      if (!audio) {
-        this.fail(new Error("OpenAI GPT-Live returned malformed base64 audio"));
-        return;
-      }
-      this.options.onAudio(Buffer.from(audio, "base64"));
       return;
     }
     if (this.publicDelegations) {
@@ -310,7 +299,7 @@ export class OpenAIQuicksilverDelegationController {
     }
   }
 
-  private consumeTranscript(): OpenAIQuicksilverTranscriptEntry[] {
+  private consumeTranscript(): RealtimeVoiceAgentConsultTranscriptEntry[] {
     const snapshot = this.transcript.consume();
     this.transcript.publish(snapshot.publication, { onTranscript: this.options.onTranscript });
     return snapshot.context;

@@ -21,8 +21,7 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `event.toolKind` and `event.toolInputKind`, host-authoritative
   discriminators for tools that intentionally share names; for example, outer
   code-mode `exec` calls use `toolKind: "code_mode_exec"` and include
-  `toolInputKind: "javascript" | "typescript"` when the input language is
-  known
+  `toolInputKind: "javascript"` for accepted Code Mode input
 - optional `event.derivedPaths`, best-effort host-derived target path hints
   for well-known tool envelopes such as `apply_patch`; these paths may be
   incomplete or over-approximate what the tool will actually touch (for
@@ -52,8 +51,6 @@ type BeforeToolCallResult = {
     scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
-    /** @deprecated Unresolved approvals always deny. */
-    timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
@@ -191,7 +188,6 @@ the change:
   agents: {
     entries: {
       "maintenance-agent": {
-        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
     },

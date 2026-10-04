@@ -247,11 +247,7 @@ public struct OpenClawChatEffortControl: View {
 
     @ViewBuilder
     private func defaultControl(isInherited: Bool, action: @escaping @MainActor () -> Void) -> some View {
-        if isInherited {
-            Text("Using session default")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-        } else {
+        if !isInherited {
             Button("Use session default", action: action)
                 .buttonStyle(.plain)
                 .font(.system(size: 10))

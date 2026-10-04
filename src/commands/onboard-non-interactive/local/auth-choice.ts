@@ -1,9 +1,3 @@
-/**
- * Non-interactive local auth-choice dispatcher.
- *
- * It normalizes legacy choices, handles secret storage mode, delegates plugin
- * setup when applicable, and applies built-in custom provider config.
- */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
@@ -11,7 +5,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
-import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
+import type {
+  ProviderNonInteractiveApiKeyCredentialParams,
+  ProviderNonInteractiveApiKeyResult,
+  ProviderResolveNonInteractiveApiKeyParams,
+} from "../../../plugins/provider-authentication.types.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
@@ -29,10 +27,6 @@ import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
-
-type ResolvedNonInteractiveApiKey = NonNullable<
-  Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
->;
 
 /** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
@@ -52,23 +46,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     env: process.env,
   });
   const nextConfig = params.nextConfig;
-  const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
-  if (opts.secretInputMode && !requestedSecretInputMode) {
-    rejectOnboardingOption(
-      opts,
-      runtime,
-      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    return null;
-  }
   const toStoredSecretInput = (paramsLocal: {
-    resolved: ResolvedNonInteractiveApiKey;
+    resolved: ProviderNonInteractiveApiKeyResult;
     provider: string;
     envVarName?: string;
   }): SecretInput | null => {
     const { resolved } = paramsLocal;
-    const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
-    if (storePlaintextSecret) {
+    if (opts.secretInputMode !== "ref") {
       return resolved.key;
     }
     if (resolved.source !== "env" || !resolved.envVarName) {
@@ -95,20 +79,19 @@ export async function applyNonInteractiveAuthChoice(params: {
       id: resolved.envVarName,
     };
   };
-  const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
+  const resolveApiKey = (input: ProviderResolveNonInteractiveApiKeyParams) =>
     resolveNonInteractiveApiKey({
       ...input,
+      cfg: nextConfig,
+      runtime,
       agentDir: params.target.agentDir,
       workspaceDir: params.target.workspaceDir,
-      secretInputMode: requestedSecretInputMode,
+      secretInputMode: opts.secretInputMode,
       json: opts.json,
     });
-  const toApiKeyCredential = (paramsLocal: {
-    provider: string;
-    resolved: ResolvedNonInteractiveApiKey;
-    email?: string;
-    metadata?: Record<string, string>;
-  }): ApiKeyCredential | null => {
+  const toApiKeyCredential = (
+    paramsLocal: ProviderNonInteractiveApiKeyCredentialParams,
+  ): ApiKeyCredential | null => {
     const stored = toStoredSecretInput({
       resolved: paramsLocal.resolved,
       provider: paramsLocal.provider,
@@ -136,14 +119,14 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice = legacyChoice.authChoice;
   }
 
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, {
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
-    : resolveDeprecatedProviderInstallCatalogEntry(authChoice as string, {
+    : resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
         config: nextConfig,
         workspaceDir: params.target.workspaceDir,
         env: process.env,
@@ -154,13 +137,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     rejectOnboardingOption(
       opts,
       runtime,
-      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
+      `${JSON.stringify(authChoice)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
     );
     return null;
   }
 
   const validAuthChoices = formatAuthChoiceChoicesForCli({
-    includeSkip: true,
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
@@ -181,12 +163,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime,
     baseConfig,
     target: params.target,
-    resolveApiKey: (input) =>
-      resolveApiKey({
-        ...input,
-        cfg: nextConfig,
-        runtime,
-      }),
+    resolveApiKey,
     toApiKeyCredential,
   });
   if (pluginProviderChoice !== undefined) {
@@ -226,18 +203,16 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
       const resolvedCustomApiKey = await resolveApiKey({
         provider: resolvedProviderId.providerId,
-        cfg: nextConfig,
         flagValue: customAuth.apiKey,
         flagName: "--custom-api-key",
         envVar: "CUSTOM_API_KEY",
         envVarName: "CUSTOM_API_KEY",
-        runtime,
         required: false,
       });
       let customApiKeyInput: SecretInput | undefined;
       if (
         resolvedCustomApiKey &&
-        (requestedSecretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
+        (opts.secretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
       ) {
         // Profile ownership stays in the auth store; serializing its resolved
         // value would expose plaintext and overwrite an existing SecretRef.

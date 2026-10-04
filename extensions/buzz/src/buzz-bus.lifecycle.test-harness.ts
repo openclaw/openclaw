@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event } from "nostr-tools";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, vi } from "vitest";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { relayMocks } from "./buzz-bus.test-helpers.js";
@@ -22,6 +23,7 @@ function startTestBus(
   overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {},
 ): Promise<BuzzBus> {
   return startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: ACCOUNT_ID,
     relayUrl: "wss://buzz.example.com",
     privateKey: PRIVATE_KEY,
@@ -66,6 +68,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.profileEvents = [];
     relayMocks.roomMetadataEvents = [];
     relayMocks.roomHistoryEvents = [];
+    relayMocks.threadRootEvents = [];
     relayMocks.beforeRoomHistoryEvent = undefined;
     relayMocks.membershipEvents = [
       {
@@ -88,6 +91,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.send.mockResolvedValue();
     relayMocks.connected = true;
     relayMocks.stallProfileQueryEose = false;
+    relayMocks.stallThreadRootQueryEose = false;
     relayMocks.stallRoomEoseChannelId = undefined;
     vi.stubGlobal(
       "fetch",

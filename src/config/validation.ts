@@ -1,15 +1,10 @@
 // Owns core preparation and sync/async orchestration for config validation.
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
-import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
-import {
-  inheritLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
-import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
@@ -73,21 +68,12 @@ async function validateConfigObjectWithPluginsAsyncInternal(
   // Raw-reference checks and parsed defaults must describe the same input after the await.
   const pending: PreparedConfigWithPlugins = {
     ok: true,
-    migrated: inheritLegacyDefaultAgentId(
-      prepared.migrated,
-      cloneConfigWithResolutionFacts(prepared.migrated),
-    ),
-    parsedConfig: inheritLegacyDefaultAgentId(
-      prepared.parsedConfig,
-      cloneConfigWithResolutionFacts(prepared.parsedConfig),
-    ),
+    migrated: cloneConfigWithResolutionFacts(prepared.migrated),
+    parsedConfig: prepared.parsedConfig,
   };
   const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
   const strictConfig = prepareStrictValidation
-    ? inheritLegacyDefaultAgentId(
-        pending.parsedConfig,
-        cloneConfigWithResolutionFacts(pending.parsedConfig),
-      )
+    ? cloneConfigWithResolutionFacts(pending.parsedConfig)
     : undefined;
   const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
     ? new Map()
@@ -142,14 +128,9 @@ function prepareConfigObjectWithPlugins(
   raw: unknown,
   params: ValidateConfigWithPluginsParams | undefined,
 ): PreparedConfigWithPlugins | { ok: false; result: ValidateConfigWithPluginsResult } {
-  const copilotConfig = removeLegacyCopilotDiscovery(
+  const migrated = applyImplicitAgentRosterDefaults(
     omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
-  );
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
-  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
-    env: params?.env,
-    homedir: params?.homedir,
-  }).config as OpenClawConfig;
+  ) as OpenClawConfig;
   const base = validateConfigObjectRaw(migrated, {
     sourceRaw: params?.sourceRaw,
     preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
@@ -159,8 +140,10 @@ function prepareConfigObjectWithPlugins(
   if (!base.ok) {
     return { ok: false, result: { ok: false, issues: base.issues, warnings: [] } };
   }
-  // Preserve the migration sidecar across Zod's fresh object before metadata discovery.
-  const parsedConfig = inheritLegacyDefaultAgentId(migrated, base.config);
+  // Validate before cloning so malformed deep values return schema errors. Zod
+  // retains nested z.unknown() references; isolate them before runtime path expansion
+  // and restore the non-enumerable roster projection that structuredClone omits.
+  const parsedConfig = attachAgentListProjection(cloneConfigWithResolutionFacts(base.config));
   return { ok: true, migrated, parsedConfig };
 }
 
@@ -171,32 +154,14 @@ function finishConfigObjectWithPlugins(
   installedPluginRecordIds?: ReadonlySet<string>,
   schemaValidations?: PreparedPluginSchemaValidations,
 ): ValidateConfigWithPluginsResult {
-  let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
-  const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
+  return validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
     schemaValidations,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
-    onManifestRegistryResolved: (registry) => {
-      manifestRegistry = registry;
-    },
   });
-  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
-  // Core roster normalization already ran; ambient channel ownership belongs to Gateway discovery.
-  if (!result.ok || !legacyDefaultAgentId || params?.pluginValidation === "core-only") {
-    return result;
-  }
-  // Carry the migration sidecar across Zod's fresh object.
-  const validatedConfig = inheritLegacyDefaultAgentId(migrated, result.config);
-  const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
-    validatedConfig,
-    legacyDefaultAgentId,
-    params?.env,
-    manifestRegistry?.plugins,
-  );
-  return { ...result, config: materialized.config };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
@@ -215,13 +180,11 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     env,
     ...(manifestRecords ? { manifestRecords } : {}),
   });
-  const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+  return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
     env,
     homedir: options?.homedir,
     materializeSessionStore: options?.materializeSessionStore,
     materializeWorkspace: options?.materializeWorkspace,
   });
-  const next = inheritLegacyDefaultAgentId(config, materialized.config);
-  return { ...materialized, config: next };
 }

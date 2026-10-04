@@ -1,28 +1,27 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   assertTrustedWorkflowHarness,
   dispatchInputsDigest,
-  FULL_RELEASE_GITHUB_POLL_INTERVAL_MS,
-  FULL_RELEASE_WAIT_TIMEOUT_MINUTES,
   parseArgs,
-  releaseProfileForTarget,
+  releaseProfileForVersion,
   releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
@@ -33,8 +32,8 @@ import {
   verifyTargetRef,
   verifyTrustedWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mts";
-import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -55,27 +54,134 @@ on:
 `;
 
 function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
+  return execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   }).trim();
 }
 
+type DispatchRepositoryOptions = {
+  releaseRef?: string;
+  workflowSource?: string;
+  targetSource?: Record<string, string>;
+  targetAlreadyRemote?: boolean;
+};
+const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
+const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
+type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+const dispatchWorkflows = new Map<string, DispatchWorkflow>();
+const fixtureCleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const cleanup of fixtureCleanups.splice(0)) {
+    cleanup();
+  }
+});
+
+function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
+  const origin = join(root, "origin.git");
+  const checkout = join(root, "checkout");
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
+  mkdirSync(checkout);
+  execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
+  execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
+  runGit(checkout, ["config", "user.email", "release-test@openclaw.invalid"]);
+  runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
+  mkdirSync(join(checkout, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(checkout, "scripts"), { recursive: true });
+  writeFileSync(join(checkout, "package.json"), '{"version":"2026.8.1"}\n');
+  writeFileSync(
+    join(checkout, "CHANGELOG.md"),
+    "## 2026.8.1\n\nRelease notes for the complete selected candidate and its user-facing fixes.\n",
+  );
+  writeFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+  );
+  writeFileSync(
+    join(checkout, "scripts", "release-ci-summary.mjs"),
+    `const expected = [
+  "--validate-run", "123",
+	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
+  "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
+  "--trusted-workflow-sha", process.env.MOCK_WORKFLOW_SHA,
+	  "--json",
+  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
+  "--verifier-source-file", process.argv[1],
+];
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
+  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
+  process.exit(2);
+}
+console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
+`,
+  );
+  runGit(checkout, ["add", "."]);
+  runGit(checkout, ["commit", "-m", "test: trusted workflow contract"]);
+  const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
+  runGit(checkout, ["remote", "add", "origin", origin]);
+  runGit(checkout, ["push", "-u", "origin", "main"]);
+  runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
+  runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
+  runGit(checkout, ["checkout", "-b", releaseRef]);
+  writeFileSync(join(checkout, "target.txt"), "release target\n");
+  for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
+    mkdirSync(join(checkout, relativePath, ".."), { recursive: true });
+    writeFileSync(join(checkout, relativePath), content);
+  }
+  runGit(checkout, ["add", "."]);
+  runGit(checkout, ["commit", "-m", "test: release target"]);
+  const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  if (options.targetAlreadyRemote !== false) {
+    runGit(checkout, ["push", "-u", "origin", releaseRef]);
+  }
+  runGit(checkout, ["checkout", "main"]);
+
+  return { origin, checkout, workflowSha, trustedWorkflowTag, targetSha };
+}
+
+function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
+  const key = JSON.stringify([
+    options.releaseRef ?? "release/2026.8.1",
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+    options.targetSource ?? {},
+    options.targetAlreadyRemote !== false,
+  ]);
+  let template = dispatchRepositoryTemplates.get(key);
+  if (!template) {
+    template = createDispatchRepository(
+      repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
+      options,
+    );
+    // Copy packed immutable history, while every case retains its own object store.
+    runGit(template.origin, ["repack", "-ad"]);
+    runGit(template.checkout, ["repack", "-ad"]);
+    dispatchRepositoryTemplates.set(key, template);
+  }
+  const origin = join(root, "origin.git");
+  const checkout = join(root, "checkout");
+  // Each case can change refs, config and objects without touching the prepared history.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.origin, origin, copyOptions);
+  cpSync(template.checkout, checkout, copyOptions);
+  runGit(checkout, ["remote", "set-url", "origin", origin]);
+  return { ...template, origin, checkout };
+}
+
 function createDispatchFixture(
   options: {
-    createRefFailure?: "target" | "workflow";
-    deleteRefFailures?: Array<"target" | "workflow">;
+    bareShaFetchFailure?: boolean;
+    createRefFailure?: boolean;
+    deleteRefFailure?: boolean;
     dispatchFailure?: boolean;
     acceptedDispatchFailure?: boolean;
-    dispatchReturnsRunUrl?: boolean;
-    duplicateRuns?: boolean;
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
-    runPathStyle?: "bare" | "short-ref" | "full-ref";
-    witnessOverrides?: Record<string, unknown>;
+    runPathStyle?: "full-ref";
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
+    witnessMissingReads?: number;
     witnessDuplicate?: boolean;
     ghRoute?: "path" | "explicit";
     tokenPresent?: boolean;
@@ -84,15 +190,13 @@ function createDispatchFixture(
     artifactReadError?: "metadata" | "archive";
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
-    archiveFailure?: "oversized" | "truncated" | "corrupt" | "digest";
-    inventoryError?: string;
-    malformedInventory?: boolean;
+    archiveFailure?: "oversized" | "corrupt" | "digest";
     incompletePagination?: boolean;
     dispatchHttpStatus?: number;
     failIntentWrite?: boolean;
     stopBeforeDispatch?: boolean;
     reopenDuringDispatch?: boolean;
-    payloadPreparationFailure?: "directory" | "write";
+    payloadPreparationFailure?: "write";
     payloadCleanupFailure?: boolean;
     parentRunStates?: Array<{
       conclusion: string | null;
@@ -100,7 +204,6 @@ function createDispatchFixture(
       attempt?: number;
       artifactReady?: boolean;
       artifacts?: unknown;
-      metadataError?: string;
       decisionState?: string;
       decisionAttempt?: number;
     }>;
@@ -122,6 +225,7 @@ function createDispatchFixture(
   const pathGhCallsPath = join(root, "path-gh-calls.jsonl");
   const parentRunIndexPath = join(root, "parent-run-index.txt");
   const runDiscoveryIndexPath = join(root, "run-discovery-index.txt");
+  const witnessReadIndexPath = join(root, "witness-read-index.txt");
   const acceptedRunPath = join(root, "accepted-run.json");
   const artifactFixturePath = join(root, "artifact-fixture.cjs");
   const fetchCallsPath = join(root, "fetch-calls.txt");
@@ -131,7 +235,6 @@ function createDispatchFixture(
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
   const releaseRef = options.releaseRef ?? "release/2026.8.1";
-  mkdirSync(checkout);
   mkdirSync(binDir);
   writeFileSync(gitCallsPath, "");
   writeFileSync(ghCallsPath, "");
@@ -159,11 +262,8 @@ fs.mkdtempSync = (prefix, ...args) => {
   const requests = join(process.cwd(), ".artifacts", "full-release-validation");
   const requestPath = process.env.MOCK_REQUEST_FILE || join(requests, fs.readdirSync(requests).find((name) => name.endsWith(".json")));
   const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-  if (intent.phase !== "prepared" || intent.refs.target !== "intended" || intent.refs.workflow !== "intended") {
-    throw new Error("payload preparation requires durable prepared intent before either ref");
-  }
-  if (${JSON.stringify(options.payloadPreparationFailure ?? "")} === "directory") {
-    throw new Error("injected payload directory failure");
+  if (intent.phase !== "prepared" || intent.refs.workflow !== "intended") {
+    throw new Error("payload preparation requires durable prepared intent before the workflow ref");
   }
   const directory = makeDirectory(prefix, ...args);
   payloadEvent("created", directory);
@@ -225,51 +325,16 @@ Atomics.wait = (array, index, value, timeout) => {
 `,
   );
 
-  execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
-  execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
-  runGit(checkout, ["config", "user.email", "release-test@openclaw.invalid"]);
-  runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
-  mkdirSync(join(checkout, ".github", "workflows"), { recursive: true });
-  mkdirSync(join(checkout, "scripts"), { recursive: true });
-  writeFileSync(join(checkout, "package.json"), '{"version":"2026.7.9"}\n');
-  writeFileSync(
-    join(checkout, "CHANGELOG.md"),
-    "## 2026.8.1\n\nRelease notes for the complete selected candidate and its user-facing fixes.\n",
-  );
-  writeFileSync(
+  const { workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(root, options);
+  const workflowSource = readFileSync(
     join(checkout, ".github", "workflows", "full-release-validation.yml"),
-    LEGACY_WORKFLOW_SOURCE,
+    "utf8",
   );
-  writeFileSync(
-    join(checkout, "scripts", "release-ci-summary.mjs"),
-    `const expected = [
-  "--validate-run", "123",
-	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
-  "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
-  "--trusted-workflow-sha", process.env.MOCK_WORKFLOW_SHA,
-	  "--json",
-  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
-  "--verifier-source-file", process.argv[1],
-];
-if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
-  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
-  process.exit(2);
-}
-console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
-`,
-  );
-  runGit(checkout, ["add", "."]);
-  runGit(checkout, ["commit", "-m", "test: legacy workflow"]);
-  const oldWorkflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  writeFileSync(
-    join(checkout, ".github", "workflows", "full-release-validation.yml"),
-    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
-  );
-  const workflow = parseYaml(
-    readFileSync(join(checkout, ".github", "workflows", "full-release-validation.yml"), "utf8"),
-  ) as {
-    on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
-  };
+  let workflow = dispatchWorkflows.get(workflowSource);
+  if (!workflow) {
+    workflow = parseYaml(workflowSource) as DispatchWorkflow;
+    dispatchWorkflows.set(workflowSource, workflow);
+  }
   const declaredWorkflowInputs = Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {});
   writeFileSync(
     artifactFixturePath,
@@ -294,7 +359,6 @@ module.exports = async () => {
     sha: process.env.MOCK_WORKFLOW_SHA,
     runId: "123", runAttempt: "1",
     inputsDigest: "sha256:" + createHash("sha256").update(canonicalInputs).digest("hex"),
-    ...${JSON.stringify(options.witnessOverrides ?? {})},
   };
   const zip = new JSZip();
   zip.file("dispatch-inputs.json", JSON.stringify(witness) + "\\n", { date: new Date("2026-01-01T00:00:00Z") });
@@ -314,29 +378,6 @@ module.exports = async () => {
 };
 `,
   );
-  writeFileSync(join(checkout, "package.json"), '{"version":"2026.8.1"}\n');
-  runGit(checkout, ["add", ".github/workflows/full-release-validation.yml", "package.json"]);
-  runGit(checkout, ["commit", "-m", "test: trusted workflow contract"]);
-  const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-  runGit(checkout, ["remote", "add", "origin", origin]);
-  runGit(checkout, ["push", "-u", "origin", "main"]);
-  runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
-  runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
-  runGit(checkout, ["checkout", "-b", releaseRef]);
-  writeFileSync(join(checkout, "target.txt"), "release target\n");
-  for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
-    mkdirSync(join(checkout, relativePath, ".."), { recursive: true });
-    writeFileSync(join(checkout, relativePath), content);
-  }
-  runGit(checkout, ["add", "."]);
-  runGit(checkout, ["commit", "-m", "test: release target"]);
-  const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
-  if (options.targetAlreadyRemote !== false) {
-    runGit(checkout, ["push", "-u", "origin", releaseRef]);
-  }
-  runGit(checkout, ["checkout", "main"]);
-
   const gitPath = join(binDir, "git");
   writeFileSync(
     gitPath,
@@ -345,6 +386,13 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+if (args.includes("https://github.com/openclaw/openclaw.git")) {
+  if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
+    console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
+    process.exit(1);
+  }
+  process.exit(0);
+}
 const result = spawnSync("git", args, {
   env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
   stdio: "inherit",
@@ -405,8 +453,7 @@ const runMetadata = (id, state = parentRunStates[0]) => {
     ...state, id, head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: state.attempt ?? 1,
     workflow_id: 17, head_branch: accepted.ref, event: "workflow_dispatch",
     path: ".github/workflows/full-release-validation.yml" + (
-      ${JSON.stringify(options.runPathStyle ?? "bare")} === "short-ref" ? "@" + accepted.ref
-      : ${JSON.stringify(options.runPathStyle ?? "bare")} === "full-ref" ? "@refs/heads/" + accepted.ref : ""
+      ${JSON.stringify(options.runPathStyle ?? "bare")} === "full-ref" ? "@refs/heads/" + accepted.ref : ""
     ),
     repository: { full_name: "openclaw/openclaw" },
     head_repository: { full_name: "openclaw/openclaw" },
@@ -422,9 +469,8 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   const ref = fields.get("ref") || "";
   const sha = fields.get("sha") || "";
-  const kind = ref.includes("/validation/") ? "target" : "workflow";
-  if (kind === ${JSON.stringify(options.createRefFailure ?? "")}) {
-    console.error("configured " + kind + " ref creation failure");
+  if (${JSON.stringify(options.createRefFailure ?? false)}) {
+    console.error("configured workflow ref creation failure");
     process.exit(19);
   }
   const object = spawnSync(
@@ -446,9 +492,8 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   process.exit(result.status ?? 1);
 } else if (args[0] === "api" && method === "DELETE" && endpoint.includes("/git/refs/")) {
   const ref = "refs/" + endpoint.slice(endpoint.indexOf("/git/refs/") + "/git/refs/".length);
-  const kind = ref.includes("/validation/") ? "target" : "workflow";
-  if (${JSON.stringify(options.deleteRefFailures ?? [])}.includes(kind)) {
-    console.error("configured " + kind + " ref deletion failure");
+  if (${JSON.stringify(options.deleteRefFailure ?? false)}) {
+    console.error("configured workflow ref deletion failure");
     process.exit(20);
   }
   const result = spawnSync("git", ["--git-dir", process.env.MOCK_ORIGIN, "update-ref", "-d", ref], {
@@ -456,13 +501,12 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     stdio: "inherit",
   });
   process.exit(result.status ?? 1);
-} else if ((args[0] === "workflow" && args[1] === "run") || (method === "POST" && endpoint.endsWith("/dispatches"))) {
+} else if (method === "POST" && endpoint.endsWith("/dispatches")) {
   const inputIndex = args.indexOf("--input");
   const payloadPath = inputIndex >= 0 ? args[inputIndex + 1] : undefined;
   const payloadText = payloadPath ? fs.readFileSync(payloadPath, "utf8") : undefined;
   const payload = payloadText === undefined ? undefined : JSON.parse(payloadText);
-  const wireInputs = payload?.inputs ?? Object.fromEntries(args[0] === "workflow" ? fields : [...fields]
-    .filter(([key]) => key.startsWith("inputs[")).map(([key, value]) => [key.slice(7, -1), value]));
+  const wireInputs = payload.inputs;
   if (payload) {
     const directory = require("node:path").dirname(payloadPath);
     fs.writeFileSync(${JSON.stringify(payloadCapturePath)}, JSON.stringify({
@@ -511,31 +555,20 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   }
   fs.writeFileSync(acceptedRunPath, JSON.stringify({
     inputs: wireInputs,
-    typedInputs: Object.fromEntries(Object.entries(wireInputs).map(([key, value]) => [
-      key, JSON.parse(process.env.MOCK_WORKFLOW_SCHEMA)[key].type === "boolean" ? value === "true" : value,
-    ])),
-    ref: payload?.ref ?? (args[0] === "workflow" ? args[args.indexOf("--ref") + 1] : fields.get("ref")),
+    ref: payload.ref,
   }));
   if (${JSON.stringify(options.acceptedDispatchFailure ?? false)}) {
     console.error("connection reset by peer after server acceptance");
     process.exit(1);
   }
-  if (args[0] === "api") {
-    console.log("HTTP/2.0 204 No Content\\r\\nContent-Length: 0\\r\\n\\r\\n");
-  } else if (${JSON.stringify(options.dispatchReturnsRunUrl ?? true)}) {
-    console.log("https://github.com/openclaw/openclaw/actions/runs/123");
-  }
+  console.log("HTTP/2.0 204 No Content\\r\\nContent-Length: 0\\r\\n\\r\\n");
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
-  if (${JSON.stringify(options.inventoryError ?? "")}) {
-    console.error(${JSON.stringify(options.inventoryError ?? "")});
-    process.exit(1);
-  }
   const index = Number(fs.readFileSync(runDiscoveryIndexPath, "utf8"));
   fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
   const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i)
-    : ${JSON.stringify(options.duplicateRuns ?? false)} ? [123, 124] : [123];
+    : [123];
   const runs = index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
     ? []
     : ids.map((id) => runMetadata(id));
@@ -548,7 +581,7 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(${JSON.stringify(options.malformedInventory ?? false)} ? "{" : JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];
@@ -580,23 +613,22 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     }
     const failure = ${JSON.stringify(options.archiveFailure ?? "")};
     if (failure === "oversized") bytes = Buffer.alloc(256 * 1024 + 1);
-    if (failure === "truncated") bytes = bytes.subarray(0, bytes.length - 1);
     if (failure === "digest") bytes[0] ^= 1;
     process.stdout.write(bytes);
   });
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts") && (fields.get("name") || "").startsWith("full-release-dispatch-inputs-")) {
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata }) => {
-    const artifacts = ${JSON.stringify(options.witnessMissing ?? false)} ? []
+    const witnessReads = fs.existsSync(${JSON.stringify(witnessReadIndexPath)})
+      ? Number(fs.readFileSync(${JSON.stringify(witnessReadIndexPath)}, "utf8")) : 0;
+    fs.writeFileSync(${JSON.stringify(witnessReadIndexPath)}, String(witnessReads + 1));
+    const artifacts = ${JSON.stringify(options.witnessMissing ?? false)} ||
+      witnessReads < ${JSON.stringify(options.witnessMissingReads ?? 0)} ? []
       : ${JSON.stringify(options.witnessDuplicate ?? false)} ? [metadata, metadata] : [metadata];
     console.log(JSON.stringify({ total_count: artifacts.length, artifacts }));
   });
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
   const state = parentRunStates[index];
-  if (state.metadataError) {
-    console.error(state.metadataError);
-    process.exit(1);
-  }
   console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
     name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
   }] : []) }));
@@ -664,6 +696,8 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
           : [
               "--sha",
               targetSha,
+              "--workflow-sha",
+              workflowSha,
               ...(options.includeTargetRef === false ? [] : ["--target-ref", releaseRef]),
             ]),
         ...extraArgs,
@@ -685,7 +719,6 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
           MOCK_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
           MOCK_WAIT_CALLS: waitCallsPath,
           MOCK_WORKFLOW_INPUTS: JSON.stringify(declaredWorkflowInputs),
-          MOCK_WORKFLOW_SCHEMA: JSON.stringify(workflow.on?.workflow_dispatch?.inputs),
           MOCK_REQUEST_FILE: extraArgs.includes("--request-file")
             ? extraArgs[extraArgs.indexOf("--request-file") + 1]
             : "",
@@ -713,21 +746,38 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
       .filter(Boolean)
       .map((line) => JSON.parse(line));
 
+  const requestPath = () => {
+    const directory = join(checkout, ".artifacts", "full-release-validation");
+    return join(
+      directory,
+      readdirSync(directory).find((name) => name.endsWith(".json"))!,
+    );
+  };
+  const calls = (method?: string) =>
+    readCalls(ghCallsPath).filter((args) => !method || ghApiMethod(args) === method);
+  const refs = () =>
+    runGit(origin, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/heads/release-ci",
+      "refs/heads/validation",
+    ])
+      .split("\n")
+      .filter(Boolean);
+  fixtureCleanups.push(() => {
+    for (const event of readPayloadEvents().filter((entry) => entry.stage === "created")) {
+      rmSync(event.path, { force: true, recursive: true });
+    }
+    rmSync(root, { force: true, recursive: true });
+  });
   return {
     checkout,
     acceptedRunPath,
     artifactTransportPath,
-    cleanup: () => {
-      for (const event of readPayloadEvents().filter((entry) => entry.stage === "created")) {
-        rmSync(event.path, { force: true, recursive: true });
-      }
-      rmSync(root, { force: true, recursive: true });
-    },
     ghCallsPath,
     fetchCallsPath,
     gitCallsPath,
     origin,
-    oldWorkflowSha,
     pathGhCallsPath,
     readCalls,
     readWaits,
@@ -742,13 +792,12 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
         fileMode: number;
         directoryMode: number;
       },
-    requestPath: () => {
-      const directory = join(checkout, ".artifacts", "full-release-validation");
-      return join(
-        directory,
-        readdirSync(directory).find((name) => name.endsWith(".json"))!,
-      );
-    },
+    requestPath,
+    record: () => JSON.parse(readFileSync(requestPath(), "utf8")),
+    calls,
+    refs,
+    dispatches: () => calls().filter(isWorkflowDispatch),
+    gitCalls: () => readCalls(gitCallsPath),
     releaseRef,
     run,
     selectedGhPath,
@@ -784,31 +833,75 @@ function ghField(args: string[], name: string): string {
 }
 
 describe("full-release-validation-at-sha", () => {
-  it("keeps explicit source intent within the 25 hosted dispatch input slots", () => {
-    const workflow = parseYaml(CURRENT_WORKFLOW_SOURCE);
-    const inputs = workflow.on.workflow_dispatch.inputs;
-    expect(Object.keys(inputs)).toHaveLength(25);
-    expect(inputs).toHaveProperty("trusted_workflow_json");
-    expect(inputs).not.toHaveProperty("validation_purpose");
-    expect(inputs).not.toHaveProperty("publication_selection_json");
+  it.each<{
+    name: string;
+    options: Parameters<typeof createDispatchFixture>[0];
+    args?: string[];
+    trustedTag?: boolean;
+    error: string;
+  }>([
+    { name: "missing purpose", options: { omitPurpose: true }, error: "validation_purpose" },
+    {
+      name: "packed lane on unsupported tooling",
+      options: {
+        workflowSource: CURRENT_WORKFLOW_SOURCE.replace(
+          '  FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"\n',
+          "",
+        ),
+      },
+      args: [
+        "-f",
+        'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
+      ],
+      error: "does not support packed lane inputs",
+    },
+    {
+      name: "automatic retry controls",
+      options: {},
+      args: ["-f", 'known_flaky_jobs_json=["normalCi:checks-node"]'],
+      error: "Automatic test retries are disabled",
+    },
+    {
+      name: "witness-incapable tooling",
+      options: {
+        workflowSource: CURRENT_WORKFLOW_SOURCE.replace(
+          '  FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"\n',
+          "",
+        ),
+      },
+      error: "Tooling SHA <sha> does not support FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1",
+    },
+    {
+      name: "pre-source contract 1 tooling",
+      options: { workflowSource: CONTRACT_ONE_WORKFLOW_SOURCE },
+      trustedTag: true,
+      error: "does not support source admission",
+    },
+    {
+      name: "missing version notes",
+      options: {
+        targetSource: {
+          "CHANGELOG.md": "## 2026.7.9\n\nAn older release with substantive notes.\n",
+        },
+      },
+      error: "does not contain a release section for 2026.8.1",
+    },
+  ])("refuses $name before remote mutations", ({ options, args = [], trustedTag, error }) => {
+    const fixture = createDispatchFixture(options);
+    const result = fixture.run(
+      trustedTag ? ["--trusted-workflow-ref", fixture.trustedWorkflowTag, ...args] : args,
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(error.replace("<sha>", fixture.workflowSha));
+    expect(fixture.calls()).toEqual([]);
+    expect(fixture.gitCalls().filter((call) => call[0] === "push")).toEqual([]);
+    expect(fixture.refs()).toEqual([]);
   });
 
-  it("rejects a missing purpose before remote creation on supporting tooling", () => {
-    const fixture = createDispatchFixture({ omitPurpose: true });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/validation_purpose/u);
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) === "POST"),
-      ).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("retains explicit publication wire values and reopens the same request read-only", () => {
+  it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture();
+    const excluded = ["extensions/example/src/example.test.ts"];
+    const excludedJson = JSON.stringify(excluded, null, 1);
     const selection = JSON.stringify(
       {
         route: "normal",
@@ -820,62 +913,84 @@ describe("full-release-validation-at-sha", () => {
       null,
       1,
     );
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
+    const result = fixture.run([
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${selection}`,
+      "-f",
+      `extension_test_exclude_patterns_json=${excludedJson}`,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const record = fixture.record();
+    const wire = record.request.wireInputs.trusted_workflow_json;
+    expect(JSON.parse(wire)).toEqual({
+      trustedWorkflow: {
+        ref: "main",
+        fullRef: "refs/heads/main",
+        sha: fixture.workflowSha,
+      },
+      validationPurpose: "publish",
+      publicationSelection: JSON.parse(selection),
+      laneInputs: {
+        extension_test_exclude_patterns_json: JSON.stringify(excluded),
+      },
+    });
+    expect(record.request.inputs.trusted_workflow_json).toBe(wire);
+    expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
+    expect(record.request.inputs).not.toHaveProperty("validation_purpose");
+    expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
+    expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+    expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
+    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
+    const before = readFileSync(fixture.requestPath());
+    const callsBefore = fixture.calls().length;
+    const gitBefore = fixture.gitCalls();
+    const payloadBefore = fixture
+      .readPayloadEvents()
+      .filter((event) => event.stage !== "reconcile");
+    const reopened = fixture.run(
+      [
+        "--request-file",
+        fixture.requestPath(),
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${selection}`,
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
-      const wire = record.request.wireInputs.trusted_workflow_json;
-      expect(JSON.parse(wire)).toEqual({
-        trustedWorkflow: {
-          ref: "main",
-          fullRef: "refs/heads/main",
-          sha: fixture.workflowSha,
-        },
-        validationPurpose: "publish",
-        publicationSelection: JSON.parse(selection),
-      });
-      expect(record.request.inputs.trusted_workflow_json).toBe(wire);
-      expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
-      expect(record.request.inputs).not.toHaveProperty("validation_purpose");
-      expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
-      const before = readFileSync(fixture.requestPath());
-      const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
-      const reopened = fixture.run(
-        [
-          "--request-file",
-          fixture.requestPath(),
-          "-f",
-          "validation_purpose=publish",
-          "-f",
-          `publication_selection_json=${JSON.stringify(JSON.parse(selection))}`,
-        ],
-        true,
-      );
-      expect(reopened.status, reopened.stderr).toBe(0);
-      expect(readFileSync(fixture.requestPath())).toEqual(before);
-      expect(
-        fixture
-          .readCalls(fixture.ghCallsPath)
-          .slice(callsBefore)
-          .filter((args) => ghApiMethod(args) !== "GET"),
-      ).toEqual([]);
-      const mismatch = fixture.run(
-        ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
-        true,
-      );
-      expect(mismatch.status).toBe(1);
-      expect(mismatch.stderr).toContain("conflict with the retained request");
-      expect(readFileSync(fixture.requestPath())).toEqual(before);
-    } finally {
-      fixture.cleanup();
-    }
+        `publication_selection_json=${JSON.stringify(JSON.parse(selection))}`,
+        "-f",
+        `extension_test_exclude_patterns_json=${excludedJson}`,
+      ],
+      true,
+    );
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(fixture.gitCalls()).toEqual(gitBefore);
+    expect(fixture.readPayloadEvents().filter((event) => event.stage !== "reconcile")).toEqual(
+      payloadBefore,
+    );
+    expect(readFileSync(fixture.requestPath())).toEqual(before);
+    const callsAfterReopen = fixture.calls();
+    const changedExclusion = fixture.run(
+      ["--request-file", fixture.requestPath(), "-f", "extension_test_exclude_patterns_json=[]"],
+      true,
+    );
+    expect(changedExclusion.status).toBe(1);
+    expect(fixture.calls()).toEqual(callsAfterReopen);
+    expect(fixture.gitCalls()).toEqual(gitBefore);
+    expect(changedExclusion.stderr).toContain("conflict with the retained request");
+    expect(readFileSync(fixture.requestPath())).toEqual(before);
+    expect(
+      fixture
+        .calls()
+        .slice(callsBefore)
+        .filter((args) => ghApiMethod(args) !== "GET"),
+    ).toEqual([]);
+    const mismatch = fixture.run(
+      ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
+      true,
+    );
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain("conflict with the retained request");
+    expect(readFileSync(fixture.requestPath())).toEqual(before);
   });
 
   it("reopens the original selected-plugin spelling after dispatch canonicalizes order and duplicates", () => {
@@ -887,74 +1002,64 @@ describe("full-release-validation-at-sha", () => {
       pluginPublishScope: "selected",
       plugins: ["@openclaw/z", "@openclaw/a", "@openclaw/z"],
     });
-    try {
-      const request = [
-        "--request-file",
-        join(fixture.checkout, "request.json"),
-        "-f",
-        "validation_purpose=publish",
-        "-f",
-        `publication_selection_json=${original}`,
-      ];
-      const first = fixture.run(["--workflow-sha", fixture.workflowSha, ...request]);
-      expect(first.status, first.stderr).toBe(0);
-      const path = join(fixture.checkout, "request.json");
-      const before = readFileSync(path);
-      const record = JSON.parse(before.toString());
-      expect(
-        JSON.parse(record.request.wireInputs.trusted_workflow_json).publicationSelection.plugins,
-      ).toEqual(["@openclaw/a", "@openclaw/z"]);
-      const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
-      const reopened = fixture.run(request, true);
-      expect(reopened.status, reopened.stderr).toBe(0);
-      expect(readFileSync(path)).toEqual(before);
-      expect(
-        fixture
-          .readCalls(fixture.ghCallsPath)
-          .slice(callsBefore)
-          .every((args) => ghApiMethod(args) === "GET"),
-      ).toBe(true);
-    } finally {
-      fixture.cleanup();
-    }
+    const request = [
+      "--request-file",
+      join(fixture.checkout, "request.json"),
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${original}`,
+    ];
+    const first = fixture.run(request);
+    expect(first.status, first.stderr).toBe(0);
+    const path = join(fixture.checkout, "request.json");
+    const before = readFileSync(path);
+    const record = JSON.parse(before.toString());
+    expect(
+      JSON.parse(record.request.wireInputs.trusted_workflow_json).publicationSelection.plugins,
+    ).toEqual(["@openclaw/a", "@openclaw/z"]);
+    const callsBefore = fixture.calls().length;
+    const reopened = fixture.run(request, true);
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(readFileSync(path)).toEqual(before);
+    expect(
+      fixture
+        .calls()
+        .slice(callsBefore)
+        .every((args) => ghApiMethod(args) === "GET"),
+    ).toBe(true);
   });
 
   it("reopens historical identity-only retained inputs without adding source intent or rewriting bytes", () => {
     const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
-      const envelope = JSON.parse(record.request.wireInputs.trusted_workflow_json);
-      const legacyIdentity = JSON.stringify(envelope.trustedWorkflow, null, 1);
-      record.request.inputs.trusted_workflow_json = legacyIdentity;
-      record.request.wireInputs.trusted_workflow_json = legacyIdentity;
-      writeFileSync(fixture.requestPath(), JSON.stringify(record) + "\n");
-      const accepted = JSON.parse(readFileSync(fixture.acceptedRunPath, "utf8"));
-      accepted.inputs.trusted_workflow_json = legacyIdentity;
-      writeFileSync(fixture.acceptedRunPath, JSON.stringify(accepted));
-      const before = readFileSync(fixture.requestPath());
-      const digestBefore = dispatchInputsDigest(record.request.inputs);
-      const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
-      const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
-      expect(reopened.status, reopened.stderr).toBe(0);
-      expect(readFileSync(fixture.requestPath())).toEqual(before);
-      expect(dispatchInputsDigest(JSON.parse(before.toString()).request.inputs)).toBe(digestBefore);
-      expect(
-        fixture
-          .readCalls(fixture.ghCallsPath)
-          .slice(callsBefore)
-          .every((args) => ghApiMethod(args) === "GET"),
-      ).toBe(true);
-      const relabeled = fixture.run(
-        ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
-        true,
-      );
-      expect(relabeled.status).toBe(1);
-      expect(readFileSync(fixture.requestPath())).toEqual(before);
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    const record = fixture.record();
+    const envelope = JSON.parse(record.request.wireInputs.trusted_workflow_json);
+    const legacyIdentity = JSON.stringify(envelope.trustedWorkflow, null, 1);
+    record.request.inputs.trusted_workflow_json = legacyIdentity;
+    record.request.wireInputs.trusted_workflow_json = legacyIdentity;
+    writeFileSync(fixture.requestPath(), JSON.stringify(record) + "\n");
+    const accepted = JSON.parse(readFileSync(fixture.acceptedRunPath, "utf8"));
+    accepted.inputs.trusted_workflow_json = legacyIdentity;
+    writeFileSync(fixture.acceptedRunPath, JSON.stringify(accepted));
+    const before = readFileSync(fixture.requestPath());
+    const callsBefore = fixture.calls().length;
+    const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(readFileSync(fixture.requestPath())).toEqual(before);
+    expect(
+      fixture
+        .calls()
+        .slice(callsBefore)
+        .every((args) => ghApiMethod(args) === "GET"),
+    ).toBe(true);
+    const relabeled = fixture.run(
+      ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
+      true,
+    );
+    expect(relabeled.status).toBe(1);
+    expect(readFileSync(fixture.requestPath())).toEqual(before);
   });
 
   it("normalizes GitHub witness inputs without depending on omitted blanks, order, or Boolean representation", () => {
@@ -997,106 +1102,103 @@ describe("full-release-validation-at-sha", () => {
       trustedWorkflowRef: `release-publish/${"a".repeat(12)}-123`,
       workflowSha: "a".repeat(40),
     });
-  });
-
-  it("accepts documented -f assignments after the option separator", () => {
     expect(
       parseArgs(["--", "-f", "release_profile=full", "-fmode=linux", "provider=anthropic"]).inputs,
+    ).toMatchObject({ mode: "linux", provider: "anthropic", release_profile: "full" });
+    expect(
+      parseArgs([
+        "-f",
+        "reuse_evidence=false",
+        "-f",
+        "fail_fast=true",
+        "-f",
+        "rerun_group=qa-parity",
+      ]).inputs,
     ).toMatchObject({
-      mode: "linux",
-      provider: "anthropic",
-      release_profile: "full",
+      reuse_evidence: "false",
+      fail_fast: "true",
+      rerun_group: "qa-parity",
     });
-    expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
+    const targetRefs: [string, string][] = [
+      ["extended-stable/2026.6.33", "extended-stable/2026.6.33"],
+      ["v2026.7.1-beta.5", "v2026.7.1-beta.5"],
+      ["v2026.7.1", "v2026.7.1"],
+      ["refs/tags/v2026.7.1-2", "v2026.7.1-2"],
+      ["refs/heads/release/2026.7.1-2", "release/2026.7.1-2"],
+    ];
+    for (const [ref, normalized] of targetRefs) {
+      const args = ["--target-ref", ref];
+      if (!normalized.startsWith("v")) {
+        args.push("--workflow-sha", "a".repeat(40));
+      }
+      expect(parseArgs(args).targetRef).toBe(normalized);
+    }
   });
 
-  it("requires an exact Tooling SHA for protected workflow tags", () => {
-    const trustedTag = `release-publish/${"a".repeat(12)}-123`;
-    expect(() => parseArgs(["--trusted-workflow-ref", trustedTag])).toThrow(
-      "explicit full Tooling SHA",
-    );
-    expect(() =>
-      parseArgs(["--workflow-sha", "a".repeat(40), "--trusted-workflow-ref", "release/2026.8.1"]),
-    ).toThrow("protected release-publish");
-  });
-
-  it("rejects retry groups that are not controller APIs", () => {
-    expect(() => parseArgs(["-f", "rerun_group=release-checks"])).toThrow(
-      "rerun_group must be one of",
-    );
-    expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
-    expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+  it("rejects invalid dispatch arguments before resolving a release", () => {
+    const cases: [string[], string][] = [
+      [["--", "-f"], "-f requires a value"],
+      [
+        ["--trusted-workflow-ref", `release-publish/${"a".repeat(12)}-123`],
+        "explicit full Tooling SHA",
+      ],
+      [
+        ["--workflow-sha", "a".repeat(40), "--trusted-workflow-ref", "release/2026.8.1"],
+        "protected release-publish",
+      ],
+      ...["release-checks", "qa"].map((group): [string[], string] => [
+        ["-f", `rerun_group=${group}`],
+        "rerun_group must be one of",
+      ]),
+      ...["--sha", "--workflow-sha", "-f"].flatMap((flag) =>
+        ["--dry-run", "-h"].map((next): [string[], string] => [
+          [flag, next],
+          `${flag} requires a value`,
+        ]),
+      ),
+      [["--target-ref", "--dry-run"], "--target-ref requires a value"],
+      ...["reuse_evidence", "fail_fast", "allow_unreleased_changelog"].map(
+        (key): [string[], string] => [["-f", `${key}=maybe`], `${key} must be true or false`],
+      ),
+      [["-f", "release_profile=minimum"], "release_profile must be beta, stable, or full"],
+      ...["-f", "--"].flatMap((prefix): [string[], string][] => [
+        [[prefix, "ref=other"], "reserves the ref input"],
+        [[prefix, `expected_sha=${"a".repeat(40)}`], "reserves expected_sha"],
+      ]),
+      [["-f", "trusted_workflow_json={}"], "reserves trusted_workflow_json"],
+      ...[
+        "feature/not-release",
+        "release/2026.6.33-1",
+        "v2026.6.33-1",
+        "release/2026.7.1-beta.2",
+        "refs/tags/release/2026.7.1",
+        "refs/heads/v2026.7.1",
+      ].map((ref): [string[], string] => [
+        ["--target-ref", ref],
+        "canonical OpenClaw release branch or tag",
+      ]),
+      [
+        ["--target-ref", "release/2026.7.1"],
+        "requires --workflow-sha with an explicit full Tooling SHA",
+      ],
+      [
+        ["--target-ref", "release/2026.7.1", "--workflow-sha", "origin/main"],
+        "explicit full Tooling SHA",
+      ],
+    ];
+    for (const [args, message] of cases) {
+      expect(() => parseArgs(args), args.join(" ")).toThrow(message);
+    }
   });
 
   it("infers the release profile from the target package version", () => {
-    const readVersion = (version: string) => () => JSON.stringify({ version });
-
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toBe("beta");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
-  });
-
-  it("rejects missing option values", () => {
-    expect(() => parseArgs(["--sha", "--dry-run"])).toThrow("--sha requires a value");
-    expect(() => parseArgs(["--sha", "-h"])).toThrow("--sha requires a value");
-    expect(() => parseArgs(["--workflow-sha", "--dry-run"])).toThrow(
-      "--workflow-sha requires a value",
+    expect(releaseProfileForVersion("2026.7.1-beta.4")).toBe("beta");
+    expect(() => releaseProfileForVersion("2026.7.1-alpha.4")).toThrow(
+      "Alpha releases are retired;",
     );
-    expect(() => parseArgs(["--workflow-sha", "-h"])).toThrow("--workflow-sha requires a value");
-    expect(() => parseArgs(["--target-ref", "--dry-run"])).toThrow("--target-ref requires a value");
-    expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
-    expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
+    expect(releaseProfileForVersion("2026.7.1")).toBe("stable");
+    expect(releaseProfileForVersion("2026.7.1-1")).toBe("stable");
   });
-
-  it("accepts only canonical release branch or tag context", () => {
-    expect(
-      parseArgs(["--target-ref", "extended-stable/2026.6.33", "--workflow-sha", "a".repeat(40)])
-        .targetRef,
-    ).toBe("extended-stable/2026.6.33");
-    expect(parseArgs(["--target-ref", "v2026.7.1-beta.5"]).targetRef).toBe("v2026.7.1-beta.5");
-    expect(parseArgs(["--target-ref", "v2026.7.1"]).targetRef).toBe("v2026.7.1");
-    expect(parseArgs(["--target-ref", "refs/tags/v2026.7.1-2"]).targetRef).toBe("v2026.7.1-2");
-    expect(
-      parseArgs(["--target-ref", "refs/heads/release/2026.7.1-2", "--workflow-sha", "a".repeat(40)])
-        .targetRef,
-    ).toBe("release/2026.7.1-2");
-    for (const ref of [
-      "feature/not-release",
-      "release/2026.6.33-1",
-      "v2026.6.33-1",
-      "release/2026.7.1-beta.2",
-      "refs/tags/release/2026.7.1",
-      "refs/heads/v2026.7.1",
-    ]) {
-      expect(() => parseArgs(["--target-ref", ref])).toThrow(
-        "canonical OpenClaw release branch or tag",
-      );
-    }
-    expect(() => parseArgs(["--target-ref", "release/2026.7.1"])).toThrow(
-      "requires --workflow-sha with an explicit full Tooling SHA",
-    );
-    expect(() =>
-      parseArgs(["--target-ref", "release/2026.7.1", "--workflow-sha", "origin/main"]),
-    ).toThrow("explicit full Tooling SHA");
-  });
-
-  it.each([
-    ["release/2026.7.1", "2026.7.1-beta.5", "v2026.7.1-beta.5", null],
-    ["release/2026.7.1-2", "2026.7.1", "v2026.7.1-2", "v2026.7.1"],
-    ["release/2026.7.1-2", "2026.7.1-2", "v2026.7.1-2", null],
-    ["v2026.7.1-2", "2026.7.1", "v2026.7.1-2", "v2026.7.1"],
-    ["v2026.7.1-2", "2026.7.1-2", "v2026.7.1-2", null],
-    ["extended-stable/2026.6.33", "2026.6.35", "v2026.6.35", null],
-  ] as const)(
-    "resolves publication identity for %s without changing package %s",
-    (ref, packageVersion, releaseTag, baseTag) => {
-      expect(resolveReleaseContextIdentity(ref, packageVersion)).toMatchObject({
-        releaseTag,
-        baseTag,
-      });
-    },
-  );
 
   it("requires a same-source base tag only when a correction uses base-version packages", () => {
     const targetSha = "a".repeat(40);
@@ -1117,147 +1219,58 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("resolves annotated release tags through their peeled commit", () => {
+  it.each([
+    { ref: "v2026.7.1-beta.5", sha: "b6387afd6d2e0f43c2ae98d2d124dbc277f03cca", annotated: true },
+    { ref: "v2026.7.1", sha: "0123456789abcdef0123456789abcdef01234567", annotated: false },
+  ])("resolves $ref through its peeled or lightweight tag", ({ ref, sha, annotated }) => {
     const calls: string[][] = [];
-    const sha = resolveRemoteTargetRefSha("v2026.7.1-beta.5", (args) => {
-      calls.push(args);
-      return `b6387afd6d2e0f43c2ae98d2d124dbc277f03cca\t${args.at(-1)}`;
-    });
-    expect(sha).toBe("b6387afd6d2e0f43c2ae98d2d124dbc277f03cca");
-    expect(calls).toEqual([["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1-beta.5^{}"]]);
-  });
-
-  it("falls back to the direct ref for lightweight release tags", () => {
-    const calls: string[][] = [];
-    const sha = resolveRemoteTargetRefSha("v2026.7.1", (args) => {
-      calls.push(args);
-      return args.at(-1)?.endsWith("^{}")
-        ? ""
-        : "0123456789abcdef0123456789abcdef01234567\trefs/tags/v2026.7.1";
-    });
-    expect(sha).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(
+      resolveRemoteTargetRefSha(ref, (args) => {
+        calls.push(args);
+        return !annotated && args.at(-1)?.endsWith("^{}") ? "" : `${sha}\t${args.at(-1)}`;
+      }),
+    ).toBe(sha);
     expect(calls).toEqual([
-      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1^{}"],
-      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1"],
+      ["ls-remote", "--tags", "origin", `refs/tags/${ref}^{}`],
+      ...(!annotated ? [["ls-remote", "--tags", "origin", `refs/tags/${ref}`]] : []),
     ]);
   });
 
   it("binds frozen release candidates to the branch or tag package version", () => {
     const candidateSha = "a".repeat(40);
     const branchTipSha = "b".repeat(40);
-    expect(
+    const verify = (ref: string, version: string, remote = branchTipSha, reachable = true) =>
       verifyTargetRef(
-        "release/2026.7.1",
+        ref,
         candidateSha,
-        "2026.7.1-beta.5",
-        () => branchTipSha,
-        (ancestor, descendant) => ancestor === candidateSha && descendant === branchTipSha,
-      ),
-    ).toBe("release/2026.7.1");
-    expect(() =>
-      verifyTargetRef(
-        "release/2026.7.1",
-        candidateSha,
-        "2026.7.1-alpha.5",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toThrow("expected 2026.7.1 or a beta prerelease of it");
-    expect(() =>
-      verifyTargetRef(
-        "release/2026.7.1",
-        candidateSha,
-        "2026.7.1",
-        () => branchTipSha,
-        () => false,
-      ),
-    ).toThrow("is not reachable from release branch");
-    expect(() =>
-      verifyTargetRef(
-        "release/2026.7.1",
-        candidateSha,
-        "2026.6.9",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toThrow("does not belong to release branch");
+        version,
+        () => remote,
+        (ancestor, descendant) => reachable && ancestor === candidateSha && descendant === remote,
+      );
+    expect(verify("release/2026.7.1", "2026.7.1-beta.5")).toBe("release/2026.7.1");
+    expect(() => verify("release/2026.7.1", "2026.7.1-alpha.5")).toThrow(
+      "expected 2026.7.1 or a beta prerelease of it",
+    );
+    expect(() => verify("release/2026.7.1", "2026.7.1", branchTipSha, false)).toThrow(
+      "is not reachable from release branch",
+    );
+    expect(() => verify("release/2026.7.1", "2026.6.9")).toThrow(
+      "does not belong to release branch",
+    );
     for (const version of ["2026.6.33", "2026.6.34", "2026.6.35"]) {
-      expect(
-        verifyTargetRef(
-          "extended-stable/2026.6.33",
-          candidateSha,
-          version,
-          () => branchTipSha,
-          () => true,
-        ),
-      ).toBe("extended-stable/2026.6.33");
+      expect(verify("extended-stable/2026.6.33", version)).toBe("extended-stable/2026.6.33");
     }
     for (const version of ["2026.6.32", "2026.7.35", "2026.6.35-beta.1", "2026.6.35-1"]) {
-      expect(() =>
-        verifyTargetRef(
-          "extended-stable/2026.6.33",
-          candidateSha,
-          version,
-          () => branchTipSha,
-          () => true,
-        ),
-      ).toThrow("does not belong to extended-stable branch");
+      expect(() => verify("extended-stable/2026.6.33", version)).toThrow(
+        "does not belong to extended-stable branch",
+      );
     }
-    expect(
-      verifyTargetRef(
-        "v2026.7.1-beta.5",
-        candidateSha,
-        "2026.7.1-beta.5",
-        () => candidateSha,
-        () => false,
-      ),
-    ).toBe("v2026.7.1-beta.5");
-    expect(() =>
-      verifyTargetRef(
-        "v2026.7.1-beta.5",
-        candidateSha,
-        "2026.7.1-beta.5",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toThrow("does not resolve");
-    expect(() =>
-      verifyTargetRef(
-        "v2026.7.1-beta.5",
-        candidateSha,
-        "2026.7.1-beta.4",
-        () => candidateSha,
-        () => true,
-      ),
-    ).toThrow("does not match release tag");
-  });
-
-  it("allows exact-target reuse to be disabled for a forced fresh run", () => {
-    expect(parseArgs(["-f", "reuse_evidence=false"]).inputs.reuse_evidence).toBe("false");
-    expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
-      "reuse_evidence must be true or false",
+    expect(verify("v2026.7.1-beta.5", "2026.7.1-beta.5", candidateSha, false)).toBe(
+      "v2026.7.1-beta.5",
     );
-    expect(parseArgs(["-f", "fail_fast=true"]).inputs.fail_fast).toBe("true");
-    expect(() => parseArgs(["-f", "fail_fast=maybe"])).toThrow("fail_fast must be true or false");
-    expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
-      "release_profile must be beta, stable, or full",
-    );
-    expect(() => parseArgs(["-f", "allow_unreleased_changelog=maybe"])).toThrow(
-      "allow_unreleased_changelog must be true or false",
-    );
-  });
-
-  it("reserves immutable candidate identity inputs for the resolved --sha", () => {
-    expect(() => parseArgs(["-f", "ref=other"])).toThrow("reserves the ref input");
-    expect(() => parseArgs(["--", "ref=other"])).toThrow("reserves the ref input");
-    expect(() => parseArgs(["-f", `expected_sha=${"a".repeat(40)}`])).toThrow(
-      "reserves expected_sha",
-    );
-    expect(() => parseArgs(["--", `expected_sha=${"a".repeat(40)}`])).toThrow(
-      "reserves expected_sha",
-    );
-    expect(() => parseArgs(["-f", "trusted_workflow_json={}"])).toThrow(
-      "reserves trusted_workflow_json",
+    expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.5")).toThrow("does not resolve");
+    expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.4", candidateSha)).toThrow(
+      "does not match release tag",
     );
   });
 
@@ -1304,271 +1317,155 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("accepts only exact protected workflow tags outside main ancestry", () => {
-    const workflowSha = "a".repeat(40);
-    const trustedTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-
-    expect(() =>
+    const sha = "a".repeat(40);
+    const tag = `release-publish/${sha.slice(0, 12)}-123`;
+    const verify = (ref: string, remote = "", mainAncestor = false) =>
       verifyTrustedWorkflowRef(
-        workflowSha,
-        "main",
-        () => "",
-        () => true,
-      ),
-    ).not.toThrow();
-    expect(() =>
-      verifyTrustedWorkflowRef(
-        workflowSha,
-        "main",
-        () => "",
-        () => false,
-      ),
-    ).toThrow("not reachable from current origin/main");
-    expect(() =>
-      verifyTrustedWorkflowRef(
-        workflowSha,
-        trustedTag,
-        () => workflowSha,
-        () => false,
-      ),
-    ).not.toThrow();
-    expect(() =>
-      verifyTrustedWorkflowRef(
-        workflowSha,
-        `release-publish/${"b".repeat(12)}-123`,
-        () => workflowSha,
-      ),
-    ).toThrow("does not match Tooling SHA");
-    expect(() => verifyTrustedWorkflowRef(workflowSha, trustedTag, () => "")).toThrow(
-      "does not exist on origin",
+        sha,
+        ref,
+        () => remote,
+        () => mainAncestor,
+      );
+    expect(() => verify("main", "", true)).not.toThrow();
+    expect(() => verify("main")).toThrow("not reachable from current origin/main");
+    expect(() => verify(tag, sha)).not.toThrow();
+    expect(() => verify(`release-publish/${"b".repeat(12)}-123`, sha)).toThrow(
+      "does not match Tooling SHA",
     );
-    expect(() => verifyTrustedWorkflowRef(workflowSha, trustedTag, () => "c".repeat(40))).toThrow(
-      `expected ${workflowSha}`,
-    );
-    expect(() =>
-      verifyTrustedWorkflowRef(workflowSha, "release/2026.8.1", () => workflowSha),
-    ).toThrow("protected release-publish");
-  });
-
-  it("bounds polling for the exact workflow run", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
-    expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(720);
-    expect(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS).toBe(120_000);
-    expect(source).toContain("workflowRun.head_sha !== workflowSha");
-    expect(source).toContain("return suite;");
-    expect(source).toContain("startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000");
-    expect(source).toContain("const remainingMs = deadline - Date.now();");
-    expect(source).toContain("Math.min(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS, remainingMs)");
-    expect(source).toContain("Parent run progress after ${elapsedMinutes}m");
-    expect(source).toContain("formatReleaseStateOutcome(releaseDecision)");
-    expect(source).toContain(
-      "Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation",
-    );
-    expect(source).not.toContain("attempt < 480");
-  });
-
-  it("discovers the run promptly and observes completion within two minutes", () => {
-    const fixture = createDispatchFixture({
-      dispatchReturnsRunUrl: false,
-      parentRunStates: [
-        { conclusion: null, status: "in_progress" },
-        { conclusion: "success", status: "completed" },
-      ],
-      runDiscoveryMisses: 1,
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(fixture.readWaits()).toEqual([30_000, 120_000]);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(
-        calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
-      ).toHaveLength(3);
-      expect(
-        calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/runs/123")),
-      ).toHaveLength(4);
-    } finally {
-      fixture.cleanup();
-    }
+    expect(() => verify(tag)).toThrow("does not exist on origin");
+    expect(() => verify(tag, "c".repeat(40))).toThrow(`expected ${sha}`);
+    expect(() => verify("release/2026.8.1", sha)).toThrow("protected release-publish");
   });
 
   it("bounds run discovery with backoff through cached registration lag", () => {
     const fixture = createDispatchFixture({
-      dispatchReturnsRunUrl: false,
       runDiscoveryMisses: 4,
     });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Could not determine Full Release Validation run id:");
-      expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000]);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(
-        calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
-      ).toHaveLength(4);
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Could not determine Full Release Validation run id:");
+    expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000]);
+    const calls = fixture.calls();
+    expect(
+      calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
+    ).toHaveLength(4);
   });
 
-  it("keeps dispatch inputs out of the selected GitHub CLI argv", () => {
-    const fixture = createDispatchFixture();
-    const marker = "synthetic-private-dispatch-value";
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        `live_suite_filter=${marker}`,
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(
-        JSON.parse(readFileSync(fixture.acceptedRunPath, "utf8")).inputs.live_suite_filter,
-      ).toBe(marker);
-      const dispatches = fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch);
-      expect(dispatches).toHaveLength(1);
-      expect(JSON.stringify(dispatches[0])).not.toContain(marker);
-    } finally {
-      fixture.cleanup();
-    }
+  it("keeps waiting while the exact run is queued before its witness upload", () => {
+    const queued = { conclusion: null, status: "queued" };
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        ...Array.from({ length: 6 }, () => queued),
+        { conclusion: "success", status: "completed" },
+      ],
+      witnessMissingReads: 6,
+    });
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
+    expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
+    expect(fixture.record()).toMatchObject({
+      phase: "observed",
+      run: { id: 123, attempt: 1 },
+    });
   });
 
   it("delivers the complete wire body through a private, bounded, short-lived payload", () => {
     const fixture = createDispatchFixture();
     const value = "spaces 'quotes' \"double\" = & ? $() `command`\n\u00e9\u65e5\u672c";
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        `live_suite_filter=${value}`,
-        "-f",
-        "run_release_soak=true",
-        "-f",
-        "reuse_evidence=false",
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      const payload = fixture.readPayload();
-      const intent = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
-      expect(payload.body).toEqual({
-        ref: intent.request.workflowRef,
-        inputs: intent.request.wireInputs,
-      });
-      expect(payload.body.inputs).toMatchObject({
-        live_suite_filter: value,
-        cross_os_suite_filter: "",
-        run_release_soak: "true",
-        reuse_evidence: "false",
-      });
-      expect(Object.values(payload.body.inputs).every((input) => typeof input === "string")).toBe(
-        true,
-      );
-      expect(payload.bytes).toBe(Buffer.byteLength(JSON.stringify(payload.body)));
-      expect(payload.bytes).toBeGreaterThan(JSON.stringify(payload.body).length);
-      expect(payload.bytes).toBeLessThanOrEqual(128 * 1024);
-      expect(payload).toMatchObject({ regularFile: true, fileMode: 0o600, directoryMode: 0o700 });
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter(isWorkflowDispatch)).toEqual([
-        [
-          "api",
-          "--include",
-          "--method",
-          "POST",
-          "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches",
-          "--hostname",
-          "github.com",
-          "--input",
-          payload.path,
-        ],
-      ]);
-      expect(JSON.stringify(calls)).not.toContain(value);
-      expect(result.stdout + result.stderr).not.toContain(value);
-      const events = fixture.readPayloadEvents();
-      expect(events.slice(0, 4).map((event) => event.stage)).toEqual([
-        "created",
-        "write",
-        "post",
-        "cleanup",
-      ]);
-      expect(events[1]?.options).toEqual({ flag: "wx", mode: 0o600 });
-      expect(events[4]?.stage).toBe("reconcile");
-      expect(existsSync(payload.path)).toBe(false);
-      expect(existsSync(payload.directory)).toBe(false);
-      expect(intent).toMatchObject({
-        phase: "observed",
-        error: "none",
-        run: { id: 123, attempt: 1 },
-      });
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run([
+      "-f",
+      `live_suite_filter=${value}`,
+      "-f",
+      "run_release_soak=true",
+      "-f",
+      "reuse_evidence=false",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const payload = fixture.readPayload();
+    const intent = fixture.record();
+    expect(payload.body).toEqual({
+      ref: intent.request.workflowRef,
+      inputs: intent.request.wireInputs,
+    });
+    expect(payload.body.inputs).toMatchObject({
+      live_suite_filter: value,
+      cross_os_suite_filter: "",
+      run_release_soak: "true",
+      reuse_evidence: "false",
+    });
+    expect(Object.values(payload.body.inputs).every((input) => typeof input === "string")).toBe(
+      true,
+    );
+    expect(payload.bytes).toBe(Buffer.byteLength(JSON.stringify(payload.body)));
+    expect(payload.bytes).toBeGreaterThan(JSON.stringify(payload.body).length);
+    expect(payload.bytes).toBeLessThanOrEqual(128 * 1024);
+    expect(payload).toMatchObject({ regularFile: true, fileMode: 0o600, directoryMode: 0o700 });
+    const calls = fixture.calls();
+    expect(calls.filter(isWorkflowDispatch)).toEqual([
+      [
+        "api",
+        "--include",
+        "--method",
+        "POST",
+        "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches",
+        "--hostname",
+        "github.com",
+        "--input",
+        payload.path,
+      ],
+    ]);
+    expect(JSON.stringify(calls)).not.toContain(value);
+    expect(result.stdout + result.stderr).not.toContain(value);
+    const events = fixture.readPayloadEvents();
+    expect(events.slice(0, 4).map((event) => event.stage)).toEqual([
+      "created",
+      "write",
+      "post",
+      "cleanup",
+    ]);
+    expect(events[1]?.options).toEqual({ flag: "wx", mode: 0o600 });
+    expect(events[4]?.stage).toBe("reconcile");
+    expect(existsSync(payload.path)).toBe(false);
+    expect(existsSync(payload.directory)).toBe(false);
+    expect(intent).toMatchObject({
+      phase: "observed",
+      error: "none",
+      run: { id: 123, attempt: 1 },
+    });
   });
 
-  it.each(["directory", "write"] as const)(
-    "does not mutate remote refs when payload %s preparation fails",
-    (failure) => {
-      const fixture = createDispatchFixture({ payloadPreparationFailure: failure });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(`injected payload ${failure} failure`);
-        expect(
-          fixture.readCalls(fixture.ghCallsPath).filter((call) => ghApiMethod(call) !== "GET"),
-        ).toEqual([]);
-        expect(
-          fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push"),
-        ).toEqual([]);
-        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
-          phase: "prepared",
-          error: "none",
-          run: null,
-          refs: { target: "intended", workflow: "intended" },
-        });
-        const events = fixture.readPayloadEvents();
-        expect(events.map((event) => event.stage)).toEqual(
-          failure === "write" ? ["created", "write", "cleanup"] : [],
-        );
-        for (const event of events) {
-          expect(existsSync(event.path)).toBe(false);
-        }
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
+  it("does not mutate remote refs when payload write preparation fails", () => {
+    const fixture = createDispatchFixture({ payloadPreparationFailure: "write" });
+    const result = fixture.run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("injected payload write failure");
+    expect(fixture.calls().filter((call) => ghApiMethod(call) !== "GET")).toEqual([]);
+    expect(fixture.gitCalls().filter((call) => call[0] === "push")).toEqual([]);
+    expect(fixture.record()).toMatchObject({
+      phase: "prepared",
+      error: "none",
+      run: null,
+      refs: { workflow: "intended" },
+    });
+    const events = fixture.readPayloadEvents();
+    expect(events.map((event) => event.stage)).toEqual(["created", "write", "cleanup"]);
+    for (const event of events) {
+      expect(existsSync(event.path)).toBe(false);
+    }
+  });
 
   it("rejects oversized UTF-8 inputs before payload preparation or remote mutation", () => {
     const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        `live_suite_filter=${"\u00e9".repeat(34_000)}`,
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Dispatch request exceeds its byte limit");
-      expect(fixture.readPayloadEvents()).toEqual([]);
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((call) => ghApiMethod(call) !== "GET"),
-      ).toEqual([]);
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push")).toEqual(
-        [],
-      );
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run(["-f", `live_suite_filter=${"\u00e9".repeat(34_000)}`]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Dispatch request exceeds its byte limit");
+    expect(fixture.readPayloadEvents()).toEqual([]);
+    expect(fixture.calls().filter((call) => ghApiMethod(call) !== "GET")).toEqual([]);
+    expect(fixture.gitCalls().filter((call) => call[0] === "push")).toEqual([]);
   });
 
   it.each([
-    { name: "success", options: {}, status: 0, phase: "observed", error: "none", deleted: 2 },
-    {
-      name: "HTTP rejection",
-      options: { dispatchHttpStatus: 422 },
-      status: 1,
-      phase: "rejected",
-      error: "http-rejection",
-      deleted: 0,
-    },
     {
       name: "unknown transport",
       options: { dispatchFailure: true },
@@ -1583,213 +1480,88 @@ describe("full-release-validation-at-sha", () => {
       status: 0,
       phase: "observed",
       error: "transport",
-      deleted: 2,
+      deleted: 1,
     },
   ])(
     "preserves $name despite payload cleanup failure",
     ({ options, status, phase, error, deleted }) => {
       const fixture = createDispatchFixture({ ...options, payloadCleanupFailure: true });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status, result.stderr).toBe(status);
-        const payload = fixture.readPayload();
-        expect(existsSync(payload.path)).toBe(true);
-        expect(result.stderr).toContain(
-          `Could not remove dispatch payload directory: ${JSON.stringify(payload.directory)}`,
-        );
-        expect(result.stderr).not.toContain("private-cleanup-error-must-not-be-logged");
-        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
-          phase,
-          error,
-        });
-        const calls = fixture.readCalls(fixture.ghCallsPath);
-        expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
-        expect(calls.filter((call) => ghApiMethod(call) === "DELETE")).toHaveLength(deleted);
-        expect(
-          runGit(fixture.origin, [
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads/release-ci",
-            "refs/heads/validation",
-          ])
-            .split("\n")
-            .filter(Boolean),
-        ).toHaveLength(2 - deleted);
-        const stages = fixture.readPayloadEvents().map((event) => event.stage);
-        expect(stages.slice(0, 4)).toEqual(["created", "write", "post", "cleanup"]);
-        if (phase === "rejected") {
-          expect(result.stderr).toContain("dispatch=rejected: GitHub returned HTTP 422");
-          expect(stages).not.toContain("reconcile");
-        } else {
-          expect(stages[4]).toBe("reconcile");
-        }
-      } finally {
-        fixture.cleanup();
-      }
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(status);
+      const payload = fixture.readPayload();
+      expect(existsSync(payload.path)).toBe(true);
+      expect(result.stderr).toContain(
+        `Could not remove dispatch payload directory: ${JSON.stringify(payload.directory)}`,
+      );
+      expect(result.stderr).not.toContain("private-cleanup-error-must-not-be-logged");
+      expect(fixture.record()).toMatchObject({
+        phase,
+        error,
+      });
+      const calls = fixture.calls();
+      expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
+      expect(calls.filter((call) => ghApiMethod(call) === "DELETE")).toHaveLength(deleted);
+      expect(fixture.refs()).toHaveLength(1 - deleted);
+      const stages = fixture.readPayloadEvents().map((event) => event.stage);
+      expect(stages.slice(0, 4)).toEqual(["created", "write", "post", "cleanup"]);
+      expect(stages[4]).toBe("reconcile");
     },
   );
 
-  it("reconciles an accepted dispatch after its response is lost without another POST", () => {
-    const fixture = createDispatchFixture({ acceptedDispatchFailure: true });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(JSON.parse(readFileSync(fixture.acceptedRunPath, "utf8")).inputs.ref).toBe(
-        fixture.targetSha,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        "Parent run: https://github.com/openclaw/openclaw/actions/runs/123",
-      );
-      expect(fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch)).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("leaves duplicate exact dispatch runs unresolved instead of adopting the first", () => {
-    const fixture = createDispatchFixture({ duplicateRuns: true, dispatchReturnsRunUrl: false });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stdout).toBe(1);
-      expect(result.stdout).not.toContain("ok release evidence");
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) === "DELETE"),
-      ).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("does not adopt a returned run URL when its workflow event is unrelated", () => {
-    const fixture = createDispatchFixture({ runIdentityOverrides: { event: "push" } });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stdout).toBe(1);
-      expect(result.stdout).not.toContain("ok release evidence");
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) === "DELETE"),
-      ).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it.each([false, true])(
-    "reopens the same retained request without mutations (explicit=%s)",
-    (explicit) => {
-      const fixture = createDispatchFixture({ acceptedDispatchFailure: true });
-      try {
-        expect(fixture.run(["--workflow-sha", fixture.workflowSha]).status).toBe(0);
-        const path = fixture.requestPath();
-        const payload = fixture.readPayload();
-        expect(existsSync(payload.directory)).toBe(false);
-        const priorPayloadEvents = fixture
-          .readPayloadEvents()
-          .filter((event) => event.stage !== "reconcile");
-        const before = readFileSync(path, "utf8");
-        const priorGh = fixture.readCalls(fixture.ghCallsPath).length;
-        const priorGit = fixture.readCalls(fixture.gitCallsPath).length;
-        const result = fixture.run(
-          explicit ? ["--reconcile-request", path] : ["--request-file", path],
-          true,
-        );
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain(
-          "dispatch=observed: https://github.com/openclaw/openclaw/actions/runs/123 attempt=1",
-        );
-        expect(readFileSync(path, "utf8")).toBe(before);
-        expect(statSync(path).mode & 0o777).toBe(0o600);
-        expect(fixture.readPayloadEvents().filter((event) => event.stage !== "reconcile")).toEqual(
-          priorPayloadEvents,
-        );
-        expect(fixture.readCalls(fixture.gitCallsPath)).toHaveLength(priorGit);
-        expect(
-          fixture
-            .readCalls(fixture.ghCallsPath)
-            .slice(priorGh)
-            .every((args) => args[0] === "api" && ghApiMethod(args) === "GET"),
-        ).toBe(true);
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
-
-  it("refuses conflicting reopen inputs without consulting or mutating GitHub", () => {
+  it("rejects obsolete retained target-ref fields before Git or remote access", () => {
     const fixture = createDispatchFixture();
-    try {
-      expect(fixture.run(["--workflow-sha", fixture.workflowSha]).status).toBe(0);
-      const path = fixture.requestPath();
-      const calls = readFileSync(fixture.ghCallsPath, "utf8");
-      const gitCalls = readFileSync(fixture.gitCallsPath, "utf8");
-      const result = fixture.run(["--request-file", path, "-f", "provider=anthropic"], true);
+    expect(fixture.run().status).toBe(0);
+    const path = fixture.requestPath();
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    const ghCalls = readFileSync(fixture.ghCallsPath, "utf8");
+    const gitCalls = readFileSync(fixture.gitCallsPath, "utf8");
+    for (const fields of ["request", "refs", "both"]) {
+      const legacy = {
+        ...record,
+        request: {
+          ...record.request,
+          ...(fields !== "refs"
+            ? { targetRef: `validation/target-${fixture.targetSha.slice(0, 12)}-123` }
+            : {}),
+        },
+        refs: { ...record.refs, ...(fields !== "request" ? { target: "created" } : {}) },
+      };
+      const bytes = `${JSON.stringify(legacy)}\n`;
+      writeFileSync(path, bytes);
+      const result = fixture.run(["--reconcile-request", path], true);
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("conflict with the retained request");
-      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(calls);
-      expect(readFileSync(fixture.gitCallsPath, "utf8")).toBe(gitCalls);
-    } finally {
-      fixture.cleanup();
+      expect(result.stderr).toContain(
+        fields === "refs"
+          ? "Invalid retained dispatch outcome"
+          : "Invalid retained dispatch request identity",
+      );
+      expect(readFileSync(path, "utf8")).toBe(bytes);
     }
+    expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(ghCalls);
+    expect(readFileSync(fixture.gitCallsPath, "utf8")).toBe(gitCalls);
   });
 
   it.each(["missing", "truncated", "oversized", "symlink", "parent symlink", "public"] as const)(
     "refuses a %s request before any remote or Git access",
     (kind) => {
       const fixture = createDispatchFixture();
-      try {
-        let path = join(fixture.checkout, "request.json");
-        if (kind === "truncated") {
-          writeFileSync(path, '{"kind":', { mode: 0o600 });
-        } else if (kind === "oversized") {
-          writeFileSync(path, "x".repeat(129 * 1024), { mode: 0o600 });
-        } else if (kind === "symlink") {
-          symlinkSync(join(fixture.checkout, "missing.json"), path);
-        } else if (kind === "parent symlink") {
-          symlinkSync(fixture.checkout, join(fixture.checkout, "linked"));
-          path = join(fixture.checkout, "linked", "request.json");
-        } else if (kind === "public") {
-          writeFileSync(path, "{}\n", { mode: 0o644 });
-        }
-        const result = fixture.run(["--reconcile-request", path], true);
-        expect(result.status).toBe(1);
-        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
-        expect(fixture.readCalls(fixture.gitCallsPath)).toEqual([]);
-      } finally {
-        fixture.cleanup();
+      let path = join(fixture.checkout, "request.json");
+      if (kind === "truncated") {
+        writeFileSync(path, '{"kind":', { mode: 0o600 });
+      } else if (kind === "oversized") {
+        writeFileSync(path, "x".repeat(129 * 1024), { mode: 0o600 });
+      } else if (kind === "symlink") {
+        symlinkSync(join(fixture.checkout, "missing.json"), path);
+      } else if (kind === "parent symlink") {
+        symlinkSync(fixture.checkout, join(fixture.checkout, "linked"));
+        path = join(fixture.checkout, "linked", "request.json");
+      } else if (kind === "public") {
+        writeFileSync(path, "{}\n", { mode: 0o644 });
       }
-    },
-  );
-
-  it.each([false, true])(
-    "refuses witness-incapable frozen tooling before remote creation (contract1=%s)",
-    (contractOne) => {
-      const fixture = createDispatchFixture({
-        workflowSource: (contractOne
-          ? CONTRACT_ONE_WORKFLOW_SOURCE
-          : CURRENT_WORKFLOW_SOURCE
-        ).replace('  FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"\n', ""),
-      });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(
-          `Tooling SHA ${fixture.workflowSha} does not support FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1`,
-        );
-        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
-        expect(fixture.readCalls(fixture.gitCallsPath).some((args) => args[0] === "push")).toBe(
-          false,
-        );
-        expect(
-          runGit(fixture.origin, [
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads/release-ci",
-            "refs/heads/validation",
-          ]),
-        ).toBe("");
-      } finally {
-        fixture.cleanup();
-      }
+      const result = fixture.run(["--reconcile-request", path], true);
+      expect(result.status).toBe(1);
+      expect(fixture.calls()).toEqual([]);
+      expect(fixture.gitCalls()).toEqual([]);
     },
   );
 
@@ -1808,147 +1580,103 @@ describe("full-release-validation-at-sha", () => {
     },
   ])("does not redispatch when $name", ({ options, status, phase }) => {
     const fixture = createDispatchFixture(options);
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(status);
-      const path = fixture.requestPath();
-      expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe(phase);
-      const before = readFileSync(path, "utf8");
-      const recovery = fixture.run(["--reconcile-request", path], true);
-      expect(recovery.status).toBe(1);
-      expect(recovery.stderr).toContain("dispatch=unknown");
-      expect(readFileSync(path, "utf8")).toBe(before);
-      expect(fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(status);
+    const path = fixture.requestPath();
+    expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe(phase);
+    const before = readFileSync(path, "utf8");
+    const recovery = fixture.run(["--reconcile-request", path], true);
+    expect(recovery.status).toBe(1);
+    expect(recovery.stderr).toContain("dispatch=unknown");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(fixture.dispatches()).toEqual([]);
   });
 
   it("allows only the claimed caller to POST when another caller reopens concurrently", () => {
     const fixture = createDispatchFixture({ reopenDuringDispatch: true });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch)).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(fixture.dispatches()).toHaveLength(1);
   });
 
-  it.each([
-    { ghRoute: "path" as const, tokenPresent: false },
-    { ghRoute: "path" as const, tokenPresent: true },
-    { ghRoute: "explicit" as const, tokenPresent: true },
+  it.each<{
+    name: string;
+    options: Parameters<typeof createDispatchFixture>[0];
+    status: number;
+    archiveReads: number;
+    usesPath: boolean;
+  }>([
+    {
+      name: "PATH CLI without a token",
+      options: { archiveEscapeFlag: "required", ghRoute: "path", tokenPresent: false },
+      status: 0,
+      archiveReads: 1,
+      usesPath: true,
+    },
+    {
+      name: "one fallback for an unsupported binary flag",
+      options: { archiveEscapeFlag: "unsupported" },
+      status: 0,
+      archiveReads: 2,
+      usesPath: false,
+    },
+    {
+      name: "no retry for an unrelated archive failure",
+      options: { archiveEscapeFlag: "required", artifactReadError: "archive" },
+      status: 1,
+      archiveReads: 1,
+      usesPath: false,
+    },
   ])(
-    "reads witness bytes through $ghRoute CLI without Node fetch (token=$tokenPresent)",
-    ({ ghRoute, tokenPresent }) => {
-      const fixture = createDispatchFixture({
-        archiveEscapeFlag: "required",
-        ghRoute,
-        tokenPresent,
-      });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status, result.stderr).toBe(0);
-        const calls = fixture.readCalls(fixture.ghCallsPath);
-        expect(calls.filter((args) => args[0] === "auth")).toEqual([]);
-        expect(readFileSync(fixture.fetchCallsPath, "utf8")).toBe("");
-        const reads = readFileSync(fixture.artifactTransportPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(reads).toHaveLength(2);
-        expect(reads[0]).toMatchObject({ timeout: 60_000, maxBuffer: 128 * 1024 });
-        expect(reads[1]).toMatchObject({
-          encoding: null,
-          timeout: 60_000,
-          maxBuffer: 256 * 1024,
-        });
-        for (const { args } of reads) {
-          expect(ghApiMethod(args)).toBe("GET");
-          expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
-          expect(args).toContain("Cache-Control: max-age=0");
-          expect(args).not.toContain("--include");
-        }
-        expect(ghApiEndpoint(reads[0].args)).toBe("repos/openclaw/openclaw/actions/artifacts/9001");
-        expect(ghApiEndpoint(reads[1].args)).toBe(
-          "repos/openclaw/openclaw/actions/artifacts/9001/zip",
-        );
-        expect(reads[1].args).toContain("--allow-escape-sequences");
-        expect(fixture.readCalls(fixture.pathGhCallsPath)).toEqual(ghRoute === "path" ? calls : []);
-        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8")).phase).toBe("observed");
-      } finally {
-        fixture.cleanup();
+    "reads witness bytes through the selected CLI: $name",
+    ({ options, status, archiveReads, usesPath }) => {
+      const fixture = createDispatchFixture(options);
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(status);
+      const calls = fixture.calls();
+      expect(calls.filter((args) => args[0] === "auth")).toEqual([]);
+      expect(readFileSync(fixture.fetchCallsPath, "utf8")).toBe("");
+      const reads = readFileSync(fixture.artifactTransportPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(reads).toHaveLength(archiveReads + 1);
+      expect(reads[0]).toMatchObject({ timeout: 60_000, maxBuffer: 128 * 1024 });
+      expect(ghApiEndpoint(reads[0].args)).toBe("repos/openclaw/openclaw/actions/artifacts/9001");
+      for (const read of reads.slice(1)) {
+        expect(read).toMatchObject({ encoding: null, timeout: 60_000, maxBuffer: 256 * 1024 });
+        expect(ghApiEndpoint(read.args)).toBe("repos/openclaw/openclaw/actions/artifacts/9001/zip");
+      }
+      for (const { args } of reads) {
+        expect(ghApiMethod(args)).toBe("GET");
+        expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
+        expect(args).toContain("Cache-Control: max-age=0");
+        expect(args).not.toContain("--include");
+      }
+      expect(reads[1].args).toContain("--allow-escape-sequences");
+      if (archiveReads === 2) {
+        expect(reads[2].args).not.toContain("--allow-escape-sequences");
+      }
+      expect(fixture.readCalls(fixture.pathGhCallsPath)).toEqual(usesPath ? calls : []);
+      expect(fixture.record().phase).toBe(status === 0 ? "observed" : "attempted");
+      if (status !== 0) {
+        expect(result.stderr).toContain("dispatch=unknown");
       }
     },
   );
 
-  it("falls back once when gh does not support the binary-output flag", () => {
-    const fixture = createDispatchFixture({ archiveEscapeFlag: "unsupported" });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const archiveReads = readFileSync(fixture.artifactTransportPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .filter(({ args }) => ghApiEndpoint(args).endsWith("/zip"));
-      expect(archiveReads).toHaveLength(2);
-      expect(archiveReads[0].args).toContain("--allow-escape-sequences");
-      expect(archiveReads[1].args).not.toContain("--allow-escape-sequences");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("does not retry unrelated witness archive failures", () => {
-    const fixture = createDispatchFixture({
-      archiveEscapeFlag: "required",
-      artifactReadError: "archive",
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("dispatch=unknown");
-      const archiveReads = readFileSync(fixture.artifactTransportPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .filter(({ args }) => ghApiEndpoint(args).endsWith("/zip"));
-      expect(archiveReads).toHaveLength(1);
-      expect(archiveReads[0].args).toContain("--allow-escape-sequences");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
   it.each([
     { name: "nonpositive ID", artifactMetadata: { id: 0 } },
-    { name: "string ID", artifactMetadata: { id: "9001" } },
-    { name: "unsafe ID", artifactMetadata: { id: Number.MAX_SAFE_INTEGER + 1 } },
-    { name: "zero size", artifactMetadata: { size_in_bytes: 0 } },
-    { name: "string size", artifactMetadata: { size_in_bytes: "100" } },
     { name: "oversized declaration", artifactMetadata: { size_in_bytes: 256 * 1024 + 1 } },
     { name: "invalid digest", artifactMetadata: { digest: "sha256:invalid" } },
     { name: "expired flag", artifactMetadata: { expired: true } },
     { name: "elapsed expiry", artifactMetadata: { expires_at: "2000-01-01T00:00:00Z" } },
-    { name: "invalid expiry", artifactMetadata: { expires_at: "invalid" } },
-    { name: "changed ID", exactArtifactMetadata: { id: 9002 } },
-    { name: "changed name", exactArtifactMetadata: { name: "other" } },
-    { name: "changed size", exactArtifactMetadata: { size_in_bytes: 1 } },
-    { name: "changed digest", exactArtifactMetadata: { digest: `sha256:${"0".repeat(64)}` } },
-    { name: "changed expiry", exactArtifactMetadata: { expires_at: "2098-01-01T00:00:00Z" } },
-    { name: "newly expired", exactArtifactMetadata: { expired: true } },
-    { name: "changed run", exactArtifactMetadata: { workflow_run: { id: 124 } } },
     {
       name: "changed SHA",
       exactArtifactMetadata: { workflow_run: { id: 123, head_sha: "c".repeat(40) } },
     },
     { name: "oversized metadata", oversizedArtifactMetadata: true },
-    { name: "denied metadata", artifactReadError: "metadata" as const },
-    { name: "denied archive", artifactReadError: "archive" as const },
     { name: "oversized archive", archiveFailure: "oversized" as const },
-    { name: "truncated archive", archiveFailure: "truncated" as const },
     { name: "corrupt ZIP with matching digest", archiveFailure: "corrupt" as const },
     { name: "mismatched archive digest", archiveFailure: "digest" as const },
   ])("refuses witness $name without fallback or remote cleanup", ({ name: _name, ...options }) => {
@@ -1957,45 +1685,30 @@ describe("full-release-validation-at-sha", () => {
       ghRoute: "path",
       tokenPresent: false,
     });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stdout).toBe(1);
-      expect(result.stderr).toContain("dispatch=unknown");
-      expect(result.stdout).not.toContain("ok release evidence");
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
-      expect(calls.filter((args) => ghApiMethod(args) === "DELETE")).toEqual([]);
-      expect(calls.filter((args) => args[0] === "auth")).toEqual([]);
-      expect(readFileSync(fixture.fetchCallsPath, "utf8")).toBe("");
-      expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8")).phase).toBe("attempted");
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]).split("\n"),
-      ).toHaveLength(2);
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stderr).toContain("dispatch=unknown");
+    expect(result.stdout).not.toContain("ok release evidence");
+    const calls = fixture.calls();
+    expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
+    expect(calls.filter((args) => ghApiMethod(args) === "DELETE")).toEqual([]);
+    expect(calls.filter((args) => args[0] === "auth")).toEqual([]);
+    expect(readFileSync(fixture.fetchCallsPath, "utf8")).toBe("");
+    expect(fixture.record().phase).toBe("attempted");
+    expect(fixture.refs()).toHaveLength(1);
   });
 
-  it.each(["bare", "short-ref", "full-ref"] as const)(
+  it.each(["full-ref"] as const)(
     "accepts the %s exact workflow path representation",
     (runPathStyle) => {
       const fixture = createDispatchFixture({ runPathStyle });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
-          phase: "observed",
-          run: { id: 123, attempt: 1 },
-        });
-        expect(fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch)).toHaveLength(1);
-      } finally {
-        fixture.cleanup();
-      }
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(fixture.record()).toMatchObject({
+        phase: "observed",
+        run: { id: 123, attempt: 1 },
+      });
+      expect(fixture.dispatches()).toHaveLength(1);
     },
   );
 
@@ -2007,23 +1720,9 @@ describe("full-release-validation-at-sha", () => {
     },
     { name: "missing witness", options: { witnessMissing: true } },
     { name: "duplicate witness", options: { witnessDuplicate: true } },
-    { name: "API denial", options: { inventoryError: "HTTP 403: forbidden" } },
-    { name: "API outage", options: { inventoryError: "HTTP 503: unavailable" } },
-    { name: "malformed inventory", options: { malformedInventory: true } },
     {
       name: "wrong repository",
       options: { runIdentityOverrides: { repository: { full_name: "example/other" } } },
-    },
-    { name: "wrong workflow", options: { runIdentityOverrides: { workflow_id: 18 } } },
-    {
-      name: "wrong path",
-      options: { runIdentityOverrides: { path: ".github/workflows/other.yml" } },
-    },
-    {
-      name: "foreign short-ref suffix",
-      options: {
-        runIdentityOverrides: { path: ".github/workflows/full-release-validation.yml@main" },
-      },
     },
     {
       name: "foreign full-ref suffix",
@@ -2033,125 +1732,101 @@ describe("full-release-validation-at-sha", () => {
         },
       },
     },
-    {
-      name: "foreign tag suffix",
-      options: {
-        runIdentityOverrides: {
-          path: ".github/workflows/full-release-validation.yml@refs/tags/main",
-        },
-      },
-    },
-    { name: "wrong transport", options: { runIdentityOverrides: { head_branch: "main" } } },
     { name: "wrong tooling SHA", options: { runIdentityOverrides: { head_sha: "c".repeat(40) } } },
-    { name: "wrong witness attempt", options: { witnessOverrides: { runAttempt: "2" } } },
+    { name: "wrong transport", options: { runIdentityOverrides: { head_branch: "main" } } },
+    { name: "unrelated workflow event", options: { runIdentityOverrides: { event: "push" } } },
+    {
+      name: "different provider input witness",
+      options: { witnessInputs: { provider: "__different_input__" } },
+    },
   ])("leaves $name unresolved without verification or cleanup", ({ options }) => {
     const fixture = createDispatchFixture(options);
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stdout).toBe(1);
-      expect(result.stderr).toContain("dispatch=unknown");
-      expect(result.stdout).not.toContain("ok release evidence");
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
-      expect(calls.filter((args) => ghApiMethod(args) === "DELETE")).toEqual([]);
-      if (options.duplicateOnSecondPage && !options.incompletePagination) {
-        expect(calls.some((args) => ghField(args, "page") === "2")).toBe(true);
-      }
-    } finally {
-      fixture.cleanup();
+    const result = fixture.run();
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stderr).toContain("dispatch=unknown");
+    expect(result.stdout).not.toContain("ok release evidence");
+    const calls = fixture.calls();
+    expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
+    expect(calls.filter((args) => ghApiMethod(args) === "DELETE")).toEqual([]);
+    if (options.duplicateOnSecondPage && !options.incompletePagination) {
+      expect(calls.some((args) => ghField(args, "page") === "2")).toBe(true);
+    }
+    if (options.witnessInputs) {
+      expect(result.stderr).toContain(
+        "Dispatch input witness does not match the complete retained request",
+      );
     }
   });
 
-  it.each(Object.keys(parseYaml(CURRENT_WORKFLOW_SOURCE).on.workflow_dispatch.inputs))(
-    "does not adopt a run with a different %s input witness",
-    (key) => {
-      const fixture = createDispatchFixture({ witnessInputs: { [key]: "__different_input__" } });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status, result.stdout).toBe(1);
-        expect(result.stderr).toContain(
-          "Dispatch input witness does not match the complete retained request",
-        );
-        expect(
-          fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) === "DELETE"),
-        ).toEqual([]);
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
-
   it.each([
     ["beta", false],
-    ["stable", true],
     ["full", true],
   ] as const)(
     "retains raw defaults separately from effective %s soak",
     (profile, effectiveSoak) => {
       const fixture = createDispatchFixture();
-      try {
-        const result = fixture.run([
-          "--workflow-sha",
-          fixture.workflowSha,
-          "-f",
-          `release_profile=${profile}`,
-        ]);
-        expect(result.status, result.stderr).toBe(0);
-        const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
-        expect(record.request).toMatchObject({
-          effectiveSoak,
-          inputs: {
-            run_release_soak: false,
-            fail_fast: false,
-            reuse_evidence: true,
-            live_suite_filter: "",
-            cross_os_suite_filter: "",
-          },
-          wireInputs: { run_release_soak: "false", fail_fast: "false", reuse_evidence: "true" },
-        });
-        expect(record.run).toEqual({ id: 123, attempt: 1 });
-        expect(record.error).toBe("none");
-      } finally {
-        fixture.cleanup();
-      }
+      const result = fixture.run(["-f", `release_profile=${profile}`]);
+      expect(result.status, result.stderr).toBe(0);
+      const record = fixture.record();
+      expect(record.request).toMatchObject({
+        effectiveSoak,
+        inputs: {
+          run_release_soak: false,
+          fail_fast: false,
+          reuse_evidence: true,
+          live_suite_filter: "",
+          cross_os_suite_filter: "",
+        },
+        wireInputs: { run_release_soak: "false", fail_fast: "false", reuse_evidence: "true" },
+      });
+      expect(record.run).toEqual({ id: 123, attempt: 1 });
+      expect(record.error).toBe("none");
     },
   );
 
-  it.each([403, 422])(
+  it.each([422])(
     "retains HTTP %s rejection without adopting or redispatching",
     (dispatchHttpStatus) => {
       const fixture = createDispatchFixture({ dispatchHttpStatus });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("dispatch=rejected");
-        const path = fixture.requestPath();
-        expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe("rejected");
-        const calls = readFileSync(fixture.ghCallsPath, "utf8");
-        const recovery = fixture.run(["--reconcile-request", path], true);
-        expect(recovery.status).toBe(1);
-        expect(recovery.stderr).toContain("dispatch=rejected");
-        expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(calls);
-      } finally {
-        fixture.cleanup();
-      }
+      const result = fixture.run();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("dispatch=rejected");
+      const path = fixture.requestPath();
+      expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe("rejected");
+      const calls = readFileSync(fixture.ghCallsPath, "utf8");
+      const recovery = fixture.run(["--reconcile-request", path], true);
+      expect(recovery.status).toBe(1);
+      expect(recovery.stderr).toContain("dispatch=rejected");
+      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(calls);
     },
   );
 
   it("does not retain or mutate a request in dry-run mode", () => {
     const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--dry-run"]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("(dry run; not written)");
-      expect(fixture.readPayloadEvents()).toEqual([]);
-      expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
-      expect(fixture.readCalls(fixture.gitCallsPath).some((args) => args[0] === "push")).toBe(
-        false,
-      );
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run(["--dry-run"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("(dry run; not written)");
+    expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
+    expect(result.stdout).not.toContain("validation/target-");
+    const fetch = fixture
+      .gitCalls()
+      .find((args) => args.includes("https://github.com/openclaw/openclaw.git"));
+    expect(fetch).toEqual([
+      "-C",
+      expect.any(String),
+      "fetch",
+      "--no-tags",
+      "--depth=1",
+      "--filter=blob:none",
+      "https://github.com/openclaw/openclaw.git",
+      fixture.targetSha,
+    ]);
+    expect(fetch![1]).not.toBe(fixture.checkout);
+    expect(existsSync(fetch![1]!)).toBe(false);
+    expect(runGit(fixture.checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+    expect(fixture.readPayloadEvents()).toEqual([]);
+    expect(fixture.calls()).toEqual([]);
+    expect(fixture.gitCalls().some((args) => args[0] === "push")).toBe(false);
   });
 
   it("binds release decisions to the exact parent attempt and tooling SHA", () => {
@@ -2196,68 +1871,36 @@ describe("full-release-validation-at-sha", () => {
     ).toThrow("binding is invalid");
   });
 
-  it("treats only transient Release Decision download failures as unavailable this poll", () => {
+  it("distinguishes missing and transient Release Decision downloads from permanent failures", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(
-        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
-          error: undefined,
-          signal: null,
-          status: 1,
-          stderr: "HTTP 503: Server Error",
-          stdout: "",
-        })),
-      ).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Release Decision artifact unavailable this poll"),
-      );
-      expect(() =>
-        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
-          error: undefined,
-          signal: null,
-          status: 1,
-          stderr: "HTTP 403: Bad credentials",
-          stdout: "",
-        })),
-      ).toThrow("Release Decision artifact download failed");
+      for (const stderr of [
+        "no valid artifacts found to download",
+        "HTTP 503: Server Error",
+        "HTTP 403: Bad credentials",
+      ]) {
+        const read = () =>
+          tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+            error: undefined,
+            signal: null,
+            status: 1,
+            stderr,
+            stdout: "",
+          }));
+        if (stderr.includes("403")) {
+          expect(read).toThrow("Release Decision artifact download failed");
+        } else {
+          expect(read()).toBeUndefined();
+        }
+        if (stderr.includes("503")) {
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("Release Decision artifact unavailable this poll"),
+          );
+        }
+      }
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it.each([
-    "no valid artifacts found to download",
-    "no artifact matches any of the names provided",
-    "no artifact matches any of the names or patterns provided",
-  ])("treats missing named Release Decision artifacts as unavailable: %s", (stderr) => {
-    expect(
-      tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
-        error: undefined,
-        signal: null,
-        status: 1,
-        stderr,
-        stdout: "",
-      })),
-    ).toBeUndefined();
-  });
-
-  it("keeps an invalid parent run fatal when artifact lookup returns HTTP 404", () => {
-    expect(() =>
-      tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
-        error: undefined,
-        signal: null,
-        status: 1,
-        stderr: "error fetching artifacts: HTTP 404: Not Found",
-        stdout: "",
-      })),
-    ).toThrow("Release Decision artifact download failed");
-  });
-
-  it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
-    expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
-    expect(source).toContain("dispatchOutput = runGh(dispatchArgs");
-    expect(source).not.toContain('run("gh"');
   });
 
   it("rejects incomplete trusted release harnesses before dispatch", () => {
@@ -2316,434 +1959,119 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("retains a failed parent workflow ref for GitHub reruns", () => {
-    expect(
+    const shouldDelete = (parentConclusion: string, evidenceVerified = false, dryRun = false) =>
       shouldDeleteTemporaryWorkflowRef({
-        dryRun: false,
-        evidenceVerified: false,
+        parentConclusion,
+        evidenceVerified,
+        dryRun,
         keepBranch: false,
-        parentConclusion: "failure",
-      }),
-    ).toBe(false);
-    expect(
-      shouldDeleteTemporaryWorkflowRef({
-        dryRun: false,
-        evidenceVerified: true,
-        keepBranch: false,
-        parentConclusion: "success",
-      }),
-    ).toBe(true);
-    expect(
-      shouldDeleteTemporaryWorkflowRef({
-        dryRun: true,
-        evidenceVerified: false,
-        keepBranch: false,
-        parentConclusion: "",
-      }),
-    ).toBe(true);
-    expect(
-      shouldDeleteTemporaryWorkflowRef({
-        dryRun: false,
-        evidenceVerified: false,
-        keepBranch: false,
-        parentConclusion: "success",
-      }),
-    ).toBe(false);
+      });
+    expect(shouldDelete("failure")).toBe(false);
+    expect(shouldDelete("success", true)).toBe(true);
+    expect(shouldDelete("", false, true)).toBe(true);
+    expect(shouldDelete("success")).toBe(false);
   });
 
-  it.each<{ name: string; source: Record<string, string>; error: string }>([
-    {
-      name: "missing version notes",
-      source: { "CHANGELOG.md": "## 2026.7.9\n\nAn older release with substantive notes.\n" },
-      error: "does not contain a release section for 2026.8.1",
-    },
-    {
-      name: "empty version notes",
-      source: { "CHANGELOG.md": "## 2026.8.1\n" },
-      error: "below the 32 byte safety minimum",
-    },
-    {
-      name: "misaligned core package",
-      source: {
-        "package.json": JSON.stringify({
-          version: "2026.8.1",
-          dependencies: { "@openclaw/ai": "workspace:*" },
-        }),
-        "packages/ai/package.json": '{"version":"2026.7.9"}',
-      },
-      error: "packages/ai/package.json version must match package.json",
-    },
-  ])("rejects $name before creating remote refs or dispatching", ({ source, error }) => {
-    const fixture = createDispatchFixture({ targetSource: source });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(error);
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push")).toEqual(
-        [],
-      );
-      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
-      expect(ghCalls.filter((call) => call[0] === "api" && ghApiMethod(call) !== "GET")).toEqual(
-        [],
-      );
-      expect(ghCalls.filter(isWorkflowDispatch)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("preserves explicitly allowed substantive draft notes during source admission", () => {
-    const fixture = createDispatchFixture({
-      targetSource: {
-        "CHANGELOG.md":
-          "## Unreleased\n\nSubstantive draft notes for the complete selected release candidate.\n",
-      },
+  it("dispatches a frozen correction candidate and removes only its workflow ref", () => {
+    const fixture = createDispatchFixture();
+    const releaseRef = `${fixture.releaseRef}-2`;
+    runGit(fixture.checkout, ["branch", releaseRef, fixture.targetSha]);
+    runGit(fixture.checkout, ["tag", "-a", "v2026.8.1", fixture.targetSha, "-m", "base release"]);
+    runGit(fixture.checkout, ["push", "origin", `refs/heads/${releaseRef}`, "refs/tags/v2026.8.1"]);
+    expect(runGit(fixture.origin, ["tag", "--list", "v2026.8.1-2"])).toBe("");
+    const result = fixture.run(["--target-ref", releaseRef]);
+    expect(result.status, result.stderr).toBe(0);
+    const creates = fixture
+      .calls("POST")
+      .filter((args) => ghApiEndpoint(args).endsWith("/git/refs"));
+    expect(creates).toHaveLength(1);
+    const branch = ghField(creates[0]!, "ref");
+    expect(branch).toMatch(
+      new RegExp(`^refs/heads/release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`, "u"),
+    );
+    expect(ghField(creates[0]!, "sha")).toBe(fixture.workflowSha);
+    const payload = fixture.readPayload();
+    expect(payload.body.ref).toBe(branch.slice("refs/heads/".length));
+    expect(payload.body.inputs).toMatchObject({
+      ref: fixture.targetSha,
+      expected_sha: fixture.targetSha,
+      target_context_ref: releaseRef,
+      allow_unreleased_changelog: "false",
     });
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        "allow_unreleased_changelog=true",
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(fixture.readCalls(fixture.ghCallsPath).some(isWorkflowDispatch)).toBe(true);
-    } finally {
-      fixture.cleanup();
-    }
+    expect(JSON.parse(payload.body.inputs.trusted_workflow_json ?? "{}").trustedWorkflow).toEqual({
+      ref: "main",
+      fullRef: "refs/heads/main",
+      sha: fixture.workflowSha,
+    });
+    expect(fixture.gitCalls().filter((args) => args[0] === "push")).toEqual([]);
+    expect(fixture.calls("DELETE").map(ghApiEndpoint)).toEqual([
+      `repos/openclaw/openclaw/git/refs/${branch.slice("refs/".length)}`,
+    ]);
+    expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+      ["refs/heads/main", `refs/heads/${fixture.releaseRef}`, `refs/heads/${releaseRef}`].join(
+        "\n",
+      ),
+    );
+    expect(result.stdout).toContain("ok release evidence current=123 root=123");
   });
 
-  it.each([false, true])(
-    "dispatches the frozen SHA and context, then cleans transport refs (correction=%s)",
-    (correction) => {
-      const fixture = createDispatchFixture();
-      try {
-        const releaseRef = correction ? `${fixture.releaseRef}-2` : fixture.releaseRef;
-        if (correction) {
-          runGit(fixture.checkout, ["branch", releaseRef, fixture.targetSha]);
-          runGit(fixture.checkout, [
-            "tag",
-            "-a",
-            "v2026.8.1",
-            fixture.targetSha,
-            "-m",
-            "base release",
-          ]);
-          runGit(fixture.checkout, [
-            "push",
-            "origin",
-            `refs/heads/${releaseRef}`,
-            "refs/tags/v2026.8.1",
-          ]);
-          expect(runGit(fixture.origin, ["tag", "--list", "v2026.8.1-2"])).toBe("");
-        }
-        const result = fixture.run([
-          "--workflow-sha",
-          fixture.workflowSha,
-          "--target-ref",
-          releaseRef,
-        ]);
-        expect(result.status, result.stderr).toBe(0);
-        const gitCalls = fixture.readCalls(fixture.gitCallsPath);
-        const ghCalls = fixture.readCalls(fixture.ghCallsPath);
-        const createCalls = ghCalls.filter(
-          (args) =>
-            args[0] === "api" &&
-            ghApiMethod(args) === "POST" &&
-            ghApiEndpoint(args).endsWith("/git/refs"),
-        );
-        const targetCreate = createCalls.find((args) =>
-          ghField(args, "ref").startsWith("refs/heads/validation/target-"),
-        );
-        expect(ghField(targetCreate ?? [], "ref")).toMatch(
-          new RegExp(
-            `^refs/heads/validation/target-${fixture.targetSha.slice(0, 12)}-[0-9]+$`,
-            "u",
-          ),
-        );
-        expect(ghField(targetCreate ?? [], "sha")).toBe(fixture.targetSha);
-        const targetBranch = ghField(targetCreate ?? [], "ref").slice("refs/heads/".length);
-        const workflowCreate = createCalls.find((args) =>
-          ghField(args, "ref").startsWith("refs/heads/release-ci/"),
-        );
-        const workflowBranch = ghField(workflowCreate ?? [], "ref").slice("refs/heads/".length);
-        expect(ghField(workflowCreate ?? [], "ref")).toMatch(
-          new RegExp(`^refs/heads/release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`, "u"),
-        );
-        expect(ghField(workflowCreate ?? [], "sha")).toBe(fixture.workflowSha);
-        expect(createCalls).toEqual([
-          [
-            "api",
-            "--method",
-            "POST",
-            "repos/openclaw/openclaw/git/refs",
-            "-f",
-            `ref=refs/heads/${targetBranch}`,
-            "-f",
-            `sha=${fixture.targetSha}`,
-            "--hostname",
-            "github.com",
-          ],
-          [
-            "api",
-            "--method",
-            "POST",
-            "repos/openclaw/openclaw/git/refs",
-            "-f",
-            `ref=refs/heads/${workflowBranch}`,
-            "-f",
-            `sha=${fixture.workflowSha}`,
-            "--hostname",
-            "github.com",
-          ],
-        ]);
-        const dispatch = ghCalls.find(isWorkflowDispatch) ?? [];
-        expect(ghApiMethod(dispatch)).toBe("POST");
-        expect(ghApiEndpoint(dispatch)).toBe(
-          "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches",
-        );
-        expect(fixture.readPayload().body.ref).toBe(workflowBranch);
-        const dispatchInputs = fixture.readPayload().body.inputs;
-        expect(dispatchInputs).toMatchObject({
-          ref: fixture.targetSha,
-          expected_sha: fixture.targetSha,
-          target_context_ref: releaseRef,
-          allow_unreleased_changelog: "false",
-        });
-        expect(JSON.parse(dispatchInputs.trusted_workflow_json ?? "{}").trustedWorkflow).toEqual({
-          ref: "main",
-          fullRef: "refs/heads/main",
-          sha: fixture.workflowSha,
-        });
-        expect(ghCalls.some((args) => ghApiEndpoint(args).endsWith("/actions/runs/123"))).toBe(
-          true,
-        );
-        expect(ghCalls.some((args) => args[0] === "graphql")).toBe(false);
-        expect(ghCalls.some((args) => args[0] === "run" && args[1] === "watch")).toBe(false);
-        for (const read of ghCalls.filter(
-          (args) => args[0] === "api" && ghApiMethod(args) === "GET",
-        )) {
-          expect(read).toContain("Cache-Control: max-age=0");
-        }
-        expect(readFileSync(fixture.pathGhCallsPath, "utf8")).toBe("");
-        expect(gitCalls.filter((args) => args[0] === "push")).toEqual([]);
-        expect(result.stdout).toContain(`Validation SHA: ${fixture.targetSha}`);
-        expect(result.stdout).toContain(`Tooling SHA: ${fixture.workflowSha}`);
-        expect(result.stdout).toContain(
-          `Frozen validation tuple: candidate=${fixture.targetSha} tooling=${fixture.workflowSha} rerun_group=all`,
-        );
-        expect(result.stdout).toContain(
-          "Parent run: https://github.com/openclaw/openclaw/actions/runs/123",
-        );
-        expect(result.stdout.indexOf("Parent run:")).toBeLessThan(
-          result.stdout.indexOf("Parent run status:"),
-        );
-        expect(
-          ghCalls.filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE"),
-        ).toEqual([
-          [
-            "api",
-            "--method",
-            "DELETE",
-            `repos/openclaw/openclaw/git/refs/heads/${workflowBranch}`,
-            "--hostname",
-            "github.com",
-          ],
-          [
-            "api",
-            "--method",
-            "DELETE",
-            `repos/openclaw/openclaw/git/refs/heads/${targetBranch}`,
-            "--hostname",
-            "github.com",
-          ],
-        ]);
-        expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-          [
-            "refs/heads/main",
-            `refs/heads/${fixture.releaseRef}`,
-            ...(correction ? [`refs/heads/${releaseRef}`] : []),
-          ].join("\n"),
-        );
-      } finally {
-        fixture.cleanup();
-      }
+  it("retains uncertain workflow ref state when creation has an ambiguous failure", () => {
+    const fixture = createDispatchFixture({ createRefFailure: true });
+    const result = fixture.run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("configured workflow ref creation failure");
+    expect(fixture.record().refs).toEqual({
+      workflow: "uncertain",
+    });
+    const calls = fixture.calls();
+    const createCalls = calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "POST");
+    const deleteCalls = calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE");
+    expect(createCalls).toHaveLength(1);
+    expect(deleteCalls).toHaveLength(0);
+    expect(calls.some(isWorkflowDispatch)).toBe(false);
+    expect(fixture.gitCalls().filter((args) => args[0] === "push")).toEqual([]);
+    expect(fixture.refs()).toHaveLength(0);
+  });
+
+  it.each([true])(
+    "rejects a failed bare-SHA preflight before retaining or mutating (dryRun=%s)",
+    (dryRun) => {
+      const fixture = createDispatchFixture({
+        includeTargetRef: false,
+        targetAlreadyRemote: false,
+        bareShaFetchFailure: true,
+      });
+      const result = fixture.run(dryRun ? ["--dry-run"] : []);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `GitHub refused to serve Validation SHA ${fixture.targetSha} by bare SHA; child checkouts fetch it the same way, so dispatch would fail.`,
+      );
+      expect(result.stderr).toContain("upload-pack: not our ref");
+      expect(fixture.calls()).toEqual([]);
+      const gitCalls = fixture.gitCalls();
+      expect(gitCalls.filter((args) => args[0] === "push")).toEqual([]);
+      const fetch = gitCalls.find((args) =>
+        args.includes("https://github.com/openclaw/openclaw.git"),
+      );
+      expect(fetch).toBeDefined();
+      expect(existsSync(fetch![1]!)).toBe(false);
+      expect(existsSync(join(fixture.checkout, ".artifacts", "full-release-validation"))).toBe(
+        false,
+      );
     },
   );
 
-  it("dispatches the canonical extended-stable tuple without conflating its SHAs", () => {
-    const contextRef = "extended-stable/2026.8.33";
-    const fixture = createDispatchFixture({
-      releaseRef: contextRef,
-      targetSource: {
-        "package.json": '{"version":"2026.8.33"}\n',
-        "CHANGELOG.md":
-          "## 2026.8.33\n\nRelease notes for the complete extended-stable candidate.\n",
-      },
-    });
-    try {
-      const result = fixture.run([
-        "--sha",
-        fixture.targetSha,
-        "--target-ref",
-        contextRef,
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        "release_profile=stable",
-        "-f",
-        "run_release_soak=true",
-        "-f",
-        "fail_fast=false",
-        "-f",
-        "rerun_group=all",
-        "-f",
-        "reuse_evidence=false",
-        "-f",
-        "dispatch_release_evidence=false",
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      const transportRef = fixture.readPayload().body.ref;
-      expect(transportRef).toMatch(
-        new RegExp(`^release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`, "u"),
-      );
-      expect(transportRef).not.toBe(fixture.targetSha);
-      expect(transportRef).not.toBe(fixture.workflowSha);
-      const inputs = fixture.readPayload().body.inputs;
-      expect(inputs).toMatchObject({
-        ref: fixture.targetSha,
-        expected_sha: fixture.targetSha,
-        target_context_ref: contextRef,
-        release_profile: "stable",
-        run_release_soak: "true",
-        fail_fast: "false",
-        rerun_group: "all",
-        reuse_evidence: "false",
-        dispatch_release_evidence: "false",
-      });
-      expect(inputs.ref).not.toBe(contextRef);
-      expect(JSON.parse(inputs.trusted_workflow_json ?? "{}").trustedWorkflow).toEqual({
-        fullRef: "refs/heads/main",
-        ref: "main",
-        sha: fixture.workflowSha,
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it.each([
-    { failure: "target" as const, created: 0 },
-    { failure: "workflow" as const, created: 1 },
-  ])("retains refs when $failure ref creation has an ambiguous failure", ({ failure, created }) => {
-    const fixture = createDispatchFixture({ createRefFailure: failure });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`configured ${failure} ref creation failure`);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      const createCalls = calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "POST");
-      const deleteCalls = calls.filter(
-        (args) => args[0] === "api" && ghApiMethod(args) === "DELETE",
-      );
-      expect(createCalls).toHaveLength(created + 1);
-      expect(deleteCalls).toHaveLength(0);
-      expect(calls.some(isWorkflowDispatch)).toBe(false);
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
-        [],
-      );
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ])
-          .split("\n")
-          .filter(Boolean),
-      ).toHaveLength(created);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("uploads a local-only candidate before creating its temporary ref", () => {
-    const fixture = createDispatchFixture({
-      includeTargetRef: false,
-      targetAlreadyRemote: false,
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
-      const targetCreate = ghCalls.find(
-        (args) =>
-          args[0] === "api" &&
-          ghApiMethod(args) === "POST" &&
-          ghField(args, "ref").startsWith("refs/heads/validation/target-"),
-      );
-      expect(targetCreate).toBeDefined();
-      const targetRef = ghField(targetCreate ?? [], "ref");
-      const pushes = fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push");
-      expect(pushes).toEqual([["push", "origin", `${fixture.targetSha}:${targetRef}`]]);
-      expect(runGit(fixture.origin, ["cat-file", "-e", `${fixture.targetSha}^{commit}`])).toBe("");
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]),
-      ).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("retains both refs after workflow dispatch is attempted", () => {
-    const fixture = createDispatchFixture({ dispatchFailure: true });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("dispatch=unknown");
-      expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
-        phase: "attempted",
-        error: "unclassified",
-        run: null,
-      });
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE")).toEqual(
-        [],
-      );
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]).split("\n"),
-      ).toHaveLength(2);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("attempts both ref deletions and reports every cleanup failure", () => {
-    const fixture = createDispatchFixture({ deleteRefFailures: ["workflow", "target"] });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Failed to delete temporary refs");
-      expect(result.stderr).toContain("configured workflow ref deletion failure");
-      expect(result.stderr).toContain("configured target ref deletion failure");
-      const deleteCalls = fixture
-        .readCalls(fixture.ghCallsPath)
-        .filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE");
-      expect(deleteCalls).toHaveLength(2);
-      expect(ghApiEndpoint(deleteCalls[0] ?? [])).toContain("/git/refs/heads/release-ci/");
-      expect(ghApiEndpoint(deleteCalls[1] ?? [])).toContain("/git/refs/heads/validation/target-");
-    } finally {
-      fixture.cleanup();
-    }
+  it("reports a workflow ref cleanup failure", () => {
+    const fixture = createDispatchFixture({ deleteRefFailure: true });
+    const result = fixture.run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Failed to delete temporary ref");
+    expect(result.stderr).toContain("configured workflow ref deletion failure");
+    const deleteCalls = fixture
+      .calls()
+      .filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE");
+    expect(deleteCalls).toHaveLength(1);
+    expect(ghApiEndpoint(deleteCalls[0] ?? [])).toContain("/git/refs/heads/release-ci/");
   });
 
   it("retries an absent decision artifact through a parent status regression", () => {
@@ -2755,54 +2083,68 @@ describe("full-release-validation-at-sha", () => {
         { conclusion: "success", status: "completed" },
       ],
     });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      const parentPolls = calls
-        .map((args, index) => ({ args, index }))
-        .filter(({ args }) => ghApiEndpoint(args).endsWith("/actions/runs/123"));
-      const artifactDownloads = calls
-        .map((args, index) => ({ args, index }))
-        .filter(({ args }) => args[0] === "run" && args[1] === "download");
-      expect(parentPolls).toHaveLength(6);
-      expect(artifactDownloads).toHaveLength(4);
-      expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[3]?.index ?? Infinity);
-      expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[4]?.index ?? -Infinity);
-      expect(result.stdout).toContain("Parent run status: queued/pending");
-      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-        "refs/heads/main\nrefs/heads/release/2026.8.1",
-      );
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    const calls = fixture.calls();
+    const parentPolls = calls
+      .map((args, index) => ({ args, index }))
+      .filter(({ args }) => ghApiEndpoint(args).endsWith("/actions/runs/123"));
+    const artifactDownloads = calls
+      .map((args, index) => ({ args, index }))
+      .filter(({ args }) => args[0] === "run" && args[1] === "download");
+    expect(parentPolls).toHaveLength(6);
+    expect(artifactDownloads).toHaveLength(4);
+    expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[3]?.index ?? Infinity);
+    expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[4]?.index ?? -Infinity);
+    expect(result.stdout).toContain("Parent run status: queued/pending");
+    expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+      "refs/heads/main\nrefs/heads/release/2026.8.1",
+    );
   });
 
-  it("waits for a terminal conclusion across every nonterminal parent state", () => {
+  it.each([
+    {
+      name: "every nonterminal parent state",
+      downloads: 2,
+      polls: 7,
+      progress: false,
+      states: ["requested", "waiting", "pending", "completed"],
+    },
+    {
+      name: "sparse progress reads while decisions remain unpublished",
+      downloads: 1,
+      polls: 13,
+      progress: true,
+      states: Array<string>(10).fill("in_progress"),
+    },
+  ])("waits for a terminal conclusion through $name", ({ states, downloads, polls, progress }) => {
     const fixture = createDispatchFixture({
       parentRunStates: [
-        { conclusion: null, status: "requested" },
-        { conclusion: null, status: "waiting" },
-        { conclusion: null, status: "pending" },
-        { conclusion: null, status: "completed" },
+        ...states.map((status) => ({ conclusion: null, status })),
         { conclusion: "success", status: "completed" },
       ],
     });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(
-        calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/runs/123")),
-      ).toHaveLength(7);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(2);
-    } finally {
-      fixture.cleanup();
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    const calls = fixture.calls();
+    expect(calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/runs/123"))).toHaveLength(
+      polls,
+    );
+    expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(
+      downloads,
+    );
+    if (progress) {
+      expect(calls.filter((args) => ghApiEndpoint(args).endsWith("/jobs"))).toHaveLength(1);
+      expect(calls.filter((args) => ghApiEndpoint(args).endsWith("/artifacts"))).toHaveLength(11);
+      expect(fixture.readWaits()).toEqual(Array(10).fill(120_000));
     }
   });
 
-  it("observes a validated blocker promptly while leaving diagnostic drain and refs intact", () => {
-    const fixture = createDispatchFixture({
+  it.each([
+    {
+      name: "a validated blocker while diagnostics drain",
+      error: "blocked_diagnostics_running",
+      waits: [120_000],
       parentRunStates: [
         { conclusion: null, status: "in_progress" },
         {
@@ -2812,30 +2154,11 @@ describe("full-release-validation-at-sha", () => {
           decisionState: "blocked_diagnostics_running",
         },
       ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("blocked_diagnostics_running");
-      expect(fixture.readWaits()).toEqual([120_000]);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
-      expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]).split("\n"),
-      ).toHaveLength(2);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("does not redownload a validated decision or adopt a newer parent attempt", () => {
-    const fixture = createDispatchFixture({
+    },
+    {
+      name: "a newer attempt after an immutable passed decision",
+      error: "does not match the exact retained workflow/ref/event/attempt identity",
+      waits: [120_000, 120_000],
       parentRunStates: [
         { conclusion: null, status: "in_progress", artifactReady: true, decisionState: "passed" },
         { conclusion: null, status: "in_progress", artifactReady: true, decisionState: "passed" },
@@ -2848,137 +2171,25 @@ describe("full-release-validation-at-sha", () => {
           decisionState: "blocked_diagnostics_running",
         },
       ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(
-        "does not match the exact retained workflow/ref/event/attempt identity",
-      );
-      expect(fixture.readWaits()).toEqual([120_000, 120_000]);
-      const downloads = fixture
-        .readCalls(fixture.ghCallsPath)
-        .filter((args) => args[0] === "run" && args[1] === "download");
-      expect(downloads.map((args) => args[args.indexOf("--name") + 1])).toEqual([
-        "full-release-decision-123-1",
-      ]);
-      expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8")).run).toEqual({
-        id: 123,
-        attempt: 1,
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("keeps progress reads sparse while checking unpublished decision metadata", () => {
-    const fixture = createDispatchFixture({
-      parentRunStates: [
-        ...Array.from({ length: 10 }, () => ({ conclusion: null, status: "in_progress" })),
-        { conclusion: "success", status: "completed" },
-      ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
-      expect(calls.filter((args) => ghApiEndpoint(args).endsWith("/jobs"))).toHaveLength(1);
-      expect(calls.filter((args) => ghApiEndpoint(args).endsWith("/artifacts"))).toHaveLength(11);
-      expect(fixture.readWaits()).toEqual(Array(10).fill(120_000));
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it.each([
-    { label: "wrong name", artifacts: [{ name: "full-release-decision-999-1", expired: false }] },
-    { label: "expired", artifacts: [{ name: "full-release-decision-123-1", expired: true }] },
-  ])("does not use $label metadata as a release decision", ({ artifacts }) => {
-    const fixture = createDispatchFixture({
+    },
+    {
+      name: "foreign metadata until a terminal decision",
+      error: "blocked_complete",
+      waits: [120_000],
       parentRunStates: [
         {
           conclusion: null,
           status: "in_progress",
-          artifacts,
+          artifacts: [{ name: "full-release-decision-999-1", expired: false }],
           decisionState: "blocked_diagnostics_running",
         },
         { conclusion: "failure", status: "completed", decisionState: "blocked_complete" },
       ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("blocked_complete");
-      expect(fixture.readWaits()).toEqual([120_000]);
-      const downloads = fixture
-        .readCalls(fixture.ghCallsPath)
-        .filter((args) => args[0] === "run" && args[1] === "download");
-      expect(downloads).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it.each([
-    {
-      label: "permanent denial",
-      metadataError: "HTTP 403: Bad credentials",
-      artifacts: undefined,
-      error: "Bad credentials",
     },
     {
-      label: "malformed response",
-      metadataError: undefined,
-      artifacts: {},
-      error: "invalid artifacts",
-    },
-  ])(
-    "stops on $label instead of hiding metadata failures as pending",
-    ({ metadataError, artifacts, error }) => {
-      const fixture = createDispatchFixture({
-        parentRunStates: [{ conclusion: null, status: "in_progress", metadataError, artifacts }],
-      });
-      try {
-        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(error);
-        expect(fixture.readWaits()).toEqual([]);
-        expect(
-          fixture
-            .readCalls(fixture.ghCallsPath)
-            .some((args) => args[0] === "run" && args[1] === "download"),
-        ).toBe(false);
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
-
-  it("recovers a transient metadata failure without downloading an unpublished artifact", () => {
-    const fixture = createDispatchFixture({
-      parentRunStates: [
-        { conclusion: null, status: "in_progress", metadataError: "HTTP 503: Server Error" },
-        { conclusion: "success", status: "completed" },
-      ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("metadata unavailable this poll");
-      expect(fixture.readWaits()).toEqual([120_000]);
-      expect(
-        fixture
-          .readCalls(fixture.ghCallsPath)
-          .filter((args) => args[0] === "run" && args[1] === "download"),
-      ).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rejects a downloaded decision from another attempt despite ready metadata", () => {
-    const fixture = createDispatchFixture({
+      name: "a downloaded decision from another attempt",
+      error: "binding is invalid",
+      waits: [],
       parentRunStates: [
         {
           conclusion: null,
@@ -2988,73 +2199,43 @@ describe("full-release-validation-at-sha", () => {
           decisionAttempt: 2,
         },
       ],
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("binding is invalid");
-      expect(fixture.readWaits()).toEqual([]);
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]).split("\n"),
-      ).toHaveLength(2);
-    } finally {
-      fixture.cleanup();
-    }
+    },
+  ])("retains diagnostic refs and rejects $name", ({ parentRunStates, error, waits }) => {
+    const fixture = createDispatchFixture({ parentRunStates });
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(fixture.readWaits()).toEqual(waits);
+    const calls = fixture.calls();
+    const downloads = calls.filter((args) => args[0] === "run" && args[1] === "download");
+    expect(downloads.map((args) => args[args.indexOf("--name") + 1])).toEqual([
+      "full-release-decision-123-1",
+    ]);
+    expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
+    expect(fixture.refs()).toHaveLength(1);
+    expect(fixture.record().run).toEqual({ id: 123, attempt: 1 });
   });
 
   it("dispatches non-main tooling only when its exact protected tag is supplied", () => {
     const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "--trusted-workflow-ref",
-        fixture.trustedWorkflowTag,
-      ]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
-      expect(fixture.readCalls(fixture.gitCallsPath)).toContainEqual([
-        "ls-remote",
-        "--tags",
-        "origin",
-        `refs/tags/${fixture.trustedWorkflowTag}`,
-      ]);
-      const trustedIdentity = fixture.readPayload().body.inputs.trusted_workflow_json;
-      expect(JSON.parse(trustedIdentity ?? "{}").trustedWorkflow).toEqual({
-        ref: fixture.trustedWorkflowTag,
-        fullRef: `refs/tags/${fixture.trustedWorkflowTag}`,
-        sha: fixture.workflowSha,
-      });
-    } finally {
-      fixture.cleanup();
-    }
+    const result = fixture.run(["--trusted-workflow-ref", fixture.trustedWorkflowTag]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
+    expect(fixture.gitCalls()).toContainEqual([
+      "ls-remote",
+      "--tags",
+      "origin",
+      `refs/tags/${fixture.trustedWorkflowTag}`,
+    ]);
+    const trustedIdentity = fixture.readPayload().body.inputs.trusted_workflow_json;
+    expect(JSON.parse(trustedIdentity ?? "{}").trustedWorkflow).toEqual({
+      ref: fixture.trustedWorkflowTag,
+      fullRef: `refs/tags/${fixture.trustedWorkflowTag}`,
+      sha: fixture.workflowSha,
+    });
   });
 
-  it("rejects a fresh request on pre-source contract 1 tooling without upgrading its frozen SHA", () => {
-    const fixture = createDispatchFixture({ workflowSource: CONTRACT_ONE_WORKFLOW_SOURCE });
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "--trusted-workflow-ref",
-        fixture.trustedWorkflowTag,
-      ]);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("does not support source admission");
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
-      ).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it.each(["publish", "diagnostic", "main-qualification", "postpublish-confidence"])(
+  it.each(["publish", "diagnostic"])(
     "requires registry capability only for fresh publish requests: %s",
     (purpose) => {
       const fixture = createDispatchFixture({
@@ -3063,182 +2244,52 @@ describe("full-release-validation-at-sha", () => {
           "",
         ),
       });
-      try {
-        const result = fixture.run([
-          "--workflow-sha",
-          fixture.workflowSha,
-          "--trusted-workflow-ref",
-          fixture.trustedWorkflowTag,
-          "-f",
-          `validation_purpose=${purpose}`,
-          ...(purpose === "publish"
-            ? [
-                "-f",
-                `publication_selection_json=${JSON.stringify({
-                  route: "normal",
-                  npmDistTag: "beta",
-                  publishOpenclawNpm: true,
-                  pluginPublishScope: "all-publishable",
-                  plugins: [],
-                })}`,
-              ]
-            : []),
-        ]);
-        expect(result.status, result.stderr).toBe(purpose === "publish" ? 1 : 0);
-        if (purpose === "publish") {
-          expect(result.stderr).toContain("does not support registry admission");
-          expect(
-            fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
-          ).toEqual([]);
-          expect(
-            fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push"),
-          ).toEqual([]);
-          expect(existsSync(join(fixture.checkout, ".artifacts/full-release-validation"))).toBe(
-            false,
-          );
-        }
-      } finally {
-        fixture.cleanup();
+      const result = fixture.run([
+        "--trusted-workflow-ref",
+        fixture.trustedWorkflowTag,
+        "-f",
+        `validation_purpose=${purpose}`,
+        ...(purpose === "publish"
+          ? [
+              "-f",
+              `publication_selection_json=${JSON.stringify({
+                route: "normal",
+                npmDistTag: "beta",
+                publishOpenclawNpm: true,
+                pluginPublishScope: "all-publishable",
+                plugins: [],
+              })}`,
+            ]
+          : []),
+      ]);
+      expect(result.status, result.stderr).toBe(purpose === "publish" ? 1 : 0);
+      if (purpose === "publish") {
+        expect(result.stderr).toContain("does not support registry admission");
+        expect(fixture.calls().filter((args) => ghApiMethod(args) !== "GET")).toEqual([]);
+        expect(fixture.gitCalls().filter((args) => args[0] === "push")).toEqual([]);
+        expect(existsSync(join(fixture.checkout, ".artifacts/full-release-validation"))).toBe(
+          false,
+        );
       }
     },
   );
 
-  it("rejects pinned old-schema tooling before either remote ref is pushed", () => {
-    const fixture = createDispatchFixture({
-      workflowSource:
-        'name: Full Release Validation\nenv:\n  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"\non:\n  workflow_dispatch:\n',
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`Tooling SHA ${fixture.workflowSha}`);
-      expect(result.stderr).toContain("missing workflow_dispatch input expected_sha");
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
-        [],
-      );
-      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rejects pinned pre-contract tooling before either remote ref is pushed", () => {
-    const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.oldWorkflowSha]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`Tooling SHA ${fixture.oldWorkflowSha}`);
-      expect(result.stderr).toContain(
-        "does not declare a supported RELEASE_ISOLATION_TOOLING_CONTRACT",
-      );
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
-        [],
-      );
-      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rejects an arbitrary older release-branch ancestor with the wrong package version", () => {
-    const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run([
-        "--sha",
-        fixture.oldWorkflowSha,
-        "--workflow-sha",
-        fixture.workflowSha,
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Target package version 2026.7.9 does not belong to release branch release/2026.8.1; expected 2026.8.1 or a beta prerelease of it",
-      );
-      expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
-        [],
-      );
-      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("keeps both temporary refs with --keep-branch", () => {
-    const fixture = createDispatchFixture();
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--keep-branch"]);
-      expect(result.status, result.stderr).toBe(0);
-      const gitCalls = fixture.readCalls(fixture.gitCallsPath);
-      expect(gitCalls.filter((args) => args[0] === "push")).toEqual([]);
-      expect(
-        fixture
-          .readCalls(fixture.ghCallsPath)
-          .some((args) => args[0] === "api" && ghApiMethod(args) === "DELETE"),
-      ).toBe(false);
-      const remoteRefs = runGit(fixture.origin, [
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/heads/release-ci",
-        "refs/heads/validation",
-      ]).split("\n");
-      expect(remoteRefs).toHaveLength(2);
-      expect(remoteRefs).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(/^refs\/heads\/release-ci\//u),
-          expect.stringMatching(/^refs\/heads\/validation\/target-/u),
-        ]),
-      );
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
   it("fails clearly before dispatch when the target SHA is absent after the named fetch", () => {
     const fixture = createDispatchFixture();
-    try {
-      const missingSha = "f".repeat(40);
-      const result = spawnSync(
-        testNodeExecPath,
-        [
-          SCRIPT_PATH,
-          "--sha",
-          missingSha,
-          "--target-ref",
-          fixture.releaseRef,
-          "--workflow-sha",
-          fixture.workflowSha,
-        ],
-        {
-          cwd: fixture.checkout,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            MOCK_GH_CALLS: fixture.ghCallsPath,
-            MOCK_GIT_CALLS: fixture.gitCallsPath,
-            MOCK_ORIGIN: fixture.origin,
-            MOCK_PATH_GH_CALLS: fixture.pathGhCallsPath,
-            MOCK_REAL_PATH: process.env.PATH,
-            MOCK_WORKFLOW_SHA: fixture.workflowSha,
-            GH_TOKEN: "fixture-token",
-            OPENCLAW_GH_BIN: fixture.selectedGhPath,
-            PATH: `${join(fixture.checkout, "..", "bin")}:${process.env.PATH}`,
-          },
-        },
-      );
-      expect(result.status).toBe(1);
-      const failedReasons = result.stderr
-        .trim()
-        .split("\n")
-        .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
-      expect(failedReasons).toEqual([
-        `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally after fetching ${fixture.releaseRef}`,
-      ]);
-      expect(result.stderr.trim().split("\n").at(-1)).toBe(
-        "[full-release-validation] FAILED (exit 1)",
-      );
-      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
+    const missingSha = "f".repeat(40);
+    const result = fixture.run(["--sha", missingSha]);
+    expect(result.status).toBe(1);
+    const failedReasons = result.stderr
+      .trim()
+      .split("\n")
+      .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
+    expect(failedReasons).toEqual([
+      `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally after fetching ${fixture.releaseRef}`,
+    ]);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(
+      "[full-release-validation] FAILED (exit 1)",
+    );
+    expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

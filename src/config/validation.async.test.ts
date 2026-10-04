@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "./types.js";
 import {
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
+  validateConfigObjectRawWithPlugins,
 } from "./validation.js";
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
@@ -43,6 +44,20 @@ function preparedMetadata(): PreparedConfigValidationPluginMetadata {
 }
 
 describe("async config plugin validation", () => {
+  it("retains the validated agent list projection for raw validation consumers", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      { agents: { entries: { main: {} } } },
+      { env, pluginValidation: "core-only" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Object.getOwnPropertyDescriptor(result.config.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [{ id: "main" }],
+      });
+    }
+  });
+
   it("returns core issues before requesting plugin metadata", async () => {
     const raw = { gateway: { port: 0 } };
     const load = vi.fn(async () => preparedMetadata());
@@ -107,11 +122,15 @@ describe("async config plugin validation", () => {
   });
 
   it.each(["full", "skip", "core-only"] as const)(
-    "keeps synchronous %s policy and legacy ownership results",
+    "keeps synchronous %s policy and explicit ownership results",
     async (pluginValidation) => {
       const metadata = preparedMetadata();
       const raw = {
-        agents: { entries: { main: { default: true }, ops: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
         plugins: {
           allow: ["validation-fixture"],
           entries: { "validation-fixture": { enabled: true, config: {} } },

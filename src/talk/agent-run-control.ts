@@ -12,6 +12,7 @@ import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-re
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { captureRealtimeVoiceRunOwner } from "./agent-run-control-owner.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -29,15 +30,11 @@ export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
   classifyRealtimeVoiceAgentControlText,
-  normalizeRealtimeVoiceAgentControlMode,
   parseRealtimeVoiceAgentControlToolArgs,
-  REALTIME_VOICE_AGENT_CONTROL_MODES,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   resolveRealtimeVoiceAgentControlIntent,
   shouldAutoControlRealtimeVoiceAgentText,
-  type RealtimeVoiceAgentControlMode,
-  type RealtimeVoiceAgentControlIntent,
   type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
 } from "./agent-run-control-shared.js";
@@ -65,6 +62,7 @@ type RealtimeVoiceAgentControlDeps = {
       isInboundUserMessage?: boolean;
       taskSuggestionDeliveryMode?: undefined;
       toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+      userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     },
   ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
@@ -92,6 +90,7 @@ export async function controlRealtimeVoiceAgentRun(
     getToolAuthorityOverlay?: () => ReplyToolAuthorityOverlay;
     /** Host context prepared by the validated authority callback, never provider text. */
     getSteeringContext?: () => string | undefined;
+    createUserTurnTranscriptRecorder?: (text: string) => UserTurnTranscriptRecorder;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
   },
@@ -231,6 +230,7 @@ export async function controlRealtimeVoiceAgentRun(
     debounceMs: 0,
     isInboundUserMessage: true,
     toolAuthorityOverlay,
+    userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder?.(steerText),
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,

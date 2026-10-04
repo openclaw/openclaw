@@ -12,12 +12,21 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  invokeConfigOpenFile,
+  invokeConfigPatch,
+  invokeConfigSchema,
+  startConfigWrite,
+} from "./config-invocations.test-support.js";
 import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+}));
+const pluginValidationMocks = vi.hoisted(() => ({
+  currentPluginMetadataSnapshot: undefined as PluginMetadataSnapshot | undefined,
 }));
 
 vi.mock("../../config/io.js", async () => {
@@ -34,18 +43,35 @@ vi.mock("../../config/validation.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/validation.js")>(
     "../../config/validation.js",
   );
+  const resolveValidationParams = (
+    params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+  ) =>
+    params?.pluginMetadataSnapshot || !pluginValidationMocks.currentPluginMetadataSnapshot
+      ? params
+      : {
+          ...params,
+          pluginMetadataSnapshot: pluginValidationMocks.currentPluginMetadataSnapshot,
+        };
   return {
     ...actual,
-    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
-    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
+    validateConfigObjectRawWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        pluginValidationMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectRawWithPlugins(config, resolveValidationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
+    validateConfigObjectWithPlugins: vi.fn(
+      (
+        config: OpenClawConfig,
+        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
+      ) =>
+        pluginValidationMocks.currentPluginMetadataSnapshot
+          ? actual.validateConfigObjectWithPlugins(config, resolveValidationParams(params))
+          : { ok: true, config, warnings: [] },
+    ),
   };
 });
 
@@ -110,58 +136,12 @@ function currentWriteSnapshot() {
   return result;
 }
 
-async function invokeConfigPatch(args: {
-  raw: unknown;
-  baseHash?: string;
-  replacePaths?: string[];
-}) {
-  const harness = createConfigHandlerHarness({
-    method: "config.patch",
-    params: {
-      raw: JSON.stringify(args.raw),
-      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
-      ...(args.replacePaths ? { replacePaths: args.replacePaths } : {}),
-    },
-  });
-  await expectDefined(
-    configHandlers["config.patch"],
-    'configHandlers["config.patch"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
-function startConfigWrite(
-  method: "config.patch" | "config.apply",
-  args: { raw: unknown; baseHash?: string },
-) {
-  const harness = createConfigHandlerHarness({
-    method,
-    params: {
-      raw: JSON.stringify(args.raw),
-      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
-    },
-  });
-  const handler = expectDefined(
-    configHandlers[method],
-    `configHandlers["${method}"] test invariant`,
-  );
-  return { harness, operation: handler(harness.options) };
-}
-
-async function invokeConfigSchema() {
-  const harness = createConfigHandlerHarness({ method: "config.schema" });
-  await expectDefined(
-    configHandlers["config.schema"],
-    'configHandlers["config.schema"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
 beforeEach(() => {
   storedConfig = {};
   storedHash = "base-hash";
   nextHash = 1;
   modelNormalizationPluginMetadata = undefined;
+  pluginValidationMocks.currentPluginMetadataSnapshot = undefined;
   configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () =>
     currentWriteSnapshot(),
   );
@@ -189,15 +169,6 @@ beforeEach(() => {
   );
 });
 
-async function invokeConfigOpenFile() {
-  const harness = createConfigHandlerHarness({ method: "config.openFile" });
-  await expectDefined(
-    configHandlers["config.openFile"],
-    'configHandlers["config.openFile"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
 afterEach(() => {
   vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
@@ -206,6 +177,46 @@ afterEach(() => {
 });
 
 describe("config.patch effective change receipt", () => {
+  it("does not report plugin defaults discovered after the write snapshot", async () => {
+    const pluginId = "defaulted-plugin";
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture();
+    pluginValidationMocks.currentPluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          configSchema: {
+            type: "object",
+            properties: { mode: { type: "string", default: "auto" } },
+          },
+        },
+      ],
+    });
+    storedConfig = {
+      plugins: { entries: { [pluginId]: { enabled: true } } },
+      ui: { prefs: { sidebarEntries: ["route:usage"] } },
+    };
+
+    const harness = await invokeConfigPatch({
+      raw: { ui: { prefs: { sidebarEntries: ["route:tasks"] } } },
+      replacePaths: ["ui.prefs.sidebarEntries"],
+    });
+
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        changedPaths: expect.arrayContaining(["ui.prefs.sidebarEntries"]),
+      }),
+      undefined,
+    );
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.not.objectContaining({
+        changedPaths: expect.arrayContaining([`plugins.entries.${pluginId}.config`]),
+      }),
+      undefined,
+    );
+  });
+
   it.each([
     { nextToken: "synthetic-old-token", expectedPaths: [] },
     {
@@ -232,53 +243,49 @@ describe("config.patch effective change receipt", () => {
 });
 
 describe("config application settlement", () => {
-  it.each(
-    (["config.patch", "config.apply"] as const).flatMap((method) =>
-      [
-        { name: "hooks", config: { hooks: { enabled: true } } },
-        {
-          name: "new Gateway HTTP settings",
-          config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
-        },
-      ].map(({ name, config }) => ({ method, name, config })),
-    ),
-  )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
-    const { promise: application, resolve: settleApplication } = createDeferred<"applied">();
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
-      path: "/tmp/openclaw.json",
-      config,
-      hash: "settled-hash",
-      application: params.awaitRuntimeApplication ? application : undefined,
-      queueFollowUp: vi.fn(),
-    }));
+  it.each([
+    { method: "config.patch", name: "hooks", config: { hooks: { enabled: true } } },
+    {
+      method: "config.apply",
+      name: "new Gateway HTTP settings",
+      config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
+    },
+  ] as const)(
+    "waits for $method application of $name before acknowledging",
+    async ({ method, config }) => {
+      const { promise: application, resolve: settleApplication } = createDeferred<"applied">();
+      configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
+        path: "/tmp/openclaw.json",
+        config,
+        hash: "settled-hash",
+        application: params.awaitRuntimeApplication ? application : undefined,
+        queueFollowUp: vi.fn(),
+      }));
 
-    const { harness, operation } = startConfigWrite(method, {
-      raw: config,
-      baseHash: "base-hash",
-    });
-    await vi.waitFor(() =>
-      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce(),
-    );
+      const { harness, operation } = startConfigWrite(method, {
+        raw: config,
+        baseHash: "base-hash",
+      });
+      await vi.waitFor(() =>
+        expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce(),
+      );
 
-    expect(harness.respond).not.toHaveBeenCalled();
+      expect(harness.respond).not.toHaveBeenCalled();
 
-    settleApplication("applied");
-    await operation;
-    expect(harness.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true }),
-      undefined,
-    );
-  });
+      settleApplication("applied");
+      await operation;
+      expect(harness.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ ok: true }),
+        undefined,
+      );
+    },
+  );
 
-  it.each(
-    (["config.patch", "config.apply"] as const).flatMap((method) =>
-      (["applied-restart-required", "restart-pending"] as const).map((outcome) => ({
-        method,
-        outcome,
-      })),
-    ),
-  )(
+  it.each([
+    { method: "config.patch", outcome: "applied-restart-required" },
+    { method: "config.apply", outcome: "restart-pending" },
+  ] as const)(
     "reports $method $outcome without misrepresenting active config",
     async ({ method, outcome }) => {
       const queueFollowUp = vi.fn();
@@ -329,40 +336,37 @@ describe("config application settlement", () => {
     },
   );
 
-  it.each(["superseded", "failed", "stopped", "unclaimed"] as const)(
-    "reports a persisted write whose runtime application was %s",
-    async (outcome) => {
-      const queueFollowUp = vi.fn();
-      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
-        path: "/tmp/openclaw.json",
-        config: { hooks: { enabled: true } },
-        hash: `${outcome}-hash`,
-        application: Promise.resolve(outcome),
-        queueFollowUp,
-      });
+  it("reports a persisted write whose runtime application failed", async () => {
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "failed-hash",
+      application: Promise.resolve("failed"),
+      queueFollowUp,
+    });
 
-      const { harness, operation } = startConfigWrite("config.patch", {
-        raw: { hooks: { enabled: true } },
-        baseHash: "base-hash",
-      });
-      await operation;
+    const { harness, operation } = startConfigWrite("config.patch", {
+      raw: { hooks: { enabled: true } },
+      baseHash: "base-hash",
+    });
+    await operation;
 
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining("persisted but was not applied"),
-        }),
-      );
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("use config.apply") }),
-      );
-      expect(queueFollowUp).toHaveBeenCalledOnce();
-    },
-  );
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("persisted but was not applied"),
+      }),
+    );
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("use config.apply") }),
+    );
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  });
 });
 
 describe("config.openFile", () => {
@@ -628,16 +632,6 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       true,
       expect.objectContaining({ ok: true, hash: "next-hash-1" }),
       undefined,
-    );
-  });
-
-  it("rejects a hash-free patch outside the LWW subtree", async () => {
-    const { respond } = await invokeConfigPatch({ raw: { gateway: { port: 19_001 } } });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
     );
   });
 

@@ -6,11 +6,12 @@ export { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.j
 export { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
 export { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 export {
+  resolveGatewayRestartDecision,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
+export { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 export {
-  resolveGatewayRestartDeferralTimeoutMs,
   consumeGatewayRestartIntent,
   consumeGatewayRestartAuthorization,
   isGatewayRestartExternallyAllowed,
@@ -30,7 +31,11 @@ export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,
   commitManagedServiceUpdateHandoff,
+  isForegroundUpdateHandoff,
+  completeForegroundUpdateHandoffAfterClose,
+  captureForegroundUpdateHandoffStop,
   requestManagedServiceUpdateHandoffPark,
+  waitForSystemServiceUpdateHandoffs,
 } from "../../infra/update-managed-service-handoff.js";
 export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -40,11 +45,7 @@ export {
   writeRestartSentinelIfUnchanged,
 } from "../../infra/restart-sentinel.js";
 export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
-export {
-  detectGatewayRespawnSupervisor,
-  detectGatewayRespawnSupervisorIdentity,
-  detectRespawnSupervisor,
-} from "../../infra/supervisor-markers.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
   createGatewayActiveWorkSnapshot,
@@ -61,16 +62,6 @@ export {
   waitForActiveCronTaskRuns,
 } from "../../cron/service/active-run-cancellation.js";
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
-export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
 
-export async function stopGatewayManagedProviderLocalServices(): Promise<void> {
-  const { hasManagedProviderLocalServices } =
-    await import("../../agents/provider-runtime-lifecycle.js");
-  if (!hasManagedProviderLocalServices()) {
-    return;
-  }
-  const { stopManagedProviderLocalServices } =
-    await import("../../agents/provider-local-service.js");
-  await stopManagedProviderLocalServices();
-}
+export { stopActiveManagedProviderLocalServices } from "../../agents/provider-runtime-lifecycle.js";

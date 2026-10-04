@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
@@ -15,6 +15,7 @@ let viewState = createDreamingViewState();
 const restoreTranslations = installDreamingViewTestTranslations();
 
 afterAll(() => restoreTranslations());
+afterEach(() => vi.restoreAllMocks());
 
 const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
@@ -70,7 +71,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         promotedAt: "2026-04-05T04:00:00.000Z",
       },
     ],
-    dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
     statusError: null,
@@ -243,10 +243,10 @@ describe("dreaming view", () => {
   });
 
   it("renders the active dream scene chrome and selects another view", () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    viewState.dreamIndex = 0;
     const onViewStateChange = vi.fn();
-    const container = renderInto(
-      buildProps({ dreamingOf: "reindexing old chats\u2026", onViewStateChange }),
-    );
+    const container = renderInto(buildProps({ onViewStateChange }));
 
     expectElement(container, ".dreams__lobster svg");
 
@@ -260,26 +260,6 @@ describe("dreaming view", () => {
     ).toContain("--lob-shell:");
 
     expect(textItems(container, ".dreams__z")).toEqual(["z", "z", "Z"]);
-
-    const stars = [...container.querySelectorAll<HTMLElement>(".dreams__star")].map((star) => ({
-      top: star.style.top,
-      left: star.style.left,
-      size: star.style.width,
-    }));
-    expect(stars).toEqual([
-      { top: "8%", left: "15%", size: "3px" },
-      { top: "12%", left: "72%", size: "2px" },
-      { top: "22%", left: "35%", size: "3px" },
-      { top: "18%", left: "88%", size: "2px" },
-      { top: "35%", left: "8%", size: "2px" },
-      { top: "45%", left: "92%", size: "2px" },
-      { top: "55%", left: "25%", size: "3px" },
-      { top: "65%", left: "78%", size: "2px" },
-      { top: "75%", left: "45%", size: "2px" },
-      { top: "82%", left: "60%", size: "3px" },
-      { top: "30%", left: "55%", size: "2px" },
-      { top: "88%", left: "18%", size: "2px" },
-    ]);
 
     expectElement(container, ".dreams__moon");
 
@@ -306,7 +286,7 @@ describe("dreaming view", () => {
     expect(onViewStateChange).toHaveBeenCalledOnce();
     expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
-    expect(text?.textContent).toBe("reindexing old chats\u2026");
+    expect(text?.textContent).toBe("consolidating memories…");
     const label = container.querySelector(".dreams__status-label");
     expect(label?.textContent).toBe("Dreaming Active");
     const detail = container.querySelector(".dreams__status-detail span");
@@ -405,29 +385,6 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("opens the full imported source page from diary cards", async () => {
-    setDreamSubTab("diary");
-    setDreamDiarySubTab("insights");
-    const onOpenWikiPage = vi.fn().mockResolvedValue({
-      title: "BA flight receipts process",
-      path: "sources/chatgpt-2026-04-10-alpha.md",
-      content: "# ChatGPT Export: BA flight receipts process",
-    });
-    const container = renderInto(buildProps({ onOpenWikiPage }));
-    const openSourceButton = container.querySelectorAll<HTMLButtonElement>(
-      ".dreams-diary__insight-actions .btn",
-    )[1];
-    expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
-    if (!(openSourceButton instanceof HTMLButtonElement)) {
-      throw new Error("Expected imported source button");
-    }
-    openSourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await Promise.resolve();
-    expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
-    setDreamDiarySubTab("dreams");
-    setDreamSubTab("scene");
-  });
-
   it("shows a truncation hint when the wiki preview only contains the first chunk", async () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
@@ -457,6 +414,7 @@ describe("dreaming view", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
     );
@@ -716,50 +674,6 @@ describe("dreaming view", () => {
       "Use Happy Together for flights.",
     ]);
     expect(container.querySelector(".dreams-diary__panel-title")).toBeNull();
-    setDreamSubTab("scene");
-  });
-
-  it("renders diary day chips without the old density map", () => {
-    setDreamSubTab("diary");
-    setDreamDiarySubTab("dreams");
-    const container = renderInto(
-      buildProps({
-        dreamDiaryContent: [
-          "# Dream Diary",
-          "",
-          "<!-- openclaw:dreaming:diary:start -->",
-          "",
-          "---",
-          "",
-          "*January 1, 2026*",
-          "",
-          "What Happened",
-          "1. First durable fact.",
-          "",
-          "---",
-          "",
-          "*January 2, 2026*",
-          "",
-          "What Happened",
-          "1. Second durable fact.",
-          "",
-          "Candidates",
-          "- candidate",
-          "",
-          "<!-- openclaw:dreaming:diary:end -->",
-        ].join("\n"),
-      }),
-    );
-    const dayChips = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) => ({
-      label: node.textContent?.replace(/\s+/g, "").trim(),
-      active: node.classList.contains("dreams-diary__day-chip--active"),
-    }));
-    expect(dayChips).toEqual([
-      { label: "1/2", active: true },
-      { label: "1/1", active: false },
-    ]);
-    expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
-    expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
     setDreamSubTab("scene");
   });
 

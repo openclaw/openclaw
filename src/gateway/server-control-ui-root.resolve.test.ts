@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -19,7 +20,7 @@ const controlUiAssetsMocks = vi.hoisted(() => ({
 }));
 const retentionMocks = vi.hoisted(() => ({
   prepare: vi.fn<(options?: { signal?: AbortSignal }) => Promise<void>>(async () => {}),
-  resolveAsset: vi.fn(() => null),
+  resolveAsset: vi.fn(async () => null),
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => controlUiAssetsMocks);
@@ -28,7 +29,10 @@ vi.mock("./control-ui-asset-retention.js", () => ({
   createControlUiAssetRetention: vi.fn(() => retentionMocks),
 }));
 
-import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
+import {
+  createGatewayControlUiRootLifecycle,
+  readControlUiRootAsset,
+} from "./server-control-ui-root.js";
 
 function readyAssets(root = "/repo/dist/control-ui", publicAssetBuildId?: string) {
   return { kind: "ready", indexPath: `${root}/index.html`, publicAssetBuildId };
@@ -48,7 +52,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
     controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue(null);
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(null);
     retentionMocks.prepare.mockResolvedValue(undefined);
-    retentionMocks.resolveAsset.mockReturnValue(null);
+    retentionMocks.resolveAsset.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -82,6 +86,19 @@ describe("createGatewayControlUiRootLifecycle", () => {
       realPath: "/repo/dist/control-ui",
     });
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+  });
+
+  test("does not admit a first file read after its root has stopped", async () => {
+    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
+    const { lifecycle } = createLifecycle();
+    const root = lifecycle.state;
+    if (root.kind !== "resolved") {
+      throw new Error("Expected a prepared root");
+    }
+    const read = vi.spyOn(WorkerTaskPool.prototype, "run").mockResolvedValue(null);
+    await lifecycle.stop();
+    expect(() => readControlUiRootAsset(root, "index.html", true)).toThrow();
+    expect(read).not.toHaveBeenCalled();
   });
 
   test("prepares retained generations for bundled roots without delaying construction", async () => {

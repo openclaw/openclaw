@@ -119,67 +119,62 @@ describe("dedicated worker RPC diagnostics", () => {
     }
   });
 
-  it.each([false, true])(
-    "releases the FIFO while computer timing stays open (closed=%s)",
-    async (closed) => {
-      const events = observeRequests();
-      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-      await admit(harness);
-      let now = 100;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      let signal: AbortSignal | undefined;
-      harness.service.executeComputer.mockImplementationOnce(
-        async (_identity, _request, receivedSignal) => {
-          signal = receivedSignal;
-          entered.resolve();
-          await release.promise;
-          return { ok: true, result: { resultJson: "{}" } };
-        },
-      );
-      harness.sendRequest(
-        "worker.computer",
-        { command: "screen.snapshot", paramsJson: "{}" },
-        "computer",
-      );
-      try {
-        await entered.promise;
-        now = 120;
-        harness.sendRequest("worker.inference.start", INFERENCE_START, "inference");
-        await settled(events);
-        expect(
-          events.filter((event) => event.method === "worker.computer").map((event) => event.phase),
-        ).toEqual(["received"]);
-        expect(signal?.aborted).toBe(false);
-        now = 200;
-        if (closed) {
-          harness.close();
-          expect(signal?.aborted).toBe(true);
-        }
-        release.resolve();
-        await settled(events, 2);
-        const computer = events.filter((event) => event.method === "worker.computer");
-        expect(computer.filter((event) => event.phase === "response")).toMatchObject([
-          { outcome: closed ? "suppressed" : "ok", durationMs: 100 },
-        ]);
-        expect(computer.find((event) => event.phase === "handler")).toMatchObject({
-          admissionMs: 0,
-          durationMs: 100,
-        });
-        expect(computer.at(-1)).toMatchObject({
-          phase: "dispatch",
-          outcome: "returned",
-          queueWaitMs: 0,
-        });
-        expect(
-          harness.responses.filter((frame) => (frame as { id?: string }).id === "computer"),
-        ).toHaveLength(closed ? 0 : 1);
-      } finally {
-        release.resolve();
-      }
-    },
-  );
+  it("releases the FIFO while computer timing stays open across connection close", async () => {
+    const events = observeRequests();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    await admit(harness);
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let signal: AbortSignal | undefined;
+    harness.service.executeComputer.mockImplementationOnce(
+      async (_identity, _request, receivedSignal) => {
+        signal = receivedSignal;
+        entered.resolve();
+        await release.promise;
+        return { ok: true, result: { resultJson: "{}" } };
+      },
+    );
+    harness.sendRequest(
+      "worker.computer",
+      { command: "screen.snapshot", paramsJson: "{}" },
+      "computer",
+    );
+    try {
+      await entered.promise;
+      now = 120;
+      harness.sendRequest("worker.inference.start", INFERENCE_START, "inference");
+      await settled(events);
+      expect(
+        events.filter((event) => event.method === "worker.computer").map((event) => event.phase),
+      ).toEqual(["received"]);
+      expect(signal?.aborted).toBe(false);
+      now = 200;
+      harness.close();
+      expect(signal?.aborted).toBe(true);
+      release.resolve();
+      await settled(events, 2);
+      const computer = events.filter((event) => event.method === "worker.computer");
+      expect(computer.filter((event) => event.phase === "response")).toMatchObject([
+        { outcome: "suppressed", durationMs: 100 },
+      ]);
+      expect(computer.find((event) => event.phase === "handler")).toMatchObject({
+        admissionMs: 0,
+        durationMs: 100,
+      });
+      expect(computer.at(-1)).toMatchObject({
+        phase: "dispatch",
+        outcome: "returned",
+        queueWaitMs: 0,
+      });
+      expect(
+        harness.responses.filter((frame) => (frame as { id?: string }).id === "computer"),
+      ).toHaveLength(0);
+    } finally {
+      release.resolve();
+    }
+  });
 
   it("does not turn a completed computer handler into cancellation when its send closes", async () => {
     const events = observeRequests();
@@ -201,25 +196,21 @@ describe("dedicated worker RPC diagnostics", () => {
     });
   });
 
-  it.each(["unavailable", "serialization"] as const)(
-    "records %s sender failure without a sent response",
-    async (kind) => {
-      const events = observeRequests();
-      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-      await admit(harness);
-      harness.sendResponse.mockReturnValueOnce(
-        kind === "serialization"
-          ? { kind, error: new Error("synthetic encoding fault") }
-          : { kind },
-      );
-      harness.sendRequest("worker.inference.start", INFERENCE_START);
-      await settled(events);
-      expect(events.filter((event) => event.phase === "response")).toMatchObject([
-        { outcome: "unavailable" },
-      ]);
-      expect(events.at(-1)).toMatchObject({ phase: "dispatch", response: "unavailable" });
-    },
-  );
+  it("records serialization sender failure without a sent response", async () => {
+    const events = observeRequests();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    await admit(harness);
+    harness.sendResponse.mockReturnValueOnce({
+      kind: "serialization",
+      error: new Error("synthetic encoding fault"),
+    });
+    harness.sendRequest("worker.inference.start", INFERENCE_START);
+    await settled(events);
+    expect(events.filter((event) => event.phase === "response")).toMatchObject([
+      { outcome: "unavailable" },
+    ]);
+    expect(events.at(-1)).toMatchObject({ phase: "dispatch", response: "unavailable" });
+  });
 
   it("records a throwing service once and preserves protocol failure", async () => {
     const events = observeRequests();

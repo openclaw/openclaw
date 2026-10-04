@@ -1,8 +1,3 @@
-/**
- * Synology Chat HTTP client.
- * Sends messages TO Synology Chat via the incoming webhook URL.
- */
-
 import * as http from "node:http";
 import * as https from "node:https";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -71,11 +66,7 @@ function isProvenPreConnectFailure(error: unknown): boolean {
 // The chatbot API (method=chatbot) requires the Chat API user_id in the
 // user_ids array. We resolve via the user_list API and cache the result.
 
-interface ChatUser {
-  user_id: number;
-  username: string;
-  nickname: string;
-}
+type ChatUser = z.infer<typeof ChatUserSchema>;
 
 type ChatUserCacheEntry = {
   users: ChatUser[];
@@ -94,17 +85,11 @@ type SynologyHostedFileSendResult =
   | { status: "rejected" }
   | { status: "indeterminate" };
 
-const ChatUserSchema = z
-  .object({
-    user_id: z.number(),
-    username: z.string().optional(),
-    nickname: z.string().optional(),
-  })
-  .transform((user): ChatUser => ({
-    user_id: user.user_id,
-    username: user.username ?? "",
-    nickname: user.nickname ?? "",
-  }));
+const ChatUserSchema = z.object({
+  user_id: z.number(),
+  username: z.string().default(""),
+  nickname: z.string().default(""),
+});
 
 const ChatUserListResponseSchema = z.object({
   success: z.boolean(),
@@ -127,14 +112,6 @@ const ChatUserListResponseSchema = z.object({
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Send a text message to Synology Chat via the incoming webhook.
- *
- * @param incomingUrl - Synology Chat incoming webhook URL
- * @param text - Message text to send
- * @param userId - Optional user ID to mention with @
- * @returns true if sent successfully
- */
 export async function sendMessage(
   incomingUrl: string,
   text: string,
@@ -172,9 +149,6 @@ export async function sendMessage(
   return true;
 }
 
-/**
- * Send an OpenClaw-hosted immutable file URL to Synology Chat.
- */
 export async function sendHostedFileUrl(
   incomingUrl: string,
   fileUrl: SynologyHostedMediaUrl,
@@ -222,18 +196,13 @@ async function fetchChatUsers(
   return new Promise((resolve) => {
     let settled = false;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const clearDeadline = () => {
-      if (deadlineTimer !== undefined) {
-        clearTimeout(deadlineTimer);
-        deadlineTimer = undefined;
-      }
-    };
     const finish = (users: ChatUser[]) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearDeadline();
+      clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
       resolve(users);
     };
     let parsedUrl: URL;
@@ -368,13 +337,7 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
     return byNickname.user_id;
   }
 
-  // Then by username
-  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
-  if (byUsername) {
-    return byUsername.user_id;
-  }
-
-  return undefined;
+  return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
 function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {

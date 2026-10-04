@@ -1,11 +1,9 @@
-// Extracts media attachment references from reply history entries.
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaAttachment } from "../../media-understanding/types.js";
 import type { MsgContext } from "../templating.js";
-import type { HistoryEntry } from "./history.types.js";
 
 const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
 const RECENT_HISTORY_IMAGE_LIMIT = 4;
@@ -25,19 +23,8 @@ function isRemotePath(value: string): boolean {
   if (/^[a-z]:[\\/]/i.test(value)) {
     return false;
   }
-  try {
-    return new URL(value).protocol !== "file:";
-  } catch {
-    return false;
-  }
-}
-
-function resolveTimestamp(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
-function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {
-  return Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+  const parsed = URL.parse(value);
+  return parsed !== null && parsed.protocol !== "file:";
 }
 
 export function resolveRecentInboundHistoryImages(params: {
@@ -48,7 +35,7 @@ export function resolveRecentInboundHistoryImages(params: {
   ttlMs?: number;
   limit?: number;
 }): RecentInboundHistoryImage[] {
-  const nowMs = params.nowMs ?? resolveTimestamp(params.ctx.Timestamp) ?? Date.now();
+  const nowMs = params.nowMs ?? asFiniteNumber(params.ctx.Timestamp) ?? Date.now();
   const ttlMs = params.ttlMs ?? RECENT_HISTORY_IMAGE_TTL_MS;
   const limit = Math.max(0, params.limit ?? RECENT_HISTORY_IMAGE_LIMIT);
   if (limit === 0) {
@@ -57,10 +44,10 @@ export function resolveRecentInboundHistoryImages(params: {
 
   const out: RecentInboundHistoryImage[] = [];
   const seen = new Set<string>();
-  const entries = resolveHistoryEntries(params.ctx);
+  const entries = Array.isArray(params.ctx.InboundHistory) ? params.ctx.InboundHistory : [];
   for (let index = entries.length - 1; index >= 0 && out.length < limit; index -= 1) {
     const entry = expectDefined(entries[index], "entries entry at index");
-    const timestamp = resolveTimestamp(entry?.timestamp);
+    const timestamp = asFiniteNumber(entry.timestamp);
     if (timestamp === undefined || Math.abs(nowMs - timestamp) > ttlMs) {
       continue;
     }

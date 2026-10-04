@@ -4,9 +4,22 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
-import { resolveStateDir } from "../config/paths.js";
+import {
+  cloneEnvWithPlatformSemantics,
+  createConfigRuntimeEnv,
+} from "../config/config-env-vars.js";
+import { createConfigIoContext } from "../config/io.context.js";
+import { coerceConfig, readConfigFileIfPresent } from "../config/io.read-helpers.js";
+import { inspectConfigJsonRootSuffixWithContext } from "../config/io.recovery.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import {
+  assertNoRetiredStateFiles,
+  createRetiredStateInspectionError,
+} from "../infra/state-migrations.retired-files.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveUserPath } from "../utils.js";
 
 function resolveLegacyAuthAgentDir(agentDir?: string): string {
@@ -72,17 +85,22 @@ function listExistingAgentDirsFromState(
   );
 }
 
-/**
- * One canonical enumeration of legacy auth-store repair candidates. Sidecar
- * inline-recovery and flat-store SQLite migration must see the same dirs, or
- * decryptable sidecar secrets get imported as credential-less profiles.
- */
+/** Keep auth import and repair on the same physical owners. */
 export function listAuthProfileRepairCandidates(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   onUnavailable?: (pathname: string) => void,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
+  const isRetained = createRetainedAgentDatabaseMatcher(
+    env,
+    () =>
+      listAgentIds(cfg).map((agentId) => ({ agentId, path: resolveAgentDir(cfg, agentId, env) })),
+    {
+      kind: "agent-directory",
+      readDatabasePaths: () => resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }),
+    },
+  );
   const addCandidate = (agentDir: string | undefined): void => {
     // Retain the selected home's expanded directory for later SQLite writes too.
     const resolvedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
@@ -110,7 +128,7 @@ export function listAuthProfileRepairCandidates(
   for (const agentDir of listExistingAgentDirsFromState(env, onUnavailable)) {
     addCandidate(agentDir);
   }
-  return [...candidates.values()];
+  return [...candidates.values()].filter(({ authPath }) => !isRetained(path.dirname(authPath)));
 }
 
 export function resolveLegacyAuthProfilesPath(agentDir?: string): string {
@@ -123,4 +141,54 @@ export function resolveLegacyAuthStatePath(agentDir?: string): string {
 
 export function resolveLegacyFlatAuthPath(agentDir?: string): string {
   return path.join(resolveLegacyAuthAgentDir(agentDir), "auth.json");
+}
+
+export function listLegacyOAuthSidecarPaths(
+  env: NodeJS.ProcessEnv,
+  cfg?: OpenClawConfig,
+  stateDir?: string,
+): string[] {
+  const directory = path.join(
+    resolveOAuthDir(cfg ? createConfigRuntimeEnv(cfg, env) : env, stateDir),
+    "auth-profiles",
+  );
+  try {
+    return fs
+      .readdirSync(directory)
+      .filter((name) => /^[a-f0-9]{32}\.json$/.test(name))
+      .map((name) => path.join(directory, name));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      try {
+        fs.lstatSync(directory);
+      } catch (inspectionError) {
+        if (hasErrnoCode(inspectionError, "ENOENT")) {
+          return [];
+        }
+        throw createRetiredStateInspectionError(directory, inspectionError);
+      }
+    }
+    throw createRetiredStateInspectionError(directory, error);
+  }
+}
+
+export function assertNoRetiredOAuthSidecarsBeforeConfigRecovery(params: {
+  env: NodeJS.ProcessEnv;
+  configPath?: string;
+}): void {
+  const context = createConfigIoContext({
+    ...params,
+    env: cloneEnvWithPlatformSemantics(params.env),
+    observe: false,
+    shellEnvFallback: "defer",
+  });
+  const raw = readConfigFileIfPresent(context.deps, context.configPath);
+  if (raw !== undefined) {
+    inspectConfigJsonRootSuffixWithContext(context, raw, (candidate) => {
+      assertNoRetiredStateFiles(
+        "OAuth credential sidecars",
+        listLegacyOAuthSidecarPaths(context.deps.env, coerceConfig(candidate)),
+      );
+    });
+  }
 }

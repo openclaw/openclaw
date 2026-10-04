@@ -1,4 +1,3 @@
-// Microsoft plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 

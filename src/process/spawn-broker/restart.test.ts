@@ -1,9 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createSpawnBrokerHost } from "./host.js";
@@ -13,7 +12,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
 
 describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
-  it("recovers after more than five independently healthy generations", async () => {
+  it("recovers after more than five independently healthy generations", async ({ signal }) => {
     let onRecovered: ((pid: number) => void) | undefined;
     const host = createSpawnBrokerHost({ onReady: (pid) => onRecovered?.(pid) });
     try {
@@ -40,11 +39,7 @@ describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
         const recovered = createDeferredCore<number>();
         onRecovered = recovered.resolve;
         process.kill(previousPid, "SIGKILL");
-        const nextPid = await withTestTimeout(
-          recovered.promise,
-          5000,
-          `Broker recovery ${cycle + 1} did not become ready`,
-        );
+        const nextPid = await withinTest(recovered.promise, signal);
         expect(nextPid).not.toBe(previousPid);
         await host.ready();
       }
@@ -53,7 +48,9 @@ describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
       await host.close();
     }
   }, 20_000);
-  it("stops after bounded consecutive recovery failures following a healthy startup", async () => {
+  it("stops after bounded consecutive recovery failures following a healthy startup", async ({
+    signal,
+  }) => {
     const directory = tempDirs.make("openclaw-broker-restarts-");
     const marker = path.join(directory, "starts");
     const preload = path.join(directory, "fail-startup.mjs");
@@ -82,7 +79,12 @@ describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
         { timeout: 7000 },
       );
       await expect(host.ready()).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
-      await delay(2500);
+      await host.waitForCleanup();
+      // A generation failure can reject while another recovery is pending.
+      // Exhaustion also rejects the replacement readiness promise.
+      await expect(withinTest(host.ready(), signal)).rejects.toMatchObject({
+        code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+      });
       expect(await starts()).toBe(6);
     } finally {
       await host.close();

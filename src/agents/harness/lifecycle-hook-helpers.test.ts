@@ -1,5 +1,7 @@
 // Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -7,6 +9,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./lifecycle-hook-helpers.js";
+import { bindAgentHarnessHookMessages } from "./lifecycle-hook-messages.js";
 
 const createLegacyHookRunner = () => ({
   hasHooks: vi.fn(() => true),
@@ -29,8 +32,46 @@ const EVENT = {
 
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
+    log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
+
+  it.each(["agent_end", "before_agent_finalize"] as const)(
+    "loads %s evidence only for its subscriber and skips delivery when loading fails",
+    async (hook) => {
+      const messages = [{ role: "custom", content: "canonical evidence" }];
+      const dispatch = vi.fn(async (_event: { messages?: unknown[] }) => undefined);
+      const loadMessages = vi.fn(async () => messages);
+      let enabled = false;
+      const params = {
+        ctx: { runId: EVENT.runId },
+        event: EVENT,
+        hookRunner: {
+          hasHooks: () => enabled,
+          runAgentEnd: dispatch,
+          runBeforeAgentFinalize: dispatch,
+        } as never,
+      };
+      const run = () => {
+        bindAgentHarnessHookMessages(params.event, loadMessages);
+        return hook === "agent_end"
+          ? awaitAgentHarnessAgentEndHook(params)
+          : runAgentHarnessBeforeAgentFinalizeHook(params);
+      };
+      await run();
+      expect(loadMessages).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      enabled = true;
+      loadMessages.mockRejectedValueOnce(new Error("transcript owner retired"));
+      await run();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(`${hook} hook failed: Error: transcript owner retired`);
+      await run();
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ messages });
+      expect(EVENT.messages).toEqual([]);
+    },
+  );
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
     const hookRunner = createLegacyHookRunner();

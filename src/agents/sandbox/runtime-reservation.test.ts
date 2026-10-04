@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
 import { registerSandboxBackend } from "./backend.js";
 import type {
@@ -29,7 +32,17 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
 vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => undefined }));
 vi.mock("../exec-defaults.js", () => ({ resolveNodeExecEligibility: () => ({ canExec: false }) }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    disposeBackend?.();
+    disposeBackend = undefined;
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
 let config: OpenClawConfig;
 let workspaceDir: string;
 let disposeBackend: (() => void) | undefined;
@@ -39,6 +52,22 @@ let pruneTimeMs = Date.now();
 function advancePruneTime() {
   pruneTimeMs += 4 * 60 * 60 * 1000;
   vi.spyOn(Date, "now").mockReturnValue(pruneTimeMs);
+}
+
+function withImmediatePrune(cfg: OpenClawConfig): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        sandbox: {
+          ...cfg.agents?.defaults?.sandbox,
+          prune: { idleHours: 1, maxAgeDays: 0 },
+        },
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -60,14 +89,6 @@ beforeEach(() => {
       },
     },
   };
-});
-
-afterEach(() => {
-  disposeBackend?.();
-  disposeBackend = undefined;
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
 });
 
 function handle(params: CreateSandboxBackendParams) {
@@ -125,6 +146,48 @@ async function seedLegacyRuntime() {
 }
 
 describe("durable sandbox runtime generations", () => {
+  it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
+    const owner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(workspaceDir, "openclaw.json"),
+        role: "gateway",
+      },
+    });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const allocate = vi.fn();
+    install(async (params) => {
+      entered.resolve();
+      await resume.promise;
+      params.assertRuntimeCurrent?.();
+      allocate();
+      return handle(params);
+    });
+    const preparation = resolve();
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        preparation,
+        "Backend discovery not reached",
+      );
+      owner.release();
+      resume.resolve();
+      const error = await preparation.catch((failure: unknown) => failure);
+      expect(allocate).not.toHaveBeenCalled();
+      expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      expect((await readRegistry()).entries).toEqual([
+        expect.objectContaining({ runtimeState: "pending" }),
+      ]);
+    } finally {
+      resume.resolve();
+      await preparation.catch(() => {});
+      owner.release();
+    }
+  });
+
   it("replays a shared reservation from its original provider workspace", async () => {
     config.agents = {
       ...config.agents,
@@ -248,7 +311,7 @@ describe("durable sandbox runtime generations", () => {
     await expect(resolve()).rejects.toThrow("provider config invalid");
     expect(allocated.size).toBe(0);
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("provider config invalid");
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
       runtimeState: "removing-pending",
       workspaceDir,
@@ -264,7 +327,7 @@ describe("durable sandbox runtime generations", () => {
   it.each(["recreate", "prune"] as const)(
     "fences a legacy %s snapshot after concurrent adoption",
     async (operation) => {
-      const cfg = await seedLegacyRuntime();
+      await seedLegacyRuntime();
       const snapshot = await readRegistry();
       const started = createDeferred();
       const finish = createDeferred();
@@ -285,7 +348,7 @@ describe("durable sandbox runtime generations", () => {
       const removing =
         operation === "recreate"
           ? removeSandboxContainer("legacy-runtime")
-          : maybePruneSandboxes({ ...cfg, prune: { idleHours: 1, maxAgeDays: 0 } });
+          : maybePruneSandboxes(withImmediatePrune(config));
       const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
       await started.promise;
       try {
@@ -350,7 +413,7 @@ describe("durable sandbox runtime generations", () => {
       return backend;
     });
     await expect(resolve()).rejects.toThrow(error.message);
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     fail = false;
     await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-1" });
     expect(allocated).toEqual(["reserved-1", "reserved-1"]);
@@ -403,19 +466,28 @@ describe("durable sandbox runtime generations", () => {
       const creating = resolve();
       const failedCreation = expect(creating).rejects.toThrow("removed or is being removed");
       const id = await started.promise;
+      const discovery = createDeferred();
+      const readActualRegistry = registry.readRegistry;
+      vi.spyOn(registry, "readRegistry").mockImplementationOnce(() => {
+        const read = readActualRegistry();
+        void read.then(() => discovery.resolve(), discovery.reject);
+        return read;
+      });
       let removing: Promise<void>;
       if (operation === "prune") {
         advancePruneTime();
-        const cfg = resolveSandboxConfigForAgent(config, "test");
-        removing = maybePruneSandboxes({ ...cfg, prune: { idleHours: 1, maxAgeDays: 0 } });
+        removing = maybePruneSandboxes(withImmediatePrune(config));
       } else {
         removing = removeSandboxContainer(id);
       }
-      await vi.waitFor(async () => {
+      try {
+        await discovery.promise;
         expect((await readRegistryEntry(id))?.runtimeState).toBe("removing-pending");
-      });
-      expect(remove).not.toHaveBeenCalled();
-      finish.resolve();
+        expect(remove).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([failedCreation, removing]);
+      }
       await failedCreation;
       await removing;
       expect(remove).toHaveBeenCalledOnce();
@@ -429,7 +501,7 @@ describe("durable sandbox runtime generations", () => {
     const context = await resolve();
     remove.mockRejectedValueOnce(new Error("cleanup response lost"));
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("cleanup response lost");
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await expect(resolve()).rejects.toThrow("removed or is being removed");
     const backend = context?.backend;
     if (!backend) {

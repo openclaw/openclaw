@@ -2,9 +2,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import {
+  isPluginSourceModulePath,
+  tryNativeRequireModule,
+} from "../plugins/native-module-require.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
@@ -14,7 +17,7 @@ import {
   type FacadeModuleLocation,
 } from "./facade-loader.js";
 import {
-  createFacadeResolutionKey as createFacadeResolutionKeyShared,
+  createFacadeResolutionKey,
   resolveBundledMetadataManifestRecord,
   resolveRuntimeFacadeModuleLocation,
   resolveRegistryPluginModuleLocationFromRecords,
@@ -33,13 +36,6 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-function createFacadeResolutionKey(params: BundledPluginPublicSurfaceParams): string {
-  return createFacadeResolutionKeyShared({
-    ...params,
-    bundledPluginsDir: resolveBundledPluginsDir(params.env ?? process.env),
-  });
-}
-
 function resolveFacadeModuleLocationUncached(
   params: BundledPluginPublicSurfaceParams,
 ): { modulePath: string; boundaryRoot: string } | null {
@@ -65,7 +61,10 @@ function resolveFacadeModuleLocation(
   if (params.env !== undefined && params.env !== process.env) {
     return resolveFacadeModuleLocationUncached(params);
   }
-  const resolutionKey = `facade-registry:${createFacadeResolutionKey(params)}`;
+  const resolutionKey = `facade-registry:${createFacadeResolutionKey({
+    ...params,
+    bundledPluginsDir: resolveBundledPluginsDir(params.env ?? process.env),
+  })}`;
   const artifacts = getPluginCacheRoot(OPENCLAW_PACKAGE_ROOT).artifacts;
   const cached = artifacts.get(resolutionKey);
   if (cached !== undefined) {
@@ -102,14 +101,18 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   }
   try {
     const modulePath = fileURLToPath(
-      new URL("./facade-activation-check.runtime.js", import.meta.url),
+      new URL(
+        isPluginSourceModulePath(CURRENT_MODULE_PATH)
+          ? "./facade-activation-check.runtime.ts"
+          : "./facade-activation-check.runtime.js",
+        import.meta.url,
+      ),
     );
-    const loaded = getCachedPluginModuleLoader({
-      modulePath,
-      importerUrl: import.meta.url,
-      loaderFilename: import.meta.url,
-      transformOpenClawDependencies: false,
-    })(modulePath) as FacadeActivationCheckRuntimeModule;
+    const native = tryNativeRequireModule(modulePath);
+    if (!native.ok) {
+      throw new Error(`Host facade activation runtime requires native loading: ${modulePath}`);
+    }
+    const loaded = native.moduleExport as FacadeActivationCheckRuntimeModule;
     setFacadeActivationCheckRuntimeModule(loaded);
     return loaded;
   } catch (error) {
@@ -117,8 +120,7 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   }
 }
 
-// Dynamic import resolves the source graph under Vitest and warms the same memo
-// for subsequent synchronous calls.
+// Async and synchronous host readers share the same native module and memo.
 async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
   const module =
     getFacadeActivationCheckRuntimeModule() ??

@@ -7,6 +7,7 @@ import {
   quoteStructuredInputValue as quote,
   readStructuredInputText,
   snapshotStructuredInput,
+  STRUCTURED_INPUT_MAX_TEXT_CHARS,
   structuredInputEntries,
   structuredInputRecord as ownRecord,
   structuredInputString as ownString,
@@ -20,7 +21,7 @@ import type {
   StructuredInputValue,
 } from "./structured-input-boundary.js";
 import { compileStructuredInputField } from "./structured-input-schema.js";
-import type { AgentHarnessUserInputQuestion } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const MAX_FORM_FIELDS = 12;
 const MAX_SCHEMA_KEYS = 24;
@@ -94,7 +95,12 @@ export function compileStructuredInputForm(params: {
   if (typeof required === "string") {
     return unsupported(required);
   }
-  const intro = readStructuredInputText(params.message ?? params.fallbackMessage, MAX_MESSAGE_TEXT);
+  const richDisplay = options.allowRichForms === true;
+  const intro = readStructuredInputText(
+    params.message ?? params.fallbackMessage,
+    richDisplay ? STRUCTURED_INPUT_MAX_TEXT_CHARS : MAX_MESSAGE_TEXT,
+    richDisplay,
+  );
   if (!intro) {
     return unsupported(
       `OpenClaw declined ${protocol} form display text that is invalid or over-limit.`,
@@ -186,10 +192,8 @@ export function compileStructuredInputUrl(params: {
       `OpenClaw declined an invalid or over-limit ${params.protocolName} elicitation URL.`,
     );
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return unsupported(`OpenClaw declined an invalid ${params.protocolName} elicitation URL.`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {

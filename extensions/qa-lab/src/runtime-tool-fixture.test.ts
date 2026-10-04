@@ -1,113 +1,30 @@
 // Qa Lab tests cover runtime tool fixture plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupRuntimeToolFixtureTempRoots,
+  makeEnv,
+  MOCK_BASE_URL,
+  mockToolRequests,
+  runLiveRuntimeToolFixture,
+  runMockRuntimeToolFixture,
+  runtimePatchAddInput,
+  runtimePatchUpdateInput,
+  runtimeToolFixtureConfig,
+  simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
+  writeQaSessionTranscript,
+  writeRuntimeToolTranscripts,
+  type RuntimeToolFixtureConfig,
+  type RuntimeToolFixtureDeps,
+} from "../test/runtime-tool-fixture-helpers.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-
-const tempRoots: string[] = [];
-
-async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSuiteRuntimeEnv> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-tool-fixture-"));
-  const workspaceDir = path.join(tempRoot, "workspace");
-  await fs.mkdir(workspaceDir);
-  tempRoots.push(tempRoot);
-  return {
-    outputDir: tempRoot,
-    repoRoot: tempRoot,
-    providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.6-luna",
-    alternateModel: "openai/gpt-5.6-luna",
-    mock: null,
-    cfg: {},
-    transport: {} as QaSuiteRuntimeEnv["transport"],
-    gateway: {
-      baseUrl: "http://127.0.0.1:1",
-      tempRoot,
-      workspaceDir,
-      runtimeEnv: {},
-      call: vi.fn(),
-    },
-    ...overrides,
-  };
-}
-
-async function writeQaSessionTranscript(
-  env: QaSuiteRuntimeEnv,
-  sessionKey: string,
-  messages: Array<Record<string, unknown>>,
-) {
-  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
-  const sessionEnv = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
-  };
-  await upsertSessionEntry({
-    agentId: "qa",
-    env: sessionEnv,
-    sessionKey,
-    entry: { sessionId, updatedAt: Date.now() },
-  });
-  for (const message of messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "qa",
-      env: sessionEnv,
-      sessionId,
-      sessionKey,
-      message,
-    });
-  }
-}
-
-function transcriptToolCall(
-  toolName: string,
-  phase: "happy" | "failure",
-  input: Record<string, unknown>,
-) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "tool_use",
-        id: `call-${toolName}-${phase}`,
-        name: toolName,
-        input,
-      },
-    ],
-  };
-}
-
-function transcriptToolResult(
-  toolName: string,
-  phase: "happy" | "failure",
-  content: string,
-  isError?: boolean,
-) {
-  return {
-    role: "tool",
-    toolName,
-    tool_call_id: `call-${toolName}-${phase}`,
-    ...(isError === undefined ? {} : { isError }),
-    content,
-  };
-}
-
-async function writeRuntimeToolTranscripts(
-  env: QaSuiteRuntimeEnv,
-  toolName: string,
-  happyMessages: Array<Record<string, unknown>>,
-  failureMessages: Array<Record<string, unknown>>,
-) {
-  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, happyMessages);
-  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
-}
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
   await writeRuntimeToolTranscripts(
@@ -216,40 +133,6 @@ async function writeCodexNativePatchEvidence(
   ]);
 }
 
-async function simulateRuntimePatchHappyTurn(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
-  params: { sessionKey: string },
-  contents: string | null = "runtime patch\n",
-) {
-  if (params.sessionKey.endsWith(":happy") && contents !== null) {
-    await fs.writeFile(
-      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
-      contents,
-      "utf8",
-    );
-  }
-  return {};
-}
-
-type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
-type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
-
-const MOCK_BASE_URL = "http://127.0.0.1:9999";
-
-function runtimeToolFixtureConfig(
-  toolName: string,
-  overrides: RuntimeToolFixtureConfig = {},
-): RuntimeToolFixtureConfig {
-  return {
-    toolName,
-    toolCoverage: {
-      bucket: "openclaw-dynamic-integration",
-      expectedLayer: "openclaw-dynamic",
-    },
-    ...overrides,
-  };
-}
-
 function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
   return runtimeToolFixtureConfig("apply_patch", {
     toolCoverage: {
@@ -258,42 +141,6 @@ function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
       required: true,
     },
   });
-}
-
-function runtimeToolFixtureDeps(
-  params: {
-    tools?: Iterable<string>;
-    fetchJson?: RuntimeToolFixtureDeps["fetchJson"];
-    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  } = {},
-): RuntimeToolFixtureDeps {
-  return {
-    createSession: vi.fn(async (_env, _label, key) => key!),
-    readEffectiveTools: vi.fn(async () => new Set(params.tools)),
-    runAgentPrompt: params.runAgentPrompt ?? vi.fn(async () => ({})),
-    fetchJson: params.fetchJson ?? vi.fn(),
-    ensureImageGenerationConfigured: vi.fn(),
-  };
-}
-
-function runLiveRuntimeToolFixture(
-  env: QaSuiteRuntimeEnv,
-  params: {
-    toolName?: string;
-    config?: RuntimeToolFixtureConfig;
-    tools?: Iterable<string>;
-    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  } = {},
-) {
-  const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
-    env,
-    params.config ?? runtimeToolFixtureConfig(toolName),
-    runtimeToolFixtureDeps({
-      tools: params.tools ?? [toolName],
-      runAgentPrompt: params.runAgentPrompt,
-    }),
-  );
 }
 
 function runNativePatchFixture(
@@ -311,89 +158,6 @@ function runNativePatchFixture(
   });
 }
 
-function mockRequestLog(requests: Array<Record<string, unknown>>) {
-  return vi.fn().mockResolvedValueOnce({ cursor: 0 }).mockResolvedValueOnce(requests);
-}
-
-function mockToolRequests(params: {
-  toolName?: string;
-  happyArgs?: Record<string, unknown>;
-  happyOutput?: string;
-  failureArgs?: Record<string, unknown>;
-  failureOutput?: string;
-  happyCallId?: string;
-  happyOutputCallId?: string;
-  failureCallId?: string;
-  failureOutputCallId?: string;
-  omitHappyOutput?: boolean;
-  omitFailureOutput?: boolean;
-}) {
-  const toolName = params.toolName ?? "read";
-  const happyCallId = params.happyCallId ?? `call-${toolName}-happy`;
-  const failureCallId = params.failureCallId ?? `call-${toolName}-failure`;
-  return [
-    {
-      allInputText: `target=${toolName}`,
-      plannedToolCallId: happyCallId,
-      plannedToolName: toolName,
-      plannedToolArgs: params.happyArgs ?? { path: "README.md" },
-    },
-    ...(params.omitHappyOutput
-      ? []
-      : [
-          {
-            allInputText: `target=${toolName}`,
-            toolOutputCallId: params.happyOutputCallId ?? happyCallId,
-            toolOutput: params.happyOutput ?? "README contents",
-          },
-        ]),
-    {
-      allInputText: `failure target=${toolName}`,
-      plannedToolCallId: failureCallId,
-      plannedToolName: toolName,
-      plannedToolArgs: params.failureArgs ?? { path: "/missing" },
-    },
-    ...(params.omitFailureOutput
-      ? []
-      : [
-          {
-            allInputText: `failure target=${toolName}`,
-            toolOutputCallId: params.failureOutputCallId ?? failureCallId,
-            toolOutput: params.failureOutput ?? "ENOENT: no such file or directory",
-          },
-        ]),
-  ];
-}
-
-async function runMockRuntimeToolFixture(params: {
-  env?: QaSuiteRuntimeEnv;
-  toolName?: string;
-  requests: Array<Record<string, unknown>>;
-  config?: RuntimeToolFixtureConfig;
-  tools?: Iterable<string>;
-  runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  forceCodex?: boolean;
-}) {
-  const toolName = params.toolName ?? "read";
-  const env = params.env ?? (await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } }));
-  if (params.forceCodex) {
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-  }
-  return runRuntimeToolFixture(
-    env,
-    runtimeToolFixtureConfig(toolName, {
-      promptSnippet: `target=${toolName}`,
-      failurePromptSnippet: `failure target=${toolName}`,
-      ...params.config,
-    }),
-    runtimeToolFixtureDeps({
-      tools: params.tools ?? [toolName],
-      fetchJson: mockRequestLog(params.requests),
-      runAgentPrompt: params.runAgentPrompt,
-    }),
-  );
-}
-
 function asyncImageFixtureConfig(overrides: RuntimeToolFixtureConfig = {}) {
   return runtimeToolFixtureConfig("image_generate", {
     toolCoverage: {
@@ -406,17 +170,6 @@ function asyncImageFixtureConfig(overrides: RuntimeToolFixtureConfig = {}) {
     failurePromptSnippet: "failure target=image_generate",
     ...overrides,
   });
-}
-
-function runtimePatchAddInput(file = "runtime-tool-fixture-patch.txt") {
-  return `*** Begin Patch\n*** Add File: ${file}\n+runtime patch\n*** End Patch\n`;
-}
-
-function runtimePatchUpdateInput(
-  file = "../runtime-tool-fixture-denied.txt",
-  context = "runtime-tool-fixture-denied-original",
-) {
-  return `*** Begin Patch\n*** Update File: ${file}\n@@\n-${context}\n+runtime patch outside the workspace\n*** End Patch\n`;
 }
 
 async function runMockRuntimeToolFixtureWithOutputs(params: {
@@ -438,15 +191,10 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
   });
 }
 
-afterEach(async () => {
-  // The session store keeps the state database open under the temporary root, so
-  // Windows fails the removal with EBUSY unless the cached handle is released first.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture", () => {
   it("checks effective tools on the same session used for the happy prompt", async () => {
@@ -456,6 +204,7 @@ describe("runtime tool fixture", () => {
       "agent:qa:runtime-tool:read:happy",
     );
     const createdKeys: string[] = [];
+    const createdLabels: string[] = [];
     const promptKeys: string[] = [];
     const promptEvidence: Array<{
       requireSuccessfulTranscriptToolResult?: boolean;
@@ -473,11 +222,13 @@ describe("runtime tool fixture", () => {
         toolCoverage: {
           bucket: "openclaw-dynamic-integration",
           expectedLayer: "openclaw-dynamic",
+          capabilityLayer: "openclaw-dynamic-direct",
         },
       },
       {
-        createSession: vi.fn(async (_env, _label, key) => {
+        createSession: vi.fn(async (_env, label, key) => {
           createdKeys.push(key);
+          createdLabels.push(label);
           return key;
         }),
         readEffectiveTools,
@@ -497,6 +248,10 @@ describe("runtime tool fixture", () => {
     expect(createdKeys).toEqual([
       "agent:qa:runtime-tool:read:happy",
       "agent:qa:runtime-tool:read:failure",
+    ]);
+    expect(createdLabels).toEqual([
+      "Runtime tool fixture: read happy",
+      "Runtime tool fixture: read failure",
     ]);
     expect(promptKeys).toEqual([
       "agent:qa:runtime-tool:read:happy",
@@ -524,122 +279,6 @@ describe("runtime tool fixture", () => {
         "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
         "failure prompt did not settle",
       ].join("\n"),
-    );
-  });
-
-  it("requires live runtime tool fixtures to produce transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [{ role: "assistant", content: "I checked README.md and it looks good." }],
-      [{ role: "assistant", content: "The denied-input path looks good." }],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path tool call for read",
-    );
-  });
-
-  it("accepts live runtime tool fixtures only after transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeLiveRuntimeToolEvidence(env);
-
-    const details = await runLiveRuntimeToolFixture(env);
-
-    expect(details).toContain("read live provider happy planned args");
-    expect(details).toContain("read live provider failure planned args");
-  });
-
-  it("skips async live runtime tool fixtures when the happy path has no result", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [
-        transcriptToolCall("image_generate", "happy", {
-          prompt: "QA lighthouse runtime parity fixture",
-        }),
-      ],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("planned call without a linked successful result");
-  });
-
-  it("still requires async live runtime tool fixtures to call the happy-path tool", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [{ role: "assistant", content: "I can start image generation later." }],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("expected live happy-path tool call for image_generate");
-  });
-
-  it("requires live failure fixtures to produce failure-shaped tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult(
-          "read",
-          "happy",
-          "README documents invalid requests, errors, and denied inputs.",
-        ),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "README contents"),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live failure-path tool failure output for read",
-    );
-  });
-
-  it("rejects failure-shaped live happy-path tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult("read", "happy", "ENOENT: no such file or directory", true),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "ENOENT: no such file or directory", true),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path successful tool output for read",
     );
   });
 
@@ -706,7 +345,6 @@ describe("runtime tool fixture", () => {
 
   it.each([
     "apply_patch failed: path escapes sandbox root",
-    "Operation not permitted (os error 1)",
     "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("verifies native Codex patch success and workspace denial: %s", async (failureOutput) => {
     const env = await makeEnv();
@@ -728,8 +366,8 @@ describe("runtime tool fixture", () => {
     });
 
     expect(promptEvidence).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: undefined },
     ]);
     expect(details).toContain("apply_patch live provider happy planned args");
     expect(details).toContain("runtime-tool-fixture-patch.txt");
@@ -768,8 +406,8 @@ describe("runtime tool fixture", () => {
     ).resolves.toContain("apply_patch live provider happy planned args");
 
     expect(promptEvidence).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: undefined },
     ]);
   });
 
@@ -778,8 +416,7 @@ describe("runtime tool fixture", () => {
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
     await writeCodexNativePatchEvidence(env, "apply_patch failed: path escapes sandbox root", {
       happyArguments: {
-        input:
-          "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+        input: runtimePatchAddInput(),
         cwd: path.resolve(env.gateway.workspaceDir, ".."),
       },
     });
@@ -812,12 +449,8 @@ describe("runtime tool fixture", () => {
     const env = await makeEnv();
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
     await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
-      happyArguments: encode(
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      ),
-      failureArguments: encode(
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
-      ),
+      happyArguments: encode(runtimePatchAddInput()),
+      failureArguments: encode(runtimePatchUpdateInput()),
       ...("shadowInput" in testCase ? { happyInput: {}, failureInput: {} } : {}),
     });
 
@@ -873,28 +506,31 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow();
   });
 
-  it("verifies executed patch envelopes with canonical absolute target paths", async () => {
-    const env = await makeEnv();
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-    const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
-    const deniedPath = path.resolve(
-      env.gateway.workspaceDir,
-      "..",
-      "runtime-tool-fixture-denied.txt",
-    );
-    await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
-      happyArguments: {
-        input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
-      },
-      failureArguments: {
-        input: `*** Begin Patch\n*** Update File: ${deniedPath}\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
-      },
-    });
+  it.each(["@@\n", "@@ runtime-tool-fixture-denied-original\n", ""])(
+    "verifies canonical absolute patch targets with update marker %j",
+    async (updateMarker) => {
+      const env = await makeEnv();
+      env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+      const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
+      const deniedPath = path.resolve(
+        env.gateway.workspaceDir,
+        "..",
+        "runtime-tool-fixture-denied.txt",
+      );
+      await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
+        happyArguments: {
+          input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
+        },
+        failureArguments: {
+          input: `*** Begin Patch\n*** Update File: ${deniedPath}\n${updateMarker}-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
+        },
+      });
 
-    await expect(runNativePatchFixture(env)).resolves.toContain(
-      "apply_patch live provider happy planned args",
-    );
-  });
+      await expect(runNativePatchFixture(env)).resolves.toContain(
+        "apply_patch live provider happy planned args",
+      );
+    },
+  );
 
   it("rejects native patch transcripts that claim success without creating the workspace file", async () => {
     const env = await makeEnv();
@@ -1079,7 +715,6 @@ describe("runtime tool fixture", () => {
 
   it.each([
     "Operation not permitted",
-    "Operation not permitted (os error 1)",
     "EPERM: sandbox denied the requested patch",
     "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("accepts native sandbox denial as a mock patch failure: %s", async (failureOutput) => {
@@ -1087,12 +722,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput,
@@ -1105,12 +738,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput: "Error: failed to find expected lines in runtime-tool-fixture-denied.txt",
@@ -1128,12 +759,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput: "Error: Path escapes sandbox root",
@@ -1142,45 +771,6 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow(
       "expected apply_patch to create runtime-tool-fixture-patch.txt with exact contents",
     );
-  });
-
-  it.each([
-    {
-      label: "happy-path file",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-wrong.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
-      expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
-    },
-    {
-      label: "failure-path file",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-wrong.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-    {
-      label: "failure-path context",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-context-that-does-not-exist\n+runtime patch outside the workspace\n*** End Patch\n",
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-  ])("rejects linked mock patch evidence for the wrong $label", async (testCase) => {
-    await expect(
-      runMockRuntimeToolFixtureWithOutputs({
-        toolName: "apply_patch",
-        happyArgs: { input: testCase.happyInput },
-        failureArgs: { input: testCase.failureInput },
-        happyOutput: "Successfully applied patch",
-        failureOutput: "Error: Path escapes sandbox root",
-      }),
-    ).rejects.toThrow(testCase.expectedError);
   });
 
   it("rejects unlinked private-QA Codex patch results without waiting for a transcript", async () => {
@@ -1289,13 +879,6 @@ describe("runtime tool fixture", () => {
         }),
       }),
     ).rejects.toThrow("planned call without a linked successful result");
-  });
-
-  it("accepts mock runtime tool fixtures only after planned calls return output", async () => {
-    const details = await runMockRuntimeToolFixture({ requests: mockToolRequests({}) });
-
-    expect(details).toContain("read mock provider happy planned args");
-    expect(details).toContain("read mock provider failure planned args");
   });
 
   it("skips non-required mock fixtures when both paths are only planned", async () => {
@@ -1463,45 +1046,6 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("read mock provider happy planned args");
   });
 
-  it("rejects unrelated tool output after a planned mock runtime tool call", async () => {
-    await expect(
-      runMockRuntimeToolFixture({
-        requests: mockToolRequests({
-          happyOutputCallId: "call-write-happy",
-          happyOutput: "README contents from some other tool",
-        }),
-      }),
-    ).rejects.toThrow("expected mock happy-path tool output for read");
-  });
-
-  it("rejects mismatched planned and output call ids on the same mock request", async () => {
-    const requests = [
-      {
-        allInputText: "target=read",
-        plannedToolCallId: "call-read-happy",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "README.md" },
-        toolOutputCallId: "call-write-previous",
-        toolOutput: "previous write output",
-      },
-      {
-        allInputText: "failure target=read",
-        plannedToolCallId: "call-read-failure",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "/missing" },
-      },
-      {
-        allInputText: "failure target=read",
-        toolOutputCallId: "call-read-failure",
-        toolOutput: "ENOENT: no such file or directory",
-      },
-    ];
-
-    await expect(runMockRuntimeToolFixture({ requests })).rejects.toThrow(
-      "expected mock happy-path tool output for read",
-    );
-  });
-
   it("still fails required OpenClaw dynamic fixtures when the tool is absent", async () => {
     const env = await makeEnv();
 
@@ -1510,4 +1054,3 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("web_search not present in effective tools");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

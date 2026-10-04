@@ -2,8 +2,9 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -11,9 +12,7 @@ import {
 import {
   captureWarmImage,
   checkpointResult,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   LEASE_ID,
@@ -203,7 +202,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
 
       clock.mockReturnValue(now + ageMs + 14 * 24 * 60 * 60 * 1_000 + 1);
-      // This lease was never enrolled, so teardown sweeps without capturing another image.
+      // An inspection-only lease owns no profile and must not sweep unrelated images.
       const inspectionOnlyLease = {
         leaseId: operationLeaseId(`provision:v2:${"3".repeat(64)}`),
         profile: PROFILE,
@@ -212,6 +211,14 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         await restarted.provider.inspect(inspectionOnlyLease);
         await restarted.provider.destroy(inspectionOnlyLease);
         expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
+      }
+      expect(providerCheckpoints).toEqual(new Set([retainedId]));
+      for (let sweep = 0; sweep < 2; sweep++) {
+        await restarted.provider.maintain!({
+          profiles: [PROFILE],
+          signal: new AbortController().signal,
+          assertCurrent() {},
+        });
       }
       expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       expect(restarted.warn).not.toHaveBeenCalled();

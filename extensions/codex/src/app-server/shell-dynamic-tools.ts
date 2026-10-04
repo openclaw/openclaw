@@ -13,10 +13,19 @@ type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME = "gateway_exec";
 export const CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME = "gateway_process";
+const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
+  "exec",
+  "process",
+  "sandbox_exec",
+  "sandbox_process",
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
+]);
+
 const PROCESS_FOLLOWUP_TEXT =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
-/** Returns true when plugin config explicitly removes any named dynamic tool. */
 export function isCodexDynamicToolExcluded(
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
   names: readonly string[],
@@ -48,29 +57,16 @@ export async function createNodeExecAliasDynamicTool(
     host: "node",
     ...(pinnedNode ? { node: pinnedNode } : {}),
   });
-  const execute: OpenClawDynamicTool["execute"] = async (toolCallId, args, signal, onUpdate) => {
-    const result = await pinnedTool.execute(toolCallId, args, signal, onUpdate);
-    return {
-      ...result,
-      content: result.content.map((item) =>
-        item.type === "text"
-          ? Object.assign({}, item, {
-              text: item.text.replace(
-                PROCESS_FOLLOWUP_TEXT,
-                "Remote-node background follow-up is unavailable. Wait for the command to complete.",
-              ),
-            })
-          : item,
-      ),
-    };
-  };
   return {
     ...pinnedTool,
     name: CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     description: pinnedNode
       ? "Run a shell command to completion on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work when it is available."
       : "Run a shell command to completion on an OpenClaw remote node. The sole connected node that can execute commands is selected automatically; select by name or id when several can. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work when it is available.",
-    execute,
+    execute: withProcessFollowupText(
+      pinnedTool,
+      "Remote-node background follow-up is unavailable. Wait for the command to complete.",
+    ),
   };
 }
 
@@ -109,22 +105,29 @@ export function createSandboxExecProjection(execTool: OpenClawDynamicTool): Open
     name: "sandbox_exec",
     description:
       "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available.",
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const result = await execTool.execute(toolCallId, args, signal, onUpdate);
-      return {
-        ...result,
-        content: result.content.map((item) =>
-          item.type === "text"
-            ? Object.assign({}, item, {
-                text: item.text.replace(
-                  PROCESS_FOLLOWUP_TEXT,
-                  "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                ),
-              })
-            : item,
-        ),
-      };
-    },
+    execute: withProcessFollowupText(
+      execTool,
+      "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+    ),
+  };
+}
+
+function withProcessFollowupText(
+  tool: OpenClawDynamicTool,
+  followupText: string,
+): OpenClawDynamicTool["execute"] {
+  return async (toolCallId, args, signal, onUpdate) => {
+    const result = await tool.execute(toolCallId, args, signal, onUpdate);
+    return {
+      ...result,
+      content: result.content.map((item) =>
+        item.type === "text"
+          ? Object.assign({}, item, {
+              text: item.text.replace(PROCESS_FOLLOWUP_TEXT, followupText),
+            })
+          : item,
+      ),
+    };
   };
 }
 
@@ -137,4 +140,21 @@ export function createSandboxProcessProjection(
     description:
       "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
+}
+
+/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
+export function placeDisabledNativeShellToolsInDirectNamespace<
+  T extends { name: string; catalogMode?: string },
+>(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
+  if (nativeToolSurfaceEnabled !== false) {
+    return tools;
+  }
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }

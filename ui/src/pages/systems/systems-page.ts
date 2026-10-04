@@ -20,10 +20,11 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSystemsBackups } from "./systems-backups.ts";
 import { SystemsController } from "./systems-controller.ts";
 import type { SystemsRouteData } from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
-import { systemKind, systemName, systemStatus } from "./systems-sidebar.ts";
+import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.ts";
 import {
   SYSTEMS_GATEWAY_STALE_MS,
   SYSTEMS_NODE_STALE_MS,
@@ -136,23 +137,34 @@ class SystemsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: SystemsRouteData;
   @property({ type: Boolean }) presented = true;
   private activeController: SystemsController | undefined;
-  private readonly poll = new PollController(this, 15_000, () => {
-    if (
-      this.presented &&
-      document.visibilityState !== "hidden" &&
-      (this.routeData?.controller.showStats || this.routeData?.controller.showDetails)
-    ) {
-      void this.routeData?.controller.refreshTelemetry();
-    }
-  });
+  private readonly poll = new PollController(
+    this,
+    15_000,
+    () => {
+      const controller = this.routeData?.controller;
+      if (!this.presented || !controller) {
+        return;
+      }
+      if (controller.needsInventoryRefresh) {
+        void controller.refresh();
+      } else if (controller.showStats || controller.showDetails) {
+        void controller.refreshTelemetry();
+      }
+      if (
+        (!controller.selected || controller.selectedId === "gateway") &&
+        !controller.needsInventoryRefresh
+      ) {
+        void controller.refreshBackups();
+      }
+    },
+    true,
+    "visible",
+  );
 
   constructor() {
     super();
     void this.poll;
-    new SubscriptionsController(this).watch(
-      () => this.routeData?.controller,
-      (controller, notify) => controller.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.routeData?.controller);
   }
 
   override connectedCallback(): void {
@@ -222,7 +234,7 @@ class SystemsPage extends OpenClawLightDomElement {
         <dt>${t("systems.status")}</dt>
         <dd>${controller.connected ? systemStatus(row) : t("systems.offline")}</dd>
         <dt>${t("systems.platform")}</dt>
-        <dd>${environment.platform ?? row.node?.platform ?? t("systems.unknown")}</dd>
+        <dd>${systemPlatform(row) ?? t("systems.unknown")}</dd>
       </dl>
       <h3>${t("systems.telemetry")}</h3>
       ${renderMeasurements(row, controller)}
@@ -249,7 +261,8 @@ class SystemsPage extends OpenClawLightDomElement {
                   event.preventDefault();
                   controller.context.navigate(face, target.options);
                 }}
-                ><strong>${session.displayName ?? session.label ?? session.key}</strong
+                ><strong class="systems-session-link__title"
+                  >${session.displayName ?? session.label ?? session.key}</strong
                 ><span>${t("systems.relations." + relation.kind)}</span></a
               >`;
             })
@@ -269,6 +282,57 @@ class SystemsPage extends OpenClawLightDomElement {
         ${(environment.capabilities ?? []).map((capability) => html`<span>${capability}</span>`)}
       </div>
     </aside>`;
+  }
+
+  private renderHostDesktopSetup(controller: SystemsController, row: SystemsInventoryRow) {
+    const setup = row.environment.desktopSetup;
+    const enabled = controller.hostDesktopEnabled;
+    const isMac = systemPlatform(row)?.startsWith("macOS") === true;
+    const ready = setup?.state === "ready" || setup?.state === "managed";
+    const title = enabled
+      ? "systems.desktopSetupEnabled"
+      : setup?.state === "managed"
+        ? "systems.managedDesktopConfigured"
+        : setup?.state === "ready"
+          ? isMac
+            ? "systems.screenSharingDetected"
+            : "systems.desktopDetected"
+          : setup?.state === "needs-server"
+            ? isMac
+              ? "systems.screenSharingNeeded"
+              : "systems.desktopServerNeeded"
+            : "systems.desktopSetupAttention";
+    const hint = enabled
+      ? "systems.desktopSetupConnecting"
+      : ready
+        ? "systems.desktopSetupEnableHint"
+        : isMac && setup?.state === "needs-server"
+          ? "systems.screenSharingSetupHint"
+          : "systems.desktopServerSetupHint";
+    return html`<div class="systems-state" role="status">
+      <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
+      <h2>${t(title)}</h2>
+      <p>${t(hint)}</p>
+      ${setup?.state === "unsupported" && setup.detail ? html`<p>${setup.detail}</p>` : nothing}
+      ${controller.desktopSetupError ? html`<p class="systems-callout--error" role="alert">${controller.desktopSetupError}</p>` : nothing}
+      ${
+        !enabled && ready
+          ? html`
+              <button
+                class="btn primary systems-text-button"
+                ?disabled=${!controller.canEnableHostDesktop || controller.desktopSetupBusy}
+                @click=${() => void controller.enableHostDesktop()}
+              >
+                ${t(controller.desktopSetupBusy ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
+              </button>
+              <p>
+                ${t(controller.context.runtimeConfig.canPatch === true ? "systems.desktopSetupApplyHint" : "systems.desktopSetupAdminHint")}
+              </p>
+            `
+          : nothing
+      }
+      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh("manual")}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
+    </div>`;
   }
 
   override render() {
@@ -308,7 +372,11 @@ class SystemsPage extends OpenClawLightDomElement {
           : row.environment.status !== "available"
             ? t("systems.offlineHint")
             : !row.environment.desktop
-              ? t("systems.noDesktopHint")
+              ? t(
+                  row.environment.id === "gateway"
+                    ? "systems.noHostDesktopHint"
+                    : "systems.noDesktopHint",
+                )
               : t("systems.accessHint");
     return html`<section class="systems-workspace" aria-label=${t("systems.title")}>
       <header class="systems-toolbar">
@@ -348,7 +416,7 @@ class SystemsPage extends OpenClawLightDomElement {
           ${icons.panelRightOpen}
         </button>
       </header>
-      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh()} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
+      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh("manual")} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
       ${!controller.connected ? html`<div class="systems-callout" role="status">${t("systems.offlineGateway")}</div>` : nothing}
       ${
         auxiliaryErrors.length
@@ -359,6 +427,7 @@ class SystemsPage extends OpenClawLightDomElement {
           : nothing
       }
       ${controller.showStats && row ? renderMeasurements(row, controller) : nothing}
+      ${!row || row.environment.id === "gateway" ? renderSystemsBackups(controller) : nothing}
       <div class="systems-body">
         <div class="systems-desktop">
           ${
@@ -374,12 +443,20 @@ class SystemsPage extends OpenClawLightDomElement {
                   .requestedSource=${row.environment.id}
                   .basePath=${controller.context.basePath}
                 ></openclaw-desktop-panel>`
-              : html`<div class="systems-state" role="status">
-                  <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
-                  <h2>${emptyTitle}</h2>
-                  <p>${emptyHint}</p>
-                  ${row ? html`<button class="systems-text-button" @click=${() => controller.toggleDetails()}>${t("systems.details")}</button>` : nothing}
-                </div>`
+              : row?.environment.id === "gateway" &&
+                  controller.connected &&
+                  row.environment.status === "available" &&
+                  (row.environment.desktopSetup ||
+                    (row.environment.desktop &&
+                      controller.hostDesktopEnabled &&
+                      controller.context.runtimeConfig.canPatch === true))
+                ? this.renderHostDesktopSetup(controller, row)
+                : html`<div class="systems-state" role="status">
+                    <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
+                    <h2>${emptyTitle}</h2>
+                    <p>${emptyHint}</p>
+                    ${row ? html`<button class="systems-text-button" @click=${() => controller.toggleDetails()}>${t("systems.details")}</button>` : nothing}
+                  </div>`
           }
         </div>
         ${controller.showDetails && row ? this.renderDetails(controller, row) : nothing}

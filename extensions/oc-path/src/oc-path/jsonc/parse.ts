@@ -1,24 +1,15 @@
-// OC Path module implements parse behavior.
-import { type ParseError, parseTree, printParseErrorCode } from "jsonc-parser/lib/esm/main.js";
+import {
+  type Node as JsoncParserNode,
+  type ParseError,
+  parseTree,
+  printParseErrorCode,
+} from "jsonc-parser/lib/esm/main.js";
 import type { Diagnostic } from "../ast.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
 
 const MAX_PARSE_DEPTH = 256;
 
-/**
- * Hard cap on jsonc input size. `parseTree` is iterative and stack-safe
- * but allocates a tree node per token regardless of depth — a 16 MiB
- * input expanding to millions of nodes hits memory pressure long before
- * `nodeToJsoncValue`'s `MAX_PARSE_DEPTH` walk would notice. Cap at the
- * source level so allocation is bounded by file size, not token count.
- *
- * 16 MiB is well past every workspace-jsonc shape we care about
- * (gateway.jsonc / openclaw.json / .openclaw/* are all <100 KiB in
- * practice; the largest LKG-tracked configs we've seen sit at single-
- * digit MB). Operators with legitimate larger inputs can lift the cap
- * by patching this constant — no SDK affordance because it isn't a
- * supported configuration.
- */
+// parseTree allocates before our depth check; cap source bytes to bound that allocation.
 export const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
 const JSONC_PARSE_INVALID_SYMBOL = 1;
 const JSONC_PARSE_END_OF_FILE_EXPECTED = 9;
@@ -32,19 +23,7 @@ type LineMap = {
   lineForOffset(offset: number): number;
 };
 
-type JsoncParserNode = {
-  readonly type: "array" | "boolean" | "null" | "number" | "object" | "property" | "string";
-  readonly offset: number;
-  readonly length: number;
-  readonly value?: unknown;
-  readonly children?: readonly JsoncParserNode[];
-};
-
 export function parseJsonc(raw: string): JsoncParseResult {
-  // Pre-parse byte-length cap. Symmetric with the post-parse depth cap
-  // at `nodeToJsoncValue`. Without this, `parseTree` would allocate the
-  // full tree before our walker noticed; bounding at the source keeps
-  // memory pressure proportional to input size.
   const inputBytes = Buffer.byteLength(raw, "utf8");
   if (inputBytes > MAX_JSONC_INPUT_BYTES) {
     return {
@@ -70,7 +49,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
     allowTrailingComma: true,
     disallowComments: false,
     allowEmptyContent: true,
-  }) as JsoncParserNode | undefined;
+  });
   const lineMap = createLineMap(raw);
   const diagnostics = errors.map((error) => toDiagnostic(error, lineMap, tree));
   let root: JsoncValue | null = null;

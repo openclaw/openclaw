@@ -1,4 +1,3 @@
-// Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -8,6 +7,7 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -29,6 +29,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -49,10 +50,10 @@ import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
+import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
@@ -84,19 +85,22 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
-import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
+import {
+  prepareSessionPatchModelSelection,
+  resolveSessionPatchModelSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
+import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
+import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
-  snapshotAgentModelFallback,
+  isSessionStatusModelPatchOrigin,
 } from "./session-model-patch-origin.js";
-import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
+import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
-
-function invalid(message: string): { ok: false; error: ErrorShape } {
-  return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
 
 type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
@@ -115,12 +119,13 @@ type SessionPatchProjectionParams = {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
 };
 
 type SessionPatchProjectionResult =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; validateModelSelection?: () => ErrorShape | undefined }
   | { ok: false; error: ErrorShape };
 
 type SessionPatchPreparation =
@@ -186,7 +191,7 @@ function* projectSessionPatchSteps(
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
-  if (typeof patch.archived === "boolean") {
+  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch) {
     if (!params.existingEntry?.sessionId) {
       return invalid(`session not found: ${storeKey}`);
     }
@@ -208,7 +213,7 @@ function* projectSessionPatchSteps(
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  let resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
@@ -238,6 +243,7 @@ function* projectSessionPatchSteps(
     );
   };
   let loadedModelCatalog: ModelCatalogSnapshot | undefined;
+  let validateModelSelection: (() => ErrorShape | undefined) | undefined;
   let catalogPrepared = false;
   function* loadPreparedModelCatalogForPatch(): Generator<
     void,
@@ -278,13 +284,19 @@ function* projectSessionPatchSteps(
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
+  // A read acknowledgement is not session activity: ageing the row here would move a
+  // just-opened session to the top of recency order, so only the read state commits.
+  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
+  const nextUpdatedAt = unreadAckOnly
+    ? (existing?.updatedAt ?? now)
+    : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
     // Reset retains sessionId, so rollback also needs the original lifecycle revision.
     ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
-    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    updatedAt: nextUpdatedAt,
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
@@ -294,6 +306,24 @@ function* projectSessionPatchSteps(
     delete next.autoLabel;
     delete next.category;
     delete next.displayName;
+  }
+
+  function applyNormalizedPreference<Key extends keyof SessionEntry & keyof SessionsPatchParams>(
+    key: Key,
+    normalize: (raw: NonNullable<SessionsPatchParams[Key]>) => SessionEntry[Key] | undefined,
+    error: string,
+  ): string | undefined {
+    const raw = patch[key];
+    if (raw === null) {
+      delete next[key];
+    } else if (raw !== undefined) {
+      const value = normalize(raw);
+      if (value === undefined) {
+        return error;
+      }
+      next[key] = value;
+    }
+    return undefined;
   }
 
   const subagentPolicyError = applySessionsPatchSubagentPolicy({
@@ -353,54 +383,22 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("archived" in patch) {
-    if (patch.archived === true) {
-      // Archived sessions leave the active quick-access set in the same write.
-      if (next.archivedAt === undefined) {
-        next.archivedAt = now;
-        next.archiveReason = "manual";
-        if (params.archivedBy) {
-          next.archivedBy = params.archivedBy;
-        } else {
-          delete next.archivedBy;
-        }
-      }
-      delete next.pinnedAt;
-    } else {
-      delete next.archivedAt;
-      delete next.archivedBy;
-      delete next.archiveReason;
+  if (patch.snoozedUntil !== undefined && patch.snoozedUntil !== null) {
+    const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
+    if (protectedError) {
+      return { ok: false, error: protectedError };
     }
   }
-
-  const pinnable = isPinnableSessionEntry(storeKey, next);
-  if (!pinnable) {
-    delete next.pinnedAt;
-  }
-  if ("pinned" in patch) {
-    if (patch.pinned === true) {
-      if (next.archivedAt !== undefined) {
-        return invalid("cannot pin an archived session; restore it first");
-      }
-      if (!pinnable) {
-        return invalid("cannot pin a child session; pin its parent session instead");
-      }
-      next.pinnedAt ??= now;
-    } else {
-      delete next.pinnedAt;
-    }
-  }
-
-  if ("unread" in patch) {
-    if (patch.unread === true) {
-      // This timestamp is also the conditional-ack revision. Repeated writes in
-      // one clock tick must still represent distinct manual unread intent.
-      next.markedUnreadAt = Math.max(now, (params.existingEntry?.markedUnreadAt ?? 0) + 1);
-    } else {
-      next.lastReadAt = now;
-      delete next.markedUnreadAt;
-      delete next.agentStatus;
-    }
+  const lifecycleFlagsError = applySessionPatchLifecycleFlags({
+    patch,
+    next,
+    existingEntry: params.existingEntry,
+    storeKey,
+    now,
+    archivedBy: params.archivedBy,
+  });
+  if (lifecycleFlagsError) {
+    return { ok: false, error: lifecycleFlagsError };
   }
 
   const rawThinking = patch.thinkingLevel;
@@ -420,15 +418,13 @@ function* projectSessionPatchSteps(
     next.thinkingLevel = normalized;
   }
 
-  const rawFastMode = patch.fastMode;
-  if (rawFastMode === null) {
-    delete next.fastMode;
-  } else if (rawFastMode !== undefined) {
-    const normalized = normalizeFastMode(rawFastMode);
-    if (normalized === undefined) {
-      return invalid('invalid fastMode (use true, false, or "auto")');
-    }
-    next.fastMode = normalized;
+  const fastModeError = applyNormalizedPreference(
+    "fastMode",
+    normalizeFastMode,
+    'invalid fastMode (use true, false, "auto", or "ultrafast")',
+  );
+  if (fastModeError) {
+    return invalid(fastModeError);
   }
 
   if ("toolOverrides" in patch) {
@@ -462,82 +458,30 @@ function* projectSessionPatchSteps(
     applyTraceOverride(next, parsed.value);
   }
 
-  if ("reasoningLevel" in patch) {
-    const raw = patch.reasoningLevel;
-    if (raw === null) {
-      delete next.reasoningLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeReasoningLevel(raw);
-      if (!normalized) {
-        return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
-      }
-      // Persist "off" explicitly so that resolveDefaultReasoningLevel()
-      // does not re-enable reasoning for capable models (#24406).
-      next.reasoningLevel = normalized;
-    }
+  // Explicit "off" values remain stored so session preferences override defaults.
+  const preferenceError =
+    applyNormalizedPreference(
+      "reasoningLevel",
+      normalizeReasoningLevel,
+      'invalid reasoningLevel (use "on"|"off"|"stream")',
+    ) ??
+    applyNormalizedPreference(
+      "responseUsage",
+      normalizeUsageDisplay,
+      'invalid responseUsage (use "off"|"tokens"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "elevatedLevel",
+      normalizeElevatedLevel,
+      'invalid elevatedLevel (use "on"|"off"|"ask"|"full")',
+    );
+  if (preferenceError) {
+    return invalid(preferenceError);
   }
 
-  const rawResponseUsage = patch.responseUsage;
-  if (rawResponseUsage === null) {
-    delete next.responseUsage;
-  } else if (rawResponseUsage !== undefined) {
-    const normalized = normalizeUsageDisplay(rawResponseUsage);
-    if (!normalized) {
-      return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
-    }
-    next.responseUsage = normalized;
-  }
-
-  if ("elevatedLevel" in patch) {
-    const raw = patch.elevatedLevel;
-    if (raw === null) {
-      delete next.elevatedLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeElevatedLevel(raw);
-      if (!normalized) {
-        return invalid('invalid elevatedLevel (use "on"|"off"|"ask"|"full")');
-      }
-      // Persist "off" explicitly so patches can override defaults.
-      next.elevatedLevel = normalized;
-    }
-  }
-
-  if ("execHost" in patch) {
-    const raw = patch.execHost;
-    if (raw === null) {
-      delete next.execHost;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecTarget(raw) ?? undefined;
-      if (!normalized) {
-        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
-      }
-      next.execHost = normalized;
-    }
-  }
-
-  if ("execNode" in patch) {
-    if (patch.execNode === null) {
-      delete next.execNode;
-      delete next.execCwd;
-      if (next.execHost === "node") {
-        delete next.execHost;
-      }
-    } else if (patch.execNode !== undefined) {
-      const trimmed = normalizeOptionalString(patch.execNode) ?? "";
-      if (!trimmed) {
-        return invalid("invalid execNode: empty");
-      }
-      if (trimmed !== next.execNode) {
-        // A cwd belongs to one node's filesystem; never carry it across node bindings.
-        delete next.execCwd;
-      }
-      next.execNode = trimmed;
-    }
-  }
-  if (patch.permissionMode === null) {
-    delete next.permissionMode;
-  } else if (patch.permissionMode !== undefined) {
-    next.permissionMode = patch.permissionMode;
+  const executionError = applySessionExecutionSettings(next, patch);
+  if (executionError) {
+    return invalid(executionError);
   }
   if (
     "agentRuntime" in patch &&
@@ -548,13 +492,23 @@ function* projectSessionPatchSteps(
   if (patch.agentRuntime === null) {
     applyModelRuntimeDirective(next, { kind: "clear" });
   }
+  if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    yield* loadPreparedModelCatalogForPatch();
+  }
   if ("model" in patch) {
+    const statusModelPatch = isSessionStatusModelPatchOrigin();
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+        : createAgentPatchedSessionModelFallback({
+            ...resolveSessionModelRef(cfg, next, sessionAgentId),
+            entry: next,
+            ts: now,
+          })
       : undefined;
-    delete next.modelFallback;
+    if (!statusModelPatch) {
+      delete next.modelFallback;
+    }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
@@ -579,7 +533,8 @@ function* projectSessionPatchSteps(
         agentId: sessionAgentId,
         catalog,
         raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
+        defaultProvider:
+          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
@@ -590,6 +545,21 @@ function* projectSessionPatchSteps(
       selection = resolved;
     }
     if (selection) {
+      const prepared = prepareSessionPatchModelSelection({
+        cfg,
+        agentId: sessionAgentId,
+        selection,
+        resetToDefault: raw === null,
+        operatorAuthority: params.operatorAuthority,
+      });
+      if (!prepared.ok) {
+        return prepared;
+      }
+      selection = prepared.selection;
+      validateModelSelection = params.operatorAuthority ? prepared.validate : undefined;
+      if (raw === null) {
+        resolvedDefault = selection;
+      }
       if (
         typeof patch.agentRuntime === "string" &&
         splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
@@ -655,14 +625,14 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
-        explicitDefaultSelection: raw === null,
+        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: raw !== null,
+        markLiveSwitchPending: statusModelPatch || raw !== null,
       });
-      if (raw === null) {
+      if (raw === null && !statusModelPatch) {
         delete next.liveModelSwitchPending;
       }
     }
@@ -715,30 +685,19 @@ function* projectSessionPatchSteps(
     };
   }
 
-  if ("sendPolicy" in patch) {
-    const raw = patch.sendPolicy;
-    if (raw === null) {
-      delete next.sendPolicy;
-    } else if (raw !== undefined) {
-      const normalized = normalizeSendPolicy(raw);
-      if (!normalized) {
-        return invalid('invalid sendPolicy (use "allow"|"deny")');
-      }
-      next.sendPolicy = normalized;
-    }
-  }
-
-  if ("groupActivation" in patch) {
-    const raw = patch.groupActivation;
-    if (raw === null) {
-      delete next.groupActivation;
-    } else if (raw !== undefined) {
-      const normalized = normalizeGroupActivation(raw);
-      if (!normalized) {
-        return invalid('invalid groupActivation (use "mention"|"always")');
-      }
-      next.groupActivation = normalized;
-    }
+  const deliveryPreferenceError =
+    applyNormalizedPreference(
+      "sendPolicy",
+      normalizeSendPolicy,
+      'invalid sendPolicy (use "allow"|"deny")',
+    ) ??
+    applyNormalizedPreference(
+      "groupActivation",
+      normalizeGroupActivation,
+      'invalid groupActivation (use "mention"|"always")',
+    );
+  if (deliveryPreferenceError) {
+    return invalid(deliveryPreferenceError);
   }
 
   if ("agentRuntime" in patch && existing?.agentRuntimeOverride !== next.agentRuntimeOverride) {
@@ -754,5 +713,5 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
-  return { ok: true, entry: next };
+  return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

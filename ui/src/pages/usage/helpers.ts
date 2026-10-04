@@ -1,6 +1,4 @@
-// Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatUiError } from "../../lib/format-error.ts";
 
 type UsageQueryTerm = {
   key?: string;
@@ -45,10 +43,6 @@ export function createDefaultUsageDateRange(date = new Date()) {
   return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
 }
 
-export function toUsageErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
-}
-
 export function toggleUsageRangeSelection<T>(
   selected: T[],
   value: T,
@@ -89,8 +83,6 @@ export function selectUsageSessionKeys(
   }
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
-
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -141,44 +133,27 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
   });
 };
 
-const getSessionText = (session: UsageSessionQueryTarget): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items
+const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
+  items
     .filter((item): item is string => Boolean(item))
     .map((item) => normalizeLowercaseStringOrEmpty(item));
-};
 
-const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
-  const providers = new Set<string>();
-  if (session.modelProvider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
-  }
-  if (session.providerOverride) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
-  }
-  if (session.origin?.provider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.provider) {
-      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
-    }
-  }
-  return Array.from(providers);
-};
+const getSessionText = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([session.label, session.key, session.sessionId]);
 
-const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
-  const models = new Set<string>();
-  if (session.model) {
-    models.add(normalizeLowercaseStringOrEmpty(session.model));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.model) {
-      models.add(normalizeLowercaseStringOrEmpty(entry.model));
-    }
-  }
-  return Array.from(models);
-};
+const getSessionProviders = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.modelProvider,
+    session.providerOverride,
+    session.origin?.provider,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
+  ]);
+
+const getSessionModels = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.model,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
+  ]);
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
@@ -241,7 +216,7 @@ const prepareUsageQuery = (
     warnings.push(`Missing value for ${term.key}`);
   }
 
-  const value = normalizeQueryText(term.value ?? "");
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
   const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
     ? NUMERIC_QUERY_SPECS[key]
     : undefined;
@@ -315,7 +290,7 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   const warnings: string[] = [];
   const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
   const predicates = terms.map((term) => {
-    const key = normalizeQueryText(term.key ?? "");
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
     const predicate = prepareUsageQuery(term, key, warnings);
     if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
       return predicate;

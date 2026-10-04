@@ -16,133 +16,108 @@ import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
-describe("resolveMessageActionDetails full-message eligibility", () => {
-  it.each([
-    { role: "assistant", id: "msg-1", shouldFetch: true },
-    { role: "user", id: "msg-1", shouldFetch: false },
-    { role: "user", id: "pending:input-1", shouldFetch: true },
-  ])("role=$role capped by metadata -> eligible=$shouldFetch", ({ role, id, shouldFetch }) => {
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role,
-        content: "Preview\n...(truncated)...",
-        __openclaw: { ...cappedMeta, id },
-      }),
-      {
-        messageId: "msg-1",
-        canFetchFullMessage: true,
-        onReply: () => {},
-        senderLabel: role,
-      },
-    );
-    expect(details?.fullMessage?.messageId).toBe(shouldFetch ? id : undefined);
-  });
-
-  it("expands accepted user text without granting transcript reply or rewind identity", () => {
-    const message = {
+describe("message action projections", () => {
+  const indented = "    *literal*";
+  const oversized = "This message is too large to display here.";
+  it.each<{
+    name: string;
+    role: string;
+    content: unknown;
+    metadata: { id: string; truncated?: boolean; reason?: string };
+    fullId?: string;
+    markdown?: string;
+    reply?: string;
+    expanded?: string;
+    onReply?: boolean;
+  }>([
+    {
+      name: "capped assistant indentation",
+      role: "assistant",
+      content: indented,
+      metadata: cappedMeta,
+      fullId: "msg-1",
+      markdown: indented,
+      expanded: indented,
+    },
+    {
+      name: "capped user",
       role: "user",
-      content: "Preview",
-      __openclaw: { ...cappedMeta, id: "pending:input-1" },
-    };
-    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
-      messageId: "pending-render",
-      canFetchFullMessage: true,
-      getAssistantMessageExpansion: () => ({
-        status: "loaded",
-        markdown: "<think>literal user input</think>",
-        revision: 1,
-      }),
-      onReply: vi.fn(),
-      senderLabel: "user",
-    });
-    expect(details?.markdown).toBe("<think>literal user input</think>");
-    expect(details?.replyTarget).toBeUndefined();
-    expect(persistedMessageEntryId(message)).toBeNull();
-  });
-
-  it("does not fetch an assistant message that merely contains the sentinel text", () => {
-    // The in-band "...(truncated)..." is ordinary Markdown to the UI; without the
-    // Gateway's structural marker it is not evidence of a display cap.
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role: "assistant",
-        content: "Quoting a log line:\n...(truncated)...\nand continuing normally.",
-        __openclaw: { id: "msg-3" },
-      }),
-      {
-        messageId: "msg-3",
-        canFetchFullMessage: true,
-        senderLabel: "assistant",
-      },
-    );
-    expect(details?.fullMessage).toBeUndefined();
-  });
-
-  it("does not fetch an untruncated assistant message", () => {
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role: "assistant",
-        content: "Complete.",
-        __openclaw: { id: "msg-2" },
-      }),
-      {
-        messageId: "msg-2",
-        canFetchFullMessage: true,
-        senderLabel: "assistant",
-      },
-    );
-    expect(details?.fullMessage).toBeUndefined();
-  });
-
-  it("projects an oversized assistant marker to a notice without disabling recovery", () => {
-    const message = {
+      content: "Preview\n...(truncated)...",
+      metadata: cappedMeta,
+      onReply: true,
+    },
+    {
+      name: "accepted input",
+      role: "user",
+      content: "Preview\n...(truncated)...",
+      metadata: { ...cappedMeta, id: "pending:input-1" },
+      fullId: "pending:input-1",
+      expanded: "<think>literal user input</think>",
+      onReply: true,
+    },
+    {
+      name: "literal sentinel",
+      role: "assistant",
+      content: "Quoting a log line:\n...(truncated)...\nand continuing normally.",
+      metadata: { id: "msg-3" },
+    },
+    {
+      name: "oversized recovery",
       role: "assistant",
       content: "[chat.history omitted: message too large]",
-      __openclaw: { id: "msg-oversized", truncated: true, reason: "oversized" },
+      metadata: { id: "msg-oversized", truncated: true, reason: "oversized" },
+      fullId: "msg-oversized",
+      markdown: oversized,
+      reply: oversized,
+      expanded: "Recovered full assistant content.",
+      onReply: true,
+    },
+    {
+      name: "omitted image reply",
+      role: "assistant",
+      content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+      metadata: { id: "msg-omitted-image" },
+      reply: "Image · Omitted from history · 12 KB",
+      onReply: true,
+    },
+  ])("preserves recovery, copy and reply semantics for $name", (entry) => {
+    const message = { role: entry.role, content: entry.content, __openclaw: entry.metadata };
+    const prepared = prepareChatMessageRender(message);
+    const options = {
+      messageId: entry.metadata.id,
+      canFetchFullMessage: true,
+      onReply: entry.onReply ? () => {} : undefined,
+      senderLabel: entry.role,
     };
-    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
-      messageId: "msg-oversized",
-      canFetchFullMessage: true,
-      onReply: () => {},
-      senderLabel: "assistant",
-    });
-
-    expect(details?.fullMessage?.messageId).toBe("msg-oversized");
-    expect(details?.markdown).toBe("This message is too large to display here.");
-    expect(details?.replyTarget?.text).toBe("This message is too large to display here.");
-
-    const loaded = resolveMessageActionDetails(prepareChatMessageRender(message), {
-      messageId: "msg-oversized",
-      canFetchFullMessage: true,
-      getAssistantMessageExpansion: () => ({
-        status: "loaded",
-        markdown: "Recovered full assistant content.",
-        revision: 1,
-      }),
-      onReply: () => {},
-      senderLabel: "assistant",
-    });
-
-    expect(loaded?.fullMessage?.messageId).toBe("msg-oversized");
-    expect(loaded?.markdown).toBe("Recovered full assistant content.");
-    expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
-  });
-
-  it("projects an omitted historical image into reply text", () => {
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role: "assistant",
-        content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
-        __openclaw: { id: "msg-omitted-image" },
-      }),
-      {
-        messageId: "msg-omitted-image",
-        onReply: () => {},
-        senderLabel: "assistant",
-      },
-    );
-
-    expect(details?.replyTarget?.text).toBe("Image · Omitted from history · 12 KB");
+    const details = resolveMessageActionDetails(prepared, options);
+    expect(details?.fullMessage?.messageId).toBe(entry.fullId);
+    if (!entry.fullId) {
+      expect(details?.fullMessage).toBeUndefined();
+    }
+    if (entry.markdown !== undefined) {
+      expect(details?.markdown).toBe(entry.markdown);
+    }
+    if (entry.reply !== undefined) {
+      expect(details?.replyTarget?.text).toBe(entry.reply);
+    }
+    if (entry.content === indented) {
+      expect(extractText(message)).toBe(indented);
+    }
+    if (entry.expanded !== undefined) {
+      const markdown = entry.expanded;
+      const loaded = resolveMessageActionDetails(prepared, {
+        ...options,
+        getAssistantMessageExpansion: () => ({ status: "loaded", markdown, revision: 1 }),
+      });
+      expect(loaded?.fullMessage?.messageId).toBe(entry.fullId);
+      expect(loaded?.markdown).toBe(markdown);
+      if (entry.role === "user") {
+        expect(loaded?.replyTarget).toBeUndefined();
+        expect(persistedMessageEntryId(message)).toBeNull();
+      } else if (entry.onReply) {
+        expect(loaded?.replyTarget?.text).toBe(markdown);
+      }
+    }
   });
 });
 
@@ -252,18 +227,6 @@ describe("user message disclosure", () => {
   });
 
   it.each([
-    {
-      name: "seven short lines",
-      markdown: [
-        "please re-review these:",
-        "#127818",
-        "#127826",
-        "#127844",
-        "#127881",
-        "",
-        "rerun the same session we had for these",
-      ].join("\n"),
-    },
     { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
     { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
   ])("keeps $name fully visible", ({ markdown }) => {
@@ -453,80 +416,77 @@ describe("message Markdown source preservation", () => {
       }
     }
   });
-
-  it("preserves assistant snapshot indentation and recovered Markdown for copying", () => {
-    const source = "    *literal*";
-    const message = { role: "assistant", content: source, __openclaw: cappedMeta };
-    expect(extractText(message)).toBe(source);
-    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
-      messageId: "msg-1",
-      canFetchFullMessage: true,
-      getAssistantMessageExpansion: () => ({ status: "loaded", markdown: source, revision: 1 }),
-      senderLabel: "assistant",
-    });
-    expect(details?.markdown).toBe(source);
-  });
 });
 
 describe("persisted human mentions in message bubbles", () => {
   const text = "@Ada Lovelace cc @Ada Lovelace";
   const humanMentions = [{ profileId: "profile-ada", start: 0, end: 13 }];
 
-  it.each([{ content: text }, { content: [{ type: "text", text }] }])(
-    "renders only explicit spans while preserving copy text",
-    ({ content }) => {
-      const message = { role: "user", content, __openclaw: { humanMentions } };
-      const host = document.createElement("div");
-      render(
-        renderGroupedMessage(prepareChatMessageRender(message), "message", {
-          isStreaming: false,
-          showReasoning: false,
-        }),
-        host,
-      );
-      const references = host.querySelectorAll("openclaw-person-reference");
-      expect(references).toHaveLength(1);
-      expect(references[0]?.getAttribute("profile-id")).toBe("profile-ada");
-      expect(references[0]?.getAttribute("label")).toBe("@Ada Lovelace");
-      expect(host.querySelector(".chat-bubble")?.getAttribute("data-message-text")).toBe(text);
-    },
-  );
-
   it.each([
-    { role: "assistant", content: text, __openclaw: { humanMentions } },
     {
+      name: "string content",
       role: "user",
       content: text,
-      __openclaw: { humanMentions, truncated: true, reason: "oversized" },
+      metadata: { humanMentions },
+      selected: true,
     },
-    { role: "user", content: text },
-  ])("does not attach identities to assistant, capped or unselected text", (message) => {
-    const host = document.createElement("div");
-    render(
-      renderGroupedMessage(prepareChatMessageRender(message), "message", {
-        isStreaming: false,
-        showReasoning: false,
-      }),
-      host,
-    );
-    expect(host.querySelector("openclaw-person-reference")).toBeNull();
-  });
-
-  it("does not reuse selection offsets after the displayed message is replaced", () => {
+    {
+      name: "text block",
+      role: "user",
+      content: [{ type: "text", text }],
+      metadata: { humanMentions },
+      selected: true,
+    },
+    {
+      name: "assistant",
+      role: "assistant",
+      content: text,
+      metadata: { humanMentions },
+      selected: false,
+    },
+    {
+      name: "capped user",
+      role: "user",
+      content: text,
+      metadata: { humanMentions, truncated: true, reason: "oversized" },
+      selected: false,
+    },
+    { name: "unselected text", role: "user", content: text, metadata: undefined, selected: false },
+    {
+      name: "replaced display",
+      role: "user",
+      content: text,
+      metadata: { humanMentions },
+      selected: false,
+      replacement: "@Different Person",
+    },
+  ])("attaches identities only to unchanged selected user spans: $name", (entry) => {
     const host = document.createElement("div");
     render(
       renderGroupedMessage(
-        prepareChatMessageRender({ role: "user", content: text, __openclaw: { humanMentions } }),
+        prepareChatMessageRender({
+          role: entry.role,
+          content: entry.content,
+          __openclaw: entry.metadata,
+        }),
         "message",
         {
           isStreaming: false,
           showReasoning: false,
-          messageActions: { markdown: "@Different Person" },
+          messageActions: entry.replacement ? { markdown: entry.replacement } : undefined,
         },
       ),
       host,
     );
-    expect(host.querySelector("openclaw-person-reference")).toBeNull();
-    expect(host.textContent).toContain("@Different Person");
+    const references = host.querySelectorAll("openclaw-person-reference");
+    expect(references).toHaveLength(entry.selected ? 1 : 0);
+    if (entry.selected) {
+      expect(references[0]?.getAttribute("profile-id")).toBe("profile-ada");
+      expect(references[0]?.getAttribute("label")).toBe("@Ada Lovelace");
+      expect(host.querySelector(".chat-bubble")?.getAttribute("data-message-text")).toBe(text);
+    }
+    if (entry.replacement) {
+      expect(host.textContent).toContain(entry.replacement);
+    }
   });
 });

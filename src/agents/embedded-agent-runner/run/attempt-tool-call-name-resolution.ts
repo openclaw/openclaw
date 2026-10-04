@@ -1,15 +1,11 @@
-/** Resolves provider-emitted tool names against the live callable set. */
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
   const folded = normalizeLowercaseStringOrEmpty(rawName);
   let caseInsensitiveMatch: string | null = null;
   for (const name of allowedToolNames) {
@@ -26,11 +22,8 @@ function resolveCaseInsensitiveAllowedToolName(
 
 function resolveExactAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
   if (allowedToolNames.has(rawName)) {
     return rawName;
   }
@@ -50,61 +43,46 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
     return [];
   }
 
-  const candidates: string[] = [];
-  const seen = new Set<string>();
+  const candidates = new Set<string>();
   const addCandidate = (value: string) => {
     const candidate = value.trim();
-    if (!candidate || seen.has(candidate)) {
-      return;
+    if (candidate) {
+      candidates.add(candidate);
+      candidates.add(normalizeToolPolicyName(candidate));
     }
-    seen.add(candidate);
-    candidates.push(candidate);
   };
 
   addCandidate(trimmed);
-  addCandidate(normalizeToolPolicyName(trimmed));
   const structuredSeeds = [trimmed];
 
-  const xmlFragmentOffset = ['"', "'", "<"]
-    .map((separator) => trimmed.indexOf(separator))
-    .filter((offset) => offset > 0)
-    .reduce<number | undefined>(
-      (earliest, offset) => (earliest === undefined || offset < earliest ? offset : earliest),
-      undefined,
-    );
-  if (xmlFragmentOffset !== undefined) {
+  const xmlFragmentOffset = Math.min(
+    ...['"', "'", "<"]
+      .map((separator) => trimmed.indexOf(separator))
+      .filter((offset) => offset > 0),
+  );
+  if (Number.isFinite(xmlFragmentOffset)) {
     const prefix = trimmed.slice(0, xmlFragmentOffset);
     addCandidate(prefix);
-    addCandidate(normalizeToolPolicyName(prefix));
     structuredSeeds.push(prefix);
   }
 
   for (const seed of structuredSeeds) {
     const normalizedDelimiter = seed.replace(/\//g, ".");
     addCandidate(normalizedDelimiter);
-    addCandidate(normalizeToolPolicyName(normalizedDelimiter));
 
     const segments = normalizeStringEntries(normalizedDelimiter.split("."));
-    if (segments.length > 1) {
-      for (let index = 1; index < segments.length; index += 1) {
-        const suffix = segments.slice(index).join(".");
-        addCandidate(suffix);
-        addCandidate(normalizeToolPolicyName(suffix));
-      }
+    for (let index = 1; index < segments.length; index += 1) {
+      addCandidate(segments.slice(index).join("."));
     }
   }
 
-  return candidates;
+  return [...candidates];
 }
 
 function resolveStructuredAllowedToolName(
   rawName: string,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string>,
 ): string | null {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return null;
-  }
-
   const candidateNames = buildStructuredToolNameCandidates(rawName);
   for (const candidate of candidateNames) {
     if (allowedToolNames.has(candidate)) {
@@ -135,32 +113,29 @@ function inferToolNameFromToolCallId(
   }
 
   const candidateTokens = new Set<string>();
+  const addCounterVariants = (value: string) => {
+    candidateTokens.add(value);
+    candidateTokens.add(value.replace(/[:._/-]\d+$/, ""));
+    candidateTokens.add(value.replace(/\d+$/, ""));
+  };
   const addToken = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed) {
       return;
     }
-    candidateTokens.add(trimmed);
-    candidateTokens.add(trimmed.replace(/[:._/-]\d+$/, ""));
-    candidateTokens.add(trimmed.replace(/\d+$/, ""));
-
     const normalizedDelimiter = trimmed.replace(/\//g, ".");
-    candidateTokens.add(normalizedDelimiter);
-    candidateTokens.add(normalizedDelimiter.replace(/[:._-]\d+$/, ""));
-    candidateTokens.add(normalizedDelimiter.replace(/\d+$/, ""));
+    addCounterVariants(trimmed);
+    addCounterVariants(normalizedDelimiter);
 
     for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i]) {
       const stripped = normalizedDelimiter.replace(prefixPattern, "");
       if (stripped !== normalizedDelimiter) {
-        candidateTokens.add(stripped);
-        candidateTokens.add(stripped.replace(/[:._-]\d+$/, ""));
-        candidateTokens.add(stripped.replace(/\d+$/, ""));
+        addCounterVariants(stripped);
       }
     }
   };
 
-  const preColon = id.split(":")[0] ?? id;
-  for (const seed of [id, preColon]) {
+  for (const seed of [id, id.split(":")[0] ?? id]) {
     addToken(seed);
   }
 

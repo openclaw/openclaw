@@ -34,23 +34,29 @@ import {
 } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
-import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
-import { loadExecApprovals } from "../infra/exec-approvals-store.js";
+import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
+  withGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -100,10 +106,6 @@ function readAcpMetaForDeletedAgentCheck(params: {
   entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
-  if (params.entry?.acp) {
-    return params.entry.acp;
-  }
-
   const acpMetadataSessionKey = normalizeOptionalString(params.acpMetadataSessionKey);
   const directKeys = new Set<string>();
   if (acpMetadataSessionKey) {
@@ -136,14 +138,14 @@ function readAcpMetaForDeletedAgentCheck(params: {
 function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
   readOnly: boolean,
+  cfg: OpenClawConfig = getRuntimeConfig(),
 ) {
-  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
@@ -151,6 +153,7 @@ function loadSessionEntryWithMode(
     exactRead: true,
     readOnly,
     projection: opts?.projection,
+    env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -165,7 +168,7 @@ function loadSessionEntryWithMode(
       }
     }
   }
-  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
     readOnly && opts?.clone !== false && canonicalMatch?.entry
@@ -177,6 +180,8 @@ function loadSessionEntryWithMode(
     storePath,
     store,
     ...(target.readSource ? { readSource: target.readSource } : {}),
+    ...(target.capturedReadSource ? { capturedReadSource: target.capturedReadSource } : {}),
+    ...(target.capturedReadSources ? { capturedReadSources: target.capturedReadSources } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,
@@ -186,9 +191,10 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, false);
+  return loadSessionEntryWithMode(sessionKey, opts, false, cfg);
 }
 
 export function loadGatewaySessionEntryReadOnly(
@@ -196,43 +202,117 @@ export function loadGatewaySessionEntryReadOnly(
   opts?: {
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, true);
+  return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
 }
 
-/** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
-  store: Record<string, TEntry>,
-  storeKeys: string[],
-): { key: string; entry: TEntry } | undefined {
-  let selected: { key: string; entry: TEntry } | undefined;
-  for (const key of storeKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    const match = { key, entry };
-    if (selected) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
+/** Consume exact row facts synchronously while their physical worker owners remain retained. */
+export async function withGatewaySessionEntry<T>(
+  sessionKey: string,
+  opts:
+    | (Pick<SessionEntryListScope, "agentId" | "projection" | "env"> & {
+        includeMembership?: boolean;
+      })
+    | undefined,
+  consume: (
+    session: ReturnType<typeof loadGatewaySessionEntry>,
+    membership: ReadonlyMap<
+      string,
+      readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[]
+    >,
+    assertSourceCurrent: () => void,
+  ) => T,
+  cfg: OpenClawConfig = getRuntimeConfig(),
+  assertConfigCurrent?: () => void,
+): Promise<T> {
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
+  return withGatewaySessionStoreTarget(
+    { cfg, key: sessionKey, ...opts },
+    (target, membership, assertSourceCurrent) => {
+      for (const key of target.storeKeys) {
+        if (isInternalSessionEffectsKey(key)) {
+          delete target.store[key];
+        }
+      }
+      const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        assertConfig();
+      };
+      assertCurrent();
+      return consume(
+        {
+          cfg,
+          ...target,
+          entry: canonicalMatch?.entry,
+          legacyKey: canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined,
+        },
+        membership,
+        assertCurrent,
       );
+    },
+  );
+}
+
+export async function withQualifiedGatewaySessionEntry<T>(params: {
+  cfg: OpenClawConfig;
+  target: QualifiedSessionEntryAccessTarget;
+  logicalStorePath: string;
+  env?: NodeJS.ProcessEnv;
+  includeMembership: boolean;
+  consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
+  assertConfigCurrent: () => void;
+}): Promise<T> {
+  let consumed = false;
+  const read = () =>
+    withQualifiedGatewaySessionStoreTarget({
+      ...params,
+      consume: (target, membership, assertSourceCurrent) => {
+        const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+        // Qualification retains the selected store key even before its row exists.
+        const storeKey = canonicalMatch?.key ?? params.target.storeKey;
+        const assertCurrent = () => {
+          assertSourceCurrent();
+          params.assertConfigCurrent();
+        };
+        assertCurrent();
+        consumed = true;
+        return params.consume(
+          {
+            cfg: params.cfg,
+            ...target,
+            entry: canonicalMatch?.entry,
+            legacyKey: storeKey !== target.canonicalKey ? storeKey : undefined,
+          },
+          membership,
+          assertCurrent,
+        );
+      },
+    });
+  // Refresh only before consumption; a callback may already have started effects.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      if (
+        consumed ||
+        !(error instanceof GatewaySessionFactsChangedDuringReadError) ||
+        attempt >= 2
+      ) {
+        throw error;
+      }
     }
-    selected = match;
   }
-  if (selected && selected.key !== storeKeys[0]) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
-    );
-  }
-  return selected;
 }
 
 export function resolveCanonicalSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): SessionEntry | undefined {
-  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+  return findCanonicalStoreMatch(store, storeKeys)?.entry;
 }
 
 export function resolveCanonicalGatewaySessionStoreKey(params: {
@@ -248,7 +328,7 @@ export function resolveCanonicalGatewaySessionStoreKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
-  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
+  findCanonicalStoreMatch(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
@@ -280,24 +360,6 @@ export function isGroupOrChannelDisplaySession(
   );
 }
 
-function normalizeFallbackList(values: readonly string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(trimmed);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
-}
-
 function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
@@ -311,8 +373,11 @@ function resolveGatewayAgentModel(
     readUtilityModelSetting(cfg, agentId).kind === "explicit";
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(
-    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  const fallbacks = dedupeByKey(
+    (fallbackOverride ?? defaultFallbacks)
+      .map((value) => splitTrailingAuthProfile(value).model.trim())
+      .filter(Boolean),
+    normalizeLowercaseStringOrEmpty,
   );
   return {
     ...(utilityOnly ? {} : { primary }),
@@ -350,9 +415,11 @@ export async function listAgentsForGateway(
   scope: SessionScope;
   agents: GatewayAgentRow[];
 }> {
-  const basic = listGatewayAgentsBasic(cfg);
-  const provenanceRecords = await listAgentProvenance();
-  const execApprovals = loadExecApprovals();
+  const [basic, provenanceRecords, execApprovals] = await Promise.all([
+    listGatewayAgentsBasic(cfg),
+    listAgentProvenance(),
+    loadExecApprovalsReadOnlyAsync(),
+  ]);
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
@@ -362,13 +429,15 @@ export async function listAgentsForGateway(
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
-        ? resolveGatewayAssistantAvatar({
-            cfg,
-            identity: { agentId, avatar },
-            httpBasePath: options.httpAvatarBasePath,
-          }).avatar
+        ? (
+            await resolveGatewayAssistantAvatar({
+              cfg,
+              identity: { agentId, avatar },
+              httpBasePath: options.httpAvatarBasePath,
+            })
+          ).avatar
         : undefined;
-    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const avatarUrl = httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar));
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),

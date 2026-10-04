@@ -1,9 +1,9 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { resolveJsonSaveTarget } from "../../infra/json-file.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
-import type { Transport } from "../../llm/types.js";
+import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
@@ -42,13 +42,7 @@ export interface ImageSettings {
   blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
-export interface ThinkingBudgetsSettings {
-  minimal?: number;
-  low?: number;
-  medium?: number;
-  high?: number;
-  max?: number;
-}
+export interface ThinkingBudgetsSettings extends ThinkingBudgets {}
 
 export interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "

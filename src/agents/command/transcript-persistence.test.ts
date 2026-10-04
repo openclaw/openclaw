@@ -1,18 +1,16 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-coordination-fallback-");
 
 it.each(["CLI", "ACP"] as const)(
   "keeps the %s coordination fallback hidden after runtime persistence is unavailable",
   async (runtime) => {
-    const cwd = tempDirs.make("openclaw-coordination-fallback-");
+    const cwd = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: `coordination-fallback-${runtime.toLowerCase()}`,

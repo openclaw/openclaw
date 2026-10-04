@@ -125,19 +125,48 @@ describe("summarizeTokenConfig", () => {
     expect(summary.detail).toContain("configured http credentials unavailable");
   });
 
-  it("still reports single-token channels as ok", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          token: "token-value",
-          tokenSource: "config",
-        },
-        snapshot: { tokenSource: "config" },
-      }),
-    ]);
+  it.each([
+    {
+      mode: "http",
+      account: {
+        botToken: "bot-token",
+        signingSecret: "", // pragma: allowlist secret
+        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+      },
+      detail: "configured http credentials unavailable in this command path · accounts 1",
+    },
+    {
+      mode: "socket",
+      account: {
+        botToken: "bot-token",
+        appToken: "",
+        appTokenStatus: "configured_unavailable",
+      },
+      detail: "partial tokens (need bot+app) · accounts 1",
+    },
+  ])(
+    "preserves unavailable-versus-partial precedence in $mode mode",
+    ({ mode, account, detail }) => {
+      expect(summarize([tokenRow({ account: { mode, ...account } })])).toEqual({
+        state: "warn",
+        detail,
+      });
+    },
+  );
 
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("token config");
+  it("requires token values for socket mode even when status fields report available", () => {
+    expect(
+      summarize([
+        tokenRow({
+          account: {
+            botToken: "",
+            appToken: "",
+            botTokenStatus: "available",
+            appTokenStatus: "available",
+          },
+        }),
+      ]),
+    ).toEqual({ state: "setup", detail: "no tokens (need bot+app)" });
   });
 
   it.each([

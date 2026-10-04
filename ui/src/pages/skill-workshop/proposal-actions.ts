@@ -1,6 +1,7 @@
 import {
   readSkillProposalRevisionChangedError,
   type SkillsProposalApplyResult,
+  type SkillsProposalEvaluateResult,
   type SkillsProposalRecordResult,
 } from "@openclaw/gateway-protocol";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
@@ -13,14 +14,10 @@ import type {
   SkillWorkshopProposal,
   SkillWorkshopProposalDecision,
 } from "../../lib/skill-workshop/index.ts";
-import {
-  proposalFromActionRecord,
-  proposalFromEvaluation,
-  type SkillProposalEvaluateResult,
-} from "./proposal-records.ts";
+import { proposalFromActionRecord, proposalFromEvaluation } from "./proposal-records.ts";
 import {
   invalidateSkillWorkshopReads,
-  loadedSkillWorkshopAgentParams,
+  loadedSkillWorkshopAgentId,
   loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
   mergeProposal,
@@ -124,7 +121,7 @@ export async function runSkillWorkshopLifecycleAction(
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
     return;
   }
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
   const isCurrentAction = () =>
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
@@ -218,7 +215,7 @@ export async function runSkillWorkshopEvaluation(
   if (!previous || previous.status !== "pending") {
     return false;
   }
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
   if (state.skillWorkshopAgentId === null) {
     state.skillWorkshopAgentId = requestAgentId;
   }
@@ -244,7 +241,7 @@ export async function runSkillWorkshopEvaluation(
     if (!current || current.status !== "pending" || !current.revisionHash) {
       throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
     }
-    const result = await client.request<SkillProposalEvaluateResult>("skills.proposals.evaluate", {
+    const result = await client.request<SkillsProposalEvaluateResult>("skills.proposals.evaluate", {
       agentId: requestAgentId,
       proposalId,
       expectedRevisionHash: current.revisionHash,
@@ -313,7 +310,7 @@ export async function requestSkillWorkshopRevision(
     state.skillWorkshopError = t("skillWorkshop.detail.draftMissing");
     return null;
   }
-  const proposalAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const proposalAgentId = loadedSkillWorkshopAgentId(state, context);
   if (state.skillWorkshopAgentId === null) {
     state.skillWorkshopAgentId = proposalAgentId;
   }

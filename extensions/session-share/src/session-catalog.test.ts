@@ -1,14 +1,33 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
+
+const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
+  return {
+    ...actual,
+    areDiagnosticsEnabledForProcess: () => diagnostics.enabled,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/session-catalog"
+        ? { ...logger, isEnabled: () => diagnostics.warnEnabled, warn: diagnostics.warn }
+        : logger;
+    },
+  };
+});
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
 const nativeSession: SessionCatalogSession = {
@@ -28,38 +47,355 @@ const remoteIdentity = {
   id: "4242",
 };
 
-function catalogFixture() {
-  const config: OpenClawConfig = {};
+async function catalogFixture() {
+  let config: OpenClawConfig = {};
   const list = vi.fn<PluginRuntime["nodes"]["list"]>().mockResolvedValue({
     nodes: [{ nodeId: "alpha", displayName: " Alpha ", connected: true, commands }],
   });
   const invoke = vi
     .fn<PluginRuntime["nodes"]["invoke"]>()
-    .mockImplementation(async ({ command }) =>
-      command === commands[0]
-        ? { payloadJSON: JSON.stringify({ sessions: [nativeSession] }) }
-        : {
-            payloadJSON: JSON.stringify({
-              threadId: nativeSession.threadId,
-              items: [{ type: "userMessage", text: "Published question" }],
-            }),
-          },
-    );
+    .mockImplementation(async ({ command }) => {
+      if (command !== commands[0]) {
+        throw new Error("Unexpected node command");
+      }
+      return { payloadJSON: JSON.stringify({ sessions: [nativeSession] }) };
+    });
   const runtime = createPluginRuntimeMock({
     config: { current: () => config },
     nodes: { list, invoke },
   });
-  const catalog = createSessionShareCatalog(createTestPluginApi({ runtime }));
+  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+  const api = createTestPluginApi({
+    runtime,
+    registerService: (registered) => {
+      service = registered;
+    },
+  });
+  const catalog = createSessionShareCatalog(api);
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = {
+    config,
+    logger: api.logger,
+    stateDir: "/unused",
+    invokeNode: invoke,
+    scheduler,
+  };
+  await service?.start(serviceContext);
   return {
     catalog,
     list,
     invoke,
+    stop: async () => {
+      scheduler.beginClose();
+      try {
+        await service?.stop?.(serviceContext);
+      } finally {
+        await scheduler.stop();
+      }
+    },
+    configure: (next: OpenClawConfig) => {
+      config = next;
+    },
   };
 }
 
 describe("session-share receiver catalog", () => {
+  it("serves complete lookups during cache saturation without losing active publications", async () => {
+    vi.useFakeTimers();
+    const fixture = await catalogFixture();
+    const gate = createDeferred<unknown>();
+    fixture.list.mockResolvedValue({
+      nodes: Array.from({ length: 32 }, (_, index) => ({
+        nodeId: `node-${index}`,
+        connected: true,
+        commands,
+      })),
+    });
+    fixture.invoke.mockImplementation(() => gate.promise);
+    const onHost = vi.fn();
+    const publications: Promise<void>[] = [];
+    try {
+      const listing = fixture.catalog.list({
+        allowPartialResults: true,
+        onHost,
+        waitUntil: (work) => publications.push(work),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await listing).toHaveLength(32);
+      const selected = fixture.catalog.list({ hostIds: ["node:node-0"], limitPerHost: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.invoke).toHaveBeenCalledTimes(33);
+      gate.resolve({ sessions: [nativeSession] });
+      expect((await selected)[0]).toMatchObject({ sessions: [nativeSession] });
+      await Promise.all(publications);
+      expect(onHost.mock.calls.filter(([host]) => host.sessions.length === 1)).toHaveLength(32);
+    } finally {
+      gate.resolve({ sessions: [] });
+      await vi.runAllTimersAsync();
+      await fixture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "warm default", query: {}, warm: true },
+    { label: "unsubscribed opt-in", query: { allowPartialResults: true }, warm: false },
+  ])("returns complete snapshots for $label callers", async ({ query, warm }) => {
+    vi.useFakeTimers();
+    const fixture = await catalogFixture();
+    try {
+      if (warm) {
+        await fixture.catalog.list(query);
+      }
+      const refreshed = { ...nativeSession, name: "Complete refresh" };
+      fixture.invoke.mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 6_000);
+        });
+        return { sessions: [refreshed] };
+      });
+      let settled = 0;
+      const calls = Array.from({ length: 6 }, () =>
+        fixture.catalog.list(query).then((hosts) => {
+          settled++;
+          return hosts;
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(settled).toBe(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      for (const hosts of await Promise.all(calls)) {
+        expect(hosts[0]).toMatchObject({ sessions: [refreshed] });
+        expect(hosts[0]?.pending).toBeUndefined();
+        expect(hosts[0]?.error).toBeUndefined();
+      }
+      expect(fixture.invoke).toHaveBeenCalledTimes(warm ? 2 : 1);
+    } finally {
+      await vi.runAllTimersAsync();
+      await fixture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a six-caller cold burst through a slow node failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = await catalogFixture();
+      fixture.invoke.mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 30_000);
+        });
+        throw new Error("node timeout");
+      });
+      const started = Date.now();
+      const elapsed: number[] = [];
+      const publications: Promise<void>[] = [];
+      const updates = Array.from({ length: 6 }, () => vi.fn());
+      const pending = updates.map((onHost) =>
+        fixture.catalog
+          .list({
+            allowPartialResults: true,
+            onHost,
+            waitUntil: (work) => publications.push(work),
+          })
+          .then((hosts) => {
+            elapsed.push(Date.now() - started);
+            return hosts;
+          }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(pending);
+      await Promise.all(publications);
+      expect(Math.max(...elapsed)).toBeLessThanOrEqual(5_000);
+      expect(fixture.invoke).toHaveBeenCalledTimes(1);
+      for (const update of updates) {
+        expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ pending: true }));
+        expect(update).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            sessions: [],
+            error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+          }),
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["unchanged", "config", "connection", "query"])(
+    "retains only a compatible page during %s refresh",
+    async (revision) => {
+      const fixture = await catalogFixture();
+      await fixture.catalog.list({});
+      const refreshed = { ...nativeSession, name: "Refreshed" };
+      const gate = createDeferred<unknown>();
+      fixture.invoke.mockImplementation(() => gate.promise);
+      if (revision === "config") {
+        fixture.configure({ gateway: { port: 12345 } });
+      }
+      if (revision === "connection") {
+        fixture.list.mockResolvedValue({
+          nodes: [{ nodeId: "alpha", connected: true, connectedAtMs: 2, commands }],
+        });
+      }
+      vi.useFakeTimers();
+      try {
+        const onHost = vi.fn();
+        const publications: Promise<void>[] = [];
+        const pending = fixture.catalog.list({
+          allowPartialResults: true,
+          search: revision === "query" ? "new" : undefined,
+          onHost,
+          waitUntil: (work) => publications.push(work),
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        const hosts = await pending;
+        expect(hosts).toEqual([
+          expect.objectContaining({
+            pending: true,
+            sessions: revision === "unchanged" ? [nativeSession] : [],
+          }),
+        ]);
+        gate.resolve({ sessions: [refreshed] });
+        await Promise.all(publications);
+        expect(onHost).toHaveBeenLastCalledWith(expect.objectContaining({ sessions: [refreshed] }));
+        expect(fixture.invoke).toHaveBeenCalledTimes(2);
+      } finally {
+        gate.resolve({ sessions: [] });
+        await fixture.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("shares matching queries without reusing a caller's cancellation", async () => {
+    const fixture = await catalogFixture();
+    const gate = createDeferred<unknown>();
+    fixture.invoke.mockImplementation(() => gate.promise);
+    const controller = new AbortController();
+    const onHost = vi.fn();
+    const publications: Promise<void>[] = [];
+    const original = fixture.catalog.list({ signal: controller.signal, onHost });
+    const other = fixture.catalog.list({
+      search: "other",
+      waitUntil: (work) => publications.push(work),
+    });
+    const follower = fixture.catalog.list({
+      allowPartialResults: true,
+      onHost: vi.fn(),
+      waitUntil: (work) => publications.push(work),
+    });
+    await follower;
+    expect(fixture.invoke).toHaveBeenCalledTimes(2);
+    controller.abort(new Error("caller retired"));
+    const rejected = expect(original).rejects.toThrow("caller retired");
+    gate.resolve({ sessions: [nativeSession] });
+    await rejected;
+    expect((await other)[0]?.sessions).toEqual([nativeSession]);
+    await Promise.all(publications);
+    expect(onHost).not.toHaveBeenCalled();
+  });
+
+  describe("slow phase diagnostics", () => {
+    beforeEach(() => {
+      diagnostics.enabled = true;
+      diagnostics.warnEnabled = true;
+      diagnostics.warn.mockReset();
+    });
+    afterEach(() => {
+      diagnostics.enabled = false;
+      vi.restoreAllMocks();
+    });
+
+    it.each([false, undefined])(
+      "preserves timeout dispatch attribution (%s) without private error data",
+      async (nodeCommandDispatched) => {
+        let clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const fixture = await catalogFixture();
+        const list = fixture.list.getMockImplementation()!;
+        fixture.list.mockImplementation(async (params) => {
+          clock += 1_200;
+          return list(params);
+        });
+        fixture.invoke.mockImplementation(async () => {
+          clock += 30_000;
+          throw Object.assign(new Error("PRIVATE_MESSAGE"), {
+            name: "GatewayClientRequestError",
+            gatewayCode: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "UNAVAILABLE",
+            retryable: false,
+            details: {
+              nodeCommandDispatched,
+              nodeError: {
+                code: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "TIMEOUT",
+                message: "PRIVATE_MESSAGE",
+              },
+              nodeId: "PRIVATE_NODE",
+              params: { searchTerm: "PRIVATE_SEARCH" },
+            },
+          });
+        });
+
+        const onHost = vi.fn();
+        const publications: Promise<void>[] = [];
+        await fixture.catalog.list({ onHost, waitUntil: (work) => publications.push(work) });
+        await Promise.all(publications);
+        expect(onHost).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            sessions: [],
+            error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+          }),
+        );
+        expect(diagnostics.warn.mock.calls).toEqual([
+          [
+            "slow Session Share catalog phase",
+            { phase: "discovery", elapsedMs: 1_200, outcome: "resolved" },
+          ],
+          [
+            "slow Session Share catalog phase",
+            {
+              phase: "invoke",
+              elapsedMs: 30_000,
+              outcome: "rejected",
+              nodeErrorCode: nodeCommandDispatched === undefined ? "unknown" : "TIMEOUT",
+              ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
+            },
+          ],
+        ]);
+      },
+    );
+
+    it.each(["level disabled", "disabled before settlement", "sink throws", "fast"])(
+      "preserves successful listings when diagnostics are %s",
+      async (mode) => {
+        diagnostics.enabled = true;
+        diagnostics.warnEnabled = mode !== "level disabled";
+        if (mode === "sink throws") {
+          diagnostics.warn.mockImplementation(() => {
+            throw new Error("diagnostic sink failed");
+          });
+        }
+        let clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const fixture = await catalogFixture();
+        const invoke = fixture.invoke.getMockImplementation()!;
+        fixture.invoke.mockImplementation(async (params) => {
+          clock += mode === "fast" ? 999 : 1_200;
+          if (mode === "disabled before settlement") {
+            diagnostics.enabled = false;
+          }
+          return invoke(params);
+        });
+
+        const hosts = await fixture.catalog.list({});
+        expect(hosts[0]?.sessions).toEqual([nativeSession]);
+        expect(diagnostics.warn).toHaveBeenCalledTimes(mode === "sink throws" ? 1 : 0);
+      },
+    );
+  });
+
   it("does not invoke nodes when the owner retires during discovery", async () => {
-    const fixture = catalogFixture();
+    const fixture = await catalogFixture();
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const controller = new AbortController();
@@ -79,8 +415,8 @@ describe("session-share receiver catalog", () => {
     expect(fixture.invoke).not.toHaveBeenCalled();
   });
 
-  it("delivers owner retirement to an active node invocation", async () => {
-    const fixture = catalogFixture();
+  it("delivers service retirement to an active shared node invocation", async () => {
+    const fixture = await catalogFixture();
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const controller = new AbortController();
@@ -102,7 +438,7 @@ describe("session-share receiver catalog", () => {
     const pending = fixture.catalog.list({ signal: controller.signal });
     try {
       await entered.promise;
-      controller.abort(new Error("catalog owner retired"));
+      await fixture.stop();
       expect(transportRetired).toBe(true);
     } finally {
       release.resolve();
@@ -113,7 +449,7 @@ describe("session-share receiver catalog", () => {
   it.each(["retirement", "publication failure"] as const)(
     "joins all started node work before rejecting on %s",
     async (failure) => {
-      const fixture = catalogFixture();
+      const fixture = await catalogFixture();
       const entered = createDeferred<void>();
       const fast = createDeferred<void>();
       const slow = createDeferred<void>();
@@ -168,43 +504,43 @@ describe("session-share receiver catalog", () => {
     },
   );
 
-  it.each(["openclaw", "node:alpha"])(
-    "namespaces colliding profile claims by the invoked node, not wire domain %s",
-    async (domain) => {
-      const fixture = catalogFixture();
-      fixture.list.mockResolvedValue({
-        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, commands, connected: true })),
-      });
-      const identity = { ...remoteIdentity, domain, idKind: "profile", id: "same-profile" };
-      fixture.invoke.mockImplementation(async ({ command }) => ({
-        payloadJSON: JSON.stringify(
-          command === commands[0]
-            ? {
-                sessions: [{ ...nativeSession, createdActor: { type: "human", identity } }],
-              }
-            : {
-                threadId: nativeSession.threadId,
-                items: [{ type: "userMessage", text: "Question", sender: { identity } }],
-              },
-        ),
-      }));
-      const hosts = await fixture.catalog.list({});
-      const pages = await Promise.all(
-        hosts.map(({ hostId }) =>
-          fixture.catalog.read({ hostId, threadId: nativeSession.threadId }),
-        ),
-      );
-      const expected = [
-        { ...identity, domain: "node:alpha" },
-        { ...identity, domain: "node:beta" },
-      ];
-      expect.soft(hosts.map((host) => host.sessions[0]?.createdActor?.identity)).toEqual(expected);
-      expect(pages.map((page) => page.items[0]?.sender?.identity)).toEqual(expected);
-    },
-  );
+  it("namespaces colliding profile claims by the invoked node, not the claimed node domain", async () => {
+    const fixture = await catalogFixture();
+    fixture.list.mockResolvedValue({
+      nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, commands, connected: true })),
+    });
+    const identity = {
+      ...remoteIdentity,
+      domain: "node:alpha",
+      idKind: "profile",
+      id: "same-profile",
+    };
+    fixture.invoke.mockImplementation(async ({ command }) => ({
+      payloadJSON: JSON.stringify(
+        command === commands[0]
+          ? {
+              sessions: [{ ...nativeSession, createdActor: { type: "human", identity } }],
+            }
+          : {
+              threadId: nativeSession.threadId,
+              items: [{ type: "userMessage", text: "Question", sender: { identity } }],
+            },
+      ),
+    }));
+    const hosts = await fixture.catalog.list({});
+    const pages = await Promise.all(
+      hosts.map(({ hostId }) => fixture.catalog.read({ hostId, threadId: nativeSession.threadId })),
+    );
+    const expected = [
+      { ...identity, domain: "node:alpha" },
+      { ...identity, domain: "node:beta" },
+    ];
+    expect.soft(hosts.map((host) => host.sessions[0]?.createdActor?.identity)).toEqual(expected);
+    expect(pages.map((page) => page.items[0]?.sender?.identity)).toEqual(expected);
+  });
 
   it("publishes eligible hosts progressively, preserving failures and deterministic host order", async () => {
-    const fixture = catalogFixture();
+    const fixture = await catalogFixture();
     const slow = createDeferred<unknown>();
     fixture.list.mockResolvedValue({
       nodes: [
@@ -247,7 +583,7 @@ describe("session-share receiver catalog", () => {
   });
 
   it("forwards filtered per-host pagination and uses the request-owned node snapshot", async () => {
-    const fixture = catalogFixture();
+    const fixture = await catalogFixture();
     const cursor = sessionCatalogPaging.encodeCursor(20);
     fixture.invoke.mockResolvedValue({
       sessions: [nativeSession],
@@ -291,7 +627,7 @@ describe("session-share receiver catalog", () => {
     { nodeId: "alpha", commands, connected: false },
     { nodeId: "alpha", commands: [commands[0]!], connected: true },
   ])("denies reads when the paired host is unavailable: %j", async (node) => {
-    const fixture = catalogFixture();
+    const fixture = await catalogFixture();
     fixture.list.mockResolvedValue({ nodes: [node] });
     await expect(
       fixture.catalog.read({ hostId: "node:alpha", threadId: nativeSession.threadId }),
@@ -304,12 +640,10 @@ describe("session-share receiver catalog", () => {
       label: "local profile",
       patch: { createdActor: { type: "human", identity: { type: "profile", id: "forged" } } },
     },
-    { label: "long label", patch: { createdActor: { type: "human", label: "x".repeat(201) } } },
-    { label: "unknown field", patch: { unexpected: true } },
     { label: "local adoption", patch: { sessionKey: "agent:main:local" } },
     { label: "write capability", patch: { canContinue: true } },
   ])("rejects node rows carrying $label", async ({ patch }) => {
-    const fixture = catalogFixture();
+    const fixture = await catalogFixture();
     fixture.invoke.mockResolvedValue({
       payloadJSON: JSON.stringify({ sessions: [{ ...nativeSession, ...patch }] }),
     });
@@ -317,20 +651,19 @@ describe("session-share receiver catalog", () => {
     expect(hosts[0]).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
   });
 
-  it.each([
-    { sender: { identity: { type: "profile", id: "forged" } } },
-    { sender: { identity: remoteIdentity, label: "x".repeat(201) } },
-    { unexpected: true },
-  ])("rejects transcript payload outside the closed wire identity contract: %j", async (patch) => {
-    const fixture = catalogFixture();
-    fixture.invoke.mockResolvedValue({
-      payloadJSON: JSON.stringify({
-        threadId: nativeSession.threadId,
-        items: [{ type: "userMessage", text: "Question", ...patch }],
-      }),
-    });
-    await expect(
-      fixture.catalog.read({ hostId: "node:alpha", threadId: nativeSession.threadId }),
-    ).rejects.toThrow("Invalid OpenClaw transcript");
-  });
+  it.each([{ sender: { identity: { type: "profile", id: "forged" } } }, { unexpected: true }])(
+    "rejects transcript payload outside the closed wire identity contract: %j",
+    async (patch) => {
+      const fixture = await catalogFixture();
+      fixture.invoke.mockResolvedValue({
+        payloadJSON: JSON.stringify({
+          threadId: nativeSession.threadId,
+          items: [{ type: "userMessage", text: "Question", ...patch }],
+        }),
+      });
+      await expect(
+        fixture.catalog.read({ hostId: "node:alpha", threadId: nativeSession.threadId }),
+      ).rejects.toThrow("Invalid OpenClaw transcript");
+    },
+  );
 });

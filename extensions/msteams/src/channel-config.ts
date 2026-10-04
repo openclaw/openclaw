@@ -5,16 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-export type ResolvedMSTeamsAccount = {
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-  tokenStatus: "available" | "configured_unavailable" | "missing";
-  credentialDiagnostics?: Extract<
-    ReturnType<typeof tryReadSecretFileSync>,
-    { status: "configured_unavailable" }
-  >["diagnostic"][];
-};
+export type ResolvedMSTeamsAccount = ReturnType<typeof resolveMSTeamsAccount>;
 
 export const msteamsMeta = {
   id: "msteams",
@@ -27,7 +18,7 @@ export const msteamsMeta = {
   order: 60,
 } as const;
 
-export function resolveMSTeamsAccount(cfg: OpenClawConfig): ResolvedMSTeamsAccount {
+export function resolveMSTeamsAccount(cfg: OpenClawConfig) {
   const config = cfg.channels?.msteams;
   const credentials = resolveMSTeamsCredentials(config);
   const certificatePath =
@@ -46,7 +37,11 @@ export function resolveMSTeamsAccount(cfg: OpenClawConfig): ResolvedMSTeamsAccou
     accountId: DEFAULT_ACCOUNT_ID,
     enabled: config?.enabled !== false,
     configured: Boolean(credentials),
-    tokenStatus: !credentials ? "missing" : unavailable ? "configured_unavailable" : "available",
+    tokenStatus: !credentials
+      ? ("missing" as const)
+      : unavailable
+        ? ("configured_unavailable" as const)
+        : ("available" as const),
     ...(unavailable ? { credentialDiagnostics: [certificate.diagnostic] } : {}),
   };
 }

@@ -1,5 +1,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeBoundedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 
 export const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";
@@ -13,19 +15,8 @@ export { fetchWithSsrFGuard };
 export type FetchGuard = typeof fetchWithSsrFGuard;
 
 export function normalizeInstanceId(value: string | null): string | undefined {
-  const instanceId = value?.trim();
-  let hasControlCharacter = false;
-  for (let index = 0; index < (instanceId?.length ?? 0); index += 1) {
-    const codePoint = instanceId?.charCodeAt(index) ?? 0;
-    if (codePoint < 0x20 || codePoint === 0x7f) {
-      hasControlCharacter = true;
-      break;
-    }
-  }
-  if (!instanceId || instanceId.length > INSTANCE_ID_MAX_LENGTH || hasControlCharacter) {
-    return undefined;
-  }
-  return instanceId;
+  const instanceId = normalizeBoundedOptionalString(value, INSTANCE_ID_MAX_LENGTH);
+  return instanceId && !containsAsciiControlCharacter(instanceId) ? instanceId : undefined;
 }
 
 export async function fetchDiscordJson(params: {

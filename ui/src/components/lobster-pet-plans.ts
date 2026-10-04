@@ -1,3 +1,4 @@
+import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
+import { THEME_CRITTER_CROSS_MS } from "./theme-flair-sprites.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -28,7 +30,6 @@ export type LobsterPetAct =
   | "sweep";
 
 type ActProfile = {
-  // [min, max] delay before the next act.
   delayMs: [number, number];
   acts: Array<[LobsterPetAct, number]>;
 };
@@ -96,8 +97,6 @@ const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
   },
 };
 
-// Busy and offline override the personality: the pet is a status indicator
-// first. Busy scurries (no naps mid-run); offline paces and peeks.
 const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
   busy: {
     delayMs: [2200, 4500],
@@ -139,45 +138,35 @@ export function resolveLobsterFinishAct(outcome: LobsterRunOutcome): LobsterPetA
 
 export const LEAVE_MS = 350;
 
-// Arrival theatrics: most visits walk up from behind the ledge; a few float
-// in under a balloon or pop out of a bubble. Rolled per arrival from the
-// component's dedicated entrance stream so visit scheduling stays untouched.
+// Entrance rolls have a dedicated stream so they cannot change visit scheduling.
 export function pickLobsterEntrance(roll: number): LobsterPetEntrance {
   return roll < 0.06 ? "balloon" : roll < 0.13 ? "bubble" : "walk";
 }
 
-// How long each entrance owns the `entering` flag; mirrors the entrance
-// animation durations in lobster-pet.css.
+// Matches the entrance animation durations in lobster-pet.css.
 export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
   walk: 450,
   balloon: 1250,
   bubble: 700,
 };
 
-// One full ledge crossing per passer kind. The snail is the point of the
-// snail: glance away, glance back, still crossing.
-export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
+const LOBSTER_PASSER_CROSS_MS: Partial<Record<LobsterPasserKind, number>> = {
   stranger: 11_000,
   crab: 11_000,
   snail: 90_000,
   duck: 14_000,
   jellyfish: 16_000,
+  ...THEME_CRITTER_CROSS_MS,
 };
 
 export type LobsterPetAnchor = "top" | "floor";
 
-// Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
-// of loads gets no visit at all; the rest get a delayed first arrival,
-// stays of a few minutes, and long gaps between returns. Disconnects summon
-// the pet regardless of schedule (unless dismissed or disabled).
+// Offline summons bypass this seeded visit schedule unless visits are disabled.
 export const VISIT_SHY_CHANCE = 0.5;
 export const VISIT_FIRST_DELAY_MS = [1800, 7500] as const;
 export const VISIT_STAY_MS = [90_000, 300_000] as const;
 export const VISIT_GAP_MS = [1_800_000, 3_600_000] as const;
 
-// Rare-event loads, planned per seed so tests can probe them purely: a molt
-// load sheds its shell during the first idle act and sizes up one tier; a
-// twin load brings a mini copycat along on every visit.
 export function isLobsterMoltLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x301d) >>> 0)() < 0.12;
 }
@@ -194,27 +183,45 @@ export type LobsterPasserPlan = {
   hops: boolean;
 };
 
-// Once per load, someone else might just... pass through. Strangers are
-// other lobsters that never stop; the rest of the traffic is a crab (not a
-// lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
-// The 9.5% event gate is unchanged from the two-kind era — variety widened,
-// frequency did not. None of them count for the Lobsterdex.
-export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
+export type LobsterPasserOptions = {
+  critters?: readonly string[];
+  strangers?: boolean;
+  critterArtwork?: ThemeArtwork["critters"];
+};
+
+export function resolveLobsterPasserCrossMs(
+  kind: LobsterPasserKind,
+  artwork?: ThemeArtwork["critters"],
+): number {
+  return (
+    (Object.hasOwn(LOBSTER_PASSER_CROSS_MS, kind) ? LOBSTER_PASSER_CROSS_MS[kind] : undefined) ??
+    artwork?.[kind]?.crossMs ??
+    12_000
+  );
+}
+
+export function planLobsterPasser(
+  seed: number,
+  { critters = [], strangers = true }: LobsterPasserOptions = {},
+): LobsterPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
-  const roll = rng();
-  if (roll >= 0.095) {
+  const roll = rng() * 1000;
+  const weights: Array<readonly [LobsterPasserKind, number]> = [
+    ["crab", 15],
+    ["snail", 12],
+    ["duck", 12],
+    ["jellyfish", 11],
+    ...(strangers ? ([["stranger", 45]] as const) : []),
+    ...critters.map((kind) => [kind, 20] as const),
+  ];
+  let limit = 0;
+  const kind = weights.find(([, weight]) => {
+    limit += weight;
+    return roll < limit;
+  })?.[0];
+  if (!kind) {
     return null;
   }
-  const kind: LobsterPasserKind =
-    roll < 0.015
-      ? "crab"
-      : roll < 0.027
-        ? "snail"
-        : roll < 0.039
-          ? "duck"
-          : roll < 0.05
-            ? "jellyfish"
-            : "stranger";
   const atMs = Math.round(2500 + rng() * 6500);
   const direction: 1 | -1 = rng() < 0.5 ? 1 : -1;
   const floor = rng() < 0.55;
@@ -222,17 +229,11 @@ export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
   return { kind, atMs, direction, floor, hops };
 }
 
-// A very rare load hosts the Elder: a huge, barnacled, unhurried lobster.
-// Lobsters famously never really stop growing; this one simply started
-// earlier than everyone else.
 function isLobsterElderLoad(seed: number): boolean {
   return mulberry32((seed ^ 0xe1d3) >>> 0)() < 0.015;
 }
 
-// Sometimes the visitor is not a stranger at all: a palette the Lobsterdex
-// already remembers comes back wearing its recorded name. Returns the chosen
-// palette id, or null for an ordinary load. Candidates are passed in
-// (sorted) so this stays a pure plan.
+// Sorted candidates keep the old-friend choice deterministic for a seed.
 function planLobsterOldFriend(seed: number, knownPaletteIds: readonly string[]): string | null {
   if (knownPaletteIds.length === 0) {
     return null;
@@ -270,7 +271,6 @@ export function resolveLobsterLoadIdentity(
     look,
   };
   if (isLobsterElderLoad(seed)) {
-    // The Elder never molts or crushes: it is already every size it needs.
     return {
       ...base,
       elder: true,
@@ -309,8 +309,6 @@ export function resolveLobsterLoadIdentity(
   };
 }
 
-// The displayed base name before honorifics: rare identities override the
-// seeded catalog name.
 export function lobsterLoadDisplayName(identity: LobsterLoadIdentity, seed: number): string {
   if (identity.elder) {
     return "Methuselah";
@@ -318,8 +316,7 @@ export function lobsterLoadDisplayName(identity: LobsterLoadIdentity, seed: numb
   return identity.friendName ?? lobsterPetName(identity.look, seed);
 }
 
-// Ledge lore, delivered by sea. Shown through the bottle's title tooltip
-// (the pet-name channel), so there is no i18n surface.
+// Bottle titles share the pet-name channel, which is intentionally not translated.
 export const LOBSTER_BOTTLE_FORTUNES = [
   "the tide returns every branch to shore",
   "molt before you feel ready",
@@ -343,8 +340,6 @@ export type LobsterBottlePlan = {
   fortuneIndex: number;
 };
 
-// A few loads beach a message in a bottle somewhere on the ledge. It is not
-// the pet's: it appears on its own clock and outlives visits.
 export function planLobsterBottle(seed: number): LobsterBottlePlan | null {
   const rng = mulberry32((seed ^ 0xb077) >>> 0);
   if (rng() >= 0.03) {
@@ -356,9 +351,7 @@ export function planLobsterBottle(seed: number): LobsterBottlePlan | null {
   return { atMs, spotPct, fortuneIndex };
 }
 
-// The pet notices gateway upgrades: the first page load on a new version, it
-// shows up carrying a bindle (moving day). The very first version sighting
-// only records a baseline - no bindle without a previous home.
+// The first version sighting only records a baseline; upgrades trigger moving day.
 const MOVING_DAY_KEY = "openclaw.control.lobsterpet.gatewayVersion.v1";
 
 export function detectLobsterMovingDay(version: string): boolean {
@@ -378,7 +371,6 @@ export function detectLobsterMovingDay(version: string): boolean {
   }
 }
 
-// Late-night visitors are always sleepy, whatever their daytime personality.
 function isLobsterNightTime(now: Date = new Date()): boolean {
   const hour = now.getHours();
   return hour >= 22 || hour < 6;

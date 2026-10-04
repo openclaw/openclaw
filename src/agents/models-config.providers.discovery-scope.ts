@@ -101,60 +101,26 @@ function resolvePluginMetadataProviderOwners(
     return undefined;
   }
   const owners = new Set<string>();
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.providers ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  return owners.size > 0
-    ? [...owners].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function appendNormalizedPluginMetadataOwners(
-  target: Set<string>,
-  ownerMap: ReadonlyMap<string, readonly string[]>,
-  provider: string,
-  normalizedProvider: string,
-): void {
-  for (const owner of ownerMap.get(provider) ?? []) {
-    target.add(owner);
-  }
-  if (normalizedProvider !== provider) {
-    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
-      target.add(owner);
+  for (const ownerMap of [
+    pluginMetadataSnapshot.owners.providers,
+    pluginMetadataSnapshot.owners.modelCatalogProviders,
+    pluginMetadataSnapshot.owners.setupProviders,
+    pluginMetadataSnapshot.owners.cliBackends,
+  ]) {
+    if (!ownerMap) {
+      continue;
     }
-  }
-  for (const [ownedId, owners] of ownerMap.entries()) {
-    if (
-      ownedId !== provider &&
-      ownedId !== normalizedProvider &&
-      normalizeProviderId(ownedId) === normalizedProvider
-    ) {
-      for (const owner of owners) {
-        target.add(owner);
+    for (const [ownedId, pluginIds] of ownerMap) {
+      if (normalizeProviderId(ownedId) === normalizedProvider) {
+        for (const pluginId of pluginIds) {
+          owners.add(pluginId);
+        }
       }
     }
   }
+  return owners.size > 0
+    ? [...owners].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
 }
 
 export function resolveImplicitProviderDiscoveryScope(params: {

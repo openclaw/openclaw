@@ -19,13 +19,12 @@ import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 registerNewSessionSetupEnglish();
 
-type DraftAgent = GatewayAgentRow;
-
 export function renderAgentSelect(params: {
-  agents: DraftAgent[];
+  agents: GatewayAgentRow[];
   agentId: string;
   agentIdentity?: AgentIdentityCapability;
   disabled: boolean;
+  variant?: "default" | "compact";
   onSelect: (agentId: string) => void;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -33,7 +32,7 @@ export function renderAgentSelect(params: {
   return html`
     <span class="new-session-page__select new-session-page__select--agent">
       <openclaw-agent-select
-        .variant=${"compact"}
+        .variant=${params.variant ?? "compact"}
         .options=${params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
           label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),
@@ -121,7 +120,7 @@ export function renderNewSessionPlaceControls({
   const checkoutState = resolveCheckoutChip({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
-    worktreeAvailable: place.worktreeAvailable(),
+    worktreeName: place.worktreeName,
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
     repository: Boolean(place.remoteRepository),
@@ -252,7 +251,7 @@ export function renderNewSessionPlaceControls({
           onClose: () => browser.close(),
         })
   }${
-    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+    place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
           idPrefix,
           state: checkoutState,

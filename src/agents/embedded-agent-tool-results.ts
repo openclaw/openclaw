@@ -1,6 +1,9 @@
 /** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,7 +18,7 @@ import {
 } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { memoizeSanitizedToolResult } from "./embedded-agent-tool-result-cache.js";
+import { createToolResultPreparation } from "./embedded-agent-tool-result-preparation.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -35,6 +38,30 @@ const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
   "x-api-key",
   "x-auth-token",
 ]);
+
+/** Recognize work accepted by a tool whose background task owns completion. */
+export function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  return details?.async === true && details.status === "started";
+}
+
+/** Preserve the accepted task's identity independently of result presentation. */
+export function readAsyncStartedTaskIds(result: unknown): {
+  asyncTaskRunId?: string;
+  asyncTaskId?: string;
+} {
+  const details = readToolResultDetails(result);
+  if (!details) {
+    return {};
+  }
+  const nestedTask = readRecord(details.task);
+  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
+  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
+  return {
+    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
+    ...(asyncTaskId ? { asyncTaskId } : {}),
+  };
+}
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -81,74 +108,47 @@ function normalizeToolErrorText(text: string): string | undefined {
     : firstLine;
 }
 
-function isErrorLikeStatus(status: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(status);
-  if (!normalized) {
-    return false;
-  }
-  if (
-    normalized === "0" ||
-    normalized === "ok" ||
-    normalized === "success" ||
-    normalized === "completed" ||
-    normalized === "running"
-  ) {
-    return false;
-  }
-  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(normalized);
-}
-
 function readErrorCandidate(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeToolErrorText(value);
   }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.message === "string") {
+  const record = asOptionalObjectRecord(value);
+  if (typeof record?.message === "string") {
     return normalizeToolErrorText(record.message);
   }
-  if (typeof record.error === "string") {
+  if (typeof record?.error === "string") {
     return normalizeToolErrorText(record.error);
   }
   return undefined;
 }
 
 function extractErrorField(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
   const direct = extractDirectErrorField(record);
   if (direct) {
     return direct;
   }
-  const status = normalizeOptionalString(record.status) ?? "";
-  if (!status || !isErrorLikeStatus(status)) {
-    return undefined;
-  }
-  return normalizeToolErrorText(status);
+  const status = normalizeOptionalString(record.status);
+  return status &&
+    /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(status.toLowerCase())
+    ? normalizeToolErrorText(status)
+    : undefined;
 }
 
 function extractDirectErrorField(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asOptionalObjectRecord(value);
   return (
-    readErrorCandidate(record.error) ??
-    readErrorCandidate(record.message) ??
-    readErrorCandidate(record.reason)
+    readErrorCandidate(record?.error) ??
+    readErrorCandidate(record?.message) ??
+    readErrorCandidate(record?.reason)
   );
 }
 
-function readErrorCodeField(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
-}
-
 function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
-  const message = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  const message = normalizeOptionalString(value);
   if (!message) {
     return undefined;
   }
@@ -161,28 +161,22 @@ function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
 }
 
 function readNestedErrorCodeField(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asOptionalObjectRecord(value);
   return (
-    readDenialErrorCodeFromMessage(record.message) ??
-    readDenialErrorCodeFromMessage(record.error) ??
-    readErrorCodeField(record.code) ??
-    readErrorCodeField(record.gatewayCode)
+    readDenialErrorCodeFromMessage(record?.message) ??
+    readDenialErrorCodeFromMessage(record?.error) ??
+    normalizeOptionalString(record?.code) ??
+    normalizeOptionalString(record?.gatewayCode)
   );
 }
 
 function extractDirectErrorCodeField(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asOptionalObjectRecord(value);
   return (
-    readNestedErrorCodeField(record.error) ??
-    readNestedErrorCodeField(record.nodeError) ??
-    readErrorCodeField(record.code) ??
-    readErrorCodeField(record.gatewayCode)
+    readNestedErrorCodeField(record?.error) ??
+    readNestedErrorCodeField(record?.nodeError) ??
+    normalizeOptionalString(record?.code) ??
+    normalizeOptionalString(record?.gatewayCode)
   );
 }
 
@@ -194,7 +188,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   const rawDetails = readRecord(errorRecord?.details);
   const nodeError = readRecord(rawDetails?.nodeError);
   const gatewayCode =
-    readErrorCodeField(errorRecord?.gatewayCode) ?? readErrorCodeField(errorRecord?.code);
+    normalizeOptionalString(errorRecord?.gatewayCode) ?? normalizeOptionalString(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
   return {
     content: [{ type: "text", text: message }],
@@ -207,30 +201,18 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   };
 }
 
-function extractAggregatedErrorField(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  return readErrorCandidate(record.aggregated);
-}
-
 function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((item) => redactStringsDeep(item, seen));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
+    if (Array.isArray(value)) {
+      return value.map((item) => redactStringsDeep(item, seen));
+    }
     const entries = Object.entries(value as Record<string, unknown>);
     for (const entry of entries) {
       entry[1] =
@@ -257,7 +239,13 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
-  return memoizeSanitizedToolResult(result, () => sanitizeStructuredToolResult(result));
+  return sanitizeStructuredToolResult(result);
+}
+
+export function prepareToolResult(result: unknown): () => unknown {
+  return result && typeof result === "object"
+    ? createToolResultPreparation(result, () => sanitizeStructuredToolResult(result))
+    : () => sanitizeToolResult(result);
 }
 
 function sanitizeStructuredToolResult(result: object): object {
@@ -425,41 +413,24 @@ export function extractToolResultText(result: unknown): string | undefined {
   }
   const content = resolveToolResultContentBlocks(result);
   const texts = collectTextContentBlocks(content)
-    .map((item) => {
-      const trimmed = item.trim();
-      return trimmed ? trimmed : undefined;
-    })
-    .filter((value): value is string => Boolean(value));
+    .map((item) => item.trim())
+    .filter(Boolean);
   if (texts.length > 0) {
     return truncateToolText(texts.join("\n"));
   }
-  const structuredTexts: string[] = [];
-  for (const item of content) {
-    const structured = stringifyStructuredToolResultContent(item);
-    if (structured) {
-      structuredTexts.push(structured);
-    }
-  }
-  if (structuredTexts.length === 0) {
-    return undefined;
-  }
-  return truncateToolText(structuredTexts.join("\n"));
+  const structuredTexts = content.map(stringifyStructuredToolResultContent).filter(Boolean);
+  return structuredTexts.length > 0 ? truncateToolText(structuredTexts.join("\n")) : undefined;
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const record = result as Record<string, unknown>;
-  return extractDirectErrorCodeField(record.details) ?? extractDirectErrorCodeField(record);
+  const record = asOptionalObjectRecord(result);
+  return extractDirectErrorCodeField(record?.details) ?? extractDirectErrorCodeField(record);
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {
-  const normalizedStatus = readToolResultStatus(result);
-  if (normalizedStatus === "timeout") {
-    return true;
-  }
-  return readToolResultDetails(result)?.timedOut === true;
+  return (
+    readToolResultStatus(result) === "timeout" || readToolResultDetails(result)?.timedOut === true
+  );
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {
@@ -467,17 +438,12 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const fromDetails = extractDirectErrorField(record.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const fromDetailsAggregated = extractAggregatedErrorField(record.details);
-  if (fromDetailsAggregated) {
-    return fromDetailsAggregated;
-  }
-  const fromRoot = extractDirectErrorField(record);
-  if (fromRoot) {
-    return fromRoot;
+  const direct =
+    extractDirectErrorField(record.details) ??
+    readErrorCandidate(asOptionalObjectRecord(record.details)?.aggregated) ??
+    extractDirectErrorField(record);
+  if (direct) {
+    return direct;
   }
   const text = extractToolResultText(result);
   if (text) {
@@ -491,13 +457,9 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
       // Fall through to status/text fallback.
     }
   }
-  const fromDetailsStatus = extractErrorField(record.details);
-  if (fromDetailsStatus) {
-    return fromDetailsStatus;
-  }
-  const fromRootStatus = extractErrorField(record);
-  if (fromRootStatus) {
-    return fromRootStatus;
+  const fromStatus = extractErrorField(record.details) ?? extractErrorField(record);
+  if (fromStatus) {
+    return fromStatus;
   }
   const status = readToolResultStatus(result);
   if (status && !isToolResultError(result)) {

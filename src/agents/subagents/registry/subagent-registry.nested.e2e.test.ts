@@ -2,9 +2,13 @@
 // across orchestrator and leaf child sessions.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { countPendingDescendantRuns, countActiveDescendantRuns } from "./subagent-registry-read.js";
+import { callGateway } from "../../../gateway/call.js";
+import {
+  countPendingDescendantRuns,
+  buildSubagentSessionListReadIndex,
+} from "./subagent-registry-read.js";
 
 vi.mock("../../../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../../../config/config.js")>(
@@ -29,15 +33,15 @@ describe("subagent registry nested agent tracking", () => {
     subagentRegistry = await import("./subagent-registry.test-helpers.js");
   });
 
-  afterEach(() => {
-    subagentRegistry.resetSubagentRegistryForTests({ persist: false });
+  afterEach(async () => {
+    await subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("listSubagentRunsForRequester returns children of the requesting session", () => {
+  it("listSubagentRunsForRequester returns children of the requesting session", async () => {
     const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-orch",
       childSessionKey: "agent:main:subagent:orch-uuid",
       requesterSessionKey: "agent:main:main",
@@ -48,7 +52,7 @@ describe("subagent registry nested agent tracking", () => {
     });
 
     // Depth-1 orchestrator spawns a depth-2 leaf
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf",
       childSessionKey: "agent:main:subagent:orch-uuid:subagent:leaf-uuid",
       requesterSessionKey: "agent:main:subagent:orch-uuid",
@@ -75,10 +79,10 @@ describe("subagent registry nested agent tracking", () => {
     expect(leafRuns).toHaveLength(0);
   });
 
-  it("announce uses requesterSessionKey to route to the correct parent", () => {
+  it("announce uses requesterSessionKey to route to the correct parent", async () => {
     const { registerSubagentRun } = subagentRegistry;
     // Register a sub-sub-agent whose parent is a sub-agent.
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-subsub",
       childSessionKey: "agent:main:subagent:orch:subagent:child",
       requesterSessionKey: "agent:main:subagent:orch",
@@ -101,11 +105,18 @@ describe("subagent registry nested agent tracking", () => {
     );
   });
 
-  it("countActiveRunsForSession only counts active children of the specific session", () => {
+  it("countActiveRunsForSession only counts active children of the specific session", async () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
+    const gateway = vi.mocked(callGateway);
+    const originalGateway = expectDefined(gateway.getMockImplementation(), "shared gateway mock");
+    onTestFinished(() => {
+      gateway.mockImplementation(originalGateway);
+    });
+    // The shared default completes runs; these children must remain active while counted.
+    gateway.mockResolvedValue({ status: "pending" });
 
     // Main spawns orchestrator (active)
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-orch-active",
       childSessionKey: "agent:main:subagent:orch1",
       requesterSessionKey: "agent:main:main",
@@ -115,7 +126,7 @@ describe("subagent registry nested agent tracking", () => {
     });
 
     // Orchestrator spawns two leaves
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf-1",
       childSessionKey: "agent:main:subagent:orch1:subagent:leaf1",
       requesterSessionKey: "agent:main:subagent:orch1",
@@ -124,7 +135,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanup: "keep",
     });
 
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "run-leaf-2",
       childSessionKey: "agent:main:subagent:orch1:subagent:leaf2",
       requesterSessionKey: "agent:main:subagent:orch1",
@@ -140,10 +151,10 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveRunsForSession("agent:main:subagent:orch1")).toBe(2);
   });
 
-  it("countActiveDescendantRuns traverses through ended parents", () => {
+  it("counts active descendants through ended parents", async () => {
     const { addSubagentRunForTests } = subagentRegistry;
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-ended",
       childSessionKey: "agent:main:subagent:orch-ended",
       requesterSessionKey: "agent:main:main",
@@ -155,7 +166,7 @@ describe("subagent registry nested agent tracking", () => {
       endedAt: 2,
       cleanupHandled: false,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-active",
       childSessionKey: "agent:main:subagent:orch-ended:subagent:leaf",
       requesterSessionKey: "agent:main:subagent:orch-ended",
@@ -167,14 +178,20 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: false,
     });
 
-    expect(countActiveDescendantRuns("agent:main:main")).toBe(1);
-    expect(countActiveDescendantRuns("agent:main:subagent:orch-ended")).toBe(1);
+    expect(buildSubagentSessionListReadIndex().countActiveDescendantRuns("agent:main:main")).toBe(
+      1,
+    );
+    expect(
+      buildSubagentSessionListReadIndex().countActiveDescendantRuns(
+        "agent:main:subagent:orch-ended",
+      ),
+    ).toBe(1);
   });
 
-  it("countPendingDescendantRuns includes ended descendants until cleanup completes", () => {
+  it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
     const { addSubagentRunForTests } = subagentRegistry;
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-ended-pending",
       childSessionKey: "agent:main:subagent:orch-pending",
       requesterSessionKey: "agent:main:main",
@@ -187,7 +204,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: false,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-ended-pending",
       childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf",
       requesterSessionKey: "agent:main:subagent:orch-pending",
@@ -201,10 +218,10 @@ describe("subagent registry nested agent tracking", () => {
       cleanupCompletedAt: undefined,
     });
 
-    expect(countPendingDescendantRuns("agent:main:main")).toBe(2);
-    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+    expect(await countPendingDescendantRuns("agent:main:main", () => {})).toBe(2);
+    expect(await countPendingDescendantRuns("agent:main:subagent:orch-pending", () => {})).toBe(1);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-completed",
       childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf-completed",
       requesterSessionKey: "agent:main:subagent:orch-pending",
@@ -217,14 +234,14 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: 3,
     });
-    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+    expect(await countPendingDescendantRuns("agent:main:subagent:orch-pending", () => {})).toBe(1);
   });
 
-  it("keeps parent pending for parallel children until both descendants complete cleanup", () => {
+  it("keeps parent pending for parallel children until both descendants complete cleanup", async () => {
     const { addSubagentRunForTests } = subagentRegistry;
     const parentSessionKey = "agent:main:subagent:orch-parallel";
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-parallel",
       childSessionKey: parentSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -237,7 +254,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: false,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-a",
       childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
       requesterSessionKey: parentSessionKey,
@@ -250,7 +267,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-b",
       childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
       requesterSessionKey: parentSessionKey,
@@ -263,9 +280,9 @@ describe("subagent registry nested agent tracking", () => {
       cleanupCompletedAt: undefined,
     });
 
-    expect(countPendingDescendantRuns(parentSessionKey)).toBe(2);
+    expect(await countPendingDescendantRuns(parentSessionKey, () => {})).toBe(2);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-a",
       childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
       requesterSessionKey: parentSessionKey,
@@ -278,9 +295,9 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: 3,
     });
-    expect(countPendingDescendantRuns(parentSessionKey)).toBe(1);
+    expect(await countPendingDescendantRuns(parentSessionKey, () => {})).toBe(1);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-b",
       childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
       requesterSessionKey: parentSessionKey,
@@ -293,6 +310,6 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: 5,
     });
-    expect(countPendingDescendantRuns(parentSessionKey)).toBe(0);
+    expect(await countPendingDescendantRuns(parentSessionKey, () => {})).toBe(0);
   });
 });

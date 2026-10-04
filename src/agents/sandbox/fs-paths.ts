@@ -1,8 +1,3 @@
-/**
- * Sandbox filesystem mount and path resolution helpers.
- *
- * Builds the container-to-host mount table and maps requested sandbox paths to writable/read-only host targets.
- */
 import os from "node:os";
 import path from "node:path";
 import { shortenPathWithHome } from "../../infra/home-display.js";
@@ -34,12 +29,6 @@ export type SandboxResolvedFsPath = {
   writable: boolean;
 };
 
-type ParsedBindMount = {
-  hostRoot: string;
-  containerRoot: string;
-  writable: boolean;
-};
-
 export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFsMount[] {
   return resolveSandboxMountSelection({
     workspaceDir: sandbox.workspaceDir,
@@ -62,29 +51,20 @@ export function resolveWritableSandboxBindHostRoots(
 ): string[] {
   const parsedBinds = parseSandboxBindMounts(binds);
   const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
-  const roots: string[] = [];
-  const seen = new Set<string>();
-  for (const parsed of parsedBinds) {
-    if (
-      !parsed.writable ||
-      seen.has(parsed.hostRoot) ||
-      readonlyRoots.some((root) => isPathInside(parsed.hostRoot, root))
-    ) {
-      continue;
-    }
-    seen.add(parsed.hostRoot);
-    roots.push(parsed.hostRoot);
-  }
-  return roots;
+  return [
+    ...new Set(
+      parsedBinds
+        .filter(
+          (bind) =>
+            bind.writable && !readonlyRoots.some((root) => isPathInside(bind.hostRoot, root)),
+        )
+        .map((bind) => bind.hostRoot),
+    ),
+  ];
 }
 
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
-  for (const parsed of parseSandboxBindMounts(binds)) {
-    if (parsed.hostRoot !== parsed.containerRoot) {
-      return true;
-    }
-  }
-  return false;
+  return parseSandboxBindMounts(binds).some((mount) => mount.hostRoot !== mount.containerRoot);
 }
 
 export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | undefined): boolean {
@@ -96,7 +76,7 @@ export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | und
   );
 }
 
-function parseSandboxBindMounts(binds: readonly string[] | undefined): ParsedBindMount[] {
+function parseSandboxBindMounts(binds: readonly string[] | undefined) {
   return resolveSandboxBindMounts(binds).map((mount) => ({
     hostRoot: path.resolve(mount.hostPath),
     containerRoot: mount.containerPath,
@@ -112,7 +92,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   mounts: SandboxFsMount[];
   containerOnlyMounts?: readonly string[];
 }): SandboxResolvedFsPath {
-  const mountsByContainer = [...params.mounts].toSorted(compareMountsByContainerPath);
+  const mountsByContainer = params.mounts.toSorted(compareMountsByContainerPath);
   // The default workspace is an input alias, not a readable host mount. It wins
   // exact host-root ties so a second bind cannot redirect cwd-relative inputs.
   const workspaceAlias: SandboxFsMount = {
@@ -173,11 +153,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   const hostResolved = resolveSandboxInputPath(input, params.cwd);
   const hostMount = findMountByHostPath(mountsByHost, hostResolved);
   if (hostMount) {
-    const relHost = hostMount.relativeHostPath;
-    const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
-    const containerPath = relPosix
-      ? path.posix.join(hostMount.mount.containerRoot, relPosix)
-      : hostMount.mount.containerRoot;
+    const containerPath = mountedHostPathToContainer(hostMount);
     const visibleMount = resolveSandboxFsMount(
       mountsByContainer,
       containerPath,
@@ -195,12 +171,17 @@ export function resolveSandboxFsPathWithMounts(params: {
   if (path.posix.isAbsolute(inputPosix)) {
     resolveSandboxFsMount(mountsByContainer, inputPosix, params.containerOnlyMounts);
   }
-  const escapeMessage = formatSandboxRootEscapeMessage({
-    input,
-    defaultWorkspaceRoot: params.defaultWorkspaceRoot,
-    defaultContainerRoot: params.defaultContainerRoot,
+  const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
+  let workspaceRoot = shortenPathWithHome(path.resolve(params.defaultWorkspaceRoot), {
+    home: os.homedir(),
+    prefix: "~",
   });
-  throw new Error(escapeMessage);
+  if (workspaceRoot.startsWith(`~${path.sep}`)) {
+    workspaceRoot = workspaceRoot.replaceAll(path.sep, path.posix.sep);
+  }
+  throw new Error(
+    `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${input}. Use a path under ${containerRoot}/ instead.`,
+  );
 }
 
 function resolveMountedContainerPath(params: {
@@ -210,18 +191,16 @@ function resolveMountedContainerPath(params: {
 }): SandboxResolvedFsPath {
   const rel = path.posix.relative(params.mount.containerRoot, params.containerPath);
   const hostPath = rel
-    ? path.resolve(params.mount.hostRoot, ...toHostSegments(rel))
+    ? path.resolve(params.mount.hostRoot, ...rel.split("/").filter(Boolean))
     : params.mount.hostRoot;
   const containerPath = rel
     ? path.posix.join(params.mount.containerRoot, rel)
     : params.mount.containerRoot;
+  const relativePath = path.posix.relative(params.defaultContainerRoot, containerPath);
   return {
     hostPath,
     containerPath,
-    relativePath: toDisplayRelative({
-      containerPath,
-      defaultContainerRoot: params.defaultContainerRoot,
-    }),
+    relativePath: relativePathEscapesContainerRoot(relativePath) ? containerPath : relativePath,
     writable: params.mount.writable,
   };
 }
@@ -234,12 +213,9 @@ function resolveRelativeContainerCandidate(params: {
 }): string {
   const cwdMount = findMountByHostPath(params.mountsByHost, path.resolve(params.cwd));
   if (cwdMount) {
-    const relHost = cwdMount.relativeHostPath;
-    const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
-    const containerCwd = relPosix
-      ? path.posix.join(cwdMount.mount.containerRoot, relPosix)
-      : cwdMount.mount.containerRoot;
-    return normalizeContainerPathCore(path.posix.resolve(containerCwd, params.inputPosix));
+    return normalizeContainerPathCore(
+      path.posix.resolve(mountedHostPathToContainer(cwdMount), params.inputPosix),
+    );
   }
   const cwdPosix = normalizePosixInput(params.cwd);
   if (path.posix.isAbsolute(cwdPosix)) {
@@ -250,54 +226,24 @@ function resolveRelativeContainerCandidate(params: {
   );
 }
 
-function formatSandboxRootEscapeMessage(params: {
-  input: string;
-  defaultWorkspaceRoot: string;
-  defaultContainerRoot: string;
-}): string {
-  const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
-  let workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
-  if (workspaceRoot.startsWith(`~${path.sep}`)) {
-    workspaceRoot = workspaceRoot.replaceAll(path.sep, path.posix.sep);
-  }
-  return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
-}
-
-function shortenHomePath(value: string): string {
-  return shortenPathWithHome(value, { home: os.homedir(), prefix: "~" });
-}
-
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
-  const byLength = b.containerRoot.length - a.containerRoot.length;
-  if (byLength !== 0) {
-    return byLength;
-  }
   // Keep resolver ordering aligned with docker mount precedence for default
   // workspace mounts, but never let bridge policy classify protected skills
   // as writable.
-  return mountSourcePriority(b.source) - mountSourcePriority(a.source);
+  return (
+    b.containerRoot.length - a.containerRoot.length ||
+    MOUNT_SOURCE_PRIORITY[b.source] - MOUNT_SOURCE_PRIORITY[a.source]
+  );
 }
 
 function compareMountsByHostPath(a: SandboxFsMount, b: SandboxFsMount): number {
-  const byLength = b.hostRoot.length - a.hostRoot.length;
-  if (byLength !== 0) {
-    return byLength;
-  }
-  return mountSourcePriority(b.source) - mountSourcePriority(a.source);
+  return (
+    b.hostRoot.length - a.hostRoot.length ||
+    MOUNT_SOURCE_PRIORITY[b.source] - MOUNT_SOURCE_PRIORITY[a.source]
+  );
 }
 
-function mountSourcePriority(source: SandboxFsMount["source"]): number {
-  if (source === "protectedSkill") {
-    return 3;
-  }
-  if (source === "bind") {
-    return 2;
-  }
-  if (source === "agent") {
-    return 1;
-  }
-  return 0;
-}
+const MOUNT_SOURCE_PRIORITY = { workspace: 0, agent: 1, bind: 2, protectedSkill: 3 };
 
 export function resolveSandboxFsMount<T extends { containerRoot: string }>(
   mounts: readonly T[],
@@ -328,7 +274,7 @@ export function resolveSandboxFsMount<T extends { containerRoot: string }>(
       `Sandbox path is container-only: ${target}. Use exec to access this mount; file tools require a host-backed bind mount.`,
     );
   }
-  return mount ?? null;
+  return mount;
 }
 
 function findMountByHostPath(
@@ -367,22 +313,13 @@ function relativePathInsideHost(root: string, target: string): string | null {
     : null;
 }
 
-function toHostSegments(relativePosix: string): string[] {
-  return relativePosix.split("/").filter(Boolean);
-}
-
-function toDisplayRelative(params: {
-  containerPath: string;
-  defaultContainerRoot: string;
+function mountedHostPathToContainer(params: {
+  mount: SandboxFsMount;
+  relativeHostPath: string;
 }): string {
-  const rel = path.posix.relative(params.defaultContainerRoot, params.containerPath);
-  if (!rel) {
-    return "";
-  }
-  if (!relativePathEscapesContainerRoot(rel)) {
-    return rel;
-  }
-  return params.containerPath;
+  return params.relativeHostPath
+    ? path.posix.join(params.mount.containerRoot, normalizePosixInput(params.relativeHostPath))
+    : params.mount.containerRoot;
 }
 
 function normalizePosixInput(value: string): string {

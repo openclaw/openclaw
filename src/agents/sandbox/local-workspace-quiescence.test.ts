@@ -34,38 +34,6 @@ beforeEach(() => {
   mocks.browserCurrent.mockReset();
 });
 
-it("persists exact runtime custody before pausing and resumes only that id", async () => {
-  const persist = vi.fn();
-  mocks.command.mockImplementation(async (_engine, args: string[]) => {
-    if (args[0] === "inspect") {
-      return {
-        code: 0,
-        stdout: args.includes("{{.State.Paused}}") ? "true" : id + " true false",
-        stderr: "",
-      };
-    }
-    if (args[0] === "pause") {
-      expect(persist).toHaveBeenLastCalledWith([{ name: "owned", id }]);
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
-  const { resume } = await quiesceLocalWorkspace({
-    workspaceDir: "/owned/projection",
-    retained: [],
-    persist,
-    assertCurrent: () => {},
-  });
-  await resume();
-  expect(mocks.command.mock.calls.map((call) => call[1][0])).toEqual([
-    "inspect",
-    "pause",
-    "inspect",
-    "unpause",
-  ]);
-  expect(mocks.command.mock.calls[3]?.[1]).toEqual(["unpause", id]);
-  expect(persist).toHaveBeenLastCalledWith([]);
-});
-
 it.each(["true", "false"])(
   "recovers its recorded paused generation (Running=%s) but never adopts a foreign pause",
   async (running) => {
@@ -85,8 +53,14 @@ it.each(["true", "false"])(
   },
 );
 
-it("revalidates the runtime after inspection before pause", async () => {
+it.each([
+  { failure: "retired", error: "retired" },
+  { failure: "engine", error: "could not be inspected" },
+])("rejects $failure inspection before pausing", async ({ failure, error }) => {
   mocks.command.mockImplementation(async () => {
+    if (failure === "engine") {
+      return { code: 125, stdout: "", stderr: "connection refused" };
+    }
     mocks.current.mockImplementation(() => {
       throw new Error("retired");
     });
@@ -99,79 +73,61 @@ it("revalidates the runtime after inspection before pause", async () => {
       persist: () => {},
       assertCurrent: () => {},
     }),
-  ).rejects.toThrow("retired");
+  ).rejects.toThrow(error);
   expect(mocks.command).toHaveBeenCalledOnce();
 });
 
-it("fences browser writers through the same exact workspace owner", async () => {
+it("persists exact container and browser custody before pausing and resumes only those IDs", async () => {
   const browserId = "b".repeat(64);
+  const retained = [
+    { name: "owned", id },
+    { name: "browser-owned", id: browserId },
+  ];
+  const persist = vi.fn();
   mocks.browsers.mockResolvedValue({
     entries: [
       { ...entry, containerName: "browser-owned" },
       { ...entry, containerName: "foreign", workspaceDir: "/other" },
     ],
   });
-  mocks.command.mockImplementation(async (_engine, args: string[]) => ({
-    code: 0,
-    stderr: "",
-    stdout: args.includes("{{.State.Paused}}")
-      ? "true"
-      : args[0] === "inspect"
-        ? `${args.at(-1) === "browser-owned" ? browserId : id} true false`
-        : "",
-  }));
-  const persist = vi.fn();
+  mocks.command.mockImplementation(async (_engine, args: string[]) => {
+    if (args[0] === "pause") {
+      expect(persist).toHaveBeenLastCalledWith(args[1] === id ? retained.slice(0, 1) : retained);
+    }
+    return {
+      code: 0,
+      stderr: "",
+      stdout: args.includes("{{.State.Paused}}")
+        ? "true"
+        : args[0] === "inspect"
+          ? `${args.at(-1) === "browser-owned" ? browserId : id} true false`
+          : "",
+    };
+  });
   const { resume } = await quiesceLocalWorkspace({
     workspaceDir: entry.workspaceDir,
     retained: [],
     persist,
     assertCurrent: () => {},
   });
-  expect(persist).toHaveBeenLastCalledWith([
-    { name: "owned", id },
-    { name: "browser-owned", id: browserId },
-  ]);
+  expect(persist).toHaveBeenLastCalledWith(retained);
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(
     mocks.command.mock.calls.filter((call) => call[1][0] === "unpause").map((call) => call[1][1]),
   ).toEqual([browserId, id]);
-});
-
-it("does not interpret engine failure as absence", async () => {
-  mocks.command.mockResolvedValue({ code: 125, stdout: "", stderr: "connection refused" });
-  await expect(
-    quiesceLocalWorkspace({
-      workspaceDir: "/owned/projection",
-      retained: [],
-      persist: () => {},
-      assertCurrent: () => {},
-    }),
-  ).rejects.toThrow("could not be inspected");
-});
-
-it("does not resume guest writers after their workspace owner is revoked", async () => {
-  let current = true;
-  const persist = vi.fn();
-  mocks.command.mockImplementation(async (_engine, args: string[]) => ({
-    code: 0,
-    stderr: "",
-    stdout: args[0] === "inspect" ? id + " true false" : "",
-  }));
-  const { resume } = await quiesceLocalWorkspace({
-    workspaceDir: entry.workspaceDir,
-    retained: [],
-    persist,
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("revoked");
-      }
-    },
-  });
-  current = false;
-  await expect(resume()).rejects.toThrow("revoked");
-  expect(mocks.command.mock.calls.some((call) => call[1][0] === "unpause")).toBe(false);
-  expect(persist).toHaveBeenLastCalledWith([{ name: "owned", id }]);
+  expect(mocks.command.mock.calls.map((call) => call[1][0])).toEqual([
+    "inspect",
+    "pause",
+    "inspect",
+    "pause",
+    "inspect",
+    "unpause",
+    "inspect",
+    "unpause",
+  ]);
+  expect(mocks.command.mock.calls[7]?.[1]).toEqual(["unpause", id]);
+  expect(persist).toHaveBeenLastCalledWith([]);
 });
 
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
@@ -219,9 +175,13 @@ it("records each released generation before a later resume failure and re-fences
   expect(pausedIds.size).toBe(0);
 });
 
-it.each([true, false])(
-  "does not unpause a retired registry owner (engine removed=%s)",
-  async (removed) => {
+it.each([
+  { owner: "workspace", removed: false, error: "revoked" },
+  { owner: "registry", removed: false, error: "runtime retired" },
+  { owner: "registry", removed: true, error: "runtime retired" },
+])(
+  "does not unpause a retired $owner owner (engine removed=$removed)",
+  async ({ owner, removed, error }) => {
     let retiring = false;
     mocks.command.mockImplementation(async (_engine, args: string[]) => {
       if (args.includes("{{.State.Paused}}")) {
@@ -232,7 +192,7 @@ it.each([true, false])(
       return { code: 0, stdout: args[0] === "inspect" ? id + " true false" : "", stderr: "" };
     });
     mocks.current.mockImplementation(() => {
-      if (retiring) {
+      if (retiring && owner === "registry") {
         throw new Error("runtime retired");
       }
     });
@@ -241,14 +201,18 @@ it.each([true, false])(
       workspaceDir: entry.workspaceDir,
       retained: [],
       persist,
-      assertCurrent: () => {},
+      assertCurrent: () => {
+        if (retiring && owner === "workspace") {
+          throw new Error("revoked");
+        }
+      },
     });
     retiring = true;
     if (removed) {
       await resume();
       expect(persist).toHaveBeenLastCalledWith([]);
     } else {
-      await expect(resume()).rejects.toThrow("runtime retired");
+      await expect(resume()).rejects.toThrow(error);
       expect(persist).toHaveBeenLastCalledWith([{ name: "owned", id }]);
     }
     expect(mocks.command.mock.calls.some((call) => call[1][0] === "unpause")).toBe(false);

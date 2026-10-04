@@ -12,7 +12,6 @@ import {
   repairOpenClawPeerLinksForNpmInstalls,
 } from "./update-config.js";
 import type {
-  PluginUpdateChannelFallback,
   PluginUpdateLogger,
   PluginUpdateOutcome,
   PluginUpdateSummary,
@@ -27,7 +26,6 @@ export function recordPluginUpdateFailure(params: {
   pluginId: string;
   message: string;
   options?: {
-    channelFallback?: PluginUpdateChannelFallback;
     code?: string;
     installedPayloadRunnable?: boolean;
   };
@@ -45,7 +43,6 @@ export function recordPluginUpdateFailure(params: {
       pluginId: params.pluginId,
       status: "skipped",
       message,
-      ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
     });
     return {
       config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
@@ -56,7 +53,6 @@ export function recordPluginUpdateFailure(params: {
     pluginId: params.pluginId,
     status: "error",
     message: params.message,
-    ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
   });
   return { config: params.config, changed: false };
 }

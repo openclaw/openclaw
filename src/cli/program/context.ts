@@ -17,12 +17,7 @@ export function createProgramContext(
   prepared: Pick<ProgramContext, "doctorDatabasePreflight" | "runtimeRecoveryEnv"> = {},
 ): ProgramContext {
   let cachedChannelOptions: string[] | undefined;
-  const getChannelOptions = (): string[] => {
-    if (cachedChannelOptions === undefined) {
-      cachedChannelOptions = resolveCliChannelOptions();
-    }
-    return cachedChannelOptions;
-  };
+  const getChannelOptions = () => (cachedChannelOptions ??= resolveCliChannelOptions());
 
   return {
     ...prepared,

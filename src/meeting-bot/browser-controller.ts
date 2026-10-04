@@ -1,4 +1,6 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sleep } from "../utils/sleep.js";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
 import { asMeetingBrowserTabs, readMeetingBrowserTab } from "./browser-request.js";
@@ -106,28 +108,6 @@ async function prepareMeetingBrowserTab<
   }
 }
 
-function selectReusableTab<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
->(params: {
-  adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
-  tabs: MeetingBrowserCandidateTab[];
-  url: string;
-}) {
-  const matches = params.tabs.filter((tab) =>
-    params.adapter.urls.isRecoverableTab(tab, params.url),
-  );
-  const accountHint = params.adapter.urls.accountHint(params.url);
-  const tab = matches.find(
-    (candidate) =>
-      params.adapter.urls.isPreferredJoinUrl(candidate.url) &&
-      (!accountHint || params.adapter.urls.accountHint(candidate.url) === accountHint),
-  );
-  return { matches, tab };
-}
-
 export async function openMeetingWithBrowser<
   Session extends MeetingBrowserJoinSession<Mode>,
   Mode extends string,
@@ -160,14 +140,17 @@ export async function openMeetingWithBrowser<
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    const reusable = selectReusableTab({
-      adapter: params.adapter,
-      tabs,
-      url: params.session.url,
-    });
-    tab = reusable.tab;
+    const matches = tabs.filter((candidate) =>
+      params.adapter.urls.isRecoverableTab(candidate, params.session.url),
+    );
+    const accountHint = params.adapter.urls.accountHint(params.session.url);
+    tab = matches.find(
+      (candidate) =>
+        params.adapter.urls.isPreferredJoinUrl(candidate.url) &&
+        (!accountHint || params.adapter.urls.accountHint(candidate.url) === accountHint),
+    );
     if (!tab && !params.adapter.urls.accountHint(params.session.url)) {
-      const fallbackUrl = reusable.matches.find((candidate) => candidate.url)?.url;
+      const fallbackUrl = matches.find((candidate) => candidate.url)?.url;
       if (fallbackUrl) {
         openSession = { ...params.session, url: fallbackUrl };
       }
@@ -218,7 +201,7 @@ export async function openMeetingWithBrowser<
     targetId,
     timeoutMs,
   });
-  const deadline = Date.now() + Math.max(0, params.config.waitForInCallMs);
+  const deadline = performance.now() + Math.max(0, params.config.waitForInCallMs);
   let browser: Health | undefined = {
     status: "browser-control",
     browserUrl: tab?.url,
@@ -232,7 +215,7 @@ export async function openMeetingWithBrowser<
       allowSessionAdoption = false;
       const actionTimeoutMs = Math.min(timeoutMs, 10_000);
       const evaluated = await runMeetingBrowserAct({
-        deadline: Date.now() + actionTimeoutMs,
+        deadline: performance.now() + actionTimeoutMs,
         targetId,
         operation: async (remainingMs) =>
           await params.callBrowser({
@@ -280,7 +263,7 @@ export async function openMeetingWithBrowser<
         return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
-      if (isMeetingBrowserTransientNavigationError(error) && Date.now() < deadline) {
+      if (isMeetingBrowserTransientNavigationError(error) && performance.now() < deadline) {
         browser = mergeBrowserNotes(browser, [
           `${params.adapter.browserLabel} navigated while joining; retrying browser inspection.`,
         ]);
@@ -292,21 +275,17 @@ export async function openMeetingWithBrowser<
           manualAction: { reason: manual.reason, message: manual.message },
           notes: [
             ...permissionNotes,
-            `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${coerceErrorMessage(error)}`,
           ],
         } as unknown as Health;
         break;
       }
     }
-    const remainingWaitMs = deadline - Date.now();
+    const remainingWaitMs = deadline - performance.now();
     if (remainingWaitMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(750, remainingWaitMs));
-      });
+      await sleep(Math.min(750, remainingWaitMs));
     }
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
   return { launched: true, browser, tab: tabIdentity };
 }
 
@@ -354,25 +333,19 @@ async function inspectRecoverableTab<
     notes?: string[];
   },
   Transcript extends MeetingTranscriptSnapshot,
->(params: {
-  adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
-  allowSessionAdoption?: boolean;
-  autoJoin?: boolean;
-  callBrowser: MeetingBrowserRequestCaller;
-  captureCaptions?: boolean;
-  config: MeetingBrowserControllerConfig;
-  meetingSessionId?: string;
-  mode: Mode;
-  readOnly?: boolean;
-  requestedMeetingUrl: string | undefined;
-  tab: MeetingBrowserCandidateTab;
-  targetId: string;
-  deadline?: number;
-  timeoutMs: number;
-}) {
+>(
+  params: Parameters<typeof recoverMeetingBrowserTab<Session, Mode, Health, Transcript>>[0] & {
+    tab: MeetingBrowserCandidateTab;
+    targetId: string;
+    deadline?: number;
+    timeoutMs: number;
+  },
+) {
   const allowMicrophone = params.adapter.browser.allowsMicrophone(params.mode);
   const focusTimeoutMs =
-    params.deadline === undefined ? params.timeoutMs : Math.floor(params.deadline - Date.now());
+    params.deadline === undefined
+      ? params.timeoutMs
+      : Math.floor(params.deadline - performance.now());
   if (focusTimeoutMs <= 0) {
     throw new Error("Meeting browser recovery timed out.");
   }
@@ -408,10 +381,11 @@ async function inspectRecoverableTab<
         timeoutMs:
           params.deadline === undefined
             ? params.timeoutMs
-            : Math.max(1, Math.floor(params.deadline - Date.now())),
+            : Math.max(1, Math.floor(params.deadline - performance.now())),
       });
   const navigationNotes: string[] = [];
-  const inspectionDeadline = params.deadline ?? Date.now() + Math.min(params.timeoutMs, 10_000);
+  const inspectionDeadline =
+    params.deadline ?? performance.now() + Math.min(params.timeoutMs, 10_000);
   let allowSessionAdoption = params.allowSessionAdoption ?? false;
   let evaluated: unknown;
   for (;;) {
@@ -446,17 +420,15 @@ async function inspectRecoverableTab<
       });
       break;
     } catch (error) {
-      const remainingMs = inspectionDeadline - Date.now();
+      const remainingMs = inspectionDeadline - performance.now();
       if (!isMeetingBrowserTransientNavigationError(error) || remainingMs <= 0) {
         throw error;
       }
       navigationNotes.push(
         `${params.adapter.browserLabel} navigated while recovering; retrying browser inspection.`,
       );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(250, remainingMs));
-      });
-      if (Date.now() >= inspectionDeadline) {
+      await sleep(Math.min(250, remainingMs));
+      if (performance.now() >= inspectionDeadline) {
         throw error;
       }
     }
@@ -524,7 +496,7 @@ export async function recoverMeetingBrowserTab<
     params.timeoutMs === undefined
       ? configuredTimeoutMs
       : Math.max(1, Math.min(configuredTimeoutMs, params.timeoutMs));
-  const deadline = params.timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+  const deadline = params.timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   const tabs = asMeetingBrowserTabs(
     await params.callBrowser({
       method: "GET",
@@ -532,7 +504,7 @@ export async function recoverMeetingBrowserTab<
       timeoutMs:
         deadline === undefined
           ? Math.min(timeoutMs, 5_000)
-          : Math.min(Math.max(1, Math.floor(deadline - Date.now())), 5_000),
+          : Math.min(Math.max(1, Math.floor(deadline - performance.now())), 5_000),
     }),
   );
   const trackedCandidate = params.trackedTargetId
@@ -575,17 +547,8 @@ export async function recoverMeetingBrowserTab<
     };
   }
   return await inspectRecoverableTab({
-    adapter: params.adapter,
-    allowSessionAdoption: params.allowSessionAdoption,
-    autoJoin: params.autoJoin,
-    callBrowser: params.callBrowser,
-    captureCaptions: params.captureCaptions,
-    config: params.config,
+    ...params,
     ...(deadline === undefined ? {} : { deadline }),
-    meetingSessionId: params.meetingSessionId,
-    mode: params.mode,
-    readOnly: params.readOnly,
-    requestedMeetingUrl: params.requestedMeetingUrl,
     timeoutMs,
     tab,
     targetId,

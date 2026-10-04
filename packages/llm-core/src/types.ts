@@ -23,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -361,17 +362,145 @@ export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OU
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
+export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
+
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /** Trusted runtime-context metadata; ordinary user messages omit it. */
+  runtimeContext?: {
+    /** Prefix-bound providers retain these messages across turns. */
+    retained?: boolean;
+  };
   /**
-   * Marks a user message carrying runtime context. Provider replay policy decides
-   * whether the carrier is transient or retained append-only; only retained
-   * carriers are stable prompt-cache anchors.
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext`; remove after
+   * the minimum supported plugin API no longer includes that release.
    */
   runtimeContextCarrier?: boolean;
+  /**
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext.retained`;
+   * remove with `runtimeContextCarrier`.
+   */
+  runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
+}
+
+export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+export const RUNTIME_CONTEXT_BEGIN_MARKER = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_END_MARKER = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_HEADER = "OpenClaw runtime context:";
+export const RUNTIME_CONTEXT_FOOTER = "End OpenClaw runtime context.";
+const ESCAPED_RUNTIME_CONTEXT_FOOTER = "[[RUNTIME_CONTEXT_FOOTER_ESCAPED]]";
+
+/** Identifies the exact delimiter envelope emitted by shipped transcript carriers. */
+export function hasLegacyRuntimeContextEnvelope(content: string): boolean {
+  return (
+    content.startsWith(`${RUNTIME_CONTEXT_BEGIN_MARKER}\n`) &&
+    content.endsWith(`\n${RUNTIME_CONTEXT_END_MARKER}`)
+  );
+}
+
+/** Prevent untrusted carrier content from terminating its provider projection. */
+export function escapeRuntimeContextFooter(content: string): string {
+  return content.replaceAll(RUNTIME_CONTEXT_FOOTER, ESCAPED_RUNTIME_CONTEXT_FOOTER);
+}
+
+/** Builds the human-readable projection used only at provider boundaries. */
+export function labelRuntimeContextText(content: string): string {
+  return `${RUNTIME_CONTEXT_HEADER}\n${escapeRuntimeContextFooter(content)}\n${RUNTIME_CONTEXT_FOOTER}`;
+}
+
+/** Labels runtime context once while preserving structured text blocks. */
+export function labelRuntimeContextContent(
+  content: string | TextContent[],
+): string | TextContent[] {
+  if (typeof content === "string") {
+    return labelRuntimeContextText(content);
+  }
+  if (content.length === 0) {
+    return [{ type: "text", text: `${RUNTIME_CONTEXT_HEADER}\n${RUNTIME_CONTEXT_FOOTER}` }];
+  }
+  return content.map((block, index) => ({
+    ...block,
+    text: [
+      ...(index === 0 ? [RUNTIME_CONTEXT_HEADER] : []),
+      escapeRuntimeContextFooter(block.text),
+      ...(index === content.length - 1 ? [RUNTIME_CONTEXT_FOOTER] : []),
+    ].join("\n"),
+  }));
+}
+
+/** Flattens already-labeled runtime context for string-only provider messages. */
+export function runtimeContextContentToText(content: string | TextContent[]): string {
+  return typeof content === "string" ? content : content.map((block) => block.text).join("\n");
+}
+
+/** Trusted per-turn OpenClaw context, projected by each provider at its valid authority level. */
+export type RuntimeContextMessage = Omit<UserMessage, "content"> & {
+  content: string | TextContent[];
+} & (
+    | { runtimeContext: NonNullable<UserMessage["runtimeContext"]> }
+    | { runtimeContextCarrier: true }
+  );
+
+/** Identifies trusted runtime context independently of its provider-compatible shape. */
+export function hasRuntimeContextMarker(message: {
+  role: string;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): boolean {
+  return (
+    message.role === "user" &&
+    (message.runtimeContext !== undefined || message.runtimeContextCarrier === true)
+  );
+}
+
+/** Distinguishes trusted runtime context while preserving user-role plugin compatibility. */
+export function isRuntimeContextMessage(message: {
+  role: string;
+  content?: unknown;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): message is RuntimeContextMessage {
+  const textOnlyContent =
+    typeof message.content === "string" ||
+    (Array.isArray(message.content) &&
+      message.content.every(
+        (part) =>
+          typeof part === "object" &&
+          part !== null &&
+          "type" in part &&
+          part.type === "text" &&
+          "text" in part &&
+          typeof part.text === "string",
+      ));
+  return textOnlyContent && hasRuntimeContextMarker(message);
+}
+
+/** Reads canonical metadata while accepting the shipped v2026.9.7 carrier fields. */
+export function readRuntimeContextMetadata(
+  message: RuntimeContextMessage,
+): NonNullable<UserMessage["runtimeContext"]> {
+  if (message.runtimeContext !== undefined) {
+    return message.runtimeContext;
+  }
+  return message.runtimeContextCarrierRetained === undefined
+    ? {}
+    : { retained: message.runtimeContextCarrierRetained };
+}
+
+/** Updates canonical retention and its shipped compatibility projection together. */
+export function setRuntimeContextRetention(
+  message: RuntimeContextMessage,
+  retained: boolean | undefined,
+): void {
+  message.runtimeContext = { ...readRuntimeContextMetadata(message), retained };
+  message.runtimeContextCarrier = true;
+  message.runtimeContextCarrierRetained = retained;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -507,7 +636,7 @@ export interface AssistantMessageEventStreamContract extends AsyncIterable<Assis
   push(event: AssistantMessageEvent): void;
   /** Complete the stream and optionally resolve the final message. */
   end(result?: AssistantMessage): void;
-  /** Final assistant message produced by the stream. */
+  /** Final assistant message produced independently of event iteration. */
   result(): Promise<AssistantMessage>;
 }
 

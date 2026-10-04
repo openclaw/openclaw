@@ -5,12 +5,17 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
+import { processProbeEntrypoints } from "./process-probes-runtime.test-support.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -84,6 +89,19 @@ function diagnosticDebugMessages(): string[] {
     .filter((message): message is string => typeof message === "string");
 }
 
+function captureDiagnosticConsole(level: "warn" | "error") {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+  const output = vi.fn();
+  loggingState.rawConsole = {
+    log: output,
+    info: output,
+    warn: output,
+    error: output,
+  };
+  diagnosticMocks.diag[level].mockImplementationOnce(createSubsystemLogger("diagnostic")[level]);
+  return output;
+}
+
 describe("command queue", () => {
   beforeAll(async () => {
     ({
@@ -116,6 +134,9 @@ describe("command queue", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    setLoggerOverride(null);
+    loggingState.rawConsole = null;
+    resetLogger();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
@@ -150,9 +171,10 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
-  it("runs queued tasks in their enqueue-time async context", async () => {
+  it("runs queued tasks and their lifecycle callbacks in their enqueue-time async context", async () => {
     const context = new AsyncLocalStorage<string>();
     const blocker = createDeferred();
+    const callbacks: Array<[string, string | undefined]> = [];
     const first = context.run("first", () =>
       enqueueCommandInLane(CommandLane.Main, async () => {
         await blocker.promise;
@@ -160,13 +182,31 @@ describe("command queue", () => {
       }),
     );
     const second = context.run("second", () =>
-      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
+        warnAfterMs: 0,
+        onWait: () => callbacks.push(["wait", context.getStore()]),
+        taskTimeoutMs: 60_000,
+        taskTimeoutProgressAtMs: () => {
+          callbacks.push(["progress", context.getStore()]);
+          return Date.now();
+        },
+        taskTimeoutSubscribe: () => {
+          callbacks.push(["subscribe", context.getStore()]);
+          return () => callbacks.push(["unsubscribe", context.getStore()]);
+        },
+      }),
     );
 
     blocker.resolve();
 
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+    expect(callbacks).toEqual([
+      ["wait", "second"],
+      ["progress", "second"],
+      ["subscribe", "second"],
+      ["unsubscribe", "second"],
+    ]);
   });
 
   it("runs foreground work before already queued background work", async () => {
@@ -265,9 +305,10 @@ describe("command queue", () => {
   });
 
   it("avoids quadratic array work as a paused queue doubles", () => {
+    const queueUrl = resolveRuntimeWorkerUrl(processProbeEntrypoints.commandQueue);
     const script = String.raw`
       const { enqueueCommandInLane, setCommandLaneConcurrency } = await import(
-        "./src/process/command-queue.ts"
+        ${JSON.stringify(queueUrl.href)}
       );
       const originalFindIndex = Array.prototype.findIndex;
       const originalShift = Array.prototype.shift;
@@ -306,7 +347,7 @@ describe("command queue", () => {
     `;
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [...resolveRuntimeWorkerArgv(queueUrl).slice(0, -1), "--input-type=module", "--eval", script],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -405,8 +446,15 @@ describe("command queue", () => {
   });
 
   it("invokes onWait callback when a task waits past the threshold", async () => {
+    const consoleOutput = captureDiagnosticConsole("warn");
     let waited: number | null = null;
     let queuedAhead: number | null = null;
+    const taskIdentity = {
+      taskKind: "spawn",
+      sessionKey: "agent:example:subagent:child",
+      runId: "child-run",
+      requesterSessionKey: "agent:example:dashboard:parent",
+    };
 
     vi.useFakeTimers();
     try {
@@ -416,6 +464,7 @@ describe("command queue", () => {
       });
 
       const second = enqueueCommandInLane(CommandLane.Main, async () => {}, {
+        taskIdentity,
         warnAfterMs: 5,
         onWait: (ms, ahead) => {
           waited = ms;
@@ -435,6 +484,12 @@ describe("command queue", () => {
           typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
       );
       expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
+      expect(waitWarning?.[1]).toMatchObject(taskIdentity);
+      expect(consoleOutput).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "taskKind=spawn sessionKey=agent:example:subagent:child runId=child-run requesterSessionKey=agent:example:dashboard:parent",
+        ),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -459,23 +514,40 @@ describe("command queue", () => {
   });
 
   it("logs error types separately from the actionable lane failure message", async () => {
+    const consoleOutput = captureDiagnosticConsole("error");
     const error = new Error("provider request failed");
     error.name = "FailoverError";
+    const taskIdentity = {
+      taskKind: "turn",
+      sessionKey: "agent:example:main",
+      runId: 'run-"quoted"\nline',
+    };
 
     await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => {
-        throw error;
-      }),
+      enqueueCommandInLane(
+        CommandLane.Main,
+        async () => {
+          throw error;
+        },
+        { taskIdentity },
+      ),
     ).rejects.toBe(error);
 
     expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
       expect.not.stringContaining("FailoverError:"),
-      expect.objectContaining({ errorName: "FailoverError" }),
+      expect.objectContaining({ errorName: "FailoverError", ...taskIdentity }),
     );
     expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
       expect.stringContaining('error="provider request failed"'),
       expect.any(Object),
     );
+    expect(consoleOutput).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'taskKind=turn sessionKey=agent:example:main runId="run-\\"quoted\\"\\nline"',
+      ),
+    );
+    expect(consoleOutput.mock.calls[0]?.[0]).not.toMatch(/[\r\n]/);
+    expect(consoleOutput.mock.calls[0]?.[0]).not.toContain("requesterSessionKey=");
   });
 
   it.each([
@@ -895,11 +967,39 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
-    markGatewayDraining();
-    await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
-    ).rejects.toBeInstanceOf(GatewayDrainingError);
+  it.each([
+    { reason: "restart", message: "Gateway is restarting. Please try again shortly." },
+    {
+      reason: "restart (SIGUSR2: update.run)",
+      message: "Gateway is restarting. Please try again shortly.",
+    },
+    {
+      reason: "restart (SIGTERM: gateway.restart)",
+      message: "Gateway is restarting. Please try again shortly.",
+    },
+    {
+      reason: "stop (SIGTERM)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+    {
+      reason: "stop (SIGINT)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+    {
+      reason: "stop (hosted Gateway stop)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+  ] satisfies {
+    reason: Parameters<CommandQueueModule["markGatewayDraining"]>[0];
+    message: string;
+  }[])("explains why new enqueues are refused for $reason", async ({ reason, message }) => {
+    markGatewayDraining(reason);
+    const task = vi.fn(async () => "blocked");
+    await expect(enqueueCommandInLane(CommandLane.Main, task)).rejects.toMatchObject({
+      name: "GatewayDrainingError",
+      message,
+    });
+    expect(task).not.toHaveBeenCalled();
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {
@@ -913,9 +1013,9 @@ describe("command queue", () => {
     const { task, release } = enqueueBlockedMainTask(async () => "active-finished");
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
-    await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
-    ).rejects.toBeInstanceOf(GatewayDrainingError);
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "blocked")).rejects.toThrow(
+      "Gateway is temporarily paused. Please try again shortly.",
+    );
 
     release();
     await expect(task).resolves.toBe("active-finished");

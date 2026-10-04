@@ -551,7 +551,7 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "openclaw.json");
       writeFileSync(
         filePath,
-        '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
         "utf-8",
       );
       const rt = createTestRuntime();
@@ -572,16 +572,16 @@ describe("openclaw path CLI", () => {
 
       const rt2 = createTestRuntime();
       await pathSetCommand(
-        "oc://openclaw.json/agents/list/0/tools/exec/security",
+        "oc://openclaw.json/agents/entries/main/tools/exec/security",
         "allowlist",
         { cwd: workspaceDir, json: true },
         rt2,
       );
 
       expect(rt2.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(filePath, "utf8")).agents.list[0].tools.exec.security).toBe(
-        "allowlist",
-      );
+      expect(
+        JSON.parse(readFileSync(filePath, "utf8")).agents.entries.main.tools.exec.security,
+      ).toBe("allowlist");
     });
 
     it("writes literal dollar replacement text through the registered Markdown command", async () => {
@@ -705,10 +705,12 @@ describe("openclaw path CLI", () => {
   });
 
   describe("emit", () => {
-    it("CLI-E01 round-trips jsonc bytes verbatim (byte-fidelity proof)", async () => {
+    it.each([
+      ["comments", '// keep this comment\n{\n  "v": 1\n}\n'],
+      ["empty file", ""],
+    ])("CLI-E01 round-trips jsonc bytes verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '// keep this comment\n{\n  "v": 1\n}\n';
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);
@@ -718,10 +720,13 @@ describe("openclaw path CLI", () => {
       expect(out.bytes).toBe(before);
     });
 
-    it("CLI-E02 round-trips md verbatim", async () => {
+    it.each([
+      ["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"],
+      ["CRLF", "## Heading\r\n\r\n- item\r\n"],
+      ["unstructured prose", "Just preamble. No structure.\n"],
+    ])("CLI-E02 round-trips md verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
-      const before = "## Tools\n- gh\n## Boundaries\n- never rm -rf\n";
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);

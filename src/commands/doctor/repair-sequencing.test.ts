@@ -7,247 +7,9 @@ import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../../plugins/plugin-metadata.test-support.js";
+import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
-
-const mocks = vi.hoisted(() => ({
-  applyPluginAutoEnable: vi.fn(),
-  materializePluginAutoEnableCandidates: vi.fn(),
-  collectChannelDoctorCompatibilityMutations: vi.fn(),
-  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(),
-  ensureAuthProfileStore: vi.fn(),
-  evaluateStoredCredentialEligibility: vi.fn(),
-  isInstalledPluginEnabled: vi.fn(),
-  loadInstalledPluginIndex: vi.fn(),
-  loadPluginMetadataSnapshot: vi.fn(),
-  maybeRepairGroupAllowFromFallback: vi.fn(),
-  maybeRepairPluginOpenClawHostLinks: vi.fn(),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
-  migrateLegacyTailscaleProfileIdentities: vi.fn(),
-  repairMergedGatewayOwnerProfile: vi.fn(),
-  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
-  maybeRepairOpenAICodexAuthConfig: vi.fn(),
-  maybeRepairOpenPolicyAllowFrom: vi.fn(),
-  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
-  maybeRepairStaleConfiguredAuthOrders: vi.fn(),
-  maybeRepairStalePluginConfig: vi.fn(),
-  repairStaleOAuthProfileShadows: vi.fn(),
-  repairMissingConfiguredPluginInstalls: vi.fn(),
-  repairStaleAgentModelRefs: vi.fn(),
-  resolveConfigWidePluginManifestRegistry: vi.fn(),
-  resolveAuthProfileOrder: vi.fn(),
-  resolveProviderInstallCatalogEntries: vi.fn(),
-  resolveProfileUnusableUntilForDisplay: vi.fn(),
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
-  materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
-}));
-
-vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: mocks.resolveConfigWidePluginManifestRegistry,
-}));
-
-vi.mock("../doctor-plugin-host-links.js", () => ({
-  maybeRepairPluginOpenClawHostLinks: mocks.maybeRepairPluginOpenClawHostLinks,
-}));
-
-vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
-}));
-
-vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
-}));
-
-vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
-  migrateLegacyTailscaleProfileIdentities: mocks.migrateLegacyTailscaleProfileIdentities,
-}));
-
-vi.mock("../../state/user-profiles-owner-migration.js", () => ({
-  repairMergedGatewayOwnerProfile: mocks.repairMergedGatewayOwnerProfile,
-}));
-
-vi.mock("../doctor-auth-flat-profiles.js", () => ({
-  maybeRepairLegacyAuthProfileStores: ({
-    profileIdMap,
-  }: {
-    profileIdMap: Map<string, string>;
-  }) => ({
-    changes: [],
-    warnings: [],
-    profileIdMap,
-  }),
-  collectOpenAICodexAuthProfileStoreIdMap: mocks.collectOpenAICodexAuthProfileStoreIdMap,
-  maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
-  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
-}));
-
-vi.mock("./shared/missing-configured-plugin-install.js", () => ({
-  repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
-}));
-
-vi.mock("./shared/stale-agent-model-ref-repair.js", () => ({
-  repairStaleAgentModelRefs: mocks.repairStaleAgentModelRefs,
-}));
-
-vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-  resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
-  resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
-}));
-
-vi.mock("../../agents/auth-profiles/credential-state.js", () => ({
-  evaluateStoredCredentialEligibility: mocks.evaluateStoredCredentialEligibility,
-}));
-
-vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>()),
-  isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
-  loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
-}));
-
-vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
-}));
-
-vi.mock("../../plugins/provider-install-catalog.js", () => ({
-  resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
-}));
-
-vi.mock("./shared/channel-doctor.js", () => ({
-  collectChannelDoctorCompatibilityMutations: mocks.collectChannelDoctorCompatibilityMutations,
-  collectChannelDoctorRepairMutations: ({ cfg }: { cfg: OpenClawConfig }) => {
-    const allowFrom = cfg.channels?.discord?.allowFrom as unknown[] | undefined;
-    if (allowFrom?.[0] === 123) {
-      return [
-        {
-          config: {
-            ...cfg,
-            channels: {
-              ...cfg.channels,
-              discord: {
-                ...cfg.channels?.discord,
-                allowFrom: ["123"],
-              },
-            },
-          },
-          changes: ["channels.discord.allowFrom: converted 1 numeric ID to strings"],
-        },
-      ];
-    }
-    if (allowFrom?.[0] === 106232522769186816) {
-      return [
-        {
-          config: cfg,
-          changes: [],
-          warnings: [
-            "channels.discord.allowFrom[0] cannot be auto-repaired because it is not a safe integer",
-          ],
-        },
-      ];
-    }
-    return [];
-  },
-  createChannelDoctorEmptyAllowlistPolicyHooks: () => ({
-    extraWarningsForAccount: () => [],
-    shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
-  }),
-}));
-
-vi.mock("./shared/empty-allowlist-scan.js", () => ({
-  scanEmptyAllowlistPolicyWarnings: (cfg: OpenClawConfig) =>
-    cfg.channels?.signal
-      ? ["channels.signal.accounts.ops\u001B[31m-team\u001B[0m\r\nnext.dmPolicy warning"]
-      : [],
-}));
-
-vi.mock("./shared/allowlist-policy-repair.js", () => ({
-  maybeRepairAllowlistPolicyAllowFrom: async (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
-
-vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
-  maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
-}));
-
-vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
-  maybeRepairBundledPluginLoadPaths: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
-
-vi.mock("./shared/open-policy-allowfrom.js", () => ({
-  maybeRepairOpenPolicyAllowFrom: mocks.maybeRepairOpenPolicyAllowFrom,
-}));
-
-vi.mock("./shared/stale-plugin-config.js", () => ({
-  maybeRepairStalePluginConfig: mocks.maybeRepairStalePluginConfig,
-}));
-
-vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
-  repairStaleOAuthProfileShadows: mocks.repairStaleOAuthProfileShadows,
-}));
-
-vi.mock("./shared/stale-auth-order.js", () => ({
-  maybeRepairStaleConfiguredAuthOrders: mocks.maybeRepairStaleConfiguredAuthOrders,
-}));
-
-vi.mock("./shared/invalid-plugin-config.js", () => ({
-  maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
-
-vi.mock("./shared/legacy-tools-by-sender.js", () => ({
-  maybeRepairLegacyToolsBySenderKeys: (cfg: OpenClawConfig) => {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    const tools = channels?.tools as
-      | { exec?: { toolsBySender?: Record<string, unknown> } }
-      | undefined;
-    const bySender = tools?.exec?.toolsBySender;
-    const rawKey = bySender
-      ? Object.keys(bySender).find((key) => !key.startsWith("id:"))
-      : undefined;
-    if (!bySender || !rawKey) {
-      return { config: cfg, changes: [] };
-    }
-    const targetKey = `id:${rawKey.trim()}`;
-    return {
-      config: {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          tools: {
-            ...(channels?.tools as Record<string, unknown> | undefined),
-            exec: {
-              ...tools?.exec,
-              toolsBySender: {
-                [targetKey]: bySender[rawKey],
-              },
-            },
-          },
-        },
-      },
-      changes: [
-        `channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (${rawKey} -> ${targetKey})`,
-      ],
-    };
-  },
-}));
-
-vi.mock("./shared/exec-safe-bins.js", () => ({
-  maybeRepairExecSafeBinProfiles: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
 
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
@@ -273,16 +35,14 @@ describe("doctor repair sequencing", () => {
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
+    mocks.resolveConfigWidePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture(),
+    );
     mocks.maybeRepairGroupAllowFromFallback.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
     }));
     mocks.maybeRepairPluginOpenClawHostLinks.mockResolvedValue(false);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue({
-      detected: [],
-      changes: [],
-      warnings: [],
-    });
     mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.repairMergedGatewayOwnerProfile.mockReturnValue({
       repaired: false,
@@ -407,13 +167,6 @@ describe("doctor repair sequencing", () => {
             discord: {
               allowFrom: [123],
             },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
-            },
             signal: {
               accounts: {
                 "ops\u001B[31m-team\u001B[0m\r\nnext": {
@@ -427,13 +180,6 @@ describe("doctor repair sequencing", () => {
           channels: {
             discord: {
               allowFrom: [123],
-            },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
             },
             signal: {
               accounts: {
@@ -455,7 +201,6 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.configChangeNotes).toStrictEqual([
       "channels.discord.allowFrom: converted 1 numeric ID to strings",
-      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (bad-keynext -> id:bad-keynext)",
     ]);
     expect(result.configChangeNotes.join("\n")).not.toContain("\u001B");
     expect(result.configChangeNotes.join("\n")).not.toContain("\r");
@@ -561,14 +306,6 @@ describe("doctor repair sequencing", () => {
 
   it("repairs stale OAuth shadows before importing and removing auth JSON", async () => {
     const events: string[] = [];
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
-      events.push("sidecar-oauth");
-      return {
-        detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 legacy Codex OAuth profile."],
-        warnings: ["Sidecar warning"],
-      };
-    });
     mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
       events.push("stale-oauth-shadows");
       return {
@@ -602,25 +339,13 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual([
-      "sidecar-oauth",
-      "stale-oauth-shadows",
-      "sqlite-migration",
-      "stale-auth-order",
-    ]);
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: {},
-      prompter: { confirmAutoFix: expect.any(Function) },
-      emitNotes: false,
-      env: process.env,
-    });
+    expect(events).toEqual(["stale-oauth-shadows", "sqlite-migration", "stale-auth-order"]);
     expect(result.changeNotes).toEqual([
-      "Migrated 1 legacy Codex OAuth profile.",
       "Removed stale OAuth auth profile shadow openai-codex.",
       "Migrated auth profile JSON into SQLite.",
     ]);
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.warningNotes).toEqual([]);
     expect(result.authProfilesRepaired).toBe(true);
   });
 

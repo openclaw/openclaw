@@ -1,18 +1,20 @@
-/**
- * Extension runner - executes extensions and manages their lifecycle.
- */
-
 import type { KeyId } from "@earendil-works/pi-tui";
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
-import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
+import { registerListener } from "../../../shared/listeners.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
+import { reportExtensionHandlerError } from "./handler-error.js";
+import {
+  bindExtensionMetadataActions,
+  bindExtensionPersistenceActions,
+} from "./metadata-actions.js";
+import { bindExtensionProviderActions } from "./provider-actions.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -23,6 +25,7 @@ import type {
   ContextUsage,
   Extension,
   ExtensionActions,
+  ExtensionActionsV2,
   ExtensionCommandContext,
   ExtensionCommandContextActions,
   ExtensionContext,
@@ -83,7 +86,7 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
-  const builtinKeybindings = {} as BuiltInKeyBindings;
+  const builtinKeybindings: BuiltInKeyBindings = {};
   for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
     if (keys === undefined) {
       continue;
@@ -114,6 +117,11 @@ interface BeforeAgentStartCombinedResult {
   messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
   systemPrompt?: string;
 }
+
+type DiscoveredResourcePaths = Record<
+  keyof ResourcesDiscoverResult,
+  Array<{ path: string; extensionPath: string }>
+>;
 
 /**
  * Events handled by the generic emit() method.
@@ -208,21 +216,13 @@ const noOpUIContext: ExtensionUIContext = {
   },
   getAllThemes: () => [],
   getTheme: () => undefined,
-  setTheme: (nextTheme: string | Theme) => {
-    void nextTheme;
-    return { success: false, error: "UI not available" };
-  },
+  setTheme: () => ({ success: false, error: "UI not available" }),
   getToolsExpanded: () => false,
   setToolsExpanded: () => {},
 };
 
 export class ExtensionRunner {
-  private extensions: Extension[];
-  private runtime: ExtensionRuntime;
   private uiContext: ExtensionUIContext;
-  private cwd: string;
-  private sessionManager: SessionManager;
-  private modelRegistry: ModelRegistry;
   private errorListeners: Set<ExtensionErrorListener> = new Set();
   private getModel: () => Model | undefined = () => undefined;
   private isIdleFn: () => boolean = () => true;
@@ -250,18 +250,23 @@ export class ExtensionRunner {
   private staleMessage: string | undefined;
 
   constructor(
-    extensions: Extension[],
-    runtime: ExtensionRuntime,
-    cwd: string,
-    sessionManager: SessionManager,
-    modelRegistry: ModelRegistry,
+    private extensions: Extension[],
+    private runtime: ExtensionRuntime,
+    private cwd: string,
+    private sessionManager: SessionManager,
+    private modelRegistry: ModelRegistry,
   ) {
-    this.extensions = extensions;
-    this.runtime = runtime;
     this.uiContext = noOpUIContext;
-    this.cwd = cwd;
-    this.sessionManager = sessionManager;
-    this.modelRegistry = modelRegistry;
+  }
+
+  /** Bind host actions with worker-backed persistence; legacy bindCore remains source-compatible. */
+  bindCoreAsync(
+    actions: ExtensionActionsV2,
+    contextActions: ExtensionContextActions,
+    providerActions?: Parameters<ExtensionRunner["bindCore"]>[2],
+  ): void {
+    this.bindCore(actions, contextActions, providerActions);
+    bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
   bindCore(
@@ -284,11 +289,9 @@ export class ExtensionRunner {
     this.runtime.setActiveTools = actions.setActiveTools;
     this.runtime.refreshTools = actions.refreshTools;
     this.runtime.getCommands = actions.getCommands;
-    this.runtime.setModel = actions.setModel;
+    bindExtensionMetadataActions(this.sessionManager, this.runtime, actions);
     this.runtime.getThinkingLevel = actions.getThinkingLevel;
-    this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
-    // Context actions (required)
     this.getModel = contextActions.getModel;
     this.isIdleFn = contextActions.isIdle;
     this.getSignalFn = contextActions.getSignal;
@@ -299,41 +302,12 @@ export class ExtensionRunner {
     this.compactFn = contextActions.compact;
     this.getSystemPromptFn = contextActions.getSystemPrompt;
 
-    // Flush provider registrations queued during extension loading
-    for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
-      try {
-        if (providerActions?.registerProvider) {
-          providerActions.registerProvider(name, config);
-        } else {
-          this.modelRegistry.registerProvider(name, config);
-        }
-      } catch (err) {
-        this.emitError({
-          extensionPath,
-          event: "register_provider",
-          error: coerceErrorMessage(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-      }
-    }
-    this.runtime.pendingProviderRegistrations = [];
-
-    // From this point on, provider registration/unregistration takes effect immediately
-    // without requiring a /reload.
-    this.runtime.registerProvider = (name, config) => {
-      if (providerActions?.registerProvider) {
-        providerActions.registerProvider(name, config);
-        return;
-      }
-      this.modelRegistry.registerProvider(name, config);
-    };
-    this.runtime.unregisterProvider = (name) => {
-      if (providerActions?.unregisterProvider) {
-        providerActions.unregisterProvider(name);
-        return;
-      }
-      this.modelRegistry.unregisterProvider(name);
-    };
+    bindExtensionProviderActions(
+      this.runtime,
+      this.modelRegistry,
+      (error) => this.emitError(error),
+      providerActions,
+    );
   }
 
   bindCommandContext(actions?: ExtensionCommandContextActions): void {
@@ -473,15 +447,16 @@ export class ExtensionRunner {
     }
   }
 
-  private assertActive(): void {
+  private requireActive(): this {
     if (this.staleMessage) {
       throw new Error(this.staleMessage);
     }
+    this.runtime.assertActive();
+    return this;
   }
 
   onError(listener: ExtensionErrorListener): () => void {
-    this.errorListeners.add(listener);
-    return () => this.errorListeners.delete(listener);
+    return registerListener(this.errorListeners, listener);
   }
 
   emitError(error: ExtensionError): void {
@@ -491,13 +466,7 @@ export class ExtensionRunner {
   }
 
   hasHandlers(eventType: string): boolean {
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get(eventType);
-      if (handlers && handlers.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.extensions.some((ext) => (ext.handlers.get(eventType)?.length ?? 0) > 0);
   }
 
   getMessageRenderer(customType: string): MessageRenderer | undefined {
@@ -570,10 +539,7 @@ export class ExtensionRunner {
    * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
    */
   createContext(): ExtensionContext {
-    const requireActiveRunner = () => {
-      this.assertActive();
-      return this;
-    };
+    const requireActiveRunner = () => this.requireActive();
     // Model selection snapshots its getter; all other context values stay live.
     const getModel = this.getModel;
     return {
@@ -612,30 +578,14 @@ export class ExtensionRunner {
   createCommandContext(): ExtensionCommandContext {
     // Add commands to the fresh context without reading its guarded getters.
     return Object.assign(this.createContext(), {
-      waitForIdle: () => {
-        this.assertActive();
-        return this.waitForIdleFn();
-      },
-      newSession: (options) => {
-        this.assertActive();
-        return this.newSessionHandler(options);
-      },
-      fork: (entryId, options) => {
-        this.assertActive();
-        return this.forkHandler(entryId, options);
-      },
-      navigateTree: (targetId, options) => {
-        this.assertActive();
-        return this.navigateTreeHandler(targetId, options);
-      },
-      switchSession: (sessionPath, options) => {
-        this.assertActive();
-        return this.switchSessionHandler(sessionPath, options);
-      },
-      reload: () => {
-        this.assertActive();
-        return this.reloadHandler();
-      },
+      waitForIdle: () => this.requireActive().waitForIdleFn(),
+      newSession: (options) => this.requireActive().newSessionHandler(options),
+      fork: (entryId, options) => this.requireActive().forkHandler(entryId, options),
+      navigateTree: (targetId, options) =>
+        this.requireActive().navigateTreeHandler(targetId, options),
+      switchSession: (sessionPath, options) =>
+        this.requireActive().switchSessionHandler(sessionPath, options),
+      reload: () => this.requireActive().reloadHandler(),
     } satisfies ExtensionCommandContextActions);
   }
 
@@ -668,12 +618,7 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
-          this.emitError({
-            extensionPath: ext.path,
-            event: eventType,
-            error: coerceErrorMessage(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
+          reportExtensionHandlerError(err, ext.path, eventType, (error) => this.emitError(error));
         }
       }
     }
@@ -762,12 +707,7 @@ export class ExtensionRunner {
     let result: ToolCallEventResult | undefined;
 
     for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("tool_call");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
+      for (const handler of ext.handlers.get("tool_call") ?? []) {
         ctx ??= this.createContext();
         const handlerResult = await handler(event, ctx);
 
@@ -836,7 +776,7 @@ export class ExtensionRunner {
     let currentSystemPrompt = systemPrompt;
     const ctx = this.createContext();
     ctx.getSystemPrompt = () => {
-      this.assertActive();
+      this.requireActive();
       return currentSystemPrompt;
     };
     const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
@@ -879,31 +819,22 @@ export class ExtensionRunner {
   async emitResourcesDiscover(
     cwd: string,
     reason: ResourcesDiscoverEvent["reason"],
-  ): Promise<{
-    skillPaths: Array<{ path: string; extensionPath: string }>;
-    promptPaths: Array<{ path: string; extensionPath: string }>;
-    themePaths: Array<{ path: string; extensionPath: string }>;
-  }> {
-    const skillPaths: Array<{ path: string; extensionPath: string }> = [];
-    const promptPaths: Array<{ path: string; extensionPath: string }> = [];
-    const themePaths: Array<{ path: string; extensionPath: string }> = [];
+  ): Promise<DiscoveredResourcePaths> {
+    const paths: DiscoveredResourcePaths = { skillPaths: [], promptPaths: [], themePaths: [] };
 
     await this.dispatchHandlers("resources_discover", async (handler, ctx, extensionPath) => {
       const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
       const result = (await handler(event, ctx)) as ResourcesDiscoverResult | undefined;
 
-      if (result?.skillPaths?.length) {
-        skillPaths.push(...result.skillPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.promptPaths?.length) {
-        promptPaths.push(...result.promptPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.themePaths?.length) {
-        themePaths.push(...result.themePaths.map((path) => ({ path, extensionPath })));
+      for (const key of ["skillPaths", "promptPaths", "themePaths"] as const) {
+        const discovered = result?.[key];
+        if (discovered?.length) {
+          paths[key].push(...discovered.map((path) => ({ path, extensionPath })));
+        }
       }
     });
 
-    return { skillPaths, promptPaths, themePaths };
+    return paths;
   }
 
   /** Emit input event. Transforms chain, "handled" short-circuits. */

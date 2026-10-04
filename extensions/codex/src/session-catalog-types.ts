@@ -122,6 +122,7 @@ export type CodexSessionCatalogError = {
 };
 
 export type CodexSessionCatalogHost = {
+  pending?: boolean;
   hostId: string;
   label: string;
   kind: "gateway" | "node";
@@ -134,10 +135,6 @@ export type CodexSessionCatalogHost = {
   nextCursor?: string;
   backwardsCursor?: string;
   error?: CodexSessionCatalogError;
-};
-
-export type CodexSessionCatalogResult = {
-  hosts: CodexSessionCatalogHost[];
 };
 
 export type CodexSessionTranscriptPage = {

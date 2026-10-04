@@ -9,7 +9,7 @@ import {
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
-  GITHUB_REQUEST_TIMEOUT_MS,
+  githubRestApiPath,
   readBoundedResponse,
   readGitHubJsonResponse,
   requiredString,
@@ -20,6 +20,7 @@ import { parseGitHubItemTarget, type GitHubItemTarget } from "./targets.js";
 
 const GITHUB_AVATAR_HOST = "avatars.githubusercontent.com";
 const GITHUB_AVATAR_MAX_BYTES = 256 * 1024;
+const GITHUB_PREVIEW_TIMEOUT_MS = 2_000;
 // One commits page bounds the extra request; the card only renders three faces,
 // so deeper paging would spend quota on people it can never show.
 const GITHUB_COMMITS_PAGE_SIZE = 100;
@@ -56,23 +57,38 @@ const previewCache = new Map<string, CacheEntry<ControlUiGitHubPreview>>();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
 
+export function isPublicGitHubRepository(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.private === false && value.visibility === "public";
+}
+
 export async function assertPublicGitHubRepository(
   repositoryUrl: string,
   fetchImpl: typeof fetch,
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Stop before item reads so shared credentials cannot probe private item numbers.
   const repository = await readGitHubJsonResponse(
-    await fetchGitHubApi(repositoryUrl, fetchImpl, token, undefined, identity),
+    await fetchGitHubApi(
+      repositoryUrl,
+      fetchImpl,
+      token,
+      undefined,
+      identity,
+      undefined,
+      signal,
+      undefined,
+      GITHUB_API_ORIGIN,
+    ),
   );
-  if (!isRecord(repository) || repository.private !== false) {
+  if (!isPublicGitHubRepository(repository)) {
     throw new ControlUiGitHubError(404, "GitHub repository is not public");
   }
 }
 
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {
-  const segments = url.pathname.split("/").filter(Boolean);
+  const segments = githubRestApiPath(url, GITHUB_API_ORIGIN).split("/").filter(Boolean);
   const collection = target.kind === "pull" ? "pulls" : "issues";
   // The commits request redirects to the same item path plus one known suffix.
   const itemSegments = segments.at(-1) === "commits" ? segments.slice(0, -1) : segments;
@@ -140,36 +156,34 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   if (!raw) {
     return null;
   }
-  try {
-    const url = new URL(raw);
-    const rawPathEnd = raw.search(/[?#]/u);
-    const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== GITHUB_AVATAR_HOST ||
-      url.hash ||
-      url.username ||
-      url.password ||
-      url.port ||
-      rawPath.includes("..") ||
-      rawPath.includes("\\") ||
-      url.pathname.includes("..") ||
-      url.pathname.includes("\\")
-    ) {
-      return null;
-    }
-    url.search = "";
-    url.searchParams.set("s", "64");
-    return url;
-  } catch {
+  const url = URL.parse(raw);
+  const rawPathEnd = raw.search(/[?#]/u);
+  const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.hostname !== GITHUB_AVATAR_HOST ||
+    url.hash ||
+    url.username ||
+    url.password ||
+    url.port ||
+    rawPath.includes("..") ||
+    rawPath.includes("\\") ||
+    url.pathname.includes("..") ||
+    url.pathname.includes("\\")
+  ) {
     return null;
   }
+  url.search = "";
+  url.searchParams.set("s", "64");
+  return url;
 }
 
 async function fetchCoAuthors(
   authorLogin: string,
   loadCommits: () => Promise<unknown>,
   fetchImpl: typeof fetch,
+  signal: AbortSignal,
 ): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
   const empty = { coAuthors: [], coAuthorCount: 0 };
   let commits: unknown;
@@ -208,6 +222,7 @@ async function fetchCoAuthors(
       const avatarDataUrl = await fetchAvatarDataUrl(
         `https://${GITHUB_AVATAR_HOST}/u/${face.accountId}`,
         fetchImpl,
+        signal,
       );
       return avatarDataUrl ? { login: face.login, avatarDataUrl } : { login: face.login };
     }),
@@ -218,6 +233,7 @@ async function fetchCoAuthors(
 async function fetchAvatarDataUrl(
   rawUrl: string | undefined,
   fetchImpl: typeof fetch,
+  signal: AbortSignal,
 ): Promise<string | undefined> {
   const url = safeAvatarUrl(rawUrl);
   if (!url) {
@@ -227,7 +243,7 @@ async function fetchAvatarDataUrl(
     const response = await fetchImpl(url, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
       redirect: "error",
-      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+      signal,
     });
     const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
     if (
@@ -248,13 +264,24 @@ async function fetchAvatarDataUrl(
 async function fetchPreview(
   target: ControlUiGitHubPreviewTarget,
   fetchImpl: typeof fetch,
+  signal: AbortSignal,
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
 ): Promise<ControlUiGitHubPreview> {
   const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>) =>
-    fetchGitHubApi(url, fetchImpl, token, beforeRedirect, identity);
+    fetchGitHubApi(
+      url,
+      fetchImpl,
+      token,
+      beforeRedirect,
+      identity,
+      undefined,
+      signal,
+      undefined,
+      GITHUB_API_ORIGIN,
+    );
   const assertPublicRepository = (url: string) =>
-    assertPublicGitHubRepository(url, fetchImpl, token, identity);
+    assertPublicGitHubRepository(url, fetchImpl, token, identity, signal);
   const repositoryUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
   const itemUrl = `${repositoryUrl}/${target.kind === "pull" ? "pulls" : "issues"}/${target.number}`;
   if (token) {
@@ -284,7 +311,7 @@ async function fetchPreview(
   // Both extra fetches run only after the public-repository assertions above,
   // so neither can widen what this token is allowed to read.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
-    fetchAvatarDataUrl(avatarUrl, fetchImpl),
+    fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
     target.kind === "pull"
       ? fetchCoAuthors(
           preview.login,
@@ -294,6 +321,7 @@ async function fetchPreview(
               GITHUB_COMMITS_MAX_BYTES,
             ),
           fetchImpl,
+          signal,
         )
       : Promise.resolve({ coAuthors: [], coAuthorCount: 0 }),
   ]);
@@ -336,11 +364,14 @@ export async function loadControlUiGitHubPreview(
     previewCache.set(key, entry);
   } else {
     const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
+    // One upstream budget includes redirects, optional-auth retries and decoration;
+    // a slow avatar or commits page must not add another full request timeout.
+    const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
     const request =
       identity && !identity.optionalAuth
-        ? fetchPreview(target, fetchImpl, token, identity)
+        ? fetchPreview(target, fetchImpl, signal, token, identity)
         : withOptionalGitHubAuth(token, (requestToken) =>
-            fetchPreview(target, fetchImpl, requestToken, identity),
+            fetchPreview(target, fetchImpl, signal, requestToken, identity),
           );
     const pending: CacheEntry<ControlUiGitHubPreview> = {
       expiresAt: now + successCacheMs,

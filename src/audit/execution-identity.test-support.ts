@@ -78,13 +78,13 @@ export function prepareExecutionIdentityContextAtAdmission(
   });
 }
 
-export function recordDeniedApprovalForRun(
+export async function recordDeniedApprovalForRun(
   runId: string,
   database: OpenClawStateDatabaseOptions,
   id = "denied-approval",
   binding?: { contextId: string; executionId: string },
-): void {
-  insertOperatorApproval({
+): Promise<void> {
+  await insertOperatorApproval({
     approval: {
       id,
       kind: "exec",
@@ -111,7 +111,7 @@ export function recordDeniedApprovalForRun(
     },
     databaseOptions: database,
   });
-  resolveOperatorApproval({
+  await resolveOperatorApproval({
     id,
     decision: "deny",
     resolver: { kind: "device", id: "private-reviewer-device" },

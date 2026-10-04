@@ -8,6 +8,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  encodeMemoryEmbedding,
   MEMORY_CHUNKING_VERSION,
   type MemorySessionSyncTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -29,6 +30,7 @@ import {
   createManagerIndexFixture,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
+import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -49,12 +51,15 @@ describe("memory session update sync", () => {
       .prepare(
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, ?, ?, ?, ?, ?)",
       )
-      .run(sessionPath, sessionPath, "stale-chunk", "fts-only", text, "[]", 10);
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, 'sessions', ?, 1, 1)",
-      )
-      .run(text, sessionPath, sessionPath, "fts-only");
+      .run(
+        sessionPath,
+        sessionPath,
+        "stale-chunk",
+        "fts-only",
+        text,
+        encodeMemoryEmbedding([]),
+        10,
+      );
     database
       .prepare(
         "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'system', 'subagent', ?)",
@@ -304,7 +309,7 @@ describe("memory session update sync", () => {
       "cli",
     );
     const owner = manager as unknown as {
-      queuedSessionSync: Promise<void> | null;
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
@@ -348,7 +353,7 @@ describe("memory session update sync", () => {
       });
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
       await owner.processSessionUpdateBatch();
-      const queuedSessionSync = owner.queuedSessionSync;
+      const queuedSessionSync = owner.sessionSyncQueue.pending;
       expect(queuedSessionSync).not.toBeNull();
 
       releaseActiveSync();
@@ -524,12 +529,19 @@ describe("memory session update sync", () => {
   it("never reindexes a tombstoned session while preserving its source transcript", async () => {
     const sessionId = "forgotten-transcript";
     const sessionKey = `agent:main:chat:${sessionId}`;
+    const decoyId = "unselected-transcript";
+    const decoyKey = `agent:main:chat:${decoyId}`;
     await seedSessionTranscript({
       sessionId,
       sessionKey,
       messages: [
         { role: "user", timestamp: Date.now(), content: "Previously indexed violet fragment." },
       ],
+    });
+    await seedSessionTranscript({
+      sessionId: decoyId,
+      sessionKey: decoyKey,
+      messages: [{ role: "user", timestamp: 1, content: "Previously indexed amber fragment." }],
     });
     const manager = await getFreshManager(
       createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
@@ -551,11 +563,42 @@ describe("memory session update sync", () => {
         .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
         .get(sessionId),
     ).toEqual({ session_id: sessionId });
+    const decoyPath = `sessions/main/${decoyId}.jsonl`;
+    const decoyBefore = readPublishedSessionIndex(database, decoyPath, "amber");
+    expect(decoyBefore.chunks).toHaveLength(1);
+    await seedSessionTranscript({
+      sessionId: decoyId,
+      sessionKey: decoyKey,
+      messages: [{ role: "assistant", timestamp: 2, content: "Unselected new amber response." }],
+    });
+    const selectedId = "selected-transcript";
+    const selectedKey = `agent:main:chat:${selectedId}`;
+    await seedSessionTranscript({
+      sessionId: selectedId,
+      sessionKey: selectedKey,
+      messages: [{ role: "user", timestamp: 1, content: "Selected new violet fragment." }],
+    });
     await manager.sync({
       reason: "targeted-update-after-forget",
-      sessions: [{ agentId: "main", sessionId, sessionKey }],
+      sessions: [
+        { agentId: "main", sessionId, sessionKey },
+        { agentId: "main", sessionId: selectedId, sessionKey: selectedKey },
+        { agentId: "main", sessionId: decoyId, sessionKey: "wrong-session-key" },
+        { agentId: "other", sessionId: decoyId, sessionKey: decoyKey },
+        { sessionId: selectedId },
+        { sessionId: " " },
+      ],
     });
     expectSessionIndexRemoved(database, sessionPath);
+    expect(readPublishedSessionIndex(database, decoyPath, "amber")).toEqual(decoyBefore);
+    const selected = readPublishedSessionIndex(
+      database,
+      `sessions/main/${selectedId}.jsonl`,
+      "violet",
+    );
+    expect(selected.chunks).toHaveLength(1);
+    expect(selected.search).toHaveLength(1);
+    expect(selected.chunks[0]?.text).toContain("Selected new violet fragment.");
   });
 
   it.each([
@@ -584,6 +627,8 @@ describe("memory session update sync", () => {
           { role: "user", timestamp: Date.now(), content: "Private violet alpha fragment." },
         ],
       });
+      const embeddingEntered = createDeferred<void>();
+      fixture.provider.providerRuntimeBatchEntered = () => embeddingEntered.resolve();
       let releaseEmbedding = () => {};
       fixture.provider.providerRuntimeBatchGate = new Promise<void>((resolve) => {
         releaseEmbedding = resolve;
@@ -593,7 +638,13 @@ describe("memory session update sync", () => {
         ...(force ? { force: true } : { sessions: [{ agentId: "main", sessionId, sessionKey }] }),
       });
       try {
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1));
+        await Promise.race([
+          embeddingEntered.promise,
+          activeSync.then(() => {
+            throw new Error("memory sync completed before the embedding batch entered");
+          }),
+        ]);
+        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
         releaseEmbedding();
         await expect(activeSync).rejects.toThrow("forgotten while memory indexing");
@@ -609,6 +660,7 @@ describe("memory session update sync", () => {
         releaseEmbedding();
         await activeSync.catch(() => undefined);
         fixture.provider.providerRuntimeBatchGate = null;
+        fixture.provider.providerRuntimeBatchEntered = null;
       }
     },
   );
@@ -634,7 +686,7 @@ describe("memory session update sync", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -735,7 +787,7 @@ describe("memory session update sync", () => {
       userPath,
       "# User\n<!-- openclaw-memory-promotion:private-second -->\n- Private violet beta fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: ["private-first", "private-second"].map((entryKey) => ({
         agentId: "main",
@@ -818,10 +870,10 @@ describe("memory session update sync", () => {
     });
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "main", default: true, workspace: fixture.paths.workspace },
-        { id: "peer", workspace: fixture.paths.workspace },
-      ],
+      entries: {
+        main: { workspace: fixture.paths.workspace },
+        peer: { workspace: fixture.paths.workspace },
+      },
     };
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
     await fs.writeFile(
@@ -829,7 +881,7 @@ describe("memory session update sync", () => {
       "# Memory\n<!-- openclaw-memory-promotion:shared-private -->\n- Private violet shared fragment.\n",
     );
     for (const agentId of ["main", "peer"]) {
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId,
         origins: [
           {

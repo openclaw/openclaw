@@ -26,6 +26,11 @@ that session. Global, agent, provider, allow/deny, owner, filesystem, sandbox, a
 execution restrictions still apply. A catalog entry does not mean a tool or plugin
 is configured, connected, or authorized in the current session.
 
+The agent's **Tools** settings include run-dependent tools such as
+`github_identity_status`, `github_publish`, and `transcripts`, so **Disable All**
+also adds explicit denies for them. Their catalog rows do not bypass the GitHub
+workspace and identity checks or the meeting transcript caller checks.
+
 | Profile     | Includes                                                                                                                                                                                                                                                                         |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
@@ -35,6 +40,11 @@ is configured, connected, or authorized in the current session.
 
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
+
+The [`tts` tool](/tools/tts/api#tool-profiles) is not part of any restricted
+profile. To let an agent on `minimal`, `coding`, or `messaging` call it, add
+`tts` to `tools.alsoAllow`. [Automatic TTS](/tools/tts/output#auto-tts-behavior)
+is not a tool, so profiles do not affect it.
 
 An unset profile also leaves core tools unfiltered, but does not itself opt into
 optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
@@ -86,6 +96,11 @@ owner, sandbox, direct-call, or execution permission checks.
 
 `pdf` belongs to both `group:media` and `group:openclaw`. Group denies also cover PDF and override an explicit `pdf` allow entry. If an existing configuration should keep PDF access, remove or narrow the conflicting group deny. Group grants do not bypass [PDF model and authentication requirements](/tools/pdf).
 
+`transcripts` appears in the Media section of the catalog but is not a member of
+`group:media` or `group:openclaw`, preserving existing group grants and denies.
+Select it explicitly by name or through the full profile; restricted profiles can
+use `tools.alsoAllow`. The current caller and capture access checks still apply.
+
 ## MCP and plugin tools inside sandbox tool policy
 
 Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` plugin id. Normal tool profiles can allow them, but `tools.sandbox.tools` is an additional gate for sandboxed sessions. If sandbox mode is `"all"` or `"non-main"`, include one of these entries in the sandbox tool allowlist when MCP/plugin tools should be visible:
@@ -122,7 +137,7 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 ## `tools.codeMode`
 
 `tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
-for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
+for a run with tools, normal OpenClaw tools move behind the guest
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
@@ -132,11 +147,18 @@ options. To engage code mode only for models whose catalog entry flags
 `compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation).
 
+`executor` defaults to `"node"`, which uses `node:vm` for trusted host
+execution, not security isolation. Set `"quickjs"` for the bundled hardened
+guest executor. Agent-level settings override the global choice. See
+[Code Mode executors](/tools/code-mode/executors) for the trust boundary and
+continuation behavior.
+
 ```json5
 {
   tools: {
     codeMode: {
       enabled: "auto",
+      executor: "node",
     },
   },
 }
@@ -221,7 +243,7 @@ Restricts tools for the current turn's originating requester. This is defense-in
 }
 ```
 
-Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard.
 
 Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 

@@ -1,4 +1,4 @@
-import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 
 /**
  * Transcript append data emitted after an outbound send completes.

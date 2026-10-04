@@ -1,3 +1,4 @@
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type {
   ClaimableDedupe,
   ClaimableDedupeOptions,
@@ -55,13 +56,6 @@ export type ChannelReplayGuard<TEvent> = {
   clearMemory: () => void;
 };
 
-function normalizeReplayKeys(value: ReplayKeys): string[] {
-  const values = Array.isArray(value) ? value : [value];
-  return [
-    ...new Set(values.map((key) => key?.trim()).filter((key): key is string => Boolean(key))),
-  ];
-}
-
 async function settleReplayWrites(pending: Promise<boolean>[]): Promise<boolean> {
   try {
     return (await Promise.all(pending)).some(Boolean);
@@ -77,7 +71,8 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
   dedupe: ClaimableDedupe & Required<Pick<ClaimableDedupe, "forget">>,
 ): ChannelReplayGuard<TEvent> {
   const claimOwners = new Map<string, { claimId: symbol; state: "claimed" | "committing" }>();
-  const resolveKeys = (event: TEvent) => normalizeReplayKeys(params.buildReplayKey(event));
+  const resolveKeys = (event: TEvent) =>
+    normalizeUniqueSingleOrTrimmedStringList(params.buildReplayKey(event));
   const resolveOwnerKey = (key: string, options?: PersistentDedupeCheckOptions) =>
     `${options?.namespace?.trim() || "global"}\0${key}`;
   const resolveOptions = (
@@ -89,6 +84,18 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
     }
     const namespace = params.namespace?.(event);
     return namespace === undefined ? options : { ...options, namespace };
+  };
+  const forgetClaimOwnership = (
+    keys: readonly string[],
+    claimId: symbol,
+    options?: PersistentDedupeCheckOptions,
+  ) => {
+    for (const key of keys) {
+      const ownerKey = resolveOwnerKey(key, options);
+      if (claimOwners.get(ownerKey)?.claimId === claimId) {
+        claimOwners.delete(ownerKey);
+      }
+    }
   };
   const releaseKeys = (
     keys: readonly string[],
@@ -142,14 +149,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
           options
             ? { ...dedupeOptions, ...options, namespace: dedupeOptions?.namespace }
             : dedupeOptions,
-        ).finally(() => {
-          for (const key of settlingKeys) {
-            const ownerKey = resolveOwnerKey(key, dedupeOptions);
-            if (claimOwners.get(ownerKey)?.claimId === claimId) {
-              claimOwners.delete(ownerKey);
-            }
-          }
-        });
+        ).finally(() => forgetClaimOwnership(settlingKeys, claimId, dedupeOptions));
         settlement = { kind: "committing", pending };
         return pending;
       },
@@ -162,12 +162,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
           (key) => claimOwners.get(resolveOwnerKey(key, dedupeOptions))?.claimId === claimId,
         );
         releaseKeys(releasingKeys, { namespace: dedupeOptions?.namespace, error: options?.error });
-        for (const key of releasingKeys) {
-          const ownerKey = resolveOwnerKey(key, dedupeOptions);
-          if (claimOwners.get(ownerKey)?.claimId === claimId) {
-            claimOwners.delete(ownerKey);
-          }
-        }
+        forgetClaimOwnership(releasingKeys, claimId, dedupeOptions);
       },
     };
   };
@@ -193,12 +188,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
       }
     } catch (error) {
       releaseKeys(claimedKeys, { namespace: dedupeOptions?.namespace, error });
-      for (const key of claimedKeys) {
-        const ownerKey = resolveOwnerKey(key, dedupeOptions);
-        if (claimOwners.get(ownerKey)?.claimId === claimId) {
-          claimOwners.delete(ownerKey);
-        }
-      }
+      forgetClaimOwnership(claimedKeys, claimId, dedupeOptions);
       throw error;
     }
     if (claimedKeys.length > 0) {

@@ -5,11 +5,16 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
+import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
-import { quoteSqliteIdentifier as quoteIdentifier } from "../infra/sqlite-schema-sql.js";
+import {
+  findSqlCharacter,
+  normalizeSqlWhitespace,
+  quoteSqliteIdentifier as quoteIdentifier,
+} from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -21,19 +26,23 @@ import {
 } from "../state/secret-state-tables.js";
 import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
+import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
 
 export const GIT_BACKUP_MANIFEST = "manifest.json";
 export const GIT_BACKUP_SCHEMA = "schema.sql";
 export const GIT_BACKUP_TABLES = "tables";
 
-const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SAFE_TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-// session_transcript_index_state: Gateway startup transcript reconciliation owns
-// rebuilding that FTS projection when the state rows are absent.
+// Transcript FTS identities and watermarks rebuild together on Gateway startup;
+// retaining identities without the omitted FTS content would leave dangling rows.
 // backup_runs: the backup outcome log is written by every backup run, so dumping
 // it would make each cycle dirty the next one and defeat no-change detection.
-const GIT_BACKUP_PROJECTION_TABLES = ["backup_runs", "session_transcript_index_state"] as const;
+const GIT_BACKUP_PROJECTION_TABLES = [
+  "backup_runs",
+  "session_transcript_fts_rows",
+  "session_transcript_index_state",
+] as const;
 
 export type GitBackupIdentity = { role: "global" } | { role: "agent"; agentId: string };
 
@@ -105,12 +114,6 @@ function readSchemaEntries(database: DatabaseSync): SchemaEntry[] {
     .map((row) => row as SchemaEntry);
 }
 
-function virtualTableNames(entries: SchemaEntry[]): string[] {
-  return entries
-    .filter((entry) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/iu.test(entry.sql))
-    .map((entry) => entry.name);
-}
-
 function isVirtualShadow(name: string, virtualTables: readonly string[]): boolean {
   return virtualTables.some(
     (virtualTable) => name === virtualTable || name.startsWith(`${virtualTable}_`),
@@ -161,6 +164,7 @@ async function serializeGitBackupTable(
   table: string,
   outputPath?: string,
   rowFilter?: (row: Record<string, unknown>) => boolean,
+  redactCatalogCredentials = false,
 ): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
@@ -203,6 +207,17 @@ async function serializeGitBackupTable(
       if (rowFilter && !rowFilter(source)) {
         continue;
       }
+      if (
+        redactCatalogCredentials &&
+        (source.scope === "plugin-model-catalog-v1" ||
+          source.scope === "plugin-model-catalog-migration-v1") &&
+        typeof source.value_json === "string"
+      ) {
+        source.value_json = stripPluginModelCatalogCredentials(source.value_json);
+        if (source.value_json === null) {
+          continue;
+        }
+      }
       const encoded: Record<string, unknown> = {};
       for (const column of columns) {
         encoded[column.name] = encodeSqliteValue(source[column.name]);
@@ -232,13 +247,6 @@ function schemaText(entries: SchemaEntry[], userVersion: number): string {
   return `${statements.join("\n\n")}\n-- PRAGMA user_version = ${userVersion}\n`;
 }
 
-function redactedSecretTables(identity: GitBackupIdentity, excludeSecrets: boolean): Set<string> {
-  if (!excludeSecrets) {
-    return new Set();
-  }
-  return new Set(identity.role === "global" ? STATE_SECRET_TABLE_NAMES : AGENT_SECRET_TABLE_NAMES);
-}
-
 /** Dump one verified SQLite copy into the deterministic Git repository layout. */
 export async function dumpGitBackupDatabase(params: {
   snapshotPath: string;
@@ -250,8 +258,15 @@ export async function dumpGitBackupDatabase(params: {
   const database = openNodeSqliteDatabase(params.snapshotPath, { readOnly: true });
   try {
     const entries = readSchemaEntries(database);
-    const virtualTables = virtualTableNames(entries);
-    const redacted = redactedSecretTables(identity, params.excludeSecrets === true);
+    const virtualTables = entries
+      .filter((entry) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/iu.test(entry.sql))
+      .map((entry) => entry.name);
+    const redacted =
+      params.excludeSecrets === true
+        ? identity.role === "global"
+          ? STATE_SECRET_TABLE_NAMES
+          : AGENT_SECRET_TABLE_NAMES
+        : [];
     const existingTables = new Set(
       entries.filter((entry) => entry.type === "table").map((entry) => entry.name),
     );
@@ -264,7 +279,7 @@ export async function dumpGitBackupDatabase(params: {
       existingTables.has("config_machine_state")
         ? [...STATE_SECRET_CONFIG_STATE_KEY_PREFIXES]
         : [];
-    const excluded = new Set([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
+    const excluded = new Set<string>([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
     const includedSchema = entries.filter(
       (entry) => !excluded.has(entry.name) && !excluded.has(entry.tableName),
     );
@@ -304,6 +319,7 @@ export async function dumpGitBackupDatabase(params: {
         table,
         path.join(tablesPath, `${table}.jsonl`),
         rowFilter,
+        identity.role === "agent" && params.excludeSecrets === true && table === "cache_entries",
       );
     }
     const manifest: GitBackupManifest = {
@@ -376,79 +392,41 @@ export function parseGitBackupManifest(value: string, source: string): GitBackup
 function splitSchemaStatements(schema: string): string[] {
   const statements: string[] = [];
   let start = 0;
-  let quote: "'" | '"' | "`" | "]" | undefined;
-  let lineComment = false;
-  let blockComment = false;
-  for (let index = 0; index < schema.length; index += 1) {
-    const character = schema[index]!;
-    const next = schema[index + 1];
-    if (lineComment) {
-      if (character === "\n") {
-        lineComment = false;
-      }
-      continue;
+  let cursor = 0;
+  while (cursor < schema.length) {
+    const end = findSqlCharacter(schema.slice(cursor), ";");
+    if (end === -1) {
+      break;
     }
-    if (blockComment) {
-      if (character === "*" && next === "/") {
-        blockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (quote) {
-      if ((quote === "]" && character === "]") || (quote !== "]" && character === quote)) {
-        if (quote !== "]" && next === quote) {
-          index += 1;
-        } else {
-          quote = undefined;
-        }
-      }
-      continue;
-    }
-    if (character === "-" && next === "-") {
-      lineComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "/" && next === "*") {
-      blockComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "'" || character === '"' || character === "`") {
-      quote = character;
-      continue;
-    }
-    if (character === "[") {
-      quote = "]";
-      continue;
-    }
-    if (character !== ";") {
-      continue;
-    }
-    const candidate = schema.slice(start, index + 1).trim();
-    if (/^CREATE\s+TRIGGER\b/iu.test(candidate) && !/\bEND\s*;$/iu.test(candidate)) {
+    const segment = schema.slice(cursor, cursor + end + 1);
+    cursor += end + 1;
+    const candidate = schema.slice(start, cursor).trim();
+    // CASE expressions also end in END; a trigger needs a standalone END statement.
+    if (
+      /^CREATE\s+TRIGGER\b/iu.test(candidate) &&
+      !/^END\s*;$/iu.test(normalizeSqlWhitespace(segment))
+    ) {
       continue;
     }
     if (candidate && !candidate.startsWith("-- PRAGMA user_version")) {
       statements.push(candidate);
     }
-    start = index + 1;
+    start = cursor;
+  }
+  const trailing = schema.slice(start).trim();
+  if (/^CREATE\s+TRIGGER\b/iu.test(trailing)) {
+    // Let SQLite reject an incomplete trigger instead of silently dropping it.
+    statements.push(trailing);
   }
   return statements;
 }
 
 function unquoteSqlIdentifier(value: string): string {
-  if (value.startsWith("'")) {
-    return value.slice(1, -1).replaceAll("''", "'");
+  const quote = value[0];
+  if (quote === "'" || quote === '"' || quote === "`") {
+    return value.slice(1, -1).replaceAll(quote + quote, quote);
   }
-  if (value.startsWith('"')) {
-    return value.slice(1, -1).replaceAll('""', '"');
-  }
-  if (value.startsWith("`")) {
-    return value.slice(1, -1).replaceAll("``", "`");
-  }
-  if (value.startsWith("[")) {
+  if (quote === "[") {
     return value.slice(1, -1);
   }
   return value;
@@ -484,38 +462,6 @@ function decodeSqliteValue(value: unknown): null | string | number | bigint | Bu
   throw new Error("Git backup row contains an invalid encoded object.");
 }
 
-async function assertFreshRestoreTarget(targetPath: string): Promise<void> {
-  for (const candidate of [
-    targetPath,
-    ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${targetPath}${suffix}`),
-  ]) {
-    try {
-      await fs.lstat(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    throw new Error(`Fresh SQLite restore path already exists: ${candidate}`);
-  }
-}
-
-function assertNoSqliteSidecarsSync(targetPath: string): void {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    const sidecarPath = `${targetPath}${suffix}`;
-    try {
-      fsSync.lstatSync(sidecarPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    throw new Error(`Fresh SQLite restore path already exists: ${sidecarPath}`);
-  }
-}
-
 function convergeRestoredSchema(database: DatabaseSync, identity: GitBackupIdentity): void {
   database.exec(
     identity.role === "global"
@@ -530,10 +476,6 @@ function validateRestoredOwner(
   identity: GitBackupIdentity,
 ): void {
   assertSqliteIntegrity(database, databasePath);
-  const foreignKeys = database.prepare("PRAGMA foreign_key_check").all();
-  if (foreignKeys.length > 0) {
-    throw new Error(`SQLite foreign_key_check failed for restored Git backup: ${databasePath}`);
-  }
   buildSnapshotValidator(identity)(database, databasePath);
 }
 
@@ -681,8 +623,8 @@ export async function restoreGitBackupDirectory(params: {
           .run();
       }
     }
-    // Contentless transcript FTS stays empty. Omission of session_transcript_index_state
-    // makes Gateway startup reconciliation rebuild that projection from transcripts.
+    // Transcript FTS and its identities stay empty. Omission of the watermark makes
+    // Gateway startup reconciliation rebuild both from canonical transcripts.
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
     // Redacted and operational projection tables are absent from Git. Recreate
     // their canonical empty schemas before enforcing database ownership.
@@ -719,7 +661,9 @@ export async function restoreGitBackupDirectory(params: {
         }
       },
       afterPublish: (guard) => {
-        guard.assertTargetMatchesExpectedContent(() => assertNoSqliteSidecarsSync(targetPath));
+        guard.assertTargetMatchesExpectedContent(() =>
+          assertNoSqliteSidecarsSync(targetPath, "Fresh SQLite restore path already exists"),
+        );
       },
     });
     return {
@@ -727,8 +671,7 @@ export async function restoreGitBackupDirectory(params: {
       targetPath,
       tables,
       excludedTables: manifest.excludedTables,
-      // Older backups predate prefix redaction; absent means nothing was omitted.
-      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes ?? [],
+      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
     };
   } catch (error) {
     if (database.isOpen) {

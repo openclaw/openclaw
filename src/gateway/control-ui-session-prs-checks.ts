@@ -25,7 +25,7 @@ const MAX_STEPS = 200;
 export type SessionPullRequestCheckTarget = Pick<
   ControlUiSessionPullRequestCheckDetails,
   "owner" | "repo" | "number" | "headSha"
->;
+> & { apiBaseUrl: string; host: string };
 export type GitHubCheckRequest = (url: string, maxBytes?: number) => Promise<unknown>;
 
 function sessionPullRequestCheckState(
@@ -44,8 +44,9 @@ function sessionPullRequestCheckState(
 export function sessionPullRequestRepositoryApiUrl(target: {
   owner: string;
   repo: string;
+  apiBaseUrl: string;
 }): string {
-  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+  return `${target.apiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
 }
 
 function incomplete(): ControlUiGitHubError {
@@ -57,7 +58,7 @@ function incomplete(): ControlUiGitHubError {
 
 /** One bounded pagination owner serves both the compact rollup and on-demand detail. */
 async function fetchSessionPullRequestCheckRuns(
-  target: { owner: string; repo: string; headSha: string },
+  target: { owner: string; repo: string; headSha: string; apiBaseUrl: string },
   request: GitHubCheckRequest,
 ): Promise<Record<string, unknown>[]> {
   return fetchPages(
@@ -110,17 +111,13 @@ async function fetchPages(
 }
 
 export async function fetchSessionPullRequestCheckRollup(
-  item: { owner: string; repo: string; headSha?: string },
-  fetchImpl: typeof fetch,
-  token?: string,
+  item: { owner: string; repo: string; headSha?: string; apiBaseUrl: string },
+  request: GitHubCheckRequest,
 ): Promise<ControlUiSessionPullRequest["checks"]> {
   if (!item.headSha || !/^[0-9a-f]{40}$/i.test(item.headSha)) {
     return undefined;
   }
-  const runs = await fetchSessionPullRequestCheckRuns(
-    { ...item, headSha: item.headSha },
-    (url, maxBytes) => gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token, maxBytes),
-  );
+  const runs = await fetchSessionPullRequestCheckRuns({ ...item, headSha: item.headSha }, request);
   if (runs.length === 0) {
     return undefined;
   }
@@ -171,12 +168,8 @@ function safeCheckLink(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 2048) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
 }
 
 type ParsedCheck = { check: ControlUiSessionPullRequestCheck; suiteId?: number };
@@ -299,7 +292,7 @@ async function loadSuiteJobs(
       conclusion: verdict,
       state: sessionPullRequestCheckState(status, verdict),
       ...timing(job),
-      detailsUrl: `https://github.com/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/actions/runs/${runId}/job/${jobId}`,
+      detailsUrl: `https://${target.host}/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/actions/runs/${runId}/job/${jobId}`,
       steps: parseSteps(job.steps ?? []),
     });
   }
@@ -316,12 +309,11 @@ export async function fetchSessionPullRequestCheckDetails(
 ): Promise<{ checks: ControlUiSessionPullRequestCheck[]; error?: unknown }> {
   const rows = parseChecks(await fetchSessionPullRequestCheckRuns(target, request), target);
   const priority = { failed: 0, running: 1, passed: 2, skipped: 3 };
-  const orderedRows = rows.toSorted(
-    (a, b) =>
-      priority[a.check.state] - priority[b.check.state] ||
-      a.check.name.localeCompare(b.check.name) ||
-      a.check.id - b.check.id,
-  );
+  const compareChecks = (
+    a: ControlUiSessionPullRequestCheck,
+    b: ControlUiSessionPullRequestCheck,
+  ) => priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id;
+  const orderedRows = rows.toSorted((a, b) => compareChecks(a.check, b.check));
   const suites = [
     ...new Set(
       orderedRows
@@ -369,12 +361,7 @@ export async function fetchSessionPullRequestCheckDetails(
     }
   }
   return {
-    checks: orderedRows
-      .map(({ check }) => details.get(check.id) ?? check)
-      .toSorted(
-        (a, b) =>
-          priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id,
-      ),
+    checks: orderedRows.map(({ check }) => details.get(check.id) ?? check).toSorted(compareChecks),
     error,
   };
 }

@@ -34,8 +34,8 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
-  getGatewayTestPort,
   installGatewayTestHooks,
   setTestPluginRegistry,
   startTestGatewayServer,
@@ -231,9 +231,9 @@ module.exports = { id: '${validPluginId}', register() {} };`,
       plugins: pluginConfig,
     });
 
-    const port = await getGatewayTestPort();
-    server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+    const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
 
     expect(ready.status).toBe(200);
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
@@ -470,7 +470,6 @@ describe("updater plugin degradation with a running source Gateway", () => {
           channel: "stable",
           ...(await preparePostCorePluginConfig({ requestedChannel: null })),
           pluginInstallRecords: records,
-          pluginRequirements: { [pluginId]: "optional" },
           timeoutMs: 5_000,
           json: true,
         }),
@@ -479,16 +478,16 @@ describe("updater plugin degradation with a running source Gateway", () => {
     expect(result.status).toBe("warning");
     expect(result.reason).toBeUndefined();
     expect(result.assessment).toMatchObject({
-      kind: "optional-repair-needed",
-      failures: [
-        expect.objectContaining({ pluginId, installPath, reason: "missing-extension-entry" }),
-      ],
+      kind: "unsafe",
+      reason: "plugin-requirement-unknown",
     });
     expect(result.npm.outcomes).toContainEqual(
       expect.objectContaining({ pluginId, status: "error" }),
     );
 
-    expect(applyPostPluginConfigValidation(result, false)).toMatchObject({
+    expect(
+      applyPostPluginConfigValidation(result, { status: "invalid", failureFacts: [] }),
+    ).toMatchObject({
       status: "error",
       reason: "post-plugin-doctor-invalid-config",
     });
@@ -512,8 +511,9 @@ describe("updater plugin degradation with a running source Gateway", () => {
       degradedRegistry.plugins.some((plugin) => plugin.id === pluginId && plugin.activated),
     ).toBe(false);
     setTestPluginRegistry(degradedRegistry);
-    const port = await getGatewayTestPort();
-    server = await startTestGatewayServer(port, { auth: { mode: "none" } });
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
+    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
     expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
 

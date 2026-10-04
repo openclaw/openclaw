@@ -12,6 +12,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -95,6 +96,7 @@ function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
+    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     getHooksConfig: () => null,
     getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),
@@ -205,7 +207,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("queues and targets a mapped global wake for the same agent", () => {
     loadConfigMock.mockReturnValue({
-      agents: { entries: { main: { default: true }, hooks: {} } },
+      agents: { entries: { main: {}, hooks: {} } },
       session: { scope: "global" },
     });
 
@@ -411,16 +413,20 @@ describe("dispatchAgentHook trust handling", () => {
     const runGate = new Promise<void>((resolve) => {
       continueRun = resolve;
     });
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await runGate;
-      subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-      return { status: "ok", summary: "done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await runGate;
+        subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        return { status: "ok", summary: "done", delivered: false };
+      },
+    );
     const requestAdmission = tryBeginGatewayRootWorkAdmission();
     expect(requestAdmission).not.toBeNull();
 
     await requestAdmission?.run(async () => {
-      dispatchAgentHook(buildAgentPayload("Async hook"));
+      const admission = await dispatchAgentHook(buildAgentPayload("Async hook"));
+      expect(admission).toMatchObject({ ok: true });
       expect(getActiveGatewayRootWorkCount()).toBe(2);
     });
     requestAdmission?.release();
@@ -481,31 +487,41 @@ describe("dispatchAgentHook trust handling", () => {
     const dispatch = resolveDispatchAgentHook();
     const firstGate = createDeferred();
     const secondGate = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await firstGate.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
 
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await secondGate.promise;
-      return { status: "ok", summary: "second done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await secondGate.promise;
+        return { status: "ok", summary: "second done", delivered: false };
+      },
+    );
 
-    dispatch({
+    const firstAdmission = dispatch({
       ...buildAgentPayload("First"),
       message: "first",
       sessionKey: "agent:main:session-a",
     });
-    dispatch({
+    const secondAdmission = dispatch({
       ...buildAgentPayload("Second"),
       message: "second",
       sessionKey: "agent:main:session-b",
     });
 
-    expect(getActiveGatewayRootWorkCount()).toBe(2);
-
     try {
-      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+      const admissions = await Promise.all([firstAdmission, secondAdmission]);
+      expect(admissions).toEqual([
+        expect.objectContaining({ ok: true }),
+        expect.objectContaining({ ok: true }),
+      ]);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2);
     } finally {
       firstGate.resolve();
       secondGate.resolve();
@@ -907,7 +923,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("keeps global-scope announcement events and wakes on the selected agent", async () => {
     loadConfigMock.mockReturnValue({
-      agents: { entries: { main: { default: true }, hooks: {} } },
+      agents: { entries: { main: {}, hooks: {} } },
       session: { scope: "global" },
     });
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
@@ -963,7 +979,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("keeps global-scope error events and wakes on the selected agent", async () => {
     loadConfigMock.mockReturnValue({
-      agents: { entries: { main: { default: true }, hooks: {} } },
+      agents: { entries: { main: {}, hooks: {} } },
       session: { scope: "global" },
     });
     runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
@@ -989,7 +1005,7 @@ describe("dispatchAgentHook trust handling", () => {
     // a target from it, so the wake must carry the accepted agent or the
     // announced event sits unread.
     loadConfigMock.mockImplementation(() => ({
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       session: { scope: "global" },
     }));
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
@@ -1018,7 +1034,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("carries the accepted default agent on the global-scope failure wake", async () => {
     loadConfigMock.mockImplementation(() => ({
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       session: { scope: "global" },
     }));
     runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));

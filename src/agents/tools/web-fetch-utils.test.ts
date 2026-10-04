@@ -214,16 +214,18 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted string receiver.
     const originalIndexOf = String.prototype.indexOf;
     let searchedSpanUnits = 0;
-    const indexOf = vi
-      .spyOn(String.prototype, "indexOf")
-      .mockImplementation(function (this: string, search, position) {
-        const found = originalIndexOf.call(this, search, position);
-        if (search === "<") {
-          const start = Math.min(this.length, Math.max(0, position ?? 0));
-          searchedSpanUnits += (found < 0 ? this.length : found + 1) - start;
-        }
-        return found;
-      });
+    const indexOf = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      search,
+      position,
+    ) {
+      const found = originalIndexOf.call(this, search, position);
+      if (search === "<") {
+        const start = Math.min(this.length, Math.max(0, position ?? 0));
+        searchedSpanUnits += (found < 0 ? this.length : found + 1) - start;
+      }
+      return found;
+    });
     let text = "";
     try {
       text = htmlToMarkdown(html).text;
@@ -446,6 +448,48 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     const fenced = `${"```js\nx\n```".repeat(1_000)}after`;
 
     expect(markdownToText(fenced)).toBe(`${"x\n".repeat(1_000)}after`);
+  });
+
+  it.each([
+    [
+      "```md\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n```",
+      "# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`",
+    ],
+    ["before```text\ncode```# tail", "beforecode# tail"],
+    ["[```label```](https://example.com)", "label"],
+    ["```text\ncode\n```# heading", "code\nheading"],
+    ["\0```text\n$&\n```", "\0$&"],
+    ["\0![](u)\x000\0![](u)\0", "\0\x000\0\0"],
+    ["```js\n# heading", "```js\nheading"],
+    [
+      "before\n```text\n  # literal \r\n\r\n\r\n  body\n```\nafter",
+      "before\n # literal\n\n body\n\nafter",
+    ],
+  ])("preserves fenced code literals and existing extraction boundaries: %s", (markdown, text) => {
+    expect(markdownToText(markdown)).toBe(text);
+  });
+
+  it("keeps code extraction bounded when prose contains long NUL runs", () => {
+    const prefix = "\0".repeat(32_768);
+    expect(markdownToText(`${prefix}${"```x```\n".repeat(5_000)}`)).toBe(
+      `${prefix}${"x\n".repeat(5_000)}`.trim(),
+    );
+  });
+
+  it("keeps blank lines between paragraphs, headings, and lists in text mode", async () => {
+    const markdown = "Intro:\n\n- one\n  - nested\n\n## Steps\n\n1. first\n2. second";
+    expect(markdownToText(markdown)).toBe("Intro:\n\none\nnested\n\nSteps\n\nfirst\nsecond");
+    const result = await extractBasicHtmlContent({
+      html: "<p>Intro:</p><ul><li>one</li><li>two</li></ul><h2>Steps</h2><ol><li>first</li><li>second</li></ol>",
+      extractMode: "text",
+    });
+    expect(result?.text).toBe("Intro:\n\none\ntwo\n\nSteps\n\nfirst\nsecond");
+  });
+
+  it("keeps paragraph and list-item separation with CRLF line endings", () => {
+    expect(markdownToText("Install steps:\r\n\r\n- Download\r\n- Run")).toBe(
+      "Install steps:\n\nDownload\nRun",
+    );
   });
 
   it("truncates without splitting a boundary emoji", () => {

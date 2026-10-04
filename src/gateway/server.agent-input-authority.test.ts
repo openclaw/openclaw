@@ -1,15 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import * as followupCustody from "../agents/tools/sessions-send-followup-custody.js";
+import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
+import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
@@ -17,10 +24,17 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import * as gatewayWork from "../process/gateway-work-admission.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadSessionEntry } from "./session-utils.js";
+import { withPreparedSessionResolve } from "./sessions-resolve.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -51,6 +65,320 @@ describe("spawn input ownership transfer", () => {
       await harness?.close();
     },
   });
+
+  it.for([
+    { kind: "native", boundary: "dispatch" },
+    { kind: "peer", boundary: "dispatch" },
+    { kind: "native", boundary: "completion" },
+    { kind: "peer", boundary: "completion" },
+  ] as const)(
+    "delivers a $kind reply after the requester ends before child $boundary",
+    async ({ kind, boundary }, { signal }) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = kernel.gatewayRequestContext;
+      const cfg = context.getRuntimeConfig();
+      const runId = randomUUID();
+      const parentKey = `agent:main:dashboard:reply-parent-${runId}`;
+      const childKey = `agent:main:dashboard:reply-child-${runId}`;
+      const client = createOperatorClient({
+        profileName: `reply-custody-${runId}`,
+        scopes: ["operator.admin"],
+      });
+      for (const sessionKey of [parentKey, childKey]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            ...(kind === "native" && sessionKey === childKey
+              ? { spawnedBy: parentKey, spawnDepth: 1 }
+              : {}),
+          },
+        );
+      }
+      await withPreparedSessionResolve(
+        {
+          projection: expectDefined(getSessionRowProjection(context), "Gateway session projection"),
+          client,
+          p: { key: childKey, agentId: "main" },
+        },
+        (resolved) => expect(resolved).toMatchObject({ ok: true, key: childKey }),
+      );
+      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      if (!operator) {
+        throw new Error("Expected original operator authority");
+      }
+      const admission = prepareAgentRunAdmission({
+        cfg,
+        operationalRunInstance: createOperationalRunInstanceRef(`requester-${runId}`),
+        operatorAuthority: operator.authority,
+        facts: {
+          runId: `requester-${runId}`,
+          agentId: "main",
+          ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+        },
+      });
+      const admitted = await admission.admit("embedded");
+      const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
+      const dispatchEntered = createDeferred();
+      const childEntered = createDeferred();
+      const releaseDispatch = createDeferred();
+      const releaseChild = createDeferred();
+      const replyFinished = createDeferred();
+      const executions: Promise<void>[] = [];
+      const parentMessages: string[] = [];
+      let replyError: unknown;
+      const continueWork = gatewayWork.runWithGatewayDetachedWorkContinuation;
+      const replyObserver = vi
+        .spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation")
+        .mockImplementation((work, holder) => {
+          const pending = continueWork(work, holder);
+          if (holder === "session:a2a-send") {
+            void pending.then(
+              () => replyFinished.resolve(),
+              (error: unknown) => {
+                replyError = error;
+                replyFinished.resolve();
+              },
+            );
+          }
+          return pending;
+        });
+      const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
+      const execute = executionModule.startAgentRunExecution;
+      const executionSpy = vi
+        .spyOn(executionModule, "startAgentRunExecution")
+        .mockImplementation((params) => {
+          const pending = (async () => {
+            if (params.runId === runId) {
+              dispatchEntered.resolve();
+              if (boundary === "dispatch") {
+                await releaseDispatch.promise;
+              }
+            }
+            await execute(params);
+          })();
+          executions.push(pending);
+          return pending;
+        });
+      agentCommandMock.mockImplementation(async (input) => {
+        const opts = input as AgentCommandGatewayIngressOpts;
+        await opts.userTurnTranscriptRecorder?.persistApproved();
+        if (opts.sessionKey === childKey) {
+          childEntered.resolve();
+          await releaseChild.promise;
+        } else {
+          parentMessages.push(opts.message ?? "");
+        }
+        const text =
+          opts.sessionKey === childKey ? "delayed child result" : "received child result";
+        const terminalReply = buildAgentRunTerminalReplySnapshot({
+          visibleText: text,
+          rawText: text,
+        });
+        emitAgentEvent({
+          runId: opts.runId!,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: 1, endedAt: Date.now(), terminalReply },
+        });
+        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
+      });
+      const unblock = () => {
+        releaseDispatch.resolve();
+        releaseChild.resolve();
+      };
+      signal.addEventListener("abort", unblock, { once: true });
+      try {
+        const result = await withPluginRuntimeGatewayRequestScope(
+          { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withGatewayToolCallerIdentity(
+              {
+                ...createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: admitted,
+                  agentId: "main",
+                  sessionKey: parentKey,
+                }),
+                agentId: "main",
+                sessionKey: parentKey,
+                personalToolParticipants: participants,
+              },
+              () =>
+                createSessionsSendTool({
+                  agentSessionKey: parentKey,
+                  agentChannel: "webchat",
+                  config: cfg,
+                  idempotencyKey: runId,
+                }).execute("detached-reply", {
+                  sessionKey: childKey,
+                  message: "finish the accepted task",
+                  timeoutSeconds: 0,
+                }),
+            ),
+        );
+        expect(result.details, JSON.stringify(result.details)).toMatchObject({
+          status: "accepted",
+          delivery: { status: "pending" },
+        });
+        await withinTest(
+          boundary === "dispatch" ? dispatchEntered.promise : childEntered.promise,
+          signal,
+        );
+        participants.close();
+        admission.close();
+        operator.release();
+        expect(() => participants.resolve()).toThrow("This turn has ended");
+        unblock();
+        await withinTest(replyFinished.promise, signal);
+        expect(replyError).toBeUndefined();
+        expect(parentMessages).toHaveLength(1);
+        expect(parentMessages[0]).toContain("delayed child result");
+      } finally {
+        unblock();
+        await Promise.allSettled(executions);
+        participants.close();
+        admission.close();
+        operator.release();
+        replyObserver.mockRestore();
+        executionSpy.mockRestore();
+        signal.removeEventListener("abort", unblock);
+      }
+    },
+  );
+
+  it.each(["requester", "child"] as const)(
+    "revokes prepared watched followup %s access before real Gateway child admission",
+    async (revoked) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = kernel.gatewayRequestContext;
+      const cfg = context.getRuntimeConfig();
+      const runId = randomUUID();
+      const parentKey = `agent:main:dashboard:denied-parent-${runId}`;
+      const childKey = `agent:main:subagent:denied-child-${runId}`;
+      const client = createOperatorClient({
+        profileName: `watched-denial-${runId}`,
+        scopes: ["operator.admin"],
+      });
+      for (const sessionKey of [parentKey, childKey]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: Date.now(),
+            createdVia: "operator",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: client.authenticatedUserProfile!.profileId,
+            },
+            ...(sessionKey === childKey ? { spawnedBy: parentKey, spawnDepth: 1 } : {}),
+          },
+        );
+      }
+      const operator = await captureGatewayOperatorRunAuthority({ client, context });
+      if (!operator) {
+        throw new Error("Expected operator-owned Gateway admission");
+      }
+      const admission = prepareAgentRunAdmission({
+        cfg,
+        operationalRunInstance: createOperationalRunInstanceRef(`requester-${runId}`),
+        operatorAuthority: operator.authority,
+        facts: {
+          runId: `requester-${runId}`,
+          agentId: "main",
+          ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+        },
+      });
+      const admitted = await admission.admit("embedded");
+      const prepared = createDeferred();
+      const release = createDeferred();
+      const prepare = followupCustody.prepareSessionsSendFollowup;
+      const held = vi
+        .spyOn(followupCustody, "prepareSessionsSendFollowup")
+        .mockImplementationOnce(async (params) => {
+          const request = await prepare(params);
+          if (!request) {
+            throw new Error("Expected real prepared followup custody");
+          }
+          prepared.resolve();
+          await release.promise;
+          return request;
+        });
+      const stage = vi.spyOn(sessionAccessor, "stageSessionPendingInput");
+      let sending: Promise<unknown> | undefined;
+      try {
+        const pending = withPluginRuntimeGatewayRequestScope(
+          { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withGatewayToolCallerIdentity(
+              createAdmittedGatewayToolCallerIdentity({
+                admittedRunContext: admitted,
+                agentId: "main",
+                sessionKey: parentKey,
+              }),
+              () =>
+                createSessionsSendTool({
+                  agentSessionKey: parentKey,
+                  requesterTurnRunId: admission.operationalRunInstance.runId,
+                  config: cfg,
+                  idempotencyKey: runId,
+                }).execute("denied-watched-followup", {
+                  sessionKey: childKey,
+                  mode: "followup",
+                  watch: true,
+                  timeoutSeconds: 0,
+                  message: "This child input must never be admitted",
+                }),
+            ),
+        );
+        sending = pending;
+        await Promise.race([
+          prepared.promise,
+          pending.then(() => {
+            throw new Error("Send ended before preparing real custody");
+          }),
+        ]);
+        const revokedKey = revoked === "requester" ? parentKey : childKey;
+        const entry = loadSessionEntry(revokedKey, { agentId: "main" }).entry;
+        if (!entry) {
+          throw new Error("Expected prepared session");
+        }
+        await sessionAccessor.replaceSessionEntry(
+          { agentId: "main", sessionKey: revokedKey },
+          { ...entry, archivedAt: Date.now() },
+        );
+        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+        expect(() => operator.authority.assertCurrent()).not.toThrow();
+        release.resolve();
+        const result = await pending;
+        expect(result.details).toMatchObject({
+          status: "error",
+          error: expect.stringMatching(/archived|revoked/),
+        });
+        expect(result.details).not.toHaveProperty("sentBeforeError");
+        expect(stage).not.toHaveBeenCalled();
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+        expect(
+          (
+            await listSessionPendingInputs({
+              agentId: "main",
+              sessionKey: childKey,
+              sessionId: childKey,
+              storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+            })
+          ).total,
+        ).toBe(0);
+      } finally {
+        release.resolve();
+        await sending?.catch(() => {});
+        held.mockRestore();
+        stage.mockRestore();
+        admission.close();
+        operator.release();
+      }
+    },
+  );
 
   it.for([
     "before staging",
@@ -206,12 +534,14 @@ describe("spawn input ownership transfer", () => {
         );
         expect(prepared).toBeUndefined();
         expect(
-          listSessionPendingInputs({
-            agentId: "main",
-            sessionKey: childKey,
-            sessionId,
-            storePath: loaded.storePath,
-          }).total,
+          (
+            await listSessionPendingInputs({
+              agentId: "main",
+              sessionKey: childKey,
+              sessionId,
+              storePath: loaded.storePath,
+            })
+          ).total,
         ).toBe(0);
       } else {
         expect(await outcome).toHaveProperty("value.status", "accepted");
@@ -228,12 +558,14 @@ describe("spawn input ownership transfer", () => {
           expect(persisted?.appended).toBe(true);
           expect(persisted?.message.content).toBe("synthetic staged child input");
           expect(
-            listSessionPendingInputs({
-              agentId: "main",
-              sessionKey: childKey,
-              sessionId,
-              storePath: loaded.storePath,
-            }).total,
+            (
+              await listSessionPendingInputs({
+                agentId: "main",
+                sessionKey: childKey,
+                sessionId,
+                storePath: loaded.storePath,
+              })
+            ).total,
           ).toBe(0);
         }
       }
@@ -342,7 +674,7 @@ describe("accepted input Gateway instance retirement", () => {
       expect(accepted).toMatchObject({ runId, sessionKey: childKey, status: "accepted" });
       const originalAck = structuredClone(accepted);
       const prepared = await executionEntered.promise;
-      const pending = listSessionPendingInputs(scope);
+      const pending = await listSessionPendingInputs(scope);
       expect(pending).toMatchObject({
         total: 1,
         items: [
@@ -360,7 +692,10 @@ describe("accepted input Gateway instance retirement", () => {
       expect(context.chatAbortControllers.get(runId)).toBe(prepared.activeRunAbort.entry);
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
       expect(() => guard()).not.toThrow();
-      const runtimeRelease = vi.spyOn(prepared.preparedModelRuntimeLease, Symbol.asyncDispose);
+      const runtimeRelease = vi.spyOn(
+        expectDefined(prepared.preparedModelRuntimeLease, "ready session runtime"),
+        Symbol.asyncDispose,
+      );
       restoreRuntimeRelease = () => runtimeRelease.mockRestore();
 
       // Retire only the instance owner: parent authority and the child controller
@@ -386,7 +721,7 @@ describe("accepted input Gateway instance retirement", () => {
           message: "Gateway instance dispatch unavailable for agent turn",
         },
       });
-      expect(listSessionPendingInputs(scope)).toEqual({
+      expect(await listSessionPendingInputs(scope)).toEqual({
         total: 1,
         items: [{ ...pending.items[0], state: "interrupted" }],
       });

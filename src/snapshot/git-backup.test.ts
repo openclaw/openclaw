@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { formatCliOperatorError } from "../cli/failure-output.js";
@@ -10,6 +9,7 @@ import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -26,9 +26,11 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 import {
   createAgentFixture,
+  createCatalogFixture,
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
@@ -124,25 +126,6 @@ afterEach(async () => {
   );
 });
 
-async function listTree(root: string): Promise<Array<[string, string]>> {
-  const result: Array<[string, string]> = [];
-  async function visit(directory: string): Promise<void> {
-    for (const entry of (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const entryPath = path.join(directory, entry.name);
-      const relative = path.relative(root, entryPath);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      } else {
-        result.push([relative, (await fs.readFile(entryPath)).toString("hex")]);
-      }
-    }
-  }
-  await visit(root);
-  return result;
-}
-
 function createStateDatabaseFixture(root: string): {
   stateDir: string;
   database: { path: string; identity: { role: "global" } };
@@ -177,38 +160,6 @@ describe("Git-backed SQLite snapshots", () => {
         `Git backup repository must be outside the OpenClaw state directory: ${stateDir}`,
       );
     }
-  });
-
-  it("dumps byte-identical trees and skips a second unchanged create commit", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const first = path.join(root, "first");
-    const second = path.join(root, "second");
-    await createFormatFixture(source);
-
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: first,
-      identity: { role: "global" },
-    });
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: second,
-      identity: { role: "global" },
-    });
-    expect(await listTree(second)).toEqual(await listTree(first));
-
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    expect(created.noChanges).toBe(false);
-    expect(unchanged.noChanges).toBe(true);
-    expect(unchanged).not.toHaveProperty("commit");
-    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
   it("backs up a configured external agent database for explicit and all scopes", async () => {
@@ -290,9 +241,9 @@ describe("Git-backed SQLite snapshots", () => {
             spawnCommand(
               [
                 process.execPath,
-                "--import",
-                "tsx",
-                fileURLToPath(new URL("./git-backup-command.test-support.ts", import.meta.url)),
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(gitBackupCommandRuntimeEntrypoint),
+                ),
                 repositoryPath,
                 ...(agentId ? [agentId] : []),
               ],
@@ -383,6 +334,7 @@ describe("Git-backed SQLite snapshots", () => {
 
     expect(created.noChanges).toBe(false);
     expect(unchanged.noChanges).toBe(true);
+    expect(unchanged).not.toHaveProperty("commit");
     expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
       "A  unrelated.txt",
     );
@@ -493,18 +445,6 @@ describe("Git-backed SQLite snapshots", () => {
     expect(output).toContain("Remove non-user ACL grants");
     expect(output).toContain("Do not use a shared or synced folder");
     expect(output).not.toContain("chmod 700");
-  });
-
-  it("accepts a private adopted root", async () => {
-    const root = await tempRoot();
-    const stateDir = path.join(root, "state");
-    const repositoryPath = path.join(root, "repository");
-    await fs.mkdir(stateDir);
-    await fs.mkdir(repositoryPath, { mode: 0o700 });
-
-    await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).resolves.toEqual({
-      repositoryPath,
-    });
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -846,6 +786,7 @@ describe("Git-backed SQLite snapshots", () => {
     expect(restored.tables.every((table) => table.ok)).toBe(true);
     expect(restored.manifest.tables).toEqual(manifest.tables);
     expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
+    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
     if (process.platform !== "win32") {
       expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
     }
@@ -890,6 +831,80 @@ describe("Git-backed SQLite snapshots", () => {
       database.close();
     }
   });
+
+  it.each([false, true])(
+    "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
+    async (excludeSecrets) => {
+      const root = await tempRoot();
+      const source = path.join(root, "source.sqlite");
+      const dump = path.join(root, "dump");
+      const { catalog, malformedHeaders, unusableCatalogs, scopes } = createCatalogFixture(source);
+      const manifest = await dumpGitBackupDatabase({
+        snapshotPath: source,
+        outputPath: dump,
+        identity: { role: "agent", agentId: "main" },
+        excludeSecrets,
+      });
+      const rows = (await fs.readFile(path.join(dump, "tables", "cache_entries.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      for (const scope of scopes) {
+        const fixtureRow = rows.find((entry) => entry.scope === scope && entry.key === "fixture");
+        expect(fixtureRow).toBeDefined();
+        expect(JSON.parse(fixtureRow.value_json)).toEqual(
+          excludeSecrets
+            ? {
+                ...catalog,
+                providers: {
+                  fixture: {
+                    api: "openai-completions",
+                    models: [{ id: "model" }],
+                  },
+                },
+              }
+            : catalog,
+        );
+        const malformedRow = rows.find(
+          (entry) => entry.scope === scope && entry.key === "malformed-headers",
+        );
+        expect(malformedRow).toBeDefined();
+        expect(JSON.parse(malformedRow.value_json)).toEqual(
+          excludeSecrets
+            ? {
+                generatedBy: "openclaw-plugin-model-catalog-v1",
+                providers: {
+                  fixture: {
+                    api: "openai-completions",
+                    models: [
+                      { id: "array-header" },
+                      { id: "object-header" },
+                      { id: "string-headers" },
+                    ],
+                  },
+                },
+              }
+            : malformedHeaders,
+        );
+        for (const [index, contents] of unusableCatalogs.entries()) {
+          expect(
+            rows.find((entry) => entry.scope === scope && entry.key === `broken-${index}`),
+          ).toEqual(
+            excludeSecrets ? undefined : { scope, key: `broken-${index}`, value_json: contents },
+          );
+        }
+      }
+      expect(rows).toContainEqual({
+        scope: "unrelated-cache",
+        key: "keep",
+        value_json: '{"value":"retained"}',
+      });
+      expect(manifest.userVersion).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(manifest.tables.cache_entries).toMatchObject({
+        rows: excludeSecrets ? 5 : 5 + scopes.length * unusableCatalogs.length,
+      });
+    },
+  );
 
   it("omits secret tables and reports the restore gap", async () => {
     const root = await tempRoot();

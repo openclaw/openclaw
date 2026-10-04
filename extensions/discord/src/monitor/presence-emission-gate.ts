@@ -1,4 +1,3 @@
-// Discord plugin module gates presence-event emission after reconnects and during bursts.
 const DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS = 5 * 60 * 1000;
 const DISCORD_PRESENCE_BURST_LIMIT = 8;
 const DISCORD_PRESENCE_BURST_WINDOW_MS = 60 * 1000;

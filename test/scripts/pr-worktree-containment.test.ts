@@ -15,6 +15,7 @@ import {
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -154,10 +155,10 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
         'source "$3"',
         'fixture_root="$4"',
         'script_parent_dir="$fixture_root"',
-        `pr_gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n'; }`,
+        `pr_gh_plain() { [ "$*" = writer-login ] || return 99; printf 'fixture-user\\n'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         provisionWorktreeFixture,
-        'pr_meta_json() { local head; head=$(git rev-parse refs/pull/42/head); jq -cn --arg head "$head" \'{number:42,title:"fixture",url:"https://example.invalid/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
+        'pr_meta_json() { local head base; head=$(git rev-parse refs/pull/42/head); base=$(git rev-parse refs/heads/main); jq -cn --arg head "$head" --arg base "$base" \'{number:42,title:"fixture",url:"https://github.com/fixture/repo/pull/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",baseRefOid:$base,baseRepository:{id:"R_fixture",databaseId:1,nameWithOwner:"fixture/repo",url:"https://github.com/fixture/repo"},isCrossRepository:false,headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
         'pr_gh() { if [ "$#" = 5 ] && [ "$1 $2 $3 $4" = "pr view 42 --json" ]; then pr_meta_json 42 | jq --arg fields "$5" \'with_entries(select(.key as $key | $fields | split(",") | index($key)))\'; else echo "Unexpected fixture GitHub request" >&2; return 99; fi; }',
         ...commands,
       ].join("\n"),
@@ -167,7 +168,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
       reviewScript,
       fixture.root,
     ],
-    { cwd: fixture.root, encoding: "utf8", env: { ...process.env, ...env } },
+    { cwd: fixture.root, encoding: "utf8", env: { ...createIndependentPrFixtureEnv(), ...env } },
   );
 }
 
@@ -190,7 +191,16 @@ function traceEntryCommands(failure: string, code = 73) {
       (name) =>
         `${name === "git" ? "pr_git" : name}() { trace_command ${name} "$@" || return $?; command ${name} "$@"; }`,
     ),
-    `pr_gh_plain() { trace_command gh_plain "$@" || return $?; printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n'; }`,
+    "pr_gh_plain() {",
+    "  local status=0",
+    '  trace_command gh_plain "$@" || status=$?',
+    '  if [ "$status" -ne 0 ]; then',
+    "    echo 'Fixture writer identity unavailable.' >&2",
+    '    return "$status"',
+    "  fi",
+    '  [ "$*" = writer-login ] || return 99',
+    "  printf 'fixture-user\\n'",
+    "}",
   ];
 }
 
@@ -261,7 +271,7 @@ describePosix("scripts/pr worktree containment", () => {
                 bash,
                 [
                   "-c",
-                  `set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\npr_gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n'; }\nmark_pr_operation_side_effects_started() { :; }\n${provisionWorktreeFixture}\nreview_checkout_main "$5"`,
+                  `set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\npr_gh_plain() { [ "$*" = writer-login ] || return 99; printf 'fixture-user\\n'; }\nmark_pr_operation_side_effects_started() { :; }\n${provisionWorktreeFixture}\nreview_checkout_main "$5"`,
                   "pr-concurrency",
                   commonScript,
                   worktreeScript,
@@ -269,7 +279,11 @@ describePosix("scripts/pr worktree containment", () => {
                   fixture.root,
                   String(pr),
                 ],
-                { cwd: fixture.root, stdio: ["ignore", "pipe", "pipe"] },
+                {
+                  cwd: fixture.root,
+                  env: createIndependentPrFixtureEnv(),
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
               );
               let output = "";
               child.stdout.on("data", (chunk) => {
@@ -333,7 +347,7 @@ describePosix("scripts/pr worktree containment", () => {
       expectEntryStopped(fixture, result);
       expect(reviewState(worktree)).toEqual(before);
       if (failure.includes("gh_plain")) {
-        expect(result.stderr).toContain("GitHub API preflight failed");
+        expect(result.stderr).toContain("Fixture writer identity unavailable.");
       }
     });
   }

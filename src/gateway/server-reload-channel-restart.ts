@@ -1,3 +1,4 @@
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { getLoadedChannelPluginEntryById } from "../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,11 +19,9 @@ export async function restartGatewayChannels(options: {
   restartChannelAccounts: ReadonlyMap<ChannelKind, Set<string>>;
   activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null;
   shouldSkipChannelRestart: boolean;
-  skipChannelRestartLogMessage: string;
   isLifecycleReloadAborted: () => boolean;
   getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
-  logSuppressedChannelRestart: (channels: ReadonlySet<ChannelKind>, action: string) => void;
   scheduleRecoveryRestart: (surface: string, err?: unknown) => void;
 }): Promise<void> {
   const {
@@ -32,16 +31,14 @@ export async function restartGatewayChannels(options: {
     restartChannelAccounts,
     activePluginChannelsAfterReload,
     shouldSkipChannelRestart,
-    skipChannelRestartLogMessage,
     isLifecycleReloadAborted,
     getChannelAutostartSuppression,
     channelReloadTargets,
-    logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
   // Suppressed and normal reloads share fallback selection so stale account
   // ids always reach the wholesale path that evicts their old runtime.
-  const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
+  const collectChannelAccountTargets = async (): Promise<Array<[ChannelKind, string]>> => {
     const targets: Array<[ChannelKind, string]> = [];
     for (const [channel, accountIds] of restartChannelAccounts) {
       if (
@@ -64,7 +61,9 @@ export async function restartGatewayChannels(options: {
       }
       try {
         for (const accountId of accountIds) {
-          plugin?.config.resolveAccount(nextConfig, accountId);
+          if (plugin) {
+            await resolveChannelAccount({ plugin, cfg: nextConfig, accountId });
+          }
         }
       } catch (err) {
         params.logChannels.info(
@@ -84,14 +83,20 @@ export async function restartGatewayChannels(options: {
     return;
   }
   if (shouldSkipChannelRestart) {
-    params.logChannels.info(skipChannelRestartLogMessage);
+    params.logChannels.info(
+      "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+    );
+    return;
+  }
+  const accountTargets = await collectChannelAccountTargets();
+  if (isLifecycleReloadAborted()) {
     return;
   }
   const suppressed = Boolean(getChannelAutostartSuppression());
   const operation = suppressed ? "stop" : "restart";
   const phase = suppressed ? "suppressed hot reload" : "hot reload";
   const targets: Array<[ChannelKind, string?]> = [
-    ...collectChannelAccountTargets(),
+    ...accountTargets,
     ...[...channelsToRestart].map((channel): [ChannelKind] => [channel]),
   ];
   const failures: string[] = [];
@@ -134,6 +139,11 @@ export async function restartGatewayChannels(options: {
     scheduleRecoveryRestart(`channel ${operation} (${failures.join(", ")})`);
   }
   if (suppressed) {
-    logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
+    const channels = channelReloadTargets();
+    if (getChannelAutostartSuppression()) {
+      params.logChannels.info(
+        `channel restart during hot reload suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
+      );
+    }
   }
 }

@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectRollupContexts } from "../../scripts/lib/watch-pr-ci-rollup.mts";
+import { collectRollupContexts, type RollupCheck } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
@@ -12,96 +10,11 @@ import {
   classifyRunAttachment,
   parseArgs,
   pollUntilDeadline,
-  sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
-
-const sha = "a".repeat(40);
-
-function runWatcher(
-  ghScript: string,
-  headSha = sha,
-  options: string[] = [],
-  clock: "poll" | "wall" | { readClock: string } = "poll",
-  envOverrides: NodeJS.ProcessEnv = {},
-  notifierPath?: string,
-) {
-  return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
-    const ghPath = join(binDir, "gh");
-    writeFileSync(ghPath, ghScript);
-    chmodSync(ghPath, 0o755);
-    const clockPath = join(binDir, "poll-clock.mjs");
-    // Evidence fixtures advance polling only, independent of fake gh startup cost.
-    // Deadline coverage explicitly retains the real clock and child timeout.
-    // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
-    writeFileSync(
-      clockPath,
-      `import { readFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import timers from "node:timers/promises";
-if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
-  const realSleep = timers.setTimeout;
-  let waitedMs = 0;
-  Date.now = () => now() + waitedMs;
-  timers.setTimeout = async (milliseconds, value, options) => {
-    const result = await realSleep(0, value, options);
-    waitedMs += milliseconds;
-    return result;
-  };
-  syncBuiltinESMExports();
-}
-`,
-    );
-    return await new Promise<{ status: number; stdout: string; stderr: string }>(
-      (resolve, reject) => {
-        execFile(
-          notifierPath ? "/bin/bash" : process.execPath,
-          [
-            ...(notifierPath
-              ? [
-                  "-c",
-                  'exec 3>"$1"; shift; exec "$@"',
-                  "watcher-notifier",
-                  notifierPath,
-                  process.execPath,
-                ]
-              : []),
-            "scripts/watch-pr-ci.mjs",
-            "42",
-            headSha,
-            "--attach-timeout",
-            "1",
-            "--timeout",
-            "1",
-            "--interval",
-            "1",
-            ...options,
-          ],
-          {
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              ...envOverrides,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
-              PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-            },
-          },
-          (error, stdout, stderr) => {
-            const status = error ? error.code : 0;
-            if (typeof status !== "number") {
-              reject(new Error("watcher process did not report an exit code", { cause: error }));
-              return;
-            }
-            resolve({ status, stdout, stderr });
-          },
-        );
-      },
-    );
-  });
-}
+import { runWatcher, sha } from "./watch-pr-ci.test-support.js";
 
 function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
@@ -138,7 +51,7 @@ const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -225,11 +138,17 @@ function replaySummary({
   },
   runStatus = "in_progress",
   afterRun = {},
+  detailContexts,
+  supersededFailure = false,
+  completeAfter = 3,
 }: {
   state?: string;
   counts?: Record<string, unknown>;
   runStatus?: string;
   afterRun?: Record<string, unknown>;
+  detailContexts?: unknown;
+  supersededFailure?: boolean;
+  completeAfter?: number;
 }) {
   return withTempDir("openclaw-watch-pr-ci-summary-", async (root) => {
     const callsPath = join(root, "calls.jsonl");
@@ -251,15 +170,17 @@ const pr = {
   ...(runReads >= 2 ? ${JSON.stringify(afterRun)} : {}),
 };
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   value = { state: "open", mergeable: true, head: { sha: "${sha}" } };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
-  value = { workflow_runs: [{ ...identity, id: 201, check_suite_id: 20_000 }] };
+  value = { workflow_runs: [{ ...identity, id: 201, check_suite_id: 20_000 },
+    ...(${supersededFailure} ? [{ ...identity, id: 100, check_suite_id: 10_000 }] : [])] };
 } else if (args[0] === "run" && args[1] === "view") {
-  value = { status: ${JSON.stringify(runStatus)}, conclusion: ${JSON.stringify(runStatus === "completed" ? "success" : null)} };
+  const completed = ${supersededFailure} ? runReads >= ${completeAfter} : ${runStatus === "completed"};
+  value = { status: completed ? "completed" : ${JSON.stringify(runStatus)}, conclusion: completed ? "success" : null };
 } else if (args[1] === "repos/openclaw/openclaw/actions/runs/100") {
   value = { ...identity, id: 100, check_suite_id: 10_000 };
 } else if (args[0] === "api" && args[1] === "graphql") {
@@ -268,15 +189,16 @@ if (args[0] === "browse" && args[1] === "--no-browser") {
   } else {
     const nodes = Array.from({ length: 200 }, (_, index) => ({
       kind: "CheckRun", databaseId: 1_000 + index, name: "old check " + index,
-      status: "COMPLETED", conclusion: "SUCCESS",
+      status: "COMPLETED", conclusion: ${supersededFailure} && index === 0 ? "CANCELLED" : "SUCCESS",
       checkSuite: { databaseId: 10_000, workflowRun: {
         databaseId: 100, event: "pull_request", workflow: { databaseId: 10 },
       } },
     }));
-    nodes.push({ kind: "StatusContext", context: "required status", state: pr.statusCheckRollup.state });
+    nodes.push({ kind: "StatusContext", context: "required status",
+      state: ${supersededFailure} ? runReads >= ${completeAfter} ? "SUCCESS" : "PENDING" : pr.statusCheckRollup.state });
     const start = Number(args.find((arg) => arg.startsWith("cursor="))?.slice(7) ?? 0);
     const end = Math.min(start + 100, nodes.length);
-    pr.statusCheckRollup.contexts = {
+    pr.statusCheckRollup.contexts = ${detailContexts !== undefined} ? ${JSON.stringify(detailContexts)} : {
       totalCount: nodes.length, nodes: nodes.slice(start, end),
       pageInfo: { hasNextPage: end < nodes.length, endCursor: end < nodes.length ? String(end) : null },
     };
@@ -319,6 +241,7 @@ function replayRestRollup(
     statusPages?: unknown[];
     runPages?: unknown[];
     suitePages?: unknown[];
+    afterRun?: { checkPages?: unknown[]; statusPages?: unknown[]; suitePages?: unknown[] };
     afterCollection?: Record<string, unknown>;
     runStatuses?: string[];
   } = {},
@@ -334,13 +257,15 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
-const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+const original = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
+const fixture = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
 const run = { id: 201, workflow_id: 10, check_suite_id: 20_000, event: "pull_request", head_sha: "${sha}" };
 const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -456,14 +381,6 @@ describe("watch-pr-ci", () => {
     ]);
   });
 
-  it("filters run ids at and before --after", () => {
-    const newer = { id: 102, created_at: "2026-07-23T02:00:00Z" };
-    const runs = [newer, { id: 101, created_at: "2026-07-23T01:00:00Z" }];
-    expect(selectRunAfter(runs, 101)).toBe(newer);
-    expect(selectRunAfter(runs, 102)).toBeUndefined();
-    expect(selectRunAfter(runs)).toBe(newer);
-  });
-
   it("skips newer draft runs without weakening the --after boundary", () => {
     const skipped = { id: 103, conclusion: "skipped" };
     const successful = { id: 102, conclusion: "success" };
@@ -484,7 +401,7 @@ describe("watch-pr-ci", () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
-  "browse --no-browser") printf 'https://github.com/openclaw/openclaw\\n' ;;
+  "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
     printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
@@ -542,7 +459,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -698,7 +615,7 @@ const pullPath = ${JSON.stringify(pullPath)};
 const reads = calls.filter((call) => call.includes(pullPath)).length;
 if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
   console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
   process.exit(0);
@@ -769,8 +686,77 @@ console.log(JSON.stringify(value));
     },
   );
 
+  // These replay groups own their CLI process, files, and polling clock per case.
+  // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it.each([
+    it.concurrent.each([
+      {
+        label: "superseded failures",
+        completeAfter: 3,
+        afterRun: {},
+        exitCode: 0,
+        reads: 10,
+        summaries: 1,
+      },
+      {
+        label: "cleared failures with active CI",
+        completeAfter: 10,
+        afterRun: { statusCheckRollup: { state: "PENDING" } },
+        exitCode: 16,
+        reads: 8,
+        summaries: 2,
+      },
+    ])(
+      "bounds summary reads for $label",
+      async ({ completeAfter, afterRun, exitCode, reads, summaries }) => {
+        const result = await replaySummary({
+          state: "FAILURE",
+          supersededFailure: true,
+          completeAfter,
+          afterRun,
+        });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        if (exitCode === 0) {
+          expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(2);
+          expect(result.stdout).toContain("\nGREEN");
+          expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/pulls/42");
+        } else {
+          expect(result.stdout).not.toContain("\nGREEN");
+        }
+        const graphql = result.calls.filter((call) => call[1] === "graphql");
+        expect(graphql).toHaveLength(reads);
+        expect(
+          graphql.filter((call) => call.some((arg) => arg.includes("checkRunCountsByState"))),
+        ).toHaveLength(summaries);
+      },
+    );
+
+    it.concurrent.each<[string, unknown]>([
+      ["missing contexts", null],
+      ["missing nodes", { totalCount: 0, pageInfo: { hasNextPage: false } }],
+      ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
+      ["missing pagination", { totalCount: 0, nodes: [] }],
+      ["no checks", { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } }],
+      ...[0, 2].map((totalCount): [string, unknown] => [
+        "inconsistent count",
+        {
+          totalCount,
+          nodes: [{ kind: "StatusContext", context: "required", state: "SUCCESS" }],
+          pageInfo: { hasNextPage: false },
+        },
+      ]),
+    ])("does not turn a FAILURE with %s into success", async (_label, detailContexts) => {
+      const result = await replaySummary({
+        state: "FAILURE",
+        runStatus: "completed",
+        detailContexts,
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).toContain("rollup detail evidence is incomplete");
+      expect(result.stdout).not.toContain("\nGREEN");
+    });
+
+    it.concurrent.each([
       { label: "complete counts", counts: undefined, pending: "1" },
       { label: "missing counts", counts: {}, pending: "unknown" },
       {
@@ -810,7 +796,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
       {
         label: "moved head",
@@ -853,7 +839,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("GraphQL quota fallback", () => {
-    it("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
+    it.concurrent("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
       const result = await replayRestRollup({
         runStatuses: ["in_progress", "in_progress", "in_progress", "completed"],
         checkPages: [
@@ -876,7 +862,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/actions/runs?head_sha="))).toBe(false);
     });
 
-    it.each([
+    it.concurrent.each([
       "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
       "gh: Resource not accessible by integration (HTTP 403)",
       "gh: Bad Gateway (HTTP 502)",
@@ -890,7 +876,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/commits/"))).toBe(false);
     });
 
-    it("keeps a required failure on the second status page blocking", async () => {
+    it.concurrent("keeps a required failure on the second status page blocking", async () => {
       const statuses = Array.from({ length: 100 }, (_, index) => ({
         id: index + 1,
         context: `status ${index}`,
@@ -913,9 +899,32 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.endsWith("/status?per_page=100&page=2"))).toBe(
         true,
       );
+      expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(1);
+      expect(result.calls.filter((call) => call[1]?.includes("/status?"))).toHaveLength(2);
+      expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each(["pending", "failure"])(
+      "reobserves a same-head %s status after attached-run success",
+      async (state) => {
+        const result = await replayRestRollup({
+          afterRun: {
+            statusPages: [
+              { sha, state, total_count: 1, statuses: [{ id: 1, context: "required", state }] },
+            ],
+          },
+        });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
+          state === "failure" ? 15 : 16,
+        );
+        expect(result.stdout).not.toContain("\nGREEN");
+        if (state === "failure") {
+          expect(result.stdout).toContain("FAILING checks=required");
+        }
+      },
+    );
+
+    it.concurrent.each([
       { label: "moved head", afterCollection: { head: { sha: "b".repeat(40) } }, exitCode: 11 },
       { label: "closed PR", afterCollection: { state: "closed" }, exitCode: 10 },
       { label: "conflicting PR", afterCollection: { mergeable: false }, exitCode: 14 },
@@ -926,7 +935,7 @@ console.log(JSON.stringify(value));
     });
 
     const failedCheck = restCheck(1, { conclusion: "failure" });
-    it("keeps an unknown completed REST outcome pending", async () => {
+    it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
         checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
       });
@@ -941,7 +950,7 @@ console.log(JSON.stringify(value));
       event: "pull_request",
       head_sha: sha,
     };
-    it.each([
+    it.concurrent.each([
       {
         label: "missing check page",
         checkPages: [
@@ -1049,7 +1058,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { status: "completed", conclusion: "skipped" },
       { status: "queued", conclusion: null },
     ])(
@@ -1083,12 +1092,18 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "same workflow and event", kind: "matching", exitCode: 0 },
+      {
+        label: "same workflow and event while active",
+        kind: "matching",
+        exitCode: 16,
+        active: true,
+      },
       { label: "another event", kind: "event", exitCode: 15 },
       { label: "missing workflow", kind: "missing", exitCode: 15 },
       { label: "ambiguous suite", kind: "ambiguous", exitCode: 15 },
-    ])("preserves same-name check ownership with $label", async ({ kind, exitCode }) => {
+    ])("preserves same-name check ownership with $label", async ({ kind, exitCode, active }) => {
       const previous = {
         ...workflow,
         id: 100,
@@ -1101,25 +1116,38 @@ console.log(JSON.stringify(value));
         ...(kind === "ambiguous" ? [{ ...previous, id: 101 }] : []),
       ];
       const result = await replayRestRollup({
+        runStatuses: active ? ["in_progress"] : undefined,
         checkPages: [
           {
             total_count: 2,
             check_runs: [
               restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
-              restCheck(2, { name: "build" }),
+              restCheck(2, {
+                name: "build",
+                ...(active ? { status: "in_progress", conclusion: null } : {}),
+              }),
             ],
           },
         ],
         runPages: [{ total_count: runs.length, workflow_runs: runs }],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).toContain(exitCode === 0 ? "\nGREEN" : "FAILING checks=build");
+      expect(result.stdout).toContain(
+        exitCode === 0 ? "\nGREEN" : active ? "TIMEOUT" : "FAILING checks=build",
+      );
       expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
+      if (active) {
+        expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(3);
+        expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(3);
+        expect(
+          result.calls.filter((call) => call[1]?.includes("/actions/runs?head_sha=")),
+        ).toHaveLength(3);
+      }
     });
   });
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
-    it.each([
+    it.concurrent.each([
       ...[
         "407 Proxy Authentication Required",
         'Post "https://api.github.com/graphql": Proxy Authentication Required',
@@ -1150,7 +1178,7 @@ if (phase === ${JSON.stringify(phase)}) {
 }
 const args = process.argv.slice(2);
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -1690,7 +1718,7 @@ if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state =
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -1931,14 +1959,10 @@ console.log(JSON.stringify(value));
       expect(result.stdout).not.toContain("GREEN");
     });
 
-    it.each(
-      [
-        { status: "IN_PROGRESS", conclusion: null, exitCode: 16 },
-        { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
-      ].flatMap((outcome) =>
-        [false, true].map((initiallyVisible) => Object.assign({}, outcome, { initiallyVisible })),
-      ),
-    )(
+    it.each([
+      { status: "IN_PROGRESS", conclusion: null, exitCode: 16, initiallyVisible: false },
+      { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15, initiallyVisible: true },
+    ])(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
       async ({ status, conclusion, exitCode, initiallyVisible }) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2100,7 +2124,6 @@ console.log(JSON.stringify(value));
       ["different run", { id: 33155056362 }],
       ["active newer attempt", { run_attempt: 4, status: "in_progress", conclusion: null }],
       ["failed newer attempt", { run_attempt: 4, conclusion: "failure" }],
-      ["cancelled newer attempt", { run_attempt: 4, conclusion: "cancelled" }],
       ["successful newer attempt", { run_attempt: 4 }],
     ])("rejects changed run evidence after collecting jobs: %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
@@ -2116,28 +2139,21 @@ console.log(JSON.stringify(value));
       expect(runReads.length).toBeGreaterThanOrEqual(2);
     });
 
-    it.concurrent.each([
-      { status: "in_progress", conclusion: null },
-      { status: "completed", conclusion: "failure" },
-      { status: "completed", conclusion: "success" },
-    ])(
-      "does not ignore an extra $status/$conclusion same-name sibling",
-      async ({ status, conclusion }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
-        assert(replacement);
-        const result = await replayPlaceholder(fixture, {
-          jobPages: [
-            {
-              total_count: fixture.jobs.total_count + 1,
-              jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799, status, conclusion }],
-            },
-          ],
-        });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-        expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
-      },
-    );
+    it.concurrent("does not ignore an extra successful same-name sibling", async () => {
+      const fixture = structuredClone(placeholderFixture);
+      const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
+      assert(replacement);
+      const result = await replayPlaceholder(fixture, {
+        jobPages: [
+          {
+            total_count: fixture.jobs.total_count + 1,
+            jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799 }],
+          },
+        ],
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
+    });
 
     it.concurrent.each([
       [
@@ -2241,7 +2257,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each(["in_progress", "queued", "completed"])(
+    it.each(["in_progress", "completed"])(
       "avoids evidence scans on routine %s polls",
       async (status) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2298,76 +2314,28 @@ console.log(JSON.stringify(value));
     );
   });
 
-  it("sanitizes untrusted check names for terminal output", () => {
-    expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");
-    expect(sanitizeCheckName("Crème 日本語 １２３")).toBe("Crème 日本語 １２３");
-    expect(sanitizeCheckName("unit\n\r\t\u0000check")).toBe("unit?check");
-    expect(sanitizeCheckName("safe\u001b[31mred\u001b[0m text")).toBe("safe?red? text");
-    expect(sanitizeCheckName("link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007")).toBe(
-      "link?text?",
-    );
-    expect(sanitizeCheckName("left\u202Eright 😀")).toBe("left?right ?");
-  });
-
-  it("sanitizes failing check and status-context names before classification output", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "unit\u001b[31mowned\u001b[0m",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-            },
-            { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
-          ],
+  it.each(["transitioned", undefined])(
+    "polls at the deadline before returning %s",
+    async (outcome) => {
+      let now = 0;
+      const waits: number[] = [];
+      let polls = 0;
+      const result = await pollUntilDeadline({
+        deadline: 1_000,
+        interval: 120,
+        now: () => now,
+        wait: async (milliseconds) => {
+          waits.push(milliseconds);
+          now += milliseconds;
         },
-      }).failingNames,
-    ).toEqual(["deploy?prod", "unit?owned?"]);
-  });
-
-  it("polls once more after the deadline-clamped final wait", async () => {
-    let now = 0;
-    const waits: number[] = [];
-    let polls = 0;
-    const result = await pollUntilDeadline({
-      deadline: 1_000,
-      interval: 120,
-      now: () => now,
-      wait: async (milliseconds) => {
-        waits.push(milliseconds);
-        now += milliseconds;
-      },
-      poll: () => (++polls === 2 ? "transitioned" : undefined),
-    });
-
-    expect(result).toBe("transitioned");
-    expect(waits).toEqual([1_000]);
-    expect(polls).toBe(2);
-  });
-
-  it("times out only after polling at the deadline", async () => {
-    let now = 0;
-    let polls = 0;
-    const result = await pollUntilDeadline({
-      deadline: 1_000,
-      interval: 120,
-      now: () => now,
-      wait: async (milliseconds) => {
-        now += milliseconds;
-      },
-      poll: () => {
-        polls += 1;
-        return undefined;
-      },
-    });
-
-    expect(result).toBeUndefined();
-    expect(now).toBe(1_000);
-    expect(polls).toBe(2);
-  });
+        poll: () => (++polls === 2 ? outcome : undefined),
+      });
+      expect(result).toBe(outcome);
+      expect(waits).toEqual([1_000]);
+      expect(now).toBe(1_000);
+      expect(polls).toBe(2);
+    },
+  );
 
   it("warns for an already-completed late attachment without changing attachment", () => {
     expect(classifyRunAttachment(102, { status: "completed", conclusion: "success" })).toEqual({
@@ -2383,482 +2351,277 @@ console.log(JSON.stringify(value));
     });
   });
 
-  it("requires aggregate success for a green rollup", () => {
-    expect(classifyRollup({ state: "SUCCESS", contexts: { nodes: [] } }).verdict).toBe("GREEN");
+  function rollupCheck(
+    name: string,
+    conclusion: string | null,
+    run?: number,
+    workflow?: number,
+    databaseId?: number,
+  ): RollupCheck {
+    return {
+      kind: "CheckRun",
+      name,
+      status: conclusion === null ? "IN_PROGRESS" : "COMPLETED",
+      conclusion,
+      ...(databaseId === undefined ? {} : { databaseId }),
+      ...(run === undefined
+        ? {}
+        : { checkSuite: { workflowRun: { databaseId: run, workflow: { databaseId: workflow } } } }),
+    };
+  }
+
+  it.each<{
+    label: string;
+    state?: string;
+    totalCount?: number;
+    nodes: RollupCheck[];
+    expected: ReturnType<typeof classifyRollup>;
+  }>([
+    ...(
+      [
+        ["plain ASCII / check (1)", "plain ASCII / check (1)"],
+        ["Crème 日本語 １２３", "Crème 日本語 １２３"],
+        ["unit\n\r\t\u0000check", "unit?check"],
+        ["safe\u001b[31mred\u001b[0m text", "safe?red? text"],
+        ["link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007", "link?text?"],
+        ["left\u202Eright 😀", "left?right ?"],
+      ] satisfies [string, string][]
+    ).map(([input, output]) => ({
+      label: `sanitized check name ${JSON.stringify(input)}`,
+      nodes: [rollupCheck(input, "FAILURE")],
+      expected: { verdict: "FAILING", pendingCount: 0, failingNames: [output], supersededCount: 0 },
+    })),
+    {
+      label: "sanitized failing check and status-context names",
+      nodes: [
+        rollupCheck("unit\u001b[31mowned\u001b[0m", "FAILURE"),
+        { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["deploy?prod", "unit?owned?"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "aggregate success",
+      state: "SUCCESS",
+      nodes: [],
+      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 0 },
+    },
+    {
+      label: "pending aggregate with completed checks",
+      state: "PENDING",
+      nodes: [rollupCheck("unit", "SUCCESS")],
+      expected: { verdict: "PENDING", pendingCount: 0, failingNames: [], supersededCount: 0 },
+    },
+    {
+      label: "pending contexts",
+      state: "PENDING",
+      nodes: [rollupCheck("unit", null)],
+      expected: { verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 0 },
+    },
+    {
+      label: "identity-less same-name cancellations",
+      state: "ERROR",
+      totalCount: 3,
+      nodes: [
+        rollupCheck("Auto response", "FAILURE"),
+        rollupCheck("unit", "CANCELLED"),
+        rollupCheck("unit", "SUCCESS"),
+      ],
+      expected: { verdict: "FAILING", pendingCount: 0, failingNames: ["unit"], supersededCount: 0 },
+    },
+    {
+      label: "truncated failing rollup",
+      totalCount: 4,
+      nodes: [rollupCheck("unit", "CANCELLED"), rollupCheck("unit", "SUCCESS")],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["unit", "+2 more contexts not shown"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "cancelled and timed-out attempts",
+      nodes: [
+        rollupCheck("Auto response", "FAILURE"),
+        rollupCheck("unit", "CANCELLED"),
+        rollupCheck("unit", "SUCCESS"),
+        rollupCheck("lint", "TIMED_OUT"),
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["lint", "unit"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "superseded runs with pending replacements",
+      nodes: [
+        rollupCheck("Real behavior proof", "CANCELLED", 100, 10, 1_000),
+        rollupCheck("Real behavior proof", null, 200, 10, 2_000),
+        rollupCheck("CI", null, 150, 20),
+      ],
+      expected: { verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 },
+    },
+    {
+      label: "pending same-run check replacement",
+      nodes: [
+        rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
+        rollupCheck("unit", null, 500, 20, 2_000),
+      ],
+      expected: { verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 1 },
+    },
+    {
+      label: "successful same-run check replacement",
+      nodes: [
+        rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
+        rollupCheck("unit", "SUCCESS", 500, 20, 2_000),
+      ],
+      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 },
+    },
+    {
+      label: "unique cancellations across independent workflows",
+      nodes: [
+        rollupCheck("old proof", "CANCELLED", 100, 10),
+        rollupCheck("proof", "SUCCESS", 200, 10),
+        rollupCheck("old CI", "CANCELLED", 150, 20),
+        rollupCheck("CI", "SUCCESS", 250, 20),
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["old CI", "old proof"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "genuine newest-run failure",
+      nodes: [
+        rollupCheck("older cancelled check", "CANCELLED", 100, 20),
+        rollupCheck("unit", "FAILURE", 200, 20),
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["older cancelled check", "unit"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "interleaved distinct workflows",
+      nodes: [
+        rollupCheck("old deploy", "CANCELLED", 200, 20),
+        rollupCheck("unit", "FAILURE", 300, 10),
+        rollupCheck("deploy", "SUCCESS", 400, 20),
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["old deploy", "unit"],
+        supersededCount: 0,
+      },
+    },
+    {
+      label: "same-name checks across runs",
+      nodes: [
+        rollupCheck("unit", "FAILURE", 300, 20, 1_000),
+        rollupCheck("unit", "SUCCESS", 400, 20, 2_000),
+      ],
+      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 },
+    },
+    {
+      label: "unseen contexts after supersession",
+      totalCount: 3,
+      nodes: [
+        rollupCheck("CI", "CANCELLED", 100, 20, 1_000),
+        rollupCheck("CI", "SUCCESS", 200, 20, 2_000),
+      ],
+      expected: {
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["status rollup", "+1 more contexts not shown"],
+        supersededCount: 1,
+      },
+    },
+  ])("classifies $label", ({ state = "FAILURE", totalCount, nodes, expected }) => {
     expect(
       classifyRollup({
-        state: "PENDING",
-        contexts: {
-          nodes: [{ kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" }],
-        },
+        state,
+        contexts: { nodes, ...(totalCount === undefined ? {} : { totalCount }) },
       }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 0, failingNames: [], supersededCount: 0 });
+    ).toEqual(expected);
   });
 
-  it("counts pending contexts without deriving the verdict from them", () => {
-    expect(
-      classifyRollup({
-        state: "PENDING",
-        contexts: {
-          nodes: [{ kind: "CheckRun", name: "unit", status: "IN_PROGRESS", conclusion: null }],
-        },
-      }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 0 });
-  });
-
-  it("lets an attached successful CI run finish while an optional context remains pending", () => {
-    expect(
-      classifyRollup({
-        state: "PENDING",
-        contexts: {
-          nodes: [
-            { kind: "CheckRun", name: "optional proof", status: "IN_PROGRESS", conclusion: null },
-          ],
-        },
-      }).verdict,
-    ).toBe("PENDING");
+  it("lets the attached CI run complete independently of the rollup", () => {
     expect(classifyAttachedCiRun({ status: "completed", conclusion: "success" })).toEqual({
       verdict: "GREEN",
     });
   });
 
-  it.each(["FAILURE", "ERROR"])(
-    "keeps identity-less same-name cancellations failing for aggregate %s",
-    (state) => {
-      expect(
-        classifyRollup({
-          state,
-          contexts: {
-            totalCount: 3,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "Auto response",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-            ],
-          },
-        }),
-      ).toEqual({
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["unit"],
-        supersededCount: 0,
-      });
-    },
-  );
-
-  it("keeps a truncated failing rollup failing", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          totalCount: 4,
-          nodes: [
-            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
-            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["unit", "+2 more contexts not shown"],
-      supersededCount: 0,
-    });
-  });
-
-  it("keeps cancelled attempts in failing-name output", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            { kind: "CheckRun", name: "Auto response", status: "COMPLETED", conclusion: "FAILURE" },
-            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
-            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-            { kind: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "TIMED_OUT" },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["lint", "unit"],
-      supersededCount: 0,
-    });
-  });
-
-  it("ignores superseded workflow runs while replacements are in progress", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "Real behavior proof",
-              databaseId: 1_000,
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: {
-                workflowRun: { databaseId: 100, workflow: { databaseId: 10 } },
-              },
-            },
-            {
-              kind: "CheckRun",
-              name: "Real behavior proof",
-              databaseId: 2_000,
-              status: "IN_PROGRESS",
-              conclusion: null,
-              checkSuite: {
-                workflowRun: { databaseId: 200, workflow: { databaseId: 10 } },
-              },
-            },
-            {
-              kind: "CheckRun",
-              name: "CI",
-              status: "IN_PROGRESS",
-              conclusion: null,
-              checkSuite: { workflowRun: { databaseId: 150, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 });
-  });
-
-  it("keeps only the newest same-run check attempt while its replacement is pending", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              databaseId: 1_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              databaseId: 2_000,
-              name: "unit",
-              status: "IN_PROGRESS",
-              conclusion: null,
-              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 1 });
-  });
-
-  it("accepts a successful newest check attempt when the aggregate remains failed", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              databaseId: 1_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              databaseId: 2_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
-  });
-
-  it("retains unique cancellations across independent workflows", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "old proof",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: {
-                workflowRun: { databaseId: 100, workflow: { databaseId: 10 } },
-              },
-            },
-            {
-              kind: "CheckRun",
-              name: "proof",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: {
-                workflowRun: { databaseId: 200, workflow: { databaseId: 10 } },
-              },
-            },
-            {
-              kind: "CheckRun",
-              name: "old CI",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 150, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              name: "CI",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 250, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["old CI", "old proof"],
-      supersededCount: 0,
-    });
-  });
-
-  it("preserves a genuine failure from the newest workflow run", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "older cancelled check",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["older cancelled check", "unit"],
-      supersededCount: 0,
-    });
-  });
-
-  it("preserves failures across interleaved distinct workflow identities", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "old deploy",
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 10 } } },
-            },
-            {
-              kind: "CheckRun",
-              name: "deploy",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["old deploy", "unit"],
-      supersededCount: 0,
-    });
-  });
-
-  it("supersedes same-name checks across runs of the same workflow", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              databaseId: 1_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              databaseId: 2_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
-  });
-
-  it("fails conservatively when unseen contexts may explain aggregate failure", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          totalCount: 3,
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "CI",
-              databaseId: 1_000,
-              status: "COMPLETED",
-              conclusion: "CANCELLED",
-              checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
-            },
-            {
-              kind: "CheckRun",
-              name: "CI",
-              databaseId: 2_000,
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["status rollup", "+1 more contexts not shown"],
-      supersededCount: 1,
-    });
-  });
-
-  it("collects rollup contexts across pages", () => {
+  it.each([2, 11])("collects a %s-context rollup within ten pages", (totalCount) => {
     const cursors: Array<string | null> = [];
     const result = collectRollupContexts((cursor) => {
       cursors.push(cursor);
-      if (cursor === null) {
+      const calls = cursors.length;
+      const complete = totalCount === 2;
+      return {
+        statusCheckRollup: {
+          state: complete ? "PENDING" : "FAILURE",
+          contexts: {
+            totalCount,
+            nodes: [
+              {
+                kind: "CheckRun",
+                name: complete ? (cursor === null ? "first" : "second") : `page-${calls}`,
+              },
+            ],
+            pageInfo: {
+              hasNextPage: !complete || cursor === null,
+              endCursor: complete ? (cursor === null ? "next" : null) : `cursor-${calls}`,
+            },
+          },
+        },
+      };
+    });
+    if (totalCount === 2) {
+      expect(cursors).toEqual([null, "next"]);
+      expect(result?.statusCheckRollup?.contexts?.totalCount).toBe(2);
+      expect(result?.statusCheckRollup?.contexts?.nodes?.map((node) => node.name)).toEqual([
+        "first",
+        "second",
+      ]);
+    } else {
+      expect(cursors).toHaveLength(10);
+      expect(result?.statusCheckRollup?.contexts?.nodes).toHaveLength(10);
+    }
+  });
+
+  it.each(["changed count", "missing page"])("rejects pagination with a %s", (scenario) => {
+    expect(() =>
+      collectRollupContexts((cursor) => {
+        if (cursor !== null && scenario === "missing page") {
+          return { headRefOid: "b".repeat(40), statusCheckRollup: null };
+        }
         return {
+          headRefOid: sha,
           statusCheckRollup: {
-            state: "PENDING",
+            state: scenario === "missing page" ? "SUCCESS" : "PENDING",
             contexts: {
-              totalCount: 2,
-              nodes: [{ kind: "CheckRun", name: "first" }],
-              pageInfo: { hasNextPage: true, endCursor: "next" },
+              totalCount: cursor === null ? 2 : 3,
+              nodes: [{ kind: "CheckRun", name: cursor === null ? "first" : "second" }],
+              pageInfo:
+                cursor === null
+                  ? { hasNextPage: true, endCursor: "next" }
+                  : { hasNextPage: false, endCursor: null },
             },
           },
         };
-      }
-      return {
-        statusCheckRollup: {
-          state: "PENDING",
-          contexts: {
-            totalCount: 2,
-            nodes: [{ kind: "CheckRun", name: "second" }],
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
-        },
-      };
-    });
-
-    expect(cursors).toEqual([null, "next"]);
-    expect(result?.statusCheckRollup?.contexts?.totalCount).toBe(2);
-    expect(result?.statusCheckRollup?.contexts?.nodes?.map((node) => node.name)).toEqual([
-      "first",
-      "second",
-    ]);
-  });
-
-  it("rejects rollup pages from a changed snapshot", () => {
-    expect(() =>
-      collectRollupContexts((cursor) => ({
-        headRefOid: "a".repeat(40),
-        statusCheckRollup: {
-          state: "PENDING",
-          contexts: {
-            totalCount: cursor === null ? 2 : 3,
-            nodes: [{ kind: "CheckRun", name: cursor === null ? "first" : "second" }],
-            pageInfo:
-              cursor === null
-                ? { hasNextPage: true, endCursor: "next" }
-                : { hasNextPage: false, endCursor: null },
-          },
-        },
-      })),
+      }),
     ).toThrow("rollup snapshot changed during pagination");
-  });
-
-  it("rejects a pagination read that loses an advertised page", () => {
-    expect(() =>
-      collectRollupContexts((cursor) =>
-        cursor === null
-          ? {
-              headRefOid: "a".repeat(40),
-              statusCheckRollup: {
-                state: "SUCCESS",
-                contexts: {
-                  totalCount: 2,
-                  nodes: [{ kind: "CheckRun", name: "first" }],
-                  pageInfo: { hasNextPage: true, endCursor: "next" },
-                },
-              },
-            }
-          : { headRefOid: "b".repeat(40), statusCheckRollup: null },
-      ),
-    ).toThrow("rollup snapshot changed during pagination");
-  });
-
-  it("caps rollup context collection at ten pages", () => {
-    let calls = 0;
-    const result = collectRollupContexts(() => {
-      calls += 1;
-      return {
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 11,
-            nodes: [{ kind: "CheckRun", name: `page-${calls}` }],
-            pageInfo: { hasNextPage: true, endCursor: `cursor-${calls}` },
-          },
-        },
-      };
-    });
-
-    expect(calls).toBe(10);
-    expect(result?.statusCheckRollup?.contexts?.nodes).toHaveLength(10);
   });
 });

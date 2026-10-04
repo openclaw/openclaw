@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.json",
+  // This editor/lint graph includes tests; retain their compatibility augmentation.
+  "files": ["../src/config/sessions/session-entry.test-compat.d.ts"],
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "../src/**/*.d.ts",
+    "../src/**/*.d.mts",
+    "../src/**/*.d.cts",
+    "../packages/**/*.d.ts",
+    "../packages/**/*.d.mts",
+    "../packages/**/*.d.cts",
+    "../extensions/**/*.d.ts",
+    "../extensions/**/*.d.mts",
+    "../extensions/**/*.d.cts"
+  ]
+}

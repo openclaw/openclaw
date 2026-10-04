@@ -1,41 +1,96 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 
 const workerDeclaration = runtimeProcessEntrypoints.updateMigratedFinalize;
-export const candidateAuthorityWorker = resolveRuntimeWorkerUrl(workerDeclaration);
-const sibling = (sourceWorkerName: string, distWorkerPath: string) =>
-  resolveRuntimeWorkerUrl({ ...workerDeclaration, sourceWorkerName, distWorkerPath });
-// Public health surfaces share this invocation's current-source compiled graph.
-export const candidateAuthorityBundledPluginsDir = path.dirname(
-  path.dirname(
-    fileURLToPath(
-      sibling(
-        "../../extensions/memory-core/doctor-health-api",
-        "extensions/memory-core/doctor-health-api.js",
+const sourceWorker = resolveRuntimeWorkerUrl(workerDeclaration);
+
+export async function prepareCandidateAuthorityRuntime(root: string) {
+  let installedRoot: string | undefined;
+  // Standalone Vitest/watch keeps its documented source execution path.
+  if (!sourceWorker.pathname.endsWith(".ts")) {
+    const preparedRoot = fileURLToPath(new URL("../../", sourceWorker));
+    await fs.promises.cp(path.join(preparedRoot, "dist"), path.join(root, "dist"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+    await fs.promises.copyFile(
+      path.join(preparedRoot, "node-host-launcher.mjs"),
+      path.join(root, "node-host-launcher.mjs"),
+    );
+    const dependencies = path.resolve("node_modules");
+    const fixtureDependencies = path.join(root, "node_modules");
+    await fs.promises.mkdir(fixtureDependencies);
+    for (const entry of await fs.promises.readdir(dependencies, { withFileTypes: true })) {
+      if (entry.name === "openclaw" || (!entry.isDirectory() && !entry.isSymbolicLink())) {
+        continue;
+      }
+      const source = path.join(dependencies, entry.name);
+      await fs.promises.symlink(
+        source,
+        path.join(fixtureDependencies, entry.name),
+        (await fs.promises.stat(source)).isDirectory()
+          ? process.platform === "win32"
+            ? "junction"
+            : "dir"
+          : "file",
+      );
+    }
+    await fs.promises.symlink(
+      root,
+      path.join(fixtureDependencies, "openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    // Doctor resolves its loaded module's package before argv/cwd. A package
+    // boundary prevents it from finding and rebuilding the source checkout's UI.
+    await fs.promises.copyFile(path.resolve("package.json"), path.join(root, "package.json"));
+    installedRoot = root;
+  }
+  const sibling = (sourceWorkerName: string, distWorkerPath: string) =>
+    resolveRuntimeWorkerUrl({
+      ...workerDeclaration,
+      sourceWorkerName,
+      distWorkerPath,
+      root: installedRoot,
+    });
+  return {
+    worker: resolveRuntimeWorkerUrl({ ...workerDeclaration, root: installedRoot }),
+    cli: sibling("../entry", "entry.js"),
+    runtime: sibling("../runtime", "runtime.js"),
+    doctorResult: sibling("update-doctor-result", "infra/update-doctor-result.js"),
+    bundledPluginsDir: path.dirname(
+      path.dirname(
+        fileURLToPath(
+          sibling(
+            "../../extensions/memory-core/doctor-health-api",
+            "extensions/memory-core/doctor-health-api.js",
+          ),
+        ),
       ),
     ),
-  ),
-);
+  };
+}
 
 /** The installed-package adapters load real candidate owners; only their I/O is observed. */
 export function writeCandidateAuthorityEntrypoints(params: {
+  runtime: Awaited<ReturnType<typeof prepareCandidateAuthorityRuntime>>;
   root: string;
   events: string;
   ready: string;
   proceed: string;
+  receiptEndpoint: string;
   boundary: "candidate" | "doctor";
 }): string {
   const workerPath = path.join(params.root, "dist", workerDeclaration.distWorkerPath);
-  const cli = sibling("../entry", "entry.js");
-  const runtime = sibling("../runtime", "runtime.js");
-  const doctorResult = sibling("update-doctor-result", "infra/update-doctor-result.js");
+  const { worker: candidateAuthorityWorker, cli, runtime, doctorResult } = params.runtime;
   const bootstrap = `
     import fs from 'node:fs';
     import fsp from 'node:fs/promises';
     import {setTimeout} from 'node:timers/promises';
+    ${fixtureReceiptClientSource(params.receiptEndpoint)}
     ${candidateAuthorityWorker.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
     const source=${JSON.stringify(candidateAuthorityWorker.href)};
     const role=process.argv[2]==='--doctor'?'doctor':process.argv[2]==='config'?'validate':process.argv.includes('--lint')?'readiness':process.argv[2]==='doctor'?'doctor':'candidate';
@@ -54,6 +109,7 @@ export function writeCandidateAuthorityEntrypoints(params: {
         if(role===${JSON.stringify(params.boundary)}) {
           fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(observation));
           fs.renameSync(${JSON.stringify(params.ready + ".tmp")},${JSON.stringify(params.ready)});
+          sendReceipt(${JSON.stringify(params.ready)},'config-backup');
           while(!fs.existsSync(${JSON.stringify(params.proceed)})) await setTimeout(10);
         }
       }

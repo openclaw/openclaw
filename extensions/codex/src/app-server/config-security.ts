@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
@@ -9,24 +8,22 @@ import type {
   CodexAppServerNetworkProxyConfig,
   CodexAppServerPolicyMode,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerTransportMode,
   OpenClawExecMode,
   ResolvedCodexAppServerNetworkProxyConfig,
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  parseAllowedApprovalsReviewersFromCodexRequirements,
-  parseAllowedSandboxModesFromCodexRequirements,
+  parseCodexRequirementsPolicy,
   readCodexRequirementsToml,
   selectGuardianApprovalPolicy,
   selectGuardianApprovalsReviewer,
   selectUserApprovalsReviewer,
 } from "./config-requirements.js";
 import { readNonEmptyString } from "./config-utils.js";
-import type { JsonObject, JsonValue } from "./protocol.js";
+import type { CodexSandboxMode, JsonObject, JsonValue } from "./protocol.js";
 
 export function shouldAutoApproveCodexAppServerApprovals(
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
@@ -40,7 +37,7 @@ export function shouldAutoApproveCodexAppServerApprovals(
 
 export function resolveCodexAppServerNetworkProxy(
   config: CodexAppServerNetworkProxyConfig | undefined,
-  sandbox: CodexAppServerSandboxMode,
+  sandbox: CodexSandboxMode,
 ): { networkProxy?: ResolvedCodexAppServerNetworkProxyConfig } {
   if (config?.enabled !== true) {
     return {};
@@ -72,7 +69,9 @@ export function resolveCodexAppServerNetworkProxy(
     },
     network: networkConfig,
   };
-  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const profileName =
+    readNonEmptyString(config.profileName) ??
+    `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${fingerprintCodexPolicy({ version: 1, profile }).slice(0, 16)}`;
   const configPatch: JsonObject = {
     "features.network_proxy.enabled": true,
     default_permissions: profileName,
@@ -83,29 +82,10 @@ export function resolveCodexAppServerNetworkProxy(
   return {
     networkProxy: {
       profileName,
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: fingerprintCodexPolicy(configPatch),
       configPatch,
     },
   };
-}
-
-function resolveNetworkProxyPermissionProfileName(
-  config: CodexAppServerNetworkProxyConfig,
-  profile: JsonObject,
-): string {
-  const explicitProfileName = readNonEmptyString(config.profileName);
-  if (explicitProfileName) {
-    return explicitProfileName;
-  }
-  const suffix = createHash("sha256")
-    .update(stableStringifyJson({ version: 1, profile }))
-    .digest("hex")
-    .slice(0, 16);
-  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
-}
-
-function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
-  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
 }
 
 function normalizeNetworkProxyPermissionMap(
@@ -121,19 +101,6 @@ function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>)
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
   );
-}
-
-function stableStringifyJson(value: JsonValue): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 /** Explicit MCP prompting must bypass Codex's unconditional Never-policy approval. */
@@ -174,34 +141,20 @@ export function withMcpElicitationsApprovalPolicy(
       },
     };
   }
-  if (policy === "never") {
-    return {
-      granular: {
-        mcp_elicitations: true,
-        rules: false,
-        sandbox_approval: false,
-        request_permissions: false,
-        skill_approval: false,
-      },
-    };
-  }
+  const prompting = policy !== "never";
   return {
     granular: {
       mcp_elicitations: true,
-      rules: true,
-      sandbox_approval: true,
-      request_permissions: true,
-      skill_approval: true,
+      rules: prompting,
+      sandbox_approval: prompting,
+      request_permissions: prompting,
+      skill_approval: prompting,
     },
   };
 }
 
 export function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" || value === "unix" ? value : "stdio";
-}
-
-export function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
-  return readNonEmptyString(value);
 }
 
 export function inferCodexAppServerConnectionClass(params: {
@@ -214,24 +167,6 @@ export function inferCodexAppServerConnectionClass(params: {
   return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
 }
 
-function assertCodexAppServerConnectionClassConfig(params: {
-  connectionClass: CodexAppServerConnectionClass;
-  authToken?: string;
-  headers: Record<string, string>;
-}): void {
-  if (
-    params.connectionClass === "remote" &&
-    !hasIdentityBearingWebSocketAuth({
-      authToken: params.authToken,
-      headers: params.headers,
-    })
-  ) {
-    throw new Error(
-      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
-    );
-  }
-}
-
 /** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
 export function assertCodexAppServerConnectionSecurity(params: {
   transport: CodexAppServerTransportMode;
@@ -239,21 +174,19 @@ export function assertCodexAppServerConnectionSecurity(params: {
   authToken?: string;
   headers: Record<string, string>;
 }): void {
-  assertCodexAppServerConnectionClassConfig({
-    connectionClass: inferCodexAppServerConnectionClass(params),
-    authToken: params.authToken,
-    headers: params.headers,
-  });
+  if (
+    inferCodexAppServerConnectionClass(params) === "remote" &&
+    !hasIdentityBearingWebSocketAuth(params)
+  ) {
+    throw new Error(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
+  }
 }
 
 function isLoopbackWebSocketUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  const parsed = URL.parse(value);
+  if (parsed?.protocol !== "ws:" && parsed?.protocol !== "wss:") {
     return false;
   }
   return isLoopbackHost(parsed.hostname);
@@ -293,32 +226,14 @@ export function resolveDefaultCodexAppServerPolicy(params: {
     return { mode: "yolo", dangerFullAccessAllowed: true };
   }
   const content = readCodexRequirementsToml(params);
-  if (content === undefined) {
-    if (!params.forceGuardian) {
-      return { mode: "yolo", dangerFullAccessAllowed: true };
-    }
-    return {
-      mode: "guardian",
-      dangerFullAccessAllowed: true,
-      approvalPolicy: selectGuardianApprovalPolicy(
-        undefined,
-        params.execModeRequiringPromptingApprovals,
-      ),
-      approvalsReviewer: params.forceUserReviewer
-        ? selectUserApprovalsReviewer(undefined, params.execModeRequiringUserReviewer)
-        : selectGuardianApprovalsReviewer(
-            undefined,
-            params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
-          ),
-      sandbox: selectGuardianSandbox(undefined),
-    };
+  if (content === undefined && !params.forceGuardian) {
+    return { mode: "yolo", dangerFullAccessAllowed: true };
   }
-  const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(
-    content,
-    readNonEmptyString(params.hostName) ?? readHostName(),
-  );
-  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  const allowedApprovalsReviewers = parseAllowedApprovalsReviewersFromCodexRequirements(content);
+  const { allowedSandboxModes, allowedApprovalPolicies, allowedApprovalsReviewers } =
+    parseCodexRequirementsPolicy(
+      content,
+      content === undefined ? undefined : (readNonEmptyString(params.hostName) ?? readHostName()),
+    );
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =

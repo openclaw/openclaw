@@ -4,14 +4,12 @@ import {
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   createSessionDiffBaselineCaptureClaim,
   type SessionDiffBaselineCapture,
 } from "../config/sessions/session-diff-baseline-capture.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -59,15 +57,17 @@ function requireAuthoritativeGeneration(params: {
   return params.entry;
 }
 
-function loadAuthoritativeGeneration(params: {
+async function loadAuthoritativeGeneration(params: {
+  agentId: string;
   expectedLifecycleRevision: string | undefined;
   expectedSessionId: string;
   sessionKey: string;
   storePath: string;
-}): InternalSessionEntry {
+}): Promise<InternalSessionEntry> {
   let entry: InternalSessionEntry | undefined;
   try {
-    entry = loadSessionEntryReadOnly({
+    entry = await readSessionEntryReadOnlyInWorker({
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
@@ -83,6 +83,7 @@ function loadAuthoritativeGeneration(params: {
 }
 
 async function persistCaptureResult(params: {
+  agentId: string;
   capture: SessionDiffBaselineCapture;
   expectedLifecycleRevision: string | undefined;
   sessionId: string;
@@ -91,9 +92,8 @@ async function persistCaptureResult(params: {
   baseline?: SessionDiffBaseline;
 }): Promise<InternalSessionEntry> {
   const persisted = await patchSessionEntryCore(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    (currentEntry) => {
-      const current = currentEntry;
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+    (current) => {
       const currentCapture = matchingCapture(current);
       if (
         current.sessionId !== params.sessionId ||
@@ -149,6 +149,7 @@ async function persistCaptureResult(params: {
 }
 
 async function settleCapture(params: {
+  agentId: string;
   capture: SessionDiffBaselineCapture;
   cwd: string;
   expectedLifecycleRevision: string | undefined;
@@ -177,6 +178,7 @@ async function settleCapture(params: {
 }
 
 export async function ensureSessionDiffBaseline(params: {
+  agentId: string;
   cwd: string;
   entry: InternalSessionEntry;
   isNewSession: boolean;
@@ -187,7 +189,8 @@ export async function ensureSessionDiffBaseline(params: {
     return params.entry;
   }
 
-  let entry = loadAuthoritativeGeneration({
+  let entry = await loadAuthoritativeGeneration({
+    agentId: params.agentId,
     expectedLifecycleRevision: params.entry.lifecycleRevision,
     expectedSessionId: params.entry.sessionId,
     sessionKey: params.sessionKey,
@@ -209,9 +212,8 @@ export async function ensureSessionDiffBaseline(params: {
     const expectedLifecycleRevision = entry.lifecycleRevision;
     const pending = createSessionDiffBaselineCaptureClaim();
     const armed = await patchSessionEntryCore(
-      { sessionKey: params.sessionKey, storePath: params.storePath },
-      (currentEntry) => {
-        const current = currentEntry;
+      { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+      (current) => {
         if (
           current.sessionId !== expectedSessionId ||
           current.lifecycleRevision !== expectedLifecycleRevision ||

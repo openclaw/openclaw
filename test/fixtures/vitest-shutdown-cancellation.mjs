@@ -22,6 +22,15 @@ export function installVitestShutdownCancellation({ root, preload }) {
         },
       });
       publish("shim.pid", child.pid);
+      let output = "";
+      const forwardReady = (chunk) => {
+        output += chunk.toString();
+        if (output.includes("shutdown-worker-ready\n")) {
+          child.stdout.off("data", forwardReady);
+          fs.writeSync(1, "shutdown-worker-ready\n");
+        }
+      };
+      child.stdout.on("data", forwardReady);
       return child;
     };
     // Release after every TERM listener and its microtasks run. An immediate KILL
@@ -47,6 +56,8 @@ export function installVitestShutdownCancellation({ root, preload }) {
       if (target === file("receipt.json")) {
         // Stop at the actual worker receipt, before any test result or teardown.
         publish("worker.pid", process.pid);
+        // Flush to the already-owned pipe before suspending this event loop.
+        fs.writeSync(1, "shutdown-worker-ready\n");
         process.kill(process.pid, "SIGSTOP");
       }
       return result;

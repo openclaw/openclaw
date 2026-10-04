@@ -30,9 +30,9 @@ const commonMatchCount = 30;
 const commonQuery = "orchardglow";
 const uniqueQuery = "copperfinch";
 const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001";
-const targetLabel = "Older fifth-agent conversation";
+const targetLabel = "Per-session communication controls in UI";
 const targetMessage =
-  "The copperfinch observatory has a violet lantern beside the northern window.";
+  "The copperfinch observatory uses cross-agent message routing beside the violet lantern.";
 const scope = {
   includeGlobal: false,
   includeUnknown: false,
@@ -94,7 +94,11 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
-  for (const fixture of fixtures) {
+  // The database owner retains one idle writer; finish each agent before switching.
+  const fixturesByAgent = fixtures.toSorted(
+    (left, right) => agentIds.indexOf(left.agentId) - agentIds.indexOf(right.agentId),
+  );
+  for (const fixture of fixturesByAgent) {
     const sessionId = randomUUID();
     const target = { agentId: fixture.agentId, sessionKey: fixture.key, env: owner.env };
     const created = await createSessionEntryWithTranscript(
@@ -272,7 +276,16 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         return;
       }
       // Never retain connect/auth frames or unrelated RPC payloads.
-      if (!["sessions.search", "sessions.list", "chat.send", "agent"].includes(frame.method)) {
+      if (
+        ![
+          "sessions.search",
+          "sessions.list",
+          "sessions.create",
+          "sessions.patch",
+          "chat.send",
+          "agent",
+        ].includes(frame.method)
+      ) {
         return;
       }
       const metric: RpcObservation = {
@@ -328,12 +341,12 @@ suite.define(() => {
     try {
       // Gateway readiness precedes background UI preparation. The JSON handoff
       // deliberately fails fast, so await its document prerequisite here.
-      const document = await waitForControlUiDocument({
+      const uiDocument = await waitForControlUiDocument({
         url: suite.server.baseUrl,
         timeoutMs: 60_000,
         onPending: () => console.log("[search-proof] waiting for the preparing UI document"),
       });
-      expect(document.ready, document.ready ? "ready" : document.reason).toBe(true);
+      expect(uiDocument.ready, uiDocument.ready ? "ready" : uiDocument.reason).toBe(true);
       const handoff = await owner.cli(["dashboard", "--json"]);
       const result = requireRecord(JSON.parse(handoff.stdout));
       expect(
@@ -372,7 +385,15 @@ suite.define(() => {
             .evaluateAll((elements) =>
               elements.map((element) => new URL((element as HTMLScriptElement).src).pathname),
             );
-          expect(scripts.some((script) => /\/assets\/index-[^/]+\.js$/u.test(script))).toBe(true);
+          const builtIndex = await readFile(
+            path.join(process.cwd(), "dist/control-ui/index.html"),
+            "utf8",
+          );
+          const builtScripts = [
+            ...builtIndex.matchAll(/<script[^>]+src="(?:\.\/|\/)?(assets\/[^"]+\.js)"/gu),
+          ].map((match) => `/${match[1]}`);
+          expect(builtScripts.length).toBeGreaterThan(0);
+          expect(scripts).toEqual(builtScripts);
           for (const script of scripts) {
             expect(script).toMatch(/^\/assets\/[^/]+\.js$/u);
             const served = await page.request.get(new URL(script, suite.server.baseUrl).href);
@@ -424,7 +445,10 @@ suite.define(() => {
               .poll(() => rpc.slice(start).every((entry) => entry.elapsedMs !== undefined))
               .toBe(true);
             await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-            const notices = await palette.getByRole("status").allTextContents();
+            const notices = await palette
+              .locator(".cmd-palette__search")
+              .getByRole("status")
+              .allTextContents();
             const traffic = rpc.slice(start);
             const searches = traffic.filter((entry) => entry.method === "sessions.search");
             // The sidebar can fetch lineage concurrently; identify this query
@@ -456,7 +480,13 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({ ...scope, search: query, limit: 10 });
+            expect(metadata[0]?.params).toEqual({
+              ...scope,
+              search: query,
+              limit: 10,
+              rowMode: "compact",
+              source: "command-palette",
+            });
             expect(metadata[0]?.ok).toBe(true);
             expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
@@ -467,6 +497,19 @@ suite.define(() => {
             ).toBe(0);
             return response;
           };
+
+          await search("per session communi", 0, "00-title-punctuation-prefix.png", [targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.getByRole("option").count()).toBe(1);
+
+          const partial = await search(
+            "cross agent message rout",
+            1,
+            "00-message-punctuation-prefix.png",
+          );
+          expect(partial.resultKeys).toEqual([targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.textContent()).toContain(targetMessage);
 
           const common = await search(commonQuery, 25, "01-common-limited-search.png");
           expect(common.truncated).toBe(true);
@@ -609,6 +652,74 @@ suite.define(() => {
           );
           expect(
             rpc.filter((metric) => metric.method === "chat.send" || metric.method === "agent"),
+          ).toEqual([]);
+          // Cover the agreed direct shortcuts against the same isolated real Gateway.
+          // The existing capture gate exports these sanitized views on manual proof runs.
+          const currentPane = activePane();
+          await capture("direct-01-before.png", currentPane, [currentPane.locator(".chat-thread")]);
+          await page.keyboard.press("ControlOrMeta+/");
+          const helper = page.locator("openclaw-keyboard-shortcuts-dialog");
+          const newHint = helper.locator(".shortcut-row").filter({ hasText: "Open New Session" });
+          const archiveHint = helper
+            .locator(".shortcut-row")
+            .filter({ hasText: "Archive current session" });
+          await newHint.waitFor({ state: "visible" });
+          await archiveHint.waitFor({ state: "visible" });
+          expect((await newHint.locator("kbd").allTextContents()).at(-1)).toBe("O");
+          expect((await archiveHint.locator("kbd").allTextContents()).at(-1)).toBe("A");
+          // The host is display: contents; the native dialog owns the opening animation.
+          await capture("direct-02-keyboard-helper.png", helper.locator("dialog"), [
+            newHint,
+            archiveHint,
+          ]);
+          await page.keyboard.press("Escape");
+          await newHint.waitFor({ state: "hidden" });
+          await page.keyboard.press("ControlOrMeta+Shift+O");
+          const draft = page.locator("openclaw-new-session-page .new-session-page__message");
+          await draft.waitFor({ state: "visible" });
+          await expect
+            .poll(() => draft.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+          expect(await draft.inputValue()).toBe("");
+          await capture("direct-03-new-session.png", page.locator("openclaw-new-session-page"), [
+            draft,
+          ]);
+          await page.goBack();
+          await expect
+            .poll(() =>
+              currentPane.evaluate(
+                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
+              ),
+            )
+            .toBe(otherKey);
+          const composer = currentPane.locator(".agent-chat__composer-combobox > textarea");
+          await composer.fill("Keep this unsent shortcut draft");
+          await capture("direct-04-archive-before.png", currentPane, [composer]);
+          await page.keyboard.press("ControlOrMeta+Shift+A");
+          const archiveRequests = (archived: boolean) =>
+            rpc.filter(
+              (metric) =>
+                metric.method === "sessions.patch" &&
+                metric.params.key === otherKey &&
+                metric.params.archived === archived,
+            );
+          await expect
+            .poll(() => archiveRequests(true).filter((metric) => metric.ok === true).length)
+            .toBe(1);
+          const undo = page.getByRole("button", { name: "Undo", exact: true });
+          await undo.waitFor({ state: "visible" });
+          await capture("direct-05-archive-after.png", currentPane, [
+            currentPane.locator(".chat-thread"),
+          ]);
+          await undo.click();
+          await expect
+            .poll(() => archiveRequests(false).filter((metric) => metric.ok === true).length)
+            .toBe(1);
+          await expect.poll(() => composer.inputValue()).toBe("Keep this unsent shortcut draft");
+          expect(
+            rpc.filter((metric) =>
+              ["sessions.create", "chat.send", "agent"].includes(metric.method),
+            ),
           ).toEqual([]);
         },
       );

@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
@@ -10,7 +10,6 @@ import {
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -38,7 +37,6 @@ import {
 } from "./group-history-window.js";
 import { isTelegramHistoryNodeAllowed, readTelegramHistoryWindow } from "./history-policy.js";
 import {
-  isTelegramMessageFromCurrentBot,
   resolveProviderObservedTelegramThreadSpec,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
@@ -54,26 +52,11 @@ import {
 } from "./message-cache.js";
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
-function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: number) {
-  if (node.promptContextProjectionMarker) {
-    return undefined;
-  }
-  const timestamp = (
-    node.sourceMessage as Message & { openclaw_prompt_context_timestamp_ms?: unknown }
-  ).openclaw_prompt_context_timestamp_ms;
-  const legacySelf =
-    isTelegramMessageFromCurrentBot(node.sourceMessage, botUserId) ||
-    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot);
-  const body = stripInlineDirectiveTagsForDelivery(node.body ?? "").text.trim();
-  return legacySelf && typeof timestamp === "number" && body
-    ? `text:${timestamp}:${body}`
-    : undefined;
-}
-
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
 export type TelegramSessionState = {
   agentId: string;
+  bindingMode: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["bindingMode"];
   sessionEntry: SessionEntry | undefined;
   sessionKey: string;
   storePath: string;
@@ -97,9 +80,6 @@ export type ResolvePromptContextAmbientWatermarkParams = {
   storePath: string;
 };
 
-export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  asFiniteNumber(timestampMs);
-
 export function promptContextBoundaryOptions(
   timestampMs?: number,
   ambientWatermark?: TelegramAmbientTranscriptWatermark,
@@ -107,7 +87,7 @@ export function promptContextBoundaryOptions(
   TelegramMessageContextOptions,
   "promptContextMinTimestampMs" | "promptContextAmbientWatermark"
 > {
-  const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+  const promptContextMinTimestampMs = asFiniteNumber(timestampMs);
   return {
     ...(promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs }),
     ...(ambientWatermark === undefined ? {} : { promptContextAmbientWatermark: ambientWatermark }),
@@ -119,7 +99,7 @@ export function latestPromptContextMinTimestampMs(
 ): number | undefined {
   let latest: number | undefined;
   for (const timestampMs of timestamps) {
-    const normalized = normalizePromptContextMinTimestampMs(timestampMs);
+    const normalized = asFiniteNumber(timestampMs);
     if (normalized !== undefined) {
       latest = latest === undefined ? normalized : Math.max(latest, normalized);
     }
@@ -189,9 +169,9 @@ export function createTelegramMessageSessionRuntime({
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = (
+  const resolveTelegramSessionState = async (
     params: ResolveTelegramSessionStateParams,
-  ): TelegramSessionState => {
+  ): Promise<TelegramSessionState> => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -199,7 +179,7 @@ export function createTelegramMessageSessionRuntime({
       topicThreadId,
       params.runtimeCfg,
     );
-    const { route } = resolveTelegramConversationRoute({
+    const { route, bindingMode } = await resolveTelegramConversationRoute({
       cfg: params.runtimeCfg,
       accountId,
       chatId: params.chatId,
@@ -231,35 +211,24 @@ export function createTelegramMessageSessionRuntime({
         agentId: route.agentId,
       }).provider,
     });
-    if (storedOverride) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
-      };
-    }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: `${provider}/${model}`,
-      };
-    }
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
+      bindingMode,
       sessionEntry: entry,
       sessionKey,
       storePath,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: storedOverride
+        ? storedOverride.provider
+          ? `${storedOverride.provider}/${storedOverride.model}`
+          : storedOverride.model
+        : provider && model
+          ? `${provider}/${model}`
+          : typeof modelCfg === "string"
+            ? modelCfg
+            : modelCfg?.primary,
     };
   };
 
@@ -457,11 +426,8 @@ export function createTelegramMessageContextRuntime({
       return [];
     }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const groupHistoryLimit = Math.max(
-      0,
-      runtimeTelegramCfg.historyLimit ??
-        runtimeCfg.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
+    const groupHistoryLimit = resolvePromptHistoryLimit(
+      runtimeTelegramCfg.historyLimit ?? runtimeCfg.messages?.groupChat?.historyLimit,
     );
     const dmHistoryLimit = resolveTelegramDmHistoryLimit({
       config: runtimeTelegramCfg,
@@ -558,10 +524,6 @@ export function createTelegramMessageContextRuntime({
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
-    const legacyAssistantTextKeys = cacheEntries.flatMap(({ node }) => {
-      const key = legacyAssistantTextKey(node, ctx.me?.id ?? opts.botInfo?.id);
-      return key ? [key] : [];
-    });
     const messages = cacheEntries.map((entry) => entry.message);
     return messages.length > 0
       ? [
@@ -571,9 +533,6 @@ export function createTelegramMessageContextRuntime({
             type: "chat_window",
             ...(completeProjectionIds.size > 0
               ? { sessionTranscriptDedupeMessageIds: [...completeProjectionIds] }
-              : {}),
-            ...(legacyAssistantTextKeys.length > 0
-              ? { sessionTranscriptAssistantTextDedupeKeys: legacyAssistantTextKeys }
               : {}),
             payload: {
               order: "chronological",

@@ -15,6 +15,20 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
+Full reports reuse a private shared-state snapshot for ordinary reads within the
+report, preserving the live database and its WAL files. Each new report reads a
+fresh snapshot. Checks that need writable inspection state or independent database
+verification retain their own copies; `--only` checks prepare state on demand.
+
+Doctor retires private database readers and writers before removing inspection
+snapshots. A cleanup failure preserves completed findings and check counts;
+updater runs report failed temporary-file removal as a warning. If database
+retirement fails, Doctor reports the error and leaves the private snapshot in place.
+
+Plugin source captures use the original profile's temporary storage, outside these
+database snapshots. Their plugin-cache owner retains them until plugin inspection
+finishes, so later channel setup checks can reuse admitted native files safely.
+
 ```bash
 openclaw doctor --json
 openclaw doctor --lint
@@ -79,6 +93,12 @@ time, and the caller's signal as its cause. Below the selected threshold, this d
 appears in JSON `warnings` and human output without failing lint. It means the inspection
 was not performed. Cancellation after acquisition and other inspection failures remain errors.
 
+During updates, optional inspections and policy advisories are warnings, including intentional open DM policies. Required configuration, state, and startup checks remain blocking. The saved report retains every finding with an individually bounded reason; update history keeps severity counts, deciding errors, and an explicit omission count when its diagnostic bound is reached.
+
+Security findings retain their specific check identifier and remediation in update reports. Secret migration commands appear before long field lists so bounded diagnostics keep the `openclaw secrets configure` and `openclaw secrets apply` next steps.
+
+`PLAINTEXT_FOUND`, `REF_SHADOWED`, and `LEGACY_RESIDUE` are findings from the separate `openclaw secrets audit` command. They describe hardening or retained recovery material, not database corruption. Standalone `secrets audit --check` can exit nonzero for these findings; that result alone does not identify a failing candidate Doctor check. Use the candidate's recorded lint findings, not a truncated stderr tail, to identify the update failure.
+
 A configured Codex plugin that is missing or whose advertised health API cannot be
 verified produces an availability warning under `core/doctor/codex-session-routes`,
 with the plugin name and repair command. Untrusted installations are not imported
@@ -98,6 +118,11 @@ plugin owner could not be inspected; see [Plugin repair warnings](/install/updat
 Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
+
+`core/doctor/session-snapshots` reports stale paths in retained legacy session
+metadata as informational findings. It preserves the original files even under
+`--fix`; active sessions use canonical SQLite state and the current runtime skill
+catalog. Historical snapshot paths do not require cleanup or a session reset.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
 

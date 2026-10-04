@@ -1,5 +1,4 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Mistral provider module implements model/runtime integration.
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -24,15 +23,6 @@ type MistralRealtimeTranscriptionEncoding =
   | "pcm_f32le"
   | "pcm_mulaw"
   | "pcm_alaw";
-
-type MistralRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  sampleRate?: number;
-  encoding?: MistralRealtimeTranscriptionEncoding;
-  targetStreamingDelayMs?: number;
-};
 
 type MistralRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
@@ -127,9 +117,7 @@ function toMistralRealtimeWsUrl(config: MistralRealtimeTranscriptionSessionConfi
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): MistralRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedMistralConfig(config);
   return {
     apiKey: normalizeMistralApiKey(raw.apiKey),

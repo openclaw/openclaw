@@ -23,10 +23,6 @@ type ProviderResult =
   | { kind: "partial"; result: MigrationsMemoryApplyResult }
   | { kind: "error"; message: string };
 
-function toErrorMessage(error: unknown): string {
-  return formatUiError(error, t("onboarding.memoryImport.unknownError"));
-}
-
 function plannedItems(provider: MemoryMigrationProviderPlan) {
   return provider.items.filter((item) => item.status === "planned");
 }
@@ -67,18 +63,9 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
   private agentsListRequest: ApplicationContext["agents"] | undefined;
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {
@@ -253,7 +240,10 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       } catch (error) {
         this.results = {
           ...this.results,
-          [provider.providerId]: { kind: "error", message: toErrorMessage(error) },
+          [provider.providerId]: {
+            kind: "error",
+            message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
+          },
         };
       }
     }

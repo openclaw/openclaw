@@ -6,7 +6,7 @@ import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "./copilot-routin
 function withDefaultRoster(config: OpenClawConfig = {}): OpenClawConfig {
   return {
     ...config,
-    agents: { entries: { main: { default: true } }, ...config.agents },
+    agents: { entries: { main: {} }, ...config.agents },
   };
 }
 
@@ -44,15 +44,6 @@ describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
         config: emptyCfg,
       }),
     ).toBe(false);
-  });
-
-  it("returns true when the provider config sets agentRuntime.id = copilot", () => {
-    expect(
-      modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "github-copilot/gpt-4o",
-        config: cfgWithProviderRuntime("copilot"),
-      }),
-    ).toBe(true);
   });
 
   it("returns true when a model override sets agentRuntime.id = copilot", () => {

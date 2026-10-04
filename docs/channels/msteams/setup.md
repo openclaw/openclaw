@@ -53,7 +53,7 @@ Install and authenticate the devtunnel CLI if needed ([getting started guide](ht
 ```bash
 # One-time setup (persistent URL across sessions):
 devtunnel create my-openclaw-bot --allow-anonymous
-devtunnel port create my-openclaw-bot -p 3978 --protocol auto
+devtunnel port create my-openclaw-bot -p 18789 --protocol auto
 
 # Each dev session:
 devtunnel host my-openclaw-bot
@@ -64,7 +64,12 @@ devtunnel host my-openclaw-bot
 `--allow-anonymous` is required because Teams cannot authenticate with devtunnels. Each incoming bot request is still validated by the Teams SDK.
 </Note>
 
-Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (URLs may change each session).
+Alternatives: `ngrok http 18789` or `tailscale funnel 18789` (URLs may change each session). Use your configured Gateway port if it differs. When configuring a reverse proxy, expose only the required webhook path.
+
+New installations use only the Gateway port. Doctor preserves port `3978` on
+existing installations with a one-shot `channels.msteams.legacyWebhook` pin.
+After moving the callback and verifying delivery through the Gateway port,
+remove that pin to close the old port.
 
 **3. Create the app**
 
@@ -86,7 +91,7 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
       appId: "<CLIENT_ID>",
       appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }
@@ -132,7 +137,7 @@ Group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`)
 3. Build a **Teams app package** referencing the bot, including the [RSC permissions](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest).
 4. Upload/install the Teams app into a team (or personal scope for DMs).
 5. Configure `msteams` in `~/.openclaw/openclaw.json` (or env vars) and start the gateway.
-6. The gateway listens for Bot Framework webhook traffic on `/api/messages` by default.
+6. The Gateway serves Bot Framework webhook traffic on `/api/messages` at `gateway.port` (default `18789`), with Teams SDK JWT authentication.
 
 ### Step 1: Create Azure Bot
 
@@ -192,7 +197,7 @@ Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single 
       appId: "<APP_ID>",
       appPassword: "<APP_PASSWORD>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }
@@ -213,13 +218,13 @@ Teams cannot reach `localhost`. Use a persistent dev tunnel so the URL stays sta
 ```bash
 # One-time setup:
 devtunnel create my-openclaw-bot --allow-anonymous
-devtunnel port create my-openclaw-bot -p 3978 --protocol auto
+devtunnel port create my-openclaw-bot -p 18789 --protocol auto
 
 # Each dev session:
 devtunnel host my-openclaw-bot
 ```
 
-Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (URLs may change each session).
+Alternatives: `ngrok http 18789` or `tailscale funnel 18789` (URLs may change each session). Use your configured Gateway port if it differs. When configuring a reverse proxy, expose only the required webhook path.
 
 If the tunnel URL changes, update the endpoint:
 

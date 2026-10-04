@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -162,9 +164,9 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       const { randomToken } = await loadOnboardHelpersModule();
       const database = { env: ctx.env ?? process.env };
       const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
-      let rollback: (() => boolean) | undefined;
+      let rollback: (() => Promise<boolean>) | undefined;
       try {
-        const current = readSecretStoreValue(entry);
+        const current = await readSecretStoreValue(entry);
         if (!current.ok || !isRedactedSecretValue(current.value)) {
           note(
             `Secret store entry "${entry.name}" changed; rerun Doctor to inspect it.`,
@@ -179,14 +181,14 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
           preserveRowIds: true,
         });
         const nextToken = randomToken();
-        ({ rollback } = writeSecretStoreEntryWithRollback({
+        ({ rollback } = await writeSecretStoreEntryWithRollback({
           ...entry,
           value: nextToken,
           expectedValue: current.value,
           kind: "secret",
           updatedBy: "doctor",
         }));
-        const repaired = readSecretStoreValue(entry);
+        const repaired = await readSecretStoreValue(entry);
         if (!repaired.ok || repaired.value !== nextToken) {
           throw new Error("the replacement token could not be verified");
         }
@@ -199,7 +201,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
         let recovery = "";
         try {
           if (rollback) {
-            recovery = rollback()
+            recovery = (await rollback())
               ? " The previous entry was restored."
               : " The entry changed again and was left untouched.";
           }
@@ -281,7 +283,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         detected: legacyState,
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });
       recordDoctorHealthWarnings(
@@ -479,7 +480,12 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
   const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
-      checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
+      checks.push(
+        ...contribution.healthChecks.map((check) => ({
+          ...normalizeHealthCheck(check),
+          updateWork: contribution.updateWork,
+        })),
+      );
       continue;
     }
     for (const id of contribution.healthCheckIds) {
@@ -489,7 +495,7 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
           `doctor contribution ${contribution.id} references unknown core health check ${id}`,
         );
       }
-      checks.push(check);
+      checks.push({ ...check, updateWork: contribution.updateWork });
     }
   }
   return checks;
@@ -508,13 +514,21 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalInspections = new Set(
+    resolveUpdateRehearsalRoot(env)
+      ? contributions.filter(
+          (entry) =>
+            !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
+        )
+      : [],
+  );
   const deferred = updateDoctorRun
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
   if (deferred.length > 0) {
     const { note } = await loadNoteModule();
     note(
-      `Omitted during update: ${deferred.map((contribution) => contribution.option.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
+      `Omitted during update: ${deferred.map((contribution) => contribution.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
       "Update Doctor scope",
     );
   }
@@ -534,7 +548,10 @@ async function runDoctorHealthContributionList(
     for (const contribution of ordered) {
       // Skip before opening a plugin snapshot; these diagnostics cannot establish
       // required migration readiness and have their own standalone invocation.
-      if (updateDoctorRun && contribution.updateWork?.kind === "standalone") {
+      if (
+        rehearsalInspections.has(contribution) ||
+        (updateDoctorRun && contribution.updateWork?.kind === "standalone")
+      ) {
         continue;
       }
       if (
@@ -545,7 +562,7 @@ async function runDoctorHealthContributionList(
           (contribution.healthCheckIds.length
             ? contribution.healthCheckIds
             : [`core/doctor/${contribution.id.replace(/^doctor:/, "")}`]
-          ).map((id) => ({ id, label: contribution.option.label })),
+          ).map((id) => ({ id, label: contribution.label })),
         )
       ) {
         continue;
@@ -563,12 +580,14 @@ async function runDoctorHealthContributionList(
             await reportDeferredLegacyState(ctx);
           }
         };
-        if (!runWithPluginMetadataSnapshot) {
-          await run();
-        } else {
-          const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-          await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
-        }
+        await measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, async () => {
+          if (!runWithPluginMetadataSnapshot) {
+            await run();
+          } else {
+            const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+            await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
+          }
+        });
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
@@ -589,6 +608,12 @@ async function runDoctorHealthContributionList(
       }
     }
   } finally {
+    if (rehearsalInspections.size > 0) {
+      // Scope notices must not displace actionable warnings from the bounded result.
+      ctx.runtime.log(
+        `Deferred advisory inspections during copied-state rehearsal: ${[...rehearsalInspections].map((entry) => entry.id).join(", ")}. The live post-swap Doctor retains these checks.`,
+      );
+    }
     const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];
     // Preserve the deferred set before the existing bounded advisory digest.
     recordDoctorHealthWarnings(ctx, findings, [], { prepend: true });

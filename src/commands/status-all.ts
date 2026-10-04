@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { buildStatusAllReportData } from "./status-all/report-data.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
 import {
+  reportStatusScanFailure,
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -45,7 +46,7 @@ export async function statusAllCommand(
         queryingChannelStatus: "Querying gateway…",
         summarizingChannels: "Summarizing channels…",
       },
-    });
+    }).catch((error: unknown) => reportStatusScanFailure(error, runtime, opts?.timeoutMs));
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({

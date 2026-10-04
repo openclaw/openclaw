@@ -2,19 +2,16 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { toStringifiedError as toRetirementError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { getMatrixRuntimeLifecycle, type MatrixRuntimeLifecycle } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
 import type { MatrixClient } from "../sdk.js";
 import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
-import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
+import { resolveMatrixAuth } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
-const loadMatrixCreateClientDeps = createLazyRuntimeModule(() =>
-  import("./create-client.js").then((runtime) => ({
-    createMatrixClient: runtime.createMatrixClient,
-  })),
-);
+const loadMatrixCreateClientDeps = createLazyRuntimeModule(() => import("./create-client.js"));
 const MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS = 5_000;
 
 export type MatrixClientLeaseRole = "monitor" | "transient";
@@ -47,7 +44,6 @@ type SharedMatrixClientLeaseState = {
 };
 
 type SharedMatrixClientState = {
-  auth: MatrixAuth;
   client: MatrixClient;
   key: string;
   started: boolean;
@@ -98,21 +94,10 @@ async function createSharedMatrixClient(params: {
 }): Promise<SharedMatrixClientState> {
   const { createMatrixClient } = await loadMatrixCreateClientDeps();
   const client = await createMatrixClient({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    password: params.auth.password,
-    deviceId: params.auth.deviceId,
-    encryption: params.auth.encryption,
+    ...params.auth,
     localTimeoutMs: params.timeoutMs,
-    initialSyncLimit: params.auth.initialSyncLimit,
-    accountId: params.auth.accountId,
-    allowPrivateNetwork: params.auth.allowPrivateNetwork,
-    ssrfPolicy: params.auth.ssrfPolicy,
-    dispatcherPolicy: params.auth.dispatcherPolicy,
   });
   return {
-    auth: params.auth,
     client,
     key: buildSharedClientKey(params.auth),
     started: false,
@@ -207,16 +192,7 @@ async function resolveSharedMatrixAuth(params: SharedMatrixClientParams): Promis
       "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const authContext = resolveMatrixAuthContext({
-    cfg: params.cfg,
-    env: params.env,
-    accountId: params.accountId,
-  });
-  return await resolveMatrixAuth({
-    cfg: authContext.cfg,
-    env: authContext.env,
-    accountId: authContext.accountId,
-  });
+  return resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId: params.accountId });
 }
 
 async function resolveOpenSharedMatrixClientState(
@@ -355,26 +331,18 @@ async function waitForRetirementDrain(
   if (!isPending()) {
     return;
   }
-  let deadline: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        deadline = setTimeout(() => {
-          if (!isPending()) {
-            return;
-          }
-          state.phase = "late-drain";
-          reject(new Error(timeoutMessage));
-        }, MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS);
-        deadline.unref?.();
-      }),
-    ]);
-  } finally {
-    if (deadline) {
-      clearTimeout(deadline);
-    }
-  }
+  await raceWithTimeout(
+    task,
+    MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS,
+    () => {
+      if (!isPending()) {
+        return task;
+      }
+      state.phase = "late-drain";
+      throw new Error(timeoutMessage);
+    },
+    { ref: false },
+  );
 }
 
 function beginGenerationRetirement(params: {

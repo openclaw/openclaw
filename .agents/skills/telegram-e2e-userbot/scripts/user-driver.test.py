@@ -42,6 +42,59 @@ def native_message(content, chat_id=-1001, message_id=42 << 20, sender_id=101):
     }
 
 
+class AuthorizationTest(unittest.TestCase):
+    def test_registers_a_new_test_user_with_explicit_names(self):
+        class Client:
+            def __init__(self):
+                self.requests = []
+                self.updates = [
+                    {
+                        "@type": "updateAuthorizationState",
+                        "authorization_state": {
+                            "@type": "authorizationStateWaitRegistration",
+                        },
+                    },
+                    {
+                        "@type": "updateAuthorizationState",
+                        "authorization_state": {"@type": "authorizationStateReady"},
+                    },
+                ]
+
+            def execute(self, payload):
+                self.requests.append(payload)
+
+            def send(self, payload):
+                self.requests.append(payload)
+
+            def receive(self, _timeout):
+                return self.updates.pop(0)
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = Client()
+        instance.printed_qr_link = None
+        instance.config = {}
+        instance.bot_config = {}
+        instance.authorize(
+            SimpleNamespace(
+                timeout_ms=1000,
+                phone="",
+                qr=False,
+                code="",
+                password="",
+                first_name="OpenClaw",
+                last_name="Guest",
+            ),
+        )
+        self.assertIn(
+            {
+                "@type": "registerUser",
+                "first_name": "OpenClaw",
+                "last_name": "Guest",
+            },
+            instance.client.requests,
+        )
+
+
 class OwnedGroupTest(unittest.TestCase):
     def fixture(self):
         class Client:
@@ -100,6 +153,110 @@ class OwnedGroupTest(unittest.TestCase):
             with self.assertRaisesRegex(driver.DriverError, "Test Server"):
                 driver.prepare_owned_group(instance, Path(root) / "group.json")
         self.assertEqual(instance.client.requests, [])
+
+    def test_private_production_forum_is_owned_and_deleted(self):
+        instance = self.fixture()
+        instance.config["testDc"] = False
+
+        def request(payload, timeout=20):
+            instance.client.requests.append(payload)
+            kind = payload["@type"]
+            if kind == "getMe":
+                return {"id": 123, "username": "leased_primary"}
+            if kind == "createNewBasicGroupChat":
+                self.assertEqual(payload["user_ids"], [])
+                return {"chat_id": -2042, "failed_to_add_members": {"failed_to_add_members": []}}
+            if kind == "upgradeBasicGroupChatToSupergroupChat":
+                self.assertEqual(payload["chat_id"], -2042)
+                return {"id": -1002042, "type": {"@type": "chatTypeSupergroup", "supergroup_id": 2042, "is_channel": False}}
+            if kind == "setChatMemberStatus":
+                self.assertEqual(payload["chat_id"], -1002042)
+                self.assertEqual(payload["member_id"]["user_id"], 42)
+                self.assertEqual(payload["status"]["@type"], "chatMemberStatusMember")
+                self.assertEqual(payload["status"]["member_until_date"], 0)
+                return {"@type": "ok"}
+            if kind == "toggleSupergroupIsForum":
+                self.assertEqual(payload, {"@type": kind, "supergroup_id": 2042, "is_forum": True, "has_forum_tabs": True})
+                return {"@type": "ok"}
+            if kind == "createForumTopic":
+                self.assertEqual(payload["chat_id"], -1002042)
+                return {"forum_topic_id": 777, "name": payload["name"]}
+            if kind == "createChatInviteLink":
+                return {"invite_link": "https://example.invalid/private-invite"}
+            if kind == "getChat":
+                return {
+                    "id": -1002042,
+                    "type": {"@type": "chatTypeSupergroup", "is_channel": False},
+                    # The server can lag this projection immediately after creation.
+                    "can_be_deleted_for_all_users": False,
+                }
+            if kind == "getChatMember":
+                return {"status": {"@type": "chatMemberStatusCreator"}}
+            if kind == "deleteChat":
+                return {"@type": "ok"}
+            raise AssertionError(kind)
+
+        instance.client.request = request
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "private-forum.json"
+            prepared = driver.prepare_private_forum(instance, manifest)
+            self.assertEqual(prepared["groupId"], "-1002042")
+            self.assertEqual(prepared["forumTopicId"], 777)
+            self.assertNotIn("inviteLink", prepared)
+            self.assertIn("inviteLink", driver.read_json(manifest))
+
+            cleaned = driver.cleanup_private_forum(instance, manifest)
+            self.assertEqual(cleaned["status"], "deleted")
+            self.assertNotIn("inviteLink", driver.read_json(manifest))
+
+        self.assertEqual(
+            [request["@type"] for request in instance.client.requests],
+            [
+                "getMe",
+                "createNewBasicGroupChat",
+                "upgradeBasicGroupChatToSupergroupChat",
+                "setChatMemberStatus",
+                "toggleSupergroupIsForum",
+                "createForumTopic",
+                "createChatInviteLink",
+                "getMe",
+                "getChat",
+                "getChatMember",
+                "deleteChat",
+            ],
+        )
+
+    def test_private_forum_cleanup_deletes_an_interrupted_basic_group(self):
+        instance = self.fixture()
+        instance.config["testDc"] = False
+        instance.client.members = {123}
+        request = instance.client.request
+
+        def request_as_creator(payload, timeout=20):
+            if payload["@type"] == "getChatMember":
+                instance.client.requests.append(payload)
+                return {"status": {"@type": "chatMemberStatusCreator"}}
+            return request(payload, timeout)
+
+        instance.client.request = request_as_creator
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "private-forum.json"
+            driver.write_json_private(
+                manifest,
+                {
+                    "basicGroupId": "-2042",
+                    "status": "basic-group-created",
+                    "sutBotId": "42",
+                    "testerUserId": "123",
+                },
+            )
+            cleaned = driver.cleanup_private_forum(instance, manifest)
+            self.assertEqual(cleaned["status"], "deleted")
+
+        self.assertEqual(
+            [request["@type"] for request in instance.client.requests],
+            ["getMe", "getChat", "getChatMember", "deleteChat"],
+        )
 
     def test_existing_group_membership_is_repaired_and_only_added_bot_leaves(self):
         instance = self.fixture()
@@ -163,7 +320,166 @@ class OwnedGroupTest(unittest.TestCase):
             self.assertEqual(instance.client.members, {123, 42})
 
 
+class PrivateStateTest(unittest.TestCase):
+    def test_load_config_keeps_later_tdlib_files_private(self):
+        previous = driver.os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                state = Path(root) / "user-driver"
+                with patch.object(driver, "STATE_DIR", state), \
+                     patch.object(driver, "CONFIG_PATH", state / "config.local.json"), \
+                     patch.object(driver, "BOT_CREDENTIALS_PATH", Path(root) / "credentials.local.json"):
+                    driver.load_config()
+                # Stand-in for TDLib's own database writes after authorization starts.
+                (state / "db").mkdir()
+                (state / "db" / "db_test.sqlite").write_bytes(b"synthetic")
+                self.assertEqual((state / "db").stat().st_mode & 0o777, 0o700)
+                self.assertEqual((state / "db" / "db_test.sqlite").stat().st_mode & 0o777, 0o600)
+        finally:
+            driver.os.umask(previous)
+
+
+class ForwardBurstTest(unittest.TestCase):
+    def make_driver(self, responses):
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.config = {}
+        instance.bot_config = {}
+        instance.client = SimpleNamespace(request=Mock(side_effect=responses), updates=[])
+        instance.client.next_update = lambda timeout: instance.client.updates.pop(0)
+        return instance
+
+    def test_bot_posts_dm_sources_directly_then_forwards_with_qa_ids(self):
+        from email import policy
+        from email.parser import BytesParser
+
+        pending = [{"id": -index, "sending_state": {"@type": "messageSendingStatePending"}}
+                   for index in (1, 2)]
+        forwarded = [{"id": message_id, "forward_info": {"@type": "messageForwardInfo"}}
+                     for message_id in (30, 40)]
+        instance = self.make_driver([{"id": 101}, {"messages": pending}])
+        instance.config = {"testDc": True}
+        instance.bot_config = {"sutBotToken": "fixture-token"}
+        unrelated = {"@type": "updateChatTitle", "chat_id": 999, "title": "fixture"}
+        confirmations = [{"@type": "updateMessageSendSucceeded", "old_message_id": -index,
+                          "message": message}
+                         for index, message in enumerate(forwarded, start=1)]
+        instance.client.updates = [unrelated, confirmations[1], confirmations[0]]
+        requests = []
+        def urlopen(request, timeout):
+            instance.client.request.assert_called_once_with({"@type": "getMe"})
+            requests.append(request)
+            self.assertEqual(timeout, 15)
+            # Bot API receipt IDs deliberately differ from QA-side TDLib IDs.
+            return io.BytesIO(b'{"ok": true, "result": {"message_id": 999}}')
+        photo_bytes = b"synthetic photo bytes\x00\r\n"
+        with tempfile.NamedTemporaryFile(suffix=".png") as photo, \
+             patch.object(driver.urllib.request, "urlopen", side_effect=urlopen), \
+             patch.object(driver.time, "time", return_value=0):
+            photo.write(photo_bytes)
+            photo.flush()
+            self.assertIsNone(instance.post_forward_sources("burst text", photo.name))
+            result = instance.forward_messages(4242, 4242, [10, 20])
+        self.assertEqual([r.full_url for r in requests], [
+            "https://api.telegram.org/botfixture-token/test/sendMessage",
+            "https://api.telegram.org/botfixture-token/test/sendPhoto",
+        ])
+        self.assertEqual([r.method for r in requests], ["POST", "POST"])
+        self.assertEqual(requests[0].get_header("Content-type"), "application/json")
+        self.assertEqual(driver.json.loads(requests[0].data), {
+            "chat_id": 101, "text": "burst text", "disable_notification": True,
+        })
+        multipart = BytesParser(policy=policy.default).parsebytes(
+            ("Content-Type: " + requests[1].get_header("Content-type") + "\r\n\r\n").encode()
+            + requests[1].data
+        )
+        self.assertEqual(multipart.get_content_type(), "multipart/form-data")
+        parts = list(multipart.iter_parts())
+        self.assertEqual([(part.get_param("name", header="content-disposition"),
+                           part.get_payload(decode=True)) for part in parts], [
+            ("chat_id", b"101"), ("disable_notification", b"true"), ("photo", photo_bytes),
+        ])
+        self.assertEqual(parts[2].get_filename(), "upload")
+        self.assertEqual(parts[2].get_content_type(), "application/octet-stream")
+        self.assertEqual(instance.client.request.call_args_list, [
+            unittest.mock.call({"@type": "getMe"}),
+            unittest.mock.call({"@type": "forwardMessages", "chat_id": 4242, "topic_id": None,
+                                "from_chat_id": 4242, "message_ids": [10, 20],
+                                "options": {"@type": "messageSendOptions", "disable_notification": True,
+                                            "from_background": False, "scheduling_state": None},
+                                "send_copy": False, "remove_caption": False}, timeout=30),
+        ])
+        self.assertEqual(result, forwarded)
+        self.assertEqual(instance.client.updates, [unrelated])
+
+    def test_bot_request_errors_never_expose_token_for_json_or_multipart(self):
+        token = "fixture-token"
+        with tempfile.NamedTemporaryFile() as photo:
+            for files in (None, {"photo": photo.name}):
+                for failure in ("transport", "json", "api"):
+                    with self.subTest(files=bool(files), failure=failure):
+                        response = io.BytesIO(b"invalid json" if failure == "json" else
+                                              driver.json.dumps({"ok": False, "description": token}).encode())
+                        with patch.object(driver.urllib.request, "urlopen", return_value=response,
+                                          side_effect=OSError("https://api.telegram.org/bot" + token)
+                                          if failure == "transport" else None):
+                            with self.assertRaises(driver.DriverError) as raised:
+                                driver.telegram_bot(token, "sendPhoto", {"chat_id": 101}, test_dc=True, files=files)
+                        self.assertNotIn(token, str(raised.exception))
+                        self.assertEqual(str(raised.exception), "<redacted>" if failure == "api"
+                                         else "Telegram Bot API sendPhoto request failed")
+
+    def test_rejects_partial_forward_receipts_and_missing_forward_origin(self):
+        valid = {"id": 30, "forward_info": {"@type": "messageForwardInfo"}}
+        for messages, error in [
+            ([], "every forwarded message"),
+            ([valid], "every forwarded message"),
+            ([valid, None], "every forwarded message"),
+            ([valid, valid, valid], "every forwarded message"),
+            ([valid, {"id": 40}], "no forward origin"),
+        ]:
+            with self.subTest(messages=messages):
+                instance = self.make_driver([{"messages": messages}])
+                with self.assertRaisesRegex(driver.DriverError, error):
+                    instance.forward_messages(4242, 102, [10, 20])
+                self.assertEqual(instance.client.request.call_count, 1)
+
+    def test_missing_photo_fails_before_any_request(self):
+        instance = self.make_driver([])
+        with tempfile.TemporaryDirectory() as directory, patch.object(driver.urllib.request, "urlopen") as http:
+            with self.assertRaisesRegex(driver.DriverError, "Photo file not found"):
+                instance.post_forward_sources("burst text", str(Path(directory) / "missing.png"))
+        instance.client.request.assert_not_called()
+        http.assert_not_called()
+
+
 class PhotoContentTest(unittest.TestCase):
+    def lookup_driver(self, *steps):
+        pending = list(steps)
+        requests = []
+
+        def request(payload, timeout=20):
+            requests.append((payload, timeout))
+            self.assertTrue(pending, f"Unexpected TDLib request: {payload}")
+            expected, result = pending.pop(0)
+            method = payload["@type"]
+            if method == "loadChats":
+                method = payload["chat_list"]["@type"]
+            self.assertEqual(method, expected)
+            if isinstance(result, driver.DriverError):
+                raise result
+            return result
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = SimpleNamespace(request=request, requests=requests)
+        self.addCleanup(self.assertEqual, pending, [])
+        return instance
+
+    def lookup_error(self, method="getChat", code=400, message="Chat not found", error_type=driver.TdRequestError):
+        return error_type(
+            f"{method} failed ({code}): {message}",
+            tdlib_code=code, tdlib_message=message, tdlib_method=method,
+        )
+
     def test_text_photo_and_album_preserve_forum_topic_and_reply_with_pinned_api(self):
         class Transport:
             def __init__(self):
@@ -186,6 +502,14 @@ class PhotoContentTest(unittest.TestCase):
             self.assertEqual(request["reply_to"]["@type"], "inputMessageReplyToMessage")
             self.assertNotIn("message_thread_id", request)
             self.assertNotIn("reply_to_message_id", request)
+        content = instance.client.requests[1]["input_message_content"]
+        self.assertEqual(content["@type"], "inputMessagePhoto")
+        self.assertEqual(content["photo"]["@type"], "inputPhoto")
+        self.assertEqual(content["photo"]["photo"]["@type"], "inputFileLocal")
+        self.assertEqual(content["show_caption_above_media"], False)
+        self.assertIsNone(content["self_destruct_type"])
+        self.assertEqual(content["has_spoiler"], False)
+        self.assertNotIn("ttl", content)
 
     def test_rejects_unsafe_prebuilt_archive_members(self):
         class FakeTar:
@@ -202,21 +526,6 @@ class PhotoContentTest(unittest.TestCase):
             driver.extract_prebuilt_archive(archive, tempfile.gettempdir())
         self.assertFalse(archive.extracted)
 
-    def test_uses_current_tdlib_photo_shape(self):
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.config = {}
-        instance.bot_config = {}
-        with tempfile.NamedTemporaryFile(suffix=".jpg") as photo:
-            content = instance.photo_content(photo.name, "caption")
-
-        self.assertEqual(content["@type"], "inputMessagePhoto")
-        self.assertEqual(content["photo"]["@type"], "inputPhoto")
-        self.assertEqual(content["photo"]["photo"]["@type"], "inputFileLocal")
-        self.assertEqual(content["show_caption_above_media"], False)
-        self.assertIsNone(content["self_destruct_type"])
-        self.assertEqual(content["has_spoiler"], False)
-        self.assertNotIn("ttl", content)
-
     def test_uses_test_dc_for_test_session(self):
         instance = driver.UserDriver.__new__(driver.UserDriver)
         instance.config = {
@@ -231,28 +540,86 @@ class PhotoContentTest(unittest.TestCase):
         self.assertEqual(current["use_test_dc"], True)
         self.assertEqual(current["database_encryption_key"], "database-key")
 
-    def test_refreshes_main_chat_list_for_a_new_numeric_chat(self):
-        class FakeClient:
-            def __init__(self):
-                self.requests = []
-                self.get_chat_calls = 0
+    def test_credential_check_accepts_chat_found_after_bounded_list_refresh(self):
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error(error_type=driver.DriverError)),
+            ("chatListMain", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
+        self.assertEqual(
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
+            -1001,
+        )
+        self.assertEqual(
+            [payload["@type"] for payload, _timeout in instance.client.requests],
+            ["getChat", "loadChats", "getChat"],
+        )
+        self.assertLessEqual(instance.client.requests[1][1], 10)
 
-            def request(self, payload, timeout=20):
-                self.requests.append((payload, timeout))
-                if payload["@type"] == "getChat":
-                    self.get_chat_calls += 1
-                    if self.get_chat_calls == 1:
-                        raise driver.DriverError("getChat failed (400): Chat not found")
-                    return {"id": -1001}
-                return {"@type": "ok"}
+    def test_credential_check_classifies_exhausted_chat_list(self):
+        exhausted = self.lookup_error("loadChats", 404, "Not Found")
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", exhausted),
+            ("chatListArchive", exhausted),
+        )
+        with self.assertRaisesRegex(driver.DriverError, "exhausting") as raised:
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
+        self.assertEqual(
+            raised.exception.diagnostic_code, driver.CREDENTIAL_STATE_MISSING_GROUP
+        )
 
-        instance = driver.UserDriver.__new__(driver.UserDriver)
-        instance.client = FakeClient()
+    def test_credential_check_loads_archived_chat_before_classifying_absence(self):
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", self.lookup_error("loadChats", 404, "Not Found")),
+            ("chatListArchive", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
+        self.assertEqual(
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
+            -1001,
+        )
+        self.assertEqual(
+            [payload["@type"] for payload, _timeout in instance.client.requests],
+            ["getChat", "loadChats", "loadChats", "getChat"],
+        )
+
+    def test_credential_check_preserves_list_load_timeout(self):
+        list_timeout = driver.DriverError(
+            "Timed out waiting for loadChats",
+            tdlib_method="loadChats",
+            tdlib_timed_out=True,
+        )
+
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error()),
+            ("chatListMain", list_timeout),
+        )
+        with self.assertRaises(driver.DriverError) as raised:
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
+        self.assertIs(raised.exception, list_timeout)
+        self.assertEqual(raised.exception.diagnostic_code, "")
+
+    def test_ordinary_numeric_chat_refreshes_the_main_chat_list(self):
+        instance = self.lookup_driver(
+            ("getChat", self.lookup_error(error_type=driver.DriverError)),
+            ("chatListMain", {"@type": "ok"}),
+            ("getChat", {"id": -1001}),
+        )
         self.assertEqual(instance.resolve_chat("-1001"), -1001)
         self.assertEqual(
             [payload["@type"] for payload, _timeout in instance.client.requests],
             ["getChat", "loadChats", "getChat"],
         )
+
+    def test_numeric_chat_propagates_unrelated_tdlib_failures(self):
+        failure = driver.DriverError("Timed out waiting for getChat")
+        instance = self.lookup_driver(("getChat", failure))
+        with self.assertRaises(driver.DriverError) as raised:
+            instance.resolve_chat("-1001")
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(raised.exception.diagnostic_code, "")
 
     def test_marks_sut_mentions_and_commands_with_utf16_entities(self):
         instance = driver.UserDriver.__new__(driver.UserDriver)
@@ -278,17 +645,10 @@ class PhotoContentTest(unittest.TestCase):
                 "type": {"@type": "textEntityTypeTextUrl", "url": "https://example.com/qa"},
             },
         ]
-        message = {
-            "id": message_id,
-            "chat_id": -1001,
-            "sender_id": {"user_id": 101},
-            "date": 123,
-            "reply_to": {"message_id": 7},
-            "content": {
-                "@type": "messageText",
-                "text": {"@type": "formattedText", "text": text, "entities": entities},
-            },
-        }
+        message = native_message({
+            "@type": "messageText",
+            "text": {"@type": "formattedText", "text": text, "entities": entities},
+        }, message_id=message_id)
         client = observation_client({101: {"username": "sut_bot"}})
         created = driver.serve_update(
             {"@type": "updateNewMessage", "message": message}, client, known
@@ -625,6 +985,45 @@ class RichObservationTest(unittest.TestCase):
                 self.assertEqual(known[(-1001, 42 << 20)]["text"], "later plain edit")
                 self.assertIsNone(known[(-1001, 42 << 20)]["richMessage"])
                 self.assertEqual(known[(-2002, 42 << 20)]["senderId"], 202)
+
+
+class ServeTargetTest(unittest.TestCase):
+    def test_serves_dm_group_and_forum_without_losing_observed_topic(self):
+        client = observation_client()
+        client.request.side_effect = None
+        client.request.return_value = {"id": 303}
+        client.next_update = lambda timeout: None
+        def send(chat_id, text, reply_to=None, forum_topic_id=None):
+            message = native_message({"@type": "messageText", "text": {"text": text, "entities": []}}, chat_id=chat_id, sender_id=303)
+            if forum_topic_id is not None:
+                message["topic_id"] = {"@type": "messageTopicForum", "forum_topic_id": forum_topic_id}
+            return message
+        instance = SimpleNamespace(client=client, authorize=lambda *_: None,
+            resolve_chat=lambda value: int(value), check_group_write_access=Mock(return_value=True),
+            send_text=Mock(side_effect=send))
+        commands = [
+            {"id": "1", "method": "send", "text": "dm", "chatId": "200"},
+            {"id": "2", "method": "send", "text": "group"},
+            {"id": "3", "method": "send", "text": "forum", "chatId": "-2002", "forumTopicId": 42},
+            {"id": "4", "method": "cleanup-private-forum"},
+            {"id": "5", "method": "send", "text": "invalid", "forumTopicId": True},
+        ]
+        events = []
+        with patch.object(driver, "load_config", return_value=({}, {})), \
+                patch.object(driver, "UserDriver", return_value=instance), \
+                patch.object(driver, "cleanup_private_forum", return_value={"ok": True, "status": "deleted"}) as cleanup, \
+                patch.object(driver, "write_ndjson", side_effect=events.append), \
+                patch.object(driver.sys, "stdin", io.StringIO("\n".join(driver.json.dumps(value) for value in commands))), \
+                patch.object(driver.select, "select", side_effect=lambda *_: ([driver.sys.stdin], [], [])):
+            driver.command_serve(SimpleNamespace(chat="-1001", observe_chat=["-2002"], timeout_ms=1000))
+        sent = [event["result"] for event in events if "result" in event and "chatId" in event["result"]]
+        self.assertEqual([value["chatId"] for value in sent], [200, -1001, -2002])
+        self.assertEqual([value["senderId"] for value in sent], [303, 303, 303])
+        self.assertEqual(sent[-1]["forumTopicId"], 42)
+        self.assertIn("positive integer", events[-1]["error"])
+        self.assertEqual(instance.send_text.call_count, 3)
+        cleanup.assert_called_once_with(instance, driver.STATE_DIR / "owned-private-forum.json")
+        self.assertEqual([call.args[0] for call in instance.check_group_write_access.call_args_list], [-1001, -2002, 200])
 
 
 class GroupWriteAccessTest(unittest.TestCase):

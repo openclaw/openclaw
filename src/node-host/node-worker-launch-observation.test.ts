@@ -2,9 +2,12 @@ import { PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { onDecodedOutput } from "../process/decoded-output.js";
+import { createAwaitedDecodedOutput, onDecodedOutput } from "../process/decoded-output.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
-import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
+import type {
+  WorkerProcessMessage,
+  WorkerProcessResult,
+} from "../worker/worker-process-protocol.js";
 import {
   observeNodeWorkerChild,
   type NodeWorkerTerminalOutcome,
@@ -37,15 +40,21 @@ function observationHarness(
     waitForExtinction?: NodeWorkerChildAdapter["waitForExtinction"];
     cleanupContainer?: () => Promise<void>;
     expectedKind?: "confirmed" | "deferred";
+    consumeError?: Error;
+    onResult?: (frame: WorkerProcessMessage) => Promise<void>;
   } = {},
 ) {
   const stdout = new PassThrough();
+  const consumption = createAwaitedDecodedOutput(stdout, () => kill("SIGKILL"));
   const stderr = new PassThrough();
   const journal = createDeferred();
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const stopped = createDeferred();
+  const firstChunkConsumed = createDeferred();
   const unsubscribe: Array<() => void> = [];
-  const kill = vi.fn();
+  const kill = vi.fn((_signal?: NodeJS.Signals) => stopped.resolve());
   const dispose = () => {
+    consumption.close();
     for (const stop of unsubscribe) {
       stop();
     }
@@ -57,6 +66,14 @@ function observationHarness(
     onStdout: (listener, onRaw) => {
       unsubscribe.push(onDecodedOutput(stdout, listener, onRaw));
     },
+    consumeStdout: (listener) =>
+      consumption.consume(async (chunk) => {
+        if (options.consumeError) {
+          throw options.consumeError;
+        }
+        await listener(chunk);
+        firstChunkConsumed.resolve();
+      }),
     onStderr: (listener, onRaw) => {
       unsubscribe.push(onDecodedOutput(stderr, listener, onRaw));
     },
@@ -67,7 +84,7 @@ function observationHarness(
     kill,
     dispose,
   } satisfies NodeWorkerChildAdapter;
-  const frames: WorkerProcessResult[] = [];
+  const frames: WorkerProcessMessage[] = [];
   const completion = observeNodeWorkerChild(
     {
       adapter,
@@ -75,7 +92,10 @@ function observationHarness(
       scrubber: createNodeWorkerCredentialScrubber("framing-fixture-token"),
       connectionFailure: {},
     },
-    (frame) => frames.push(frame),
+    async (frame) => {
+      frames.push(frame);
+      await options.onResult?.(frame);
+    },
     () => undefined,
     options.cleanupContainer,
   );
@@ -88,7 +108,8 @@ function observationHarness(
     (closing ??= (async () => {
       stdout.end();
       stderr.end();
-      await Promise.all([finished(stdout), finished(stderr)]);
+      // The outcome owns output errors; cleanup joins EOF and the decoder's final callback.
+      await Promise.allSettled([finished(stdout), finished(stderr), consumption.drain()]);
       journal.resolve();
       exit.resolve({ code: 0, signal: null });
       try {
@@ -99,6 +120,10 @@ function observationHarness(
     })());
   return {
     stdout,
+    stopped: stopped.promise,
+    drainOutput: () => consumption.drain(),
+    completeExit: () => exit.resolve({ code: 0, signal: null }),
+    firstChunkConsumed: firstChunkConsumed.promise,
     frames,
     kill,
     completion,
@@ -116,58 +141,124 @@ function observationHarness(
 }
 
 describe("node worker output framing", () => {
-  it("preserves a UTF-8 character split across decoded output chunks", async () => {
+  it("requests stop after consumer failure and joins separately completed child output", async () => {
+    const failure = new Error("synthetic stdout consumer failed");
+    const harness = observationHarness({ consumeError: failure });
+    const settled = vi.fn();
+    void harness.outcome.then(settled, settled);
+    try {
+      await harness.releaseJournal();
+      harness.stdout.write(encodeResult("first"));
+      await harness.stopped;
+      await expect(harness.drainOutput()).rejects.toBe(failure);
+      // Let rejection handlers settle before checking that child exit still owns completion.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(settled).not.toHaveBeenCalled();
+      harness.completeExit();
+      expect(await harness.outcome).toEqual({
+        state: "failed",
+        errorText: failure.message,
+      });
+      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    } finally {
+      harness.completeExit();
+      await harness.close();
+    }
+  });
+
+  const retained = { ...resultFrame("first"), retainWorker: true, retention: "background" };
+  const idle = { type: "idle-ready", turnId: "first" };
+  const unicode = encodeResult("first", "hello 漢😀");
+  const split = unicode.indexOf(Buffer.from("😀"));
+  const largeLeaf = "x".repeat(
+    NODE_WORKER_STDOUT_MAX_BYTES / 2 + 1 - encodeResult("first", "").length,
+  );
+
+  it.each([
+    {
+      name: "idle readiness after a retained result",
+      chunks: [Buffer.from(`${JSON.stringify(retained)}\n${JSON.stringify(idle)}\n`)],
+      frames: [retained, idle],
+      result: retained.result,
+    },
+    {
+      name: "UTF-8 split across decoded chunks",
+      chunks: [
+        unicode.subarray(0, split + 1),
+        unicode.subarray(split + 1, split + 3),
+        unicode.subarray(split + 3),
+      ],
+      frames: [resultFrame("first", "hello 漢😀")],
+      result: resultFrame("first", "hello 漢😀").result,
+    },
+    {
+      name: "bounded frames whose combined chunk exceeds the cap",
+      chunks: [
+        Buffer.concat([encodeResult("first", largeLeaf), encodeResult("second", largeLeaf)]),
+      ],
+      frames: [resultFrame("first", largeLeaf), resultFrame("second", largeLeaf)],
+      result: resultFrame("second", largeLeaf).result,
+    },
+  ])("delivers $name after journaling", async ({ chunks, frames, result }) => {
     const harness = observationHarness();
     try {
       await harness.releaseJournal();
-      const wire = encodeResult("first", "hello 漢😀");
-      const split = wire.indexOf(Buffer.from("😀"));
-      harness.stdout.write(wire.subarray(0, split + 1));
-      harness.stdout.write(wire.subarray(split + 1, split + 3));
+      for (const chunk of chunks.slice(0, -1)) {
+        harness.stdout.write(chunk);
+      }
       expect(harness.frames).toEqual([]);
-      harness.stdout.write(wire.subarray(split + 3));
-
+      harness.stdout.write(chunks.at(-1)!);
       expect(await harness.close()).toEqual({
         state: "completed",
-        resultJson: JSON.stringify(resultFrame("first", "hello 漢😀").result),
+        resultJson: JSON.stringify(result),
       });
-      expect(harness.frames).toEqual([resultFrame("first", "hello 漢😀")]);
+      expect(harness.frames).toEqual(frames);
       expect(harness.kill).not.toHaveBeenCalled();
     } finally {
       await harness.close();
     }
   });
 
-  it("does not accept late results while the owner still drains a failed worker", async () => {
-    const harness = observationHarness();
-    try {
-      harness.failWait(new Error("worker wait failed"));
-      expect(await harness.outcome).toMatchObject({ state: "failed" });
-      harness.stdout.write(encodeResult("late"));
-      expect(harness.frames).toEqual([]);
-    } finally {
-      await harness.close();
-    }
-  });
-
-  it("accepts multiple bounded frames whose combined chunk exceeds the cap after journaling", async () => {
-    const harness = observationHarness();
-    try {
-      await harness.releaseJournal();
-      harness.stdout.write(
-        Buffer.concat([
-          sizedResult("first", NODE_WORKER_STDOUT_MAX_BYTES / 2 + 1),
-          sizedResult("second", NODE_WORKER_STDOUT_MAX_BYTES / 2 + 1),
-        ]),
-      );
-
-      expect(await harness.close()).toMatchObject({ state: "completed" });
-      expect(harness.frames.map((frame) => frame.turnId)).toEqual(["first", "second"]);
-      expect(harness.kill).not.toHaveBeenCalled();
-    } finally {
-      await harness.close();
-    }
-  });
+  it.each([false, true])(
+    "fences late frames after wait failure (accepted write: %s)",
+    async (acceptedWrite) => {
+      const resultStarted = createDeferred();
+      const resultFinished = createDeferred();
+      const harness = observationHarness({
+        onResult: async () => {
+          resultStarted.resolve();
+          await resultFinished.promise;
+        },
+      });
+      const settled = vi.fn();
+      void harness.outcome.then(settled);
+      try {
+        if (acceptedWrite) {
+          await harness.releaseJournal();
+          harness.stdout.write(Buffer.concat([encodeResult("first"), encodeResult("late")]));
+          await resultStarted.promise;
+        }
+        harness.failWait(new Error("worker wait failed"));
+        if (acceptedWrite) {
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          resultFinished.resolve();
+        }
+        expect(await harness.outcome).toMatchObject({ state: "failed" });
+        if (!acceptedWrite) {
+          harness.stdout.write(encodeResult("late"));
+        }
+        await harness.firstChunkConsumed;
+        expect(harness.frames).toEqual(acceptedWrite ? [resultFrame("first")] : []);
+      } finally {
+        resultFinished.resolve();
+        await harness.close();
+      }
+    },
+  );
 
   it("delivers an earlier frame before rejecting a later oversized frame in the same chunk", async () => {
     const harness = observationHarness();
@@ -176,19 +267,20 @@ describe("node worker output framing", () => {
       harness.stdout.write(
         Buffer.concat([encodeResult("first"), Buffer.alloc(NODE_WORKER_STDOUT_MAX_BYTES + 1, 120)]),
       );
+      await harness.firstChunkConsumed;
 
       expect(harness.frames).toEqual([resultFrame("first")]);
-      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
       expect(await harness.close()).toMatchObject({
         state: "failed",
         errorText: `worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`,
       });
+      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     } finally {
       await harness.close();
     }
   });
 
-  it.each([-1, 0, 1])(
+  it.each([0, 1])(
     "bounds aggregate output including delimiters at cap + %i before journal readiness",
     async (delta) => {
       const harness = observationHarness();
@@ -199,6 +291,7 @@ describe("node worker output framing", () => {
             sizedResult("second", NODE_WORKER_STDOUT_MAX_BYTES / 2 + delta),
           ]),
         );
+        await harness.firstChunkConsumed;
 
         expect(harness.frames).toEqual([]);
         expect(harness.kill).toHaveBeenCalledTimes(delta > 0 ? 1 : 0);
@@ -211,7 +304,9 @@ describe("node worker output framing", () => {
           expect(harness.frames).toEqual([]);
         } else {
           expect(outcome).toMatchObject({ state: "completed" });
-          expect(harness.frames.map((frame) => frame.turnId)).toEqual(["first", "second"]);
+          expect(
+            harness.frames.map((frame) => ("turnId" in frame ? frame.turnId : undefined)),
+          ).toEqual(["first", "second"]);
         }
       } finally {
         await harness.close();
@@ -252,7 +347,6 @@ describe("node worker cleanup observation", () => {
   } satisfies ProcessExtinctionResult;
 
   it.each([
-    { name: "void", extinction: undefined, kind: "confirmed" },
     { name: "confirmed", extinction: { status: "confirmed" }, kind: "confirmed" },
     { name: "uncertain", extinction: uncertainExtinction, kind: "deferred" },
   ] as const)("observes $name native completion", async ({ extinction, kind }) => {

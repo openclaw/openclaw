@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
+const DISCORD_VIDEO_MEDIA_EXTENSIONS = [".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"];
 
 function normalizeMediaPathForExtension(mediaUrl: string): string {
   const trimmed = mediaUrl.trim();
@@ -26,10 +26,5 @@ function normalizeMediaPathForExtension(mediaUrl: string): string {
 
 export function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
   const normalized = normalizeMediaPathForExtension(mediaUrl);
-  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
-    if (normalized.endsWith(ext)) {
-      return true;
-    }
-  }
-  return false;
+  return DISCORD_VIDEO_MEDIA_EXTENSIONS.some((ext) => normalized.endsWith(ext));
 }

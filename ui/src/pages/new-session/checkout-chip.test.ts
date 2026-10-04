@@ -9,7 +9,6 @@ describe("Checkout chip state", () => {
         destination: "cloud" as const,
         repository,
         worktree: !repository,
-        worktreeAvailable: true,
         baseRef,
         label: baseRef ? `From ${baseRef}` : "Starting branch",
       })),
@@ -18,7 +17,6 @@ describe("Checkout chip state", () => {
       destination: "remote",
       repository: true,
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "release",
       label: "Remote checkout from release",
     },
@@ -26,30 +24,18 @@ describe("Checkout chip state", () => {
       destination: "remote",
       repository: true,
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "",
       label: "Remote checkout",
     },
     {
       destination: "remote",
       worktree: true,
-      worktreeAvailable: true,
-      headBranch: "main",
-      baseRef: "main",
-      label: "New worktree from main",
-    },
-    {
-      destination: "remote",
-      worktree: true,
-      worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
     },
-    { destination: "local", worktree: false, worktreeAvailable: false, baseRef: "", label: null },
     {
       destination: "local",
       worktree: false,
-      worktreeAvailable: true,
       headBranch: "feature",
       baseRef: "main",
       label: "feature",
@@ -57,14 +43,12 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "main",
       label: "Current checkout",
     },
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: true,
       headBranch: "feature",
       baseRef: "main",
       label: "New worktree from main",
@@ -72,28 +56,59 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: true,
-      baseRef: "release",
-      label: "New worktree from release",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      worktreeAvailable: true,
       baseRef: "",
       label: "New worktree",
     },
+  ] as const)("$destination worktree=$worktree: $label", ({ label, ...params }) => {
+    expect(resolveCheckoutChip({ worktreeName: "", ...params })).toEqual({ label });
+  });
+
+  it.each([
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: false,
-      baseRef: "",
-      label: "New worktree",
+      name: " release-proof ",
+      label: "Worktree · release-proof",
+    },
+    {
+      destination: "remote",
+      worktree: true,
+      name: "release-proof",
+      label: "Worktree · release-proof",
+    },
+    { destination: "local", worktree: true, name: "   ", label: "New worktree from main" },
+    { destination: "local", worktree: false, name: "release-proof", label: "main" },
+    {
+      destination: "cloud",
+      worktree: true,
+      name: "release-proof",
+      label: "Worktree · release-proof",
+    },
+    {
+      destination: "cloud",
+      worktree: true,
+      repository: true,
+      name: "release-proof",
+      label: "From main",
+    },
+    {
+      destination: "remote",
+      worktree: false,
+      repository: true,
+      name: "release-proof",
+      label: "Remote checkout from main",
     },
   ] as const)(
-    "$destination worktree=$worktree available=$worktreeAvailable: $label",
-    ({ label, ...params }) => {
-      expect(resolveCheckoutChip(params)).toEqual(label === null ? null : { label });
+    "labels $destination checkout with name=$name: $label",
+    ({ name, label, ...params }) => {
+      expect(
+        resolveCheckoutChip({
+          headBranch: "main",
+          baseRef: "main",
+          worktreeName: name,
+          ...params,
+        }),
+      ).toEqual({ label });
     },
   );
 
@@ -102,6 +117,7 @@ describe("Checkout chip state", () => {
     { worktree: true, remotePlacement: false, repository: false },
     { worktree: true, remotePlacement: true, repository: false },
     { worktree: false, remotePlacement: true, repository: true },
+    { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
     {
       worktree: true,
       remotePlacement: false,
@@ -109,8 +125,8 @@ describe("Checkout chip state", () => {
       idPrefix: "palette-session-1",
     },
   ])(
-    "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement)",
-    ({ worktree, remotePlacement, repository, idPrefix }) => {
+    "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
+    ({ worktree, remotePlacement, repository, idPrefix, emptyBranches }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
@@ -127,10 +143,12 @@ describe("Checkout chip state", () => {
           worktreeAvailable: true,
           branches: {
             repoRoot: "/repo",
-            branches: [
-              { name: "main", kind: "local" },
-              { name: "release/next", kind: "local" },
-            ],
+            branches: emptyBranches
+              ? []
+              : [
+                  { name: "main", kind: "local" },
+                  { name: "release/next", kind: "local" },
+                ],
             headBranch: "feature",
           },
           branchesLoading: false,
@@ -151,6 +169,20 @@ describe("Checkout chip state", () => {
         }),
         container,
       );
+
+      if (worktree || repository) {
+        const baseRef = container.querySelector("input")!;
+        if (emptyBranches) {
+          expect(baseRef.hasAttribute("role")).toBe(false);
+          expect(baseRef.hasAttribute("aria-expanded")).toBe(false);
+          expect(container.querySelector('[role="listbox"]')).toBeNull();
+        } else {
+          expect(baseRef.getAttribute("role")).toBe("combobox");
+          expect(container.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+            "From",
+          );
+        }
+      }
 
       if (repository) {
         expect(container.querySelector('[data-value="checkout"]')).toBeNull();

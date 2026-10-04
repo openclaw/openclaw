@@ -110,6 +110,28 @@ describe("Plugin link reader panel", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["Merged", "accent", "2026-09-23T12:31:58Z"],
+    ["Closed", "negative", "2026-09-24T09:15:00Z"],
+    ["Open", "positive", undefined],
+    ["Draft", "neutral", undefined],
+  ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
+    const document = {
+      ...item(),
+      createdAt: "2026-09-23T11:08:47Z",
+      updatedAt: "2026-09-25T01:00:00Z",
+      badge: { label, tone, timestamp },
+    };
+    const panel = await mount(vi.fn().mockResolvedValue(document));
+    open(panel);
+    await expectTitle(panel, document.title);
+    const time = panel.renderRoot.querySelector(".lr-content:not([hidden]) time");
+    const expected = timestamp ?? document.createdAt;
+    expect(time?.getAttribute("datetime")).toBe(expected);
+    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(panel.renderRoot.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
+  });
+
   it("resolves document images through the reader, deduplicates attachments, and preserves source links", async () => {
     const url = "https://images.example/attachment.png";
     const dataUrl = "data:image/png;base64,aW1hZ2U=";
@@ -228,29 +250,45 @@ describe("Plugin link reader panel", () => {
     },
   );
 
-  it("accepts the same document identity when only the requested anchor differs", async () => {
-    const panel = await mount(vi.fn().mockResolvedValue(item(1)));
-    open(panel, itemUrl(1) + "#comment-4");
-    await expectTitle(panel, "Item 1");
-  });
+  it.each([false, true])(
+    "preserves typing focus while opening and settling a reader (embedded: %s)",
+    async (embedded) => {
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      composer.focus();
+      const pending = deferredDetail();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockRejectedValueOnce(new Error("Request failed"));
+      const panel = await mount(request, { embedded, presented: embedded });
+      expect(document.activeElement).toBe(composer);
 
-  it("uses only the detail contract when an agent is selected", async () => {
-    const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (Object.keys(params as object).some((key) => key !== "url" && key !== "refresh")) {
-        throw new Error("Unexpected detail parameter");
-      }
-      return requestedItem(params);
-    });
-    const panel = await mount(request);
-    panel.agentId = "selected-agent";
-    open(panel);
-    await expectTitle(panel, "Item 1");
-    expect(request).toHaveBeenCalledWith(
-      "forge.item",
-      { url: itemUrl(1) },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
+      open(panel, itemUrl(1) + "#comment-4");
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(composer);
+      pending.resolve(item());
+      await pending.promise;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("h1")?.textContent).toBe("Item 1");
+      expect(document.activeElement).toBe(composer);
+
+      open(panel, itemUrl(2));
+      await panel.updateComplete;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector('[role="alert"] h2')?.textContent).toBe(
+        "Could not load item",
+      );
+      expect(document.activeElement).toBe(composer);
+      const address = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+      address.focus();
+      address.value = itemUrl(3);
+      address.dispatchEvent(new Event("input", { bubbles: true }));
+      await panel.updateComplete;
+      expect(panel.shadowRoot?.activeElement).toBe(address);
+    },
+  );
 
   it.each([itemUrl(2), itemUrl(1) + "?resource=other"])(
     "rejects a document for another target: %s",
@@ -376,15 +414,23 @@ describe("Plugin link reader panel", () => {
       storageKey,
       JSON.stringify({ open: true, dock: "right", width: 560, height: 420 }),
     );
-    const request = vi.fn(async () => item());
+    const request = vi.fn(async (_method: string, params?: unknown) => {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
+        throw new Error("Unexpected detail parameter");
+      }
+      return requestedItem(params);
+    });
     const panel = await mount(request);
+    panel.agentId = "selected-agent";
     expect(request).not.toHaveBeenCalled();
     expect(panel.renderRoot.querySelector(".bp")).toBeNull();
     open(panel);
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
     expect(panel.renderRoot.querySelector(".lr-description strong")?.textContent).toBe(
@@ -495,6 +541,7 @@ describe("Plugin link reader panel", () => {
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.click();
     await panel.updateComplete;
     const input = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+    expect(panel.shadowRoot?.activeElement).toBe(input);
     const form = panel.renderRoot.querySelector("form")!;
     input.value = "https://example.com/not-supported";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -628,15 +675,19 @@ describe("Plugin link reader panel", () => {
   });
 
   it.each([
-    "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
-    "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
-    "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
-    "GitHub item is unavailable or not public (HTTP 404). Open the link on GitHub to check access.",
-    "GitHub request timed out. Retry shortly.",
-  ])("shows the actionable Gateway failure: %s", async (message) => {
-    const request = vi
-      .fn()
-      .mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message }));
+    {
+      error: new Error("not available"),
+      message: "Try again or open the original",
+    },
+    {
+      error: new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+      }),
+      message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+    },
+  ])("keeps failure and disconnect states actionable: $message", async ({ error, message }) => {
+    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(item());
     const panel = await mount(request);
     open(panel);
     await waitForFast(() =>
@@ -647,20 +698,6 @@ describe("Plugin link reader panel", () => {
     );
     expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).not.toContain(
       "This item may be private or deleted",
-    );
-  });
-
-  it("keeps failure and disconnect states actionable without displaying stale content", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("not available"))
-      .mockResolvedValue(item());
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
-        "Try again or open the original",
-      ),
     );
     const external = panel.renderRoot.querySelector<HTMLAnchorElement>(
       '[role="alert"] a[data-link-reader-external]',

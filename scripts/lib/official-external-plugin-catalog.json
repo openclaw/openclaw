@@ -117,6 +117,24 @@
       }
     },
     {
+      "name": "@openclaw/cua-computer",
+      "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "cua-computer",
+          "label": "CUA Computer"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cua-computer",
+          "npmSpec": "@openclaw/cua-computer",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",
@@ -533,6 +551,24 @@
       }
     },
     {
+      "name": "@openclaw/onnx",
+      "description": "Local ONNX decision models for OpenClaw",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "onnx",
+          "label": "ONNX"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/onnx",
+          "npmSpec": "@openclaw/onnx",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/openshell-sandbox",
       "description": "OpenClaw OpenShell sandbox backend",
       "source": "official",
@@ -695,6 +731,32 @@
       }
     },
     {
+      "name": "@openclaw/slack-huddles",
+      "description": "OpenClaw Slack huddle browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "slack-huddles",
+          "label": "Slack huddles"
+        },
+        "contracts": {
+          "tools": [
+            "slack_huddles"
+          ],
+          "transcriptSourceProviders": [
+            "slack-huddle"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/slack-huddles",
+          "npmSpec": "@openclaw/slack-huddles",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",
@@ -781,7 +843,7 @@
           "clawhubSpec": "clawhub:@openclaw/teams-meetings",
           "npmSpec": "@openclaw/teams-meetings",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.9.8"
         }
       }
     },
@@ -804,6 +866,24 @@
           "npmSpec": "@openclaw/tokenjuice",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -847,7 +927,7 @@
           "clawhubSpec": "clawhub:@openclaw/zoom-meetings",
           "npmSpec": "@openclaw/zoom-meetings",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.9.8"
         }
       }
     }

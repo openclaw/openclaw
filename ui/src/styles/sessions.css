@@ -425,7 +425,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-/* --- Table --- */
 .sessions-table {
   min-width: 760px;
 }
@@ -502,7 +501,8 @@
   border-radius: var(--radius-sm);
 }
 
-.session-avatar svg {
+.session-avatar svg,
+.session-actions .icon-btn svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -578,7 +578,7 @@
   flex: 0 1 auto;
   max-width: 140px;
   overflow: hidden;
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -595,9 +595,8 @@
 }
 
 .session-kind--direct {
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
 }
-
 .session-kind--group {
   color: var(--info);
 }
@@ -633,7 +632,6 @@
   text-overflow: ellipsis;
 }
 
-/* --- Initial-load skeleton --- */
 .session-skeleton-row td {
   border-bottom: 1px solid var(--border);
 }
@@ -670,7 +668,6 @@
   }
 }
 
-/* --- Empty states --- */
 .sessions-table .data-table-empty-state {
   display: flex;
   flex-direction: column;
@@ -749,28 +746,20 @@
     opacity var(--duration-fast) ease;
 }
 
-.session-actions .icon-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sessions-table tr:hover .session-actions .icon-btn,
 .session-actions .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled) {
+.session-actions .icon-btn:hover:not(:disabled),
+.session-details-toggle:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible {
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -794,17 +783,6 @@
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
-}
-
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .session-details-toggle svg {
@@ -988,58 +966,6 @@
   white-space: nowrap;
 }
 
-.session-details-empty {
-  padding: 4px 0;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-list {
-  display: grid;
-}
-
-.session-checkpoint-card {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) 0;
-}
-
-.session-checkpoint-card + .session-checkpoint-card {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.session-checkpoint-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.session-checkpoint-card__header strong,
-.session-checkpoint-card__delta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-checkpoint-card__delta {
-  flex: 0 1 auto;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-card__summary {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.session-checkpoint-card__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-/* --- Narrow layouts --- */
 @media (max-width: 768px) {
   .sessions-toolbar {
     align-items: stretch;

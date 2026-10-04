@@ -1,17 +1,9 @@
-// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
-import fs from "node:fs/promises";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 import {
   isDefaultInstallIdentity,
   resolveConfigPath,
   resolveStateDir,
 } from "../../config/paths.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  GatewayControlUiConfig,
-} from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
@@ -19,7 +11,6 @@ import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { formatServiceLabel } from "../../daemon/runtime-format.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
@@ -43,26 +34,21 @@ import {
   type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
 } from "../../plugins/plugin-version-drift.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
+import { readDaemonStatusConfig } from "./status.config.js";
 import {
   inspectDaemonPortStatuses,
   resolveGatewayStatusProbeConfig,
   resolveGatewayStatusSummary,
 } from "./status.gateway.js";
+import { projectDaemonRuntimeStatus } from "./status.projection.js";
+import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
 
-type ConfigSummary = {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  warnings?: ConfigFileSnapshot["warnings"];
-  controlUi?: GatewayControlUiConfig;
-};
+type ConfigSummary = Awaited<ReturnType<typeof readDaemonStatusConfig>>["summary"];
 
 type DaemonConfigContext = {
   mergedDaemonEnv: Record<string, string | undefined>;
@@ -72,130 +58,6 @@ type DaemonConfigContext = {
   daemonConfigSummary: ConfigSummary;
   configMismatch: boolean;
 };
-
-type StatusConfigRead = {
-  summary: ConfigSummary;
-  cfg: OpenClawConfig;
-  mode: "fast" | "full";
-};
-
-type CliStatusSummary = {
-  version: string;
-  entrypoint?: string;
-};
-
-const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
-const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
-const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
-const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
-const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
-const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
-const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
-const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
-
-async function readFastStatusConfig(configPath: string): Promise<StatusConfigRead | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(configPath, "utf8");
-  } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
-      return null;
-    }
-    return {
-      summary: { path: configPath, exists: false, valid: true },
-      cfg: {},
-      mode: "fast",
-    };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON5.parse(raw);
-  } catch (err) {
-    return {
-      summary: {
-        path: configPath,
-        exists: true,
-        valid: false,
-        issues: [{ path: "", message: `JSON5 parse failed: ${String(err)}` }],
-      },
-      cfg: {},
-      mode: "fast",
-    };
-  }
-
-  const cfg: OpenClawConfig = asNonArrayRecord(parsed);
-  // Includes and environment expansion require the full config owner.
-  if (raw.includes("$include") || raw.includes("${") || Object.hasOwn(cfg, "env")) {
-    return null;
-  }
-
-  return {
-    summary: {
-      path: configPath,
-      exists: true,
-      valid: true,
-      controlUi: cfg.gateway?.controlUi,
-    },
-    cfg,
-    mode: "fast",
-  };
-}
-
-async function readFullStatusConfig(params: {
-  env: NodeJS.ProcessEnv;
-  configPath: string;
-  pluginValidation?: "full" | "skip";
-}): Promise<StatusConfigRead> {
-  const { createConfigIO } = await loadConfigIoRuntime();
-  const io = createConfigIO({
-    env: params.env,
-    configPath: params.configPath,
-    observe: false,
-    pluginValidation: params.pluginValidation ?? "skip",
-    logger: {
-      error: () => {},
-      warn: () => {},
-    },
-  });
-  const snapshot = await io.readConfigFileSnapshot().catch(() => null);
-  const cfg = (snapshot?.valid && snapshot.runtimeConfig) || io.loadConfig();
-  return {
-    summary: {
-      path: snapshot?.path ?? params.configPath,
-      exists: snapshot?.exists ?? false,
-      valid: snapshot?.valid ?? true,
-      ...(snapshot?.issues?.length ? { issues: snapshot.issues } : {}),
-      ...(snapshot?.warnings?.length ? { warnings: snapshot.warnings } : {}),
-      controlUi: cfg.gateway?.controlUi,
-    },
-    cfg,
-    mode: "full",
-  };
-}
-
-async function readStatusConfig(params: {
-  env: NodeJS.ProcessEnv;
-  configPath: string;
-  deep?: boolean;
-}): Promise<StatusConfigRead> {
-  return (
-    (params.deep ? null : await readFastStatusConfig(params.configPath)) ??
-    (await readFullStatusConfig({
-      env: params.env,
-      configPath: params.configPath,
-      pluginValidation: params.deep ? "full" : "skip",
-    }))
-  );
-}
-
-function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummary {
-  const entrypoint = argv[1]?.trim();
-  return {
-    version: VERSION,
-    ...(entrypoint ? { entrypoint } : {}),
-  };
-}
 
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
@@ -209,7 +71,7 @@ async function loadDaemonConfigContext(
   const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
   const daemonConfigPath = resolveConfigPath(mergedDaemonEnv, resolveStateDir(mergedDaemonEnv));
   const sameConfigPath = cliConfigPath === daemonConfigPath;
-  const cliConfigRead = await readStatusConfig({
+  const cliConfigRead = await readDaemonStatusConfig({
     env: process.env,
     configPath: cliConfigPath,
     deep: opts.deep,
@@ -218,7 +80,7 @@ async function loadDaemonConfigContext(
     sameConfigPath && (cliConfigRead.mode === "fast" || !serviceEnv);
   const daemonConfigRead = sharesDaemonConfigContext
     ? cliConfigRead
-    : await readStatusConfig({
+    : await readDaemonStatusConfig({
         env: mergedDaemonEnv,
         configPath: daemonConfigPath,
         deep: opts.deep,
@@ -303,16 +165,17 @@ async function gatherDaemonStatusImpl(
   const timeoutMs = parseTimeoutMsWithFallback(opts.rpc.timeout, 10_000, {
     invalidType: "error",
   });
-  const service = resolveGatewayService();
-  const serviceState = await readGatewayServiceState(service, {
+  const { service, state: serviceState } = await readDaemonServiceStatus({
     env: process.env,
-    timeoutMs,
+    timeoutMs:
+      process.platform === "win32" && opts.rpc.timeout === undefined ? undefined : timeoutMs,
   });
   const { command, env: serviceEnv, loadState, runtime } = serviceState;
   const loaded = loadState.status === "loaded";
   // An explicit local port or separate process context does not select the
   // native service. Keep that service visible without borrowing its target or auth.
   const useNativeServiceTargetContext =
+    !serviceState.inspectionFailed &&
     localPortOverride === undefined &&
     serviceState.inspectionReason !== "service-manager-unavailable" &&
     isDefaultInstallIdentity(process.env) &&
@@ -337,7 +200,7 @@ async function gatherDaemonStatusImpl(
     }
   }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
-  const configAudit: ServiceConfigAudit = await loadServiceAuditModule().then(
+  const configAudit: ServiceConfigAudit = await import("../../daemon/service-audit.js").then(
     ({ auditGatewayServiceConfig }) =>
       auditGatewayServiceConfig({
         env: process.env,
@@ -397,13 +260,13 @@ async function gatherDaemonStatusImpl(
   });
 
   const extraServices = opts.deep
-    ? await loadDaemonInspectModule()
+    ? await import("../../daemon/inspect.js")
         .then(({ findExtraGatewayServices }) =>
           findExtraGatewayServices(process.env, {
             deep: true,
           }),
         )
-        .then((services) =>
+        .then(({ services }) =>
           services.filter(
             (extra) =>
               extra.platform !== "linux" ||
@@ -415,7 +278,7 @@ async function gatherDaemonStatusImpl(
     : [];
   const launchdDiagnostics =
     process.platform === "darwin"
-      ? await loadLaunchdDiagnosticsModule().then(({ gatherLaunchdJobDiagnostics }) =>
+      ? await import("./status.launchd.js").then(({ gatherLaunchdJobDiagnostics }) =>
           gatherLaunchdJobDiagnostics(serviceEnv, Boolean(opts.deep)),
         )
       : {};
@@ -423,7 +286,7 @@ async function gatherDaemonStatusImpl(
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const localCertificate =
     opts.probe && !probeUrlOverride && tlsEnabled
-      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+      ? await import("../../infra/tls/gateway.js").then(({ inspectGatewayTlsCertificate }) =>
           inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
         )
       : undefined;
@@ -451,7 +314,7 @@ async function gatherDaemonStatusImpl(
       daemonProbeAuth = {};
     } else if (canResolveProbeAuth) {
       // Trusted-proxy probes still use the local-direct password owned by this resolver.
-      const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+      const probeAuthResolution = await import("../../gateway/probe-auth.js").then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({
             cfg: daemonCfg,
@@ -472,7 +335,7 @@ async function gatherDaemonStatusImpl(
   }
 
   const rpc = opts.probe
-    ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
+    ? await import("./probe.js").then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
           url: probeUrl,
           ...(probeUrlOverride ? { urlOverride: probeUrlOverride } : {}),
@@ -496,7 +359,7 @@ async function gatherDaemonStatusImpl(
   }
   const health =
     opts.probe && serviceTargetsProbe && loaded && rpc?.ok !== true
-      ? await loadRestartHealthModule()
+      ? await import("./restart-health.js")
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
               service,
@@ -607,9 +470,18 @@ async function gatherDaemonStatusImpl(
   const hostDesktop = await (
     await import("../../gateway/desktop/host-source.js")
   ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+  const targetRole: "target" | "diagnostic-only" = serviceTargetsProbe
+    ? "target"
+    : "diagnostic-only";
+
+  const projection = await projectDaemonRuntimeStatus({
+    deep: opts.deep,
+    service,
+    state: serviceState,
+  });
 
   return {
-    cli: resolveCliStatusSummary(),
+    cli: projection.cli,
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
@@ -621,8 +493,9 @@ async function gatherDaemonStatusImpl(
       loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
-      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
+      targetRole,
       command,
+      ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       runtime: runtime?.inspectionFailure
         ? {

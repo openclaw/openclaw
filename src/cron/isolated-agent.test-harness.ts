@@ -9,12 +9,15 @@ import type { CronJob } from "./types.js";
 
 /** Runs a test callback with an isolated OpenClaw home for cron tests. */
 export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-cron-",
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
 }
 
 export async function writeSessionStore(
   home: string,
-  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+  session: Pick<SessionEntry, "delivery">,
 ): Promise<string> {
   return writeSessionStoreEntries(home, {
     "agent:main:main": {
@@ -45,7 +48,7 @@ export function makeCfg(
 ): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),

@@ -17,6 +17,9 @@ Use the green window button to enter native full screen. The Dashboard's sidebar
 and chat controls remain available at the top of the window. Leaving full screen
 restores the normal titlebar and window controls.
 
+While the Dashboard loads, its empty canvas follows the native window's appearance.
+Once the page paints, the Dashboard's selected theme supplies its background.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
@@ -32,8 +35,10 @@ require macOS 26 or later.
 
 The Node-based CLI and Gateway need a [supported Node version](/install/node)
 on an operating system supported by that runtime. Official Node 24 and Node 26
-macOS binaries require macOS 13.5 or later. Running the CLI on an older Mac
-does not make the native app compatible with that macOS version.
+macOS binaries are built for macOS 13.5 or later, the oldest release Node
+supports. Older macOS releases may still run them but are not supported. Running
+the CLI on an older Mac does not make the native app compatible with that macOS
+version.
 
 Building from source also requires the toolchain listed in
 [macOS developer setup](/platforms/mac/dev-setup#prerequisites).
@@ -88,6 +93,14 @@ cookie sync, and permissions. Device voice controls appear under
 **Settings → Talk → This Mac**, and app update preferences under
 **Settings → Updates → This Mac**. These device controls appear only in the
 macOS app's embedded Dashboard, not in an ordinary browser.
+
+**This Mac → Capabilities → Desktop sharing** is enabled by default. It exposes
+this Mac's existing Screen Sharing service in **Systems**, independently of
+**Computer Control** and **Keep computer awake**. Enable Screen Sharing in
+**System Settings → General → Sharing** and approve the node's desktop capability
+when requested. Existing explicit disable settings stay off after an update;
+changing the Mac setting reconnects the node automatically. See
+[paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops).
 
 Enabling sensitive capabilities opens a native confirmation with **Cancel** as
 the default. Closing or replacing the Dashboard page cancels pending consent;

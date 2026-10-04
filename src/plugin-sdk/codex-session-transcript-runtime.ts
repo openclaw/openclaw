@@ -3,11 +3,10 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
-import {
-  readSessionTranscriptContextMessages,
-  type SessionTranscriptContextVersion,
-} from "../config/sessions/session-accessor.sqlite-model-context.js";
+import type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { readSessionTranscriptContextMessages } from "../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptContextSnapshot as CodexSessionContextSnapshot } from "../config/sessions/session-history-read.types.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -27,8 +26,34 @@ import type { SessionTranscriptTargetParams } from "./session-transcript-runtime
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
 export { validateSessionTranscriptContextAdmission as validateCodexSessionTranscriptReadAdmission } from "../config/sessions/session-accessor.sqlite-model-context.js";
 export { validateSessionTranscriptContextVersion as validateCodexSessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
-export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 export { SessionTranscriptReadFenceError };
+
+export type { CodexSessionContextSnapshot };
+
+export type CodexSessionContextReader = <T>(
+  target: SessionTranscriptRuntimeTarget,
+  read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+) => Promise<T>;
+
+/** The owner supplies a captured read, SQL-free live authority, and actor-side validation. */
+export function createCodexSessionContextReader(owner: {
+  assertCurrent(target: SessionTranscriptRuntimeTarget): void;
+  read(): Promise<CodexSessionContextSnapshot>;
+  validate(snapshot: CodexSessionContextSnapshot): Promise<void>;
+  retain<T>(operation: () => Promise<T>): Promise<T>;
+}): CodexSessionContextReader {
+  return (target, read) =>
+    owner.retain(async () => {
+      owner.assertCurrent(target);
+      const snapshot = await owner.read();
+      owner.assertCurrent(target);
+      const result = await read(snapshot.messages, snapshot.header);
+      await owner.validate(snapshot);
+      owner.assertCurrent(target);
+      return result;
+    });
+}
 
 /** The native evidence consumer remains lazy inside one readonly transcript snapshot. */
 export function readCodexSessionContext<T>(

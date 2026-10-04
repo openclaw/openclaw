@@ -36,13 +36,12 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
 import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
@@ -60,7 +59,6 @@ import {
 type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
 
 const DEFAULT_SESSIONS_LIMIT = 100;
-const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
 /** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
@@ -260,7 +258,7 @@ export async function sessionsCommand(
   const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const { lookupContextTokens, resolveModelContextTokenProjection } =
-    await contextLookupRuntimeLoader.load();
+    await import("../agents/context.js");
   const configContextTokens =
     lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
   const targets = resolveCommandSessionStoreTargets({ cfg, opts });

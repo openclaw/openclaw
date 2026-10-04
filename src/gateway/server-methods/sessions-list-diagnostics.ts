@@ -11,6 +11,8 @@ import type {
   SessionListDiagnostics,
   SessionListPhase,
 } from "../session-list-diagnostics.types.js";
+import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
+import { summarizeSessionListForWsLog } from "../ws-log.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -19,6 +21,7 @@ const sessionListDiagnostics = channel("openclaw.session.list");
 function startSessionListDiagnostics(
   respond: RespondFn,
   operation: "sessions.list" | "sessions.subscribe",
+  params: unknown,
 ) {
   const logEnabled = areDiagnosticsEnabledForProcess() && sessionLog.isEnabled("warn");
   if (!logEnabled && !sessionListDiagnostics.hasSubscribers) {
@@ -79,9 +82,7 @@ function startSessionListDiagnostics(
     mark,
     startSyncCpu,
     finishSyncCpu,
-    get projection() {
-      return projection;
-    },
+    projection,
     respond: ((...args) => {
       mark("response");
       responseOutcome = args[0] ? "ok" : "error";
@@ -100,7 +101,9 @@ function startSessionListDiagnostics(
       mark("handlerExit");
       const handlerElapsedMs = checkpoint - startedAt;
       const shouldLog =
-        logEnabled && handlerElapsedMs >= 1_000 && areDiagnosticsEnabledForProcess();
+        logEnabled &&
+        handlerElapsedMs >= SLOW_GATEWAY_REQUEST_MS &&
+        areDiagnosticsEnabledForProcess();
       if (!shouldLog && !sessionListDiagnostics.hasSubscribers) {
         return;
       }
@@ -112,17 +115,16 @@ function startSessionListDiagnostics(
         }
         const fields = {
           operation,
+          ...summarizeSessionListForWsLog(params),
           pid: process.pid,
           threadId,
           isMainThread,
           handlerElapsedMs: Math.round(handlerElapsedMs),
           phaseDurationsMs,
           ...cpuMetrics,
-          ...(projection
-            ? Object.fromEntries(
-                Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
-              )
-            : {}),
+          ...Object.fromEntries(
+            Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
+          ),
           handlerOutcome,
           responseOutcome,
         };
@@ -153,6 +155,7 @@ export function withSessionListDiagnostics(
     const diagnostics = startSessionListDiagnostics(
       args.respond,
       args.req.method === "sessions.subscribe" ? "sessions.subscribe" : "sessions.list",
+      args.params,
     );
     let outcome: "returned" | "threw" = "returned";
     try {

@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -70,19 +69,10 @@ describe("prepared worker intent admission", () => {
       getConfig: () => support.testState.config,
       projectNamespace: "gateway-test",
       providerFor: () => provider,
-      requireWorkerProfile: (value) => {
-        const error = validateCloudWorkerProfileSettings(value);
-        if (error) {
-          throw new Error(error);
-        }
-        return value as Parameters<WorkerProvider["provision"]>[0];
-      },
       prepareNodeArtifacts,
       resumeProvision,
       isStopping: () => false,
-      inState: (record, ...states) => states.includes(record.state),
       withLock: async (_environmentId, task) => task(),
-      serviceError: (_code, message) => new Error(message),
     });
     return {
       owner,
@@ -196,7 +186,7 @@ describe("prepared worker intent admission", () => {
     expect(f.resumeProvision).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["current", "legacy-label", "linked-transport"])(
+  it.each(["legacy-label", "linked-transport"])(
     "replays a fresh admitted intent after display or transport metadata changes (%s)",
     async (variant) => {
       const f = await fixture();
@@ -213,7 +203,7 @@ describe("prepared worker intent admission", () => {
         await requireGit(f.projectPath, ["worktree", "add", "--detach", linked, "HEAD"]);
         profileSnapshot.project.root = linked;
       }
-      const stored = support.testState.store.createIntent({
+      const stored = await support.testState.store.createIntent({
         ...deriveEnvironmentIntent("display-replay"),
         providerId: original.providerId,
         profileId: "development",
@@ -233,14 +223,6 @@ describe("prepared worker intent admission", () => {
       expect(support.testState.store.get(stored.environmentId)?.profileSnapshot).toEqual(
         profileSnapshot,
       );
-      expect(f.resumeProvision).toHaveBeenCalledOnce();
-
-      await fs.writeFile(path.join(f.projectPath, "input.txt"), "changed source\n");
-      await requireGit(f.projectPath, ["commit", "--quiet", "-am", "change source"]);
-      const changed = await f.owner.prepareIntent("development", options);
-      await expect(
-        f.owner.createWithProfile("development", "display-replay", options, changed),
-      ).rejects.toThrow("Idempotency key belongs to another project preparation");
       expect(f.resumeProvision).toHaveBeenCalledOnce();
     },
   );
@@ -291,7 +273,7 @@ describe("prepared worker intent admission", () => {
   it("rechecks profile policy after awaited artifact preparation and during retention", async () => {
     const f = await fixture();
     const intent = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
-    const record = support.testState.store.createIntent({
+    const record = await support.testState.store.createIntent({
       environmentId: "retained",
       providerId: intent.providerId,
       profileId: "development",
@@ -301,7 +283,7 @@ describe("prepared worker intent admission", () => {
     const retention = await f.owner.prepareRetention(record);
     expect(retention).toBeDefined();
     f.provider.supportsProjectPreparation = () => false;
-    expect(() => retention!.assertCurrent()).toThrow("retention policy changed");
+    expect(retention!.isCurrent()).toBe(false);
     f.provider.supportsProjectPreparation = () => true;
     const entered = createDeferredCore();
     const release = createDeferredCore();

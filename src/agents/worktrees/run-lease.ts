@@ -3,20 +3,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import { worktreePathExists } from "./git.js";
+import { readRegistryWorktree } from "./registry-read.js";
 import {
-  abortWorktreeRemovalRow,
-  admitWorktreeRunLeaseRow,
   claimWorktreeRemovalRow,
-  finalizeWorktreeRemovalRows,
   getRegistryWorktree,
   hasLiveWorktreeRunLeaseRow,
   listRegistryWorktrees,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
-import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import {
+  admitWorktreeRunLeaseRowAsync,
+  releaseWorktreeRunLeaseRowAsync,
+} from "./run-lease-store.js";
+import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
+
+export {
+  abortWorktreeRemovalRow as abortWorktreeRemoval,
+  finalizeWorktreeRemovalRows as finalizeWorktreeRemoval,
+} from "./registry.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -35,44 +45,28 @@ type HeldWorktreeLock = { refcount: number; gitLocked: boolean };
 // the parent's still-live checkout.
 const heldGitLocks = new Map<string, HeldWorktreeLock>();
 const gitLockTransitionTails = new Map<string, Promise<void>>();
-let ownerChecks: RunLeaseOwnerChecks = {};
-let resolveSelfStartTime = getFileLockProcessStartTime;
-let releaseRunLeaseRow = releaseWorktreeRunLeaseRow;
-let unlockWorktreeImpl = unlockWorktree;
 
 // A cleanup that could not finish (persistent state-database delete or git unlock
-// failure) is retained here so the process keeps ownership of it and retries on the
-// next lease acquisition and at exit, instead of stranding the row and git guard.
+// failure) is retained here for lifecycle retries. Unknown native admission stays
+// fenced until process death permits stale-owner reaping; deletion could race a late insert.
 type LeaseCleanup = {
   env: NodeJS.ProcessEnv;
+  context: OpenClawStateWorkerContext;
   id: string;
   token: string;
   rowDeleted: boolean;
+  admissionSettled: boolean;
+  gitRetained: boolean;
   refcountReleased: boolean;
 };
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
 
-async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
-  const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
-  let finish!: () => void;
-  const current = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const tail = previous.then(() => current);
-  gitLockTransitionTails.set(id, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    finish();
-    if (gitLockTransitionTails.get(id) === tail) {
-      gitLockTransitionTails.delete(id);
-    }
-  }
+function withGitLockTransition<T>(id: string, task: () => Promise<T>): Promise<T> {
+  return enqueueKeyedTask({ tails: gitLockTransitionTails, key: id, task });
 }
 
-async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> {
+async function retainGitLock(context: OpenClawStateWorkerContext, id: string): Promise<void> {
   await withGitLockTransition(id, async () => {
     const held = heldGitLocks.get(id) ?? { refcount: 0, gitLocked: false };
     const needsLock = held.refcount === 0 && !held.gitLocked;
@@ -83,7 +77,7 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
     }
     let record: ManagedWorktreeRecord | undefined;
     try {
-      record = getRegistryWorktree(env, id);
+      record = await readRegistryWorktree(context, id);
       if (!record) {
         return;
       }
@@ -92,7 +86,7 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
     } catch (error) {
       heldGitLocks.delete(id);
       throw new Error(
-        `managed worktree is unusable because its Git removal guard could not be acquired: ${record?.path ?? id}; repair the checkout or create a new worktree before retrying: ${errorMessage(error)}`,
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${record?.path ?? id}; checkout preserved. Repair its Git metadata or create a new worktree before retrying: ${errorMessage(error)}`,
         { cause: error },
       );
     }
@@ -121,9 +115,9 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
       return true;
     }
     try {
-      const record = getRegistryWorktree(cleanup.env, cleanup.id);
+      const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
-        await unlockWorktreeImpl(record);
+        await unlockWorktree(record);
       }
     } catch (error) {
       log.warn(`failed to unlock worktree ${cleanup.id}: ${errorMessage(error)}`);
@@ -183,15 +177,25 @@ export async function resolveWorktreeIdForPath(params: {
   return undefined;
 }
 
-function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): boolean {
+async function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): Promise<boolean> {
   for (let attempt = 1; attempt <= RELEASE_MAX_ATTEMPTS; attempt += 1) {
     try {
-      releaseRunLeaseRow(cleanup.env, cleanup.id, cleanup.token);
+      await releaseWorktreeRunLeaseRowAsync(
+        cleanup.env,
+        cleanup.id,
+        cleanup.token,
+        cleanup.context,
+      );
       return true;
     } catch (error) {
       log.warn(
         `failed to release worktree run lease for ${cleanup.id} (attempt ${attempt}): ${errorMessage(error)}`,
       );
+      if (attempt < RELEASE_MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25 * attempt);
+        });
+      }
     }
   }
   return false;
@@ -201,13 +205,16 @@ function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): boolean {
 // row and the git guard are released. Keeps everything until each step succeeds so a
 // removal stays correctly blocked while cleanup is still owed.
 async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
+  if (!cleanup.admissionSettled) {
+    return false;
+  }
   if (!cleanup.rowDeleted) {
-    if (!deleteRunLeaseRowWithRetries(cleanup)) {
+    if (!(await deleteRunLeaseRowWithRetries(cleanup))) {
       return false;
     }
     cleanup.rowDeleted = true;
   }
-  return await releaseGitLock(cleanup);
+  return !cleanup.gitRetained || (await releaseGitLock(cleanup));
 }
 
 async function drainPendingLeaseCleanups(): Promise<void> {
@@ -223,13 +230,13 @@ function ensureExitCleanupRegistered(): void {
     return;
   }
   exitCleanupRegistered = true;
-  // A row that never deleted keeps its worktree unremovable until this process ends;
-  // delete it synchronously on exit so a live-pid lease row does not linger.
+  // Only settled admissions can be deleted synchronously; unknown writers may still insert.
   process.on("exit", () => {
     for (const cleanup of pendingLeaseCleanups) {
-      if (!cleanup.rowDeleted) {
+      if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {
-          releaseRunLeaseRow(cleanup.env, cleanup.id, cleanup.token);
+          cleanup.context.admission.assertCurrent();
+          releaseWorktreeRunLeaseRow(cleanup.context.environment, cleanup.id, cleanup.token);
         } catch {
           // Best effort at exit; the dead pid also lets a later process prune it.
         }
@@ -240,7 +247,12 @@ function ensureExitCleanupRegistered(): void {
 
 export async function acquireWorktreeRunLease(
   id: string,
-  opts: { env?: NodeJS.ProcessEnv; exclusive?: true } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    exclusive?: true;
+    /** Creation can reconcile a missing checkout while retaining exclusive registry custody. */
+    allowMissingCheckout?: true;
+  } = {},
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   ensureExitCleanupRegistered();
@@ -248,107 +260,92 @@ export async function acquireWorktreeRunLease(
   await drainPendingLeaseCleanups();
   const token = randomUUID();
   const pid = process.pid;
-  const startTime = resolveSelfStartTime(pid);
-  admitWorktreeRunLeaseRow(env, {
-    worktreeId: id,
-    token,
-    pid,
-    startTime,
-    now: Date.now(),
-    checks: ownerChecks,
-    ...(opts.exclusive ? { exclusive: true } : {}),
-  });
+  const startTime = getFileLockProcessStartTime(pid);
+  const context = captureOpenClawStateWorkerContext({ env });
   const cleanup: LeaseCleanup = {
     env,
+    context,
     id,
     token,
     rowDeleted: false,
-    refcountReleased: false,
+    admissionSettled: false,
+    gitRetained: false,
+    refcountReleased: true,
   };
   // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
   // newer same-process holder after a prior generation's unlock failed.
   try {
-    await retainGitLock(env, id);
+    await admitWorktreeRunLeaseRowAsync(
+      context,
+      {
+        worktreeId: id,
+        token,
+        pid,
+        startTime,
+        now: Date.now(),
+        ...(opts.exclusive || opts.allowMissingCheckout ? { exclusive: true } : {}),
+      },
+      (kind) => {
+        cleanup.admissionSettled = kind !== "unknown";
+        cleanup.rowDeleted = kind === "not-entered";
+      },
+    );
+    const record = opts.allowMissingCheckout ? await readRegistryWorktree(context, id) : undefined;
+    if (!record || (await worktreePathExists(record.path))) {
+      await retainGitLock(context, id);
+      cleanup.gitRetained = true;
+      cleanup.refcountReleased = false;
+    }
+    context.admission.assertCurrent();
   } catch (error) {
-    // The failed retain already discarded its in-memory holder; cleanup owns only
-    // the durable row and keeps it fenced if deletion cannot complete yet.
-    cleanup.refcountReleased = true;
     if (!(await runLeaseCleanup(cleanup))) {
       pendingLeaseCleanups.add(cleanup);
     }
     throw error;
   }
-  let released = false;
+  let release: Promise<void> | undefined;
   return {
     id,
     token,
-    release: async () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      if (!(await runLeaseCleanup(cleanup))) {
-        pendingLeaseCleanups.add(cleanup);
-      }
-    },
+    release: () =>
+      (release ??= runLeaseCleanup(cleanup).then((complete) => {
+        if (!complete) {
+          pendingLeaseCleanups.add(cleanup);
+        }
+      })),
   };
 }
 
 export function claimWorktreeRemoval(
   env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; token: string },
-): void {
+  params: {
+    worktreeId: string;
+    token: string;
+    retiredExact?: true;
+    retiredRemoval?: true;
+    assertCurrent?: () => void;
+    workerAuthority?: WorktreeWorkerAuthority;
+  },
+): Promise<void> {
   const pid = process.pid;
-  claimWorktreeRemovalRow(env, {
+  return claimWorktreeRemovalRow(env, {
     ...params,
     pid,
-    startTime: resolveSelfStartTime(pid),
+    startTime: getFileLockProcessStartTime(pid),
     now: Date.now(),
-    checks: ownerChecks,
   });
 }
 
-export function finalizeWorktreeRemoval(env: NodeJS.ProcessEnv, worktreeId: string): void {
-  finalizeWorktreeRemovalRows(env, worktreeId);
-}
-
-export function abortWorktreeRemoval(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-  token: string,
-): void {
-  abortWorktreeRemovalRow(env, worktreeId, token);
-}
-
 export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
+  return hasLiveWorktreeRunLeaseRow(env, worktreeId);
 }
 
 const testing = {
-  setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
-    resolveSelfStartTime = resolver ?? getFileLockProcessStartTime;
-    ownerChecks = { ...ownerChecks, getProcessStartTime: resolver ?? undefined };
-  },
-  setDeadPidResolverForTest(resolver: ((pid: number) => boolean) | null): void {
-    ownerChecks = { ...ownerChecks, isPidDefinitelyDead: resolver ?? undefined };
-  },
-  setReleaseRowImplForTest(impl: typeof releaseWorktreeRunLeaseRow | null): void {
-    releaseRunLeaseRow = impl ?? releaseWorktreeRunLeaseRow;
-  },
-  setUnlockImplForTest(impl: typeof unlockWorktree | null): void {
-    unlockWorktreeImpl = impl ?? unlockWorktree;
-  },
-  async drainPendingCleanupsForTest(): Promise<void> {
-    await drainPendingLeaseCleanups();
-  },
+  drainPendingCleanupsForTest: drainPendingLeaseCleanups,
   resetForTest(): void {
     heldGitLocks.clear();
     gitLockTransitionTails.clear();
     pendingLeaseCleanups.clear();
-    ownerChecks = {};
-    resolveSelfStartTime = getFileLockProcessStartTime;
-    releaseRunLeaseRow = releaseWorktreeRunLeaseRow;
-    unlockWorktreeImpl = unlockWorktree;
   },
 };
 

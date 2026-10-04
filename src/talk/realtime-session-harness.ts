@@ -93,15 +93,9 @@ type RealtimeVoiceSessionHarnessHealth = ReturnType<typeof getRealtimeVoiceTrans
     lastInputBytes: number;
     lastOutputBytes: number;
     suppressedInputBytes: number;
-    recentTalkEvents: Array<{
-      id: string;
-      type: TalkEvent["type"];
-      sessionId: string;
-      turnId?: string;
-      seq: number;
-      timestamp: string;
-      final?: boolean;
-    }>;
+    recentTalkEvents: Array<
+      Pick<TalkEvent, "id" | "type" | "sessionId" | "turnId" | "seq" | "timestamp" | "final">
+    >;
   };
 
 export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
@@ -155,7 +149,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   let responseOwnerId: string | undefined;
   let suppressNextUnkeyedLegacyTerminal = false;
   const settledResponseIds = new Set<string>();
-  const settledResponseIdOrder: string[] = [];
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
@@ -191,9 +184,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       return;
     }
     settledResponseIds.add(responseId);
-    settledResponseIdOrder.push(responseId);
-    if (settledResponseIdOrder.length > MAX_SETTLED_RESPONSE_IDS) {
-      const oldest = settledResponseIdOrder.shift();
+    if (settledResponseIds.size > MAX_SETTLED_RESPONSE_IDS) {
+      const oldest = settledResponseIds.values().next().value;
       if (oldest) {
         settledResponseIds.delete(oldest);
       }
@@ -217,7 +209,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
 
   const finishResponse = (
     outcome: RealtimeVoiceResponseOutcome,
-    source: "typed" | "legacy" | "manual",
+    source: "typed" | "legacy",
   ): TalkTurnResult => {
     if (outcome.responseId && settledResponseIds.has(outcome.responseId)) {
       return { ok: false, reason: "no_active_turn" };
@@ -318,11 +310,12 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
           ensureTurn();
           bridgeParams.onResponseRequest?.();
         },
-        onTranscript: (role, text, isFinal) => {
+        onTranscript: (...args) => {
+          const [role, text, isFinal] = args;
           if (isFinal) {
             harness.recordTranscript(role, text);
           }
-          bridgeParams.onTranscript?.(role, text, isFinal);
+          bridgeParams.onTranscript?.(...args);
         },
         onEvent: (event) => {
           claimResponseEvent(event);

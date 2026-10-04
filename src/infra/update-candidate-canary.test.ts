@@ -6,8 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as diskSpace from "./disk-space.js";
+import { registerCanaryMigrationPolicyTests } from "./update-candidate-canary-migration.test-support.js";
+import {
+  registerCanaryProgressWorkerTests,
+  registerCanaryUncertainReceiptTests,
+} from "./update-candidate-canary-progress.test-support.js";
 import * as readiness from "./update-candidate-canary-readiness.test-support.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
@@ -17,7 +23,6 @@ import {
   renderSteps,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
-import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -29,9 +34,12 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
-import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+}));
 vi.mock("node:child_process", async (importOriginal) =>
   (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
     await importOriginal<typeof import("node:child_process")>(),
@@ -51,7 +59,27 @@ vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   signalProcessTree: mocks.signal,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const admission = vi.hoisted(
+  (): {
+    active: boolean;
+    beforeGrant?: (stage: string) => void;
+  } => ({ active: false }),
+);
+vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) =>
+  (
+    await import("./update-candidate-canary-mocks.test-support.js")
+  ).mockCanarySqliteOperationAdmission(
+    await importOriginal<typeof import("./sqlite-worker-operation-admission.js")>(),
+    admission,
+  ),
+);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    admission.beforeGrant = undefined;
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 let root: string;
 let nextPid = 41_000;
 const children = new Map<number, FakeChild>();
@@ -61,7 +89,6 @@ let pluginErrors = false;
 let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
-let lintReport: { ok: boolean; checksRun: number; findings: unknown[]; warnings: unknown[] };
 let databasePath: string | undefined;
 
 function canaryStateOptions(timeoutMs?: number) {
@@ -74,7 +101,6 @@ beforeEach(async () => {
   pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
-  lintReport = { ok: true, checksRun: 1, findings: [], warnings: [] };
   databasePath = undefined;
   root = path.join(await fs.realpath(tempDirs.make("canary-unit-")), "candidate");
   await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
@@ -98,7 +124,7 @@ beforeEach(async () => {
           pluginErrors,
           runtimeContract,
           runtimeError,
-          lintReport,
+          lintReport: { ok: true, checksRun: 1, findings: [], warnings: [] },
         }));
       }
       return child;
@@ -119,6 +145,7 @@ afterEach(() => {
 
 describe("update candidate canary", () => {
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
+  registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
   it("records a typed capacity refusal before notifying the snapshot failure", async () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
@@ -133,7 +160,7 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: "snapshot" });
       const failed = result.steps.at(-1);
       expect(failed).toMatchObject({
-        name: "Preparing update checks",
+        name: "candidate-state-snapshot",
         exitCode: 1,
         snapshotCapacity: {
           reason: "snapshot-capacity-insufficient",
@@ -151,86 +178,52 @@ describe("update candidate canary", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains posture warnings without admitting blocking lint errors (blocking: %s)",
-    async (blocking) => {
-      lintReport = {
-        ok: !blocking,
-        checksRun: 1,
-        findings: blocking
-          ? [{ checkId: "core/config", severity: "error", message: "Invalid configuration." }]
-          : [],
-        warnings: [
-          {
-            checkId: "core/doctor/security",
-            severity: "warning",
-            message: "Open group policy permits mention-gated requests.",
-          },
-        ],
-      };
+  it.each(
+    [
+      { runtime: "node", runtimeArgs: [] },
+      { runtime: "bun", runtimeArgs: ["--no-install"] },
+    ].filter(
+      ({ runtime }) =>
+        process.platform !== "win32" || runtime === (process.versions.bun ? "bun" : "node"),
+    ),
+  )(
+    "keeps $runtime snapshot and validation source selection inside the candidate",
+    async ({ runtime, runtimeArgs }) => {
       stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions());
-      expect(result.status).toBe(blocking ? "error" : "ok");
-      if (blocking) {
-        expect(result).toMatchObject({ phase: "lint", reason: "doctor-failed" });
-      } else {
-        expect(
-          updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
-        ).toContain("Open group policy permits mention-gated requests.");
+      const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
+        createCanarySnapshotResult(options.input, databasePath, warnings),
+      );
+      const servingRoot = path.join(root, "installed");
+      const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+      const nodeRunner = process.platform === "win32" ? process.execPath : path.join(root, runtime);
+      if (process.platform !== "win32") {
+        // The snapshot watchdog also launches this runtime for a real builtin-only I/O probe.
+        await fs.symlink(process.execPath, nodeRunner);
       }
+      const result = await validateUpdateCandidateCanary({
+        ...canaryStateOptions(3000),
+        env,
+        nodeRunner,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps[0]?.warnings).toEqual(warnings);
+      expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
+        nodeRunner,
+        ...runtimeArgs,
+        path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
+      ]);
+      expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+      for (const call of mocks.spawn.mock.calls) {
+        expect(call[0]).toBe(nodeRunner);
+        expect(call[1].slice(0, runtimeArgs.length)).toEqual(runtimeArgs);
+        expect(call[1].includes("--no-install")).toBe(runtime === "bun");
+        expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      }
+      expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
     },
   );
-  it("keeps snapshot and validation source selection inside the candidate", async () => {
-    stubHealthyGateway();
-    const servingRoot = path.join(root, "installed");
-    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), env });
-    expect(result.status).toBe("ok");
-    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
-    for (const call of mocks.spawn.mock.calls) {
-      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    }
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
-  });
-
-  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
-    let now = 2_000_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    stubHealthyGateway();
-    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
-      const child = new FakeChild(nextPid++);
-      children.set(child.pid, child);
-      childEnv = options.env;
-      queueMicrotask(() => {
-        child.stderr.write(
-          formatCliFailureLines({
-            title: "The CLI command failed.",
-            error: new Error("Health unavailable\nDistinct connection detail"),
-            env: {},
-          }).join("\n") + "\n",
-        );
-      });
-      now += 899;
-      return child;
-    });
-    try {
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
-      expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("deadline exceeded");
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
-      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
-      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("deadline exceeded");
-      const report = renderUpdateRunReport(
-        updateRunReportInputFromResult({ ...result, mode: "git", root }),
-      );
-      expect(report.markdown).toContain("deadline exceeded");
-    } finally {
-      clock.mockRestore();
-    }
-  });
 
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     databasePath = path.join(root, "snapshot-budget.sqlite");
@@ -253,7 +246,7 @@ describe("update candidate canary", () => {
       expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
       expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
+        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
       );
       expect(result.logTail.join("\n")).toContain("readyz: ready");
       await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({
@@ -264,16 +257,26 @@ describe("update candidate canary", () => {
     }
   });
 
+  registerCanaryProgressWorkerTests(() => root, mocks, admission);
+
   it.each([
-    [0, undefined, "error"],
-    [2 * 1024 ** 3, undefined, "ok"],
-    [2 * 1024 ** 3, 30 * 60_000, "error"],
+    [0, undefined, 31 * 60_000, "error"],
+    [400 * 1024 ** 2, undefined, 400_000, "ok"],
+    [2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
+    [2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
   ] as const)(
     "derives validation time from %i state bytes while honoring an explicit %s ms deadline",
-    async (sqliteBytes, timeoutMs, expectedStatus) => {
+    async (sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
+      // The sparse database models validation cost, not this host's free disk space.
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 16 * 1024 ** 3,
+        totalBytes: 32 * 1024 ** 3,
+      }));
       const now = Date.now.bind(Date);
       let doctorElapsed = 0;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
@@ -282,7 +285,7 @@ describe("update candidate canary", () => {
           const child = new FakeChild(nextPid++);
           children.set(child.pid, child);
           childEnv = options.env;
-          doctorElapsed = 31 * 60_000;
+          doctorElapsed = elapsedMs;
           queueMicrotask(() => child.emit("close", 0));
           return child;
         },
@@ -297,12 +300,13 @@ describe("update candidate canary", () => {
           expect(result.logTail.join("\n")).toContain("deadline exceeded");
         } else {
           expect(result.steps).toContainEqual(
-            expect.objectContaining({ name: "Checking data migrations", exitCode: 0 }),
+            expect.objectContaining({ name: "candidate-doctor", exitCode: 0 }),
           );
           expect(result.logTail.join("\n")).toContain("readyz: ready");
         }
       } finally {
         clock.mockRestore();
+        capacity.mockRestore();
       }
     },
   );
@@ -393,7 +397,7 @@ describe("update candidate canary", () => {
       stubHealthyGateway();
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result.status).toBe(expectedStatus);
-      const step = result.steps.find((entry) => entry.name === "Checking data migrations");
+      const step = result.steps.find((entry) => entry.name === "candidate-doctor");
       expect(step?.exitCode).toBe(exitCode);
       if (receipt.status === "advisory") {
         expect(step?.advisory).toEqual({
@@ -454,7 +458,7 @@ describe("update candidate canary", () => {
       if (proceeds) {
         expect(result.steps).toContainEqual(
           expect.objectContaining({
-            name: "Checking plugins",
+            name: "candidate-plugins",
             exitCode: 0,
             stdoutTail: 'Plugin "fixture" could not be loaded during the update preview.',
           }),
@@ -482,11 +486,11 @@ describe("update candidate canary", () => {
       const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), onStep });
       expect(result.status).toBe("ok");
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
+        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
       );
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "Removing temporary update files",
+          name: "candidate-state-cleanup",
           advisory: expect.objectContaining({
             message: expect.stringContaining("synthetic cleanup permission denied"),
           }),
@@ -517,26 +521,6 @@ describe("update candidate canary", () => {
       expect(result).not.toHaveProperty("checkpointContinuation");
     },
   );
-  it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
-    await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
-    stubHealthyGateway();
-    const onStep = vi.fn();
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep });
-    expect(result).toMatchObject({ status: "ok", phase: "runtime" });
-    expect(result.candidateSchemaVersions).toBeUndefined();
-    expect(result).not.toHaveProperty("checkpointContinuation");
-    expect(result.steps).toEqual([
-      expect.objectContaining({
-        name: "Checking update recovery",
-        exitCode: null,
-        stdoutTail: "This version uses the current updater to finish installation",
-      }),
-    ]);
-    expect(onStep).toHaveBeenCalledWith(result.steps[0]);
-    expect(mocks.snapshot).not.toHaveBeenCalled();
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  });
-
   it("rehearses private state, observes readiness, and joins child close after tree signals", async () => {
     runtimeContract = {
       state: 2,
@@ -592,16 +576,19 @@ describe("update candidate canary", () => {
     });
     expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
-      "Preparing update checks",
-      "Checking data migrations",
-      "Checking update health",
-      "Checking configuration",
-      "Checking plugins",
-      "Checking update recovery",
-      "Checking Gateway startup",
+      "candidate-state-snapshot",
+      "candidate-doctor",
+      "candidate-doctor-lint",
+      "candidate-config",
+      "candidate-plugins",
+      "candidate-recovery",
+      "candidate-gateway-startup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
-    expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
+    expect(completed.at(-1)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
+    expect(
+      completed.map((step) => step.argv.filter((arg) => arg !== "--no-install").slice(1, 3)),
+    ).toEqual([
       [],
       ["doctor", "--fix"],
       ["doctor", "--lint"],
@@ -629,6 +616,7 @@ describe("update candidate canary", () => {
       expect(childEnv[key]).toBeUndefined();
     }
     expect(mocks.spawn.mock.calls.find(([, args]) => args.includes("--check"))?.[1]).toEqual([
+      ...(process.versions.bun ? ["--no-install"] : []),
       path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"),
       "--check",
     ]);
@@ -652,198 +640,124 @@ describe("update candidate canary", () => {
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reuses caller-owned rehearsal changes across validations until the caller disposes them", async () => {
-    const config: OpenClawConfig = { logging: { level: "info" } };
-    const observed: Array<{ configPath: string; level: string | undefined }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        const configPath = childEnv.OPENCLAW_CONFIG_PATH!;
-        const current = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-        observed.push({ configPath, level: current.logging?.level });
-        return Response.json({ status: "started", ready: true });
-      }),
-    );
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      candidateRoot: root,
-      config,
-      stateDir: root,
-      env: {},
-      timeoutMs: 3_000,
-    });
-    const options = { ...canaryStateOptions(3_000), config, rehearsal };
-    try {
-      const first = await validateUpdateCandidateCanary(options);
-      expect(first.status).toBe("ok");
-      const copied = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")) as OpenClawConfig;
-      copied.logging = { ...copied.logging, level: "debug" };
-      const repairedConfig = JSON.stringify(copied);
-      await fs.writeFile(rehearsal.configPath, repairedConfig);
-      const second = await validateUpdateCandidateCanary(options);
-      expect(second.status).toBe("ok");
-      expect(observed).toEqual([
-        { configPath: rehearsal.configPath, level: "info" },
-        { configPath: rehearsal.configPath, level: "info" },
-        { configPath: rehearsal.configPath, level: "debug" },
-        { configPath: rehearsal.configPath, level: "debug" },
-      ]);
-      expect(mocks.snapshot).toHaveBeenCalledTimes(2);
-      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBe(repairedConfig);
-      await expect(fs.access(rehearsal.stateDir)).resolves.toBeUndefined();
-    } finally {
-      await rehearsal.cleanup();
-    }
-    await expect(fs.access(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each(["lint", "startup", "startup-multiline", "config", "multiline", "envelope", "compact"])(
-    "retains the CLI reason when %s exits before its report",
-    async (scenario) => {
-      const phase = scenario.startsWith("startup")
-        ? "startup"
-        : scenario === "config"
-          ? "config"
-          : "lint";
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
-      mocks.spawn.mockImplementation((command, args: string[], options) => {
-        if (
-          !args.includes({ lint: "--lint", startup: "--update-canary", config: "validate" }[phase])
-        ) {
-          return spawnNormally(command, args, options);
-        }
-        const error = scenario.endsWith("multiline")
-          ? createInvalidConfigError(
-              "/fixture/openclaw.json",
-              `- gateway.port: invalid ${"x".repeat(160)} token=synthetic-secret\n- gateway.host: unknown`,
-            )
-          : new Error("Unable to resolve health API token=synthetic-secret");
-        if (scenario === "startup-multiline") {
-          throw error;
-        }
-        const child = new FakeChild(nextPid++);
-        queueMicrotask(() => {
-          if (phase === "config") {
-            child.stdout.write(
-              JSON.stringify({
-                ok: false,
-                error: { message: "OpenClaw config is invalid" },
-                valid: false,
-                issues: [
-                  { path: "gateway.port", message: "Expected number; token=synthetic-secret" },
-                ],
-              }),
-            );
-          }
-          if (["envelope", "compact"].includes(scenario)) {
-            child.stdout.write(
-              JSON.stringify(
-                formatCliJsonFailure(error, { argv: [], env: {} }),
-                null,
-                scenario === "compact" ? undefined : 2,
-              ) + "\n",
-            );
-          }
-          child.stderr.write(
-            formatCliFailureLines({ title: "The CLI command failed.", error, env: {} }).join("\n") +
-              "\n",
-          );
-          if (["lint", "startup", "config"].includes(scenario)) {
-            child.stderr.write(
-              Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""),
-            );
-          }
-          child.emit("close", 1);
-        });
-        return child;
-      });
-      const env = { API_TOKEN: "synthetic-secret" };
-      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
-      expect(result).toMatchObject({ status: "error", phase });
-      const failed = result.steps.at(-1)!;
-      expect(failed.failureFacts?.[0]?.message).toContain(
-        phase === "config"
-          ? "Expected number"
-          : scenario.endsWith("multiline")
-            ? "Invalid config"
-            : "Unable to resolve health API",
-      );
-      if (!["lint", "config"].includes(scenario)) {
-        const output = renderSteps([failed]);
-        if (scenario.endsWith("multiline")) {
-          expect(output).toContain("gateway.port: invalid");
-          expect(output).toContain("gateway.host: unknown");
-          expect(updateRunStepsFromResultStep(failed).at(-1)?.detail).toContain(
-            scenario === "multiline" ? "gateway.port: invalid" : "gateway.host: unknown",
-          );
-        } else {
-          const report = renderUpdateRunReport(
-            updateRunReportInputFromResult({ ...result, mode: "git", root }),
-          );
-          for (const text of [output, report.markdown]) {
-            expect(text.match(/Unable to resolve health API/gu)).toHaveLength(1);
-          }
-          expect(result.logTail.join("\n")).toContain("Unable to resolve health API");
-        }
-      }
-      if (phase === "config") {
-        expect(failed.failureFacts?.[0]?.affectedKey).toBe("gateway.port");
-      }
-      expect(JSON.stringify(result)).not.toContain("synthetic-secret");
-    },
-  );
-
-  it("preserves bounded Doctor findings before the diagnostic log tail", async () => {
+  it.each([
+    "lint",
+    "startup",
+    "startup-multiline",
+    "startup-tail",
+    "config",
+    "multiline",
+    "envelope",
+    "compact",
+  ])("retains the failure reason when %s exits before its report", async (scenario) => {
+    const phase = scenario.startsWith("startup")
+      ? "startup"
+      : scenario === "config"
+        ? "config"
+        : "lint";
     const spawnNormally = mocks.spawn.getMockImplementation()!;
     mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("--lint")) {
+      if (
+        !args.includes({ lint: "--lint", startup: "--update-canary", config: "validate" }[phase])
+      ) {
         return spawnNormally(command, args, options);
+      }
+      const error = scenario.endsWith("multiline")
+        ? createInvalidConfigError(
+            "/fixture/openclaw.json",
+            `- gateway.port: invalid ${"x".repeat(160)} token=synthetic-secret\n- gateway.host: unknown`,
+          )
+        : new Error("Unable to resolve health API token=synthetic-secret");
+      if (scenario === "startup-multiline") {
+        throw error;
       }
       const child = new FakeChild(nextPid++);
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({
-            ok: false,
-            checksRun: 1,
-            findings: [
-              ...Array.from({ length: 8 }, (_, index) => ({
-                checkId: `optional.warning.${index}`,
-                severity: "warning",
-                message: "Optional check was skipped.",
-              })),
-              ...Array.from({ length: 8 }, (_, index) => ({
-                checkId: `config.invalid.${index}`,
-                severity: "error",
-                path: "mcp.servers.example",
-                message:
-                  "Invalid server at /Users/synthetic/private/config.json token=synthetic-canary-secret",
-                requirement: "connect ECONNREFUSED private-host.example:8443",
-              })),
-            ],
-          })}\n`,
-        );
-        child.stderr.write(Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""));
+        if (phase === "config") {
+          child.stdout.write(
+            JSON.stringify({
+              ok: false,
+              error: { message: "OpenClaw config is invalid" },
+              valid: false,
+              issues: [
+                { path: "gateway.port", message: "Expected number; token=synthetic-secret" },
+              ],
+            }),
+          );
+        }
+        if (["envelope", "compact"].includes(scenario)) {
+          child.stdout.write(
+            JSON.stringify(
+              formatCliJsonFailure(error, { argv: [], env: {} }),
+              null,
+              scenario === "compact" ? undefined : 2,
+            ) + "\n",
+          );
+        }
+        if (scenario === "startup-tail") {
+          child.stderr.write("openclaw-update-canary-progress: cli.main.argv\nEarlier warning\n");
+          child.stderr.write(`${"x".repeat(20_001)} ${error.message}\n`);
+          child.stderr.write("openclaw-update-canary-progress: cli.main.gateway-run-bootstrap\n");
+        } else {
+          child.stderr.write(
+            formatCliFailureLines({
+              title: "The CLI command failed.",
+              error,
+              argv: args,
+              env: options.env,
+            }).join("\n") + "\n",
+          );
+        }
+        if (["lint", "startup", "config"].includes(scenario)) {
+          child.stderr.write(
+            Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""),
+          );
+        }
         child.emit("close", 1);
       });
       return child;
     });
-    const onStep = vi.fn();
-    const env = { API_TOKEN: "synthetic-canary-secret" };
-    const options = { ...canaryStateOptions(3_000), env, onStep };
-    const result = await validateUpdateCandidateCanary(options);
-    expect(result).toMatchObject({ status: "error", phase: "lint" });
-    expect(result.steps.at(-1)).toMatchObject({
-      failureFacts: Array.from({ length: 5 }, (_, index) => ({
-        check: `config.invalid.${index}`,
-        code: "doctor-failed",
-        affectedKey: "mcp.servers.example",
-        message: expect.stringContaining("Invalid server"),
-      })),
-    });
-    expect(onStep).toHaveBeenLastCalledWith(result.steps.at(-1));
-    expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
-    expect(JSON.stringify(result)).not.toContain("synthetic-canary-secret");
-    expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
-    expect(result.logTail.join("\n")).not.toContain("config.invalid.0");
+    const env = { API_TOKEN: "synthetic-secret" };
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
+    expect(result).toMatchObject({ status: "error", phase });
+    const failed = result.steps.at(-1)!;
+    if (scenario === "startup-tail") {
+      expect.soft(failed.stderrTail).toContain("Unable to resolve health API");
+    }
+    expect(failed.failureFacts?.[0]?.message).toContain(
+      phase === "config"
+        ? "Expected number"
+        : scenario.endsWith("multiline")
+          ? "Invalid config"
+          : "Unable to resolve health API",
+    );
+    if (!["lint", "config"].includes(scenario)) {
+      const output = renderSteps([failed]);
+      if (scenario.endsWith("multiline")) {
+        expect(output).toContain("gateway.port: invalid");
+        expect(output).toContain("gateway.host: unknown");
+        expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
+          expect.stringContaining(
+            scenario === "multiline" ? "gateway.port: invalid" : "Invalid config",
+          ),
+        );
+      } else {
+        const report = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+        );
+        for (const text of [output, report.markdown]) {
+          expect(text).toContain("Unable to resolve health API");
+          if (scenario !== "startup-tail") {
+            expect(text.match(/Unable to resolve health API/gu)).toHaveLength(1);
+          }
+        }
+        expect(result.logTail.join("\n")).toContain("Unable to resolve health API");
+      }
+    }
+    if (phase === "config") {
+      expect(failed.failureFacts?.[0]?.affectedKey).toBe("gateway.port");
+    }
+    expect(JSON.stringify(result)).not.toContain("synthetic-secret");
   });
 
   it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(
@@ -881,13 +795,17 @@ describe("update candidate canary", () => {
         ),
       );
       const result = await validateUpdateCandidateCanary(canaryStateOptions(250));
-      expect(result.status).toBe(failure === "readiness" ? "ok" : "error");
+      expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
       if (failure === "plugins") {
         expect(renderSteps(result.steps)).toContain("incompatible plugin");
       }
       if (failure === "readiness") {
-        readiness.expectCanaryReadinessWarning(result.steps.at(-1), "readyz", 503);
+        expect(result.steps.at(-1)).toMatchObject({
+          exitCode: 1,
+          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+        });
+        expect(result.steps.at(-1)?.advisory).toBeUndefined();
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);
@@ -936,27 +854,81 @@ describe("update candidate canary", () => {
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(result.steps.at(-1)).toMatchObject({
-      name: "Checking update recovery",
+      name: "candidate-recovery",
       exitCode: 1,
     });
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(false);
   });
 
-  it("aborts further validation and removes private state when recording a step fails", async () => {
-    await expect(
-      validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onStep: () => {
-          throw new Error("ledger unavailable");
-        },
-      }),
-    ).rejects.toThrow("ledger unavailable");
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
-      targetStateDir: string;
-    };
-    await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  it.each(["sync", "async"])(
+    "aborts further validation when %s step recording fails",
+    async (mode) => {
+      await expect(
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep: () => {
+            if (mode === "async") {
+              return Promise.reject(new Error("ledger unavailable"));
+            }
+            throw new Error("ledger unavailable");
+          },
+        }),
+      ).rejects.toThrow("ledger unavailable");
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
+        targetStateDir: string;
+      };
+      await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  registerCanaryUncertainReceiptTests({
+    mocks,
+    canaryStateOptions,
+    setRuntimeError: (value) => {
+      runtimeError = value;
+    },
   });
+
+  it.each(["candidate-state-snapshot", "candidate-doctor"])(
+    "joins %s recording before starting the next child or observing cancellation",
+    async (name) => {
+      stubHealthyGateway();
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const controller = new AbortController();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        signal: controller.signal,
+        onStep: (step) => {
+          if (step.name === name && step.exitCode === 0) {
+            entered.resolve();
+            return receipt.promise;
+          }
+          return undefined;
+        },
+      });
+      await entered.promise;
+      const expectedChildren = name === "candidate-doctor" ? 1 : 0;
+      expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
+      controller.abort(new Error("cancelled during step recording"));
+      receipt.resolve();
+      const result = await pending;
+      expect(result.status).toBe("error");
+      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+        "cancelled during step recording",
+      );
+      expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
+      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
+        targetStateDir: string;
+      };
+      await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
     runtimeError = true;

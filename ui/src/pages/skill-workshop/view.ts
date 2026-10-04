@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../components/icons.ts";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/resizable-divider.ts";
@@ -38,16 +39,12 @@ type SkillWorkshopSection = {
   selected: SkillWorkshopProposal | undefined;
 };
 
-function resolveSection(props: SkillWorkshopProps): SkillWorkshopSection {
+export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const filtered = filterSkillWorkshopProposals(props.proposals, props.query);
-  return {
+  const section = {
     groups: groupByRecency(filtered),
     selected: filtered.find((proposal) => proposal.key === props.selectedKey) ?? filtered[0],
   };
-}
-
-export function renderSkillWorkshop(props: SkillWorkshopProps) {
-  const section = resolveSection(props);
   const selected = section.selected;
   const preview =
     selected && props.filePreviewKey
@@ -113,7 +110,13 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
+      @modal-cancel=${(event: Event) => {
+        if (cancelDisabled) {
+          event.preventDefault();
+          return;
+        }
+        props.onRevisionCancel();
+      }}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -131,21 +134,25 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
-              ×
+              ${icons.x}
             </button>
           </openclaw-tooltip>
         </div>
-        <p class="sw-revision-dialog__copy">${t("skillWorkshop.revision.description")}</p>
+        <p id="sw-revision-description" class="sw-revision-dialog__copy">
+          ${t("skillWorkshop.revision.description")}
+        </p>
         <textarea
           class="sw-revision-dialog__input"
           autofocus
+          aria-label=${t("skillWorkshop.revision.title", { verb })}
+          aria-describedby="sw-revision-description"
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
           ?disabled=${
             !props.access.canRevise || Boolean(props.actionBusy) || props.revisionRecoveryActive
           }
           @input=${(event: Event) =>
-            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
+            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value)}
         ></textarea>
         ${
           busy
@@ -198,8 +205,6 @@ function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSect
         groups: section.groups,
         selected: section.selected,
         emptyText: queueEmptyText(props),
-        searchLabel: t("skillWorkshop.queue.suggestionsLabel"),
-        searchPlaceholder: t("skillWorkshop.queue.searchSuggestions"),
       })}
       ${renderQueueResizer(props)}
       ${
@@ -238,8 +243,12 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
   const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
-    : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
+    ? t("skillWorkshop.detail.edited", {
+        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
+      })
+    : t("skillWorkshop.detail.created", {
+        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
+      });
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
   return html`
@@ -290,7 +299,7 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
                   ${t("skillWorkshop.detail.draftMissing")}
                 </p>`
               : detailLoading
-                ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
                 : renderSkillDocument(proposal.body)
           }
         </div>
@@ -352,46 +361,25 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
   const draftUnavailable = disabled || Boolean(proposal.degradedState);
+  const action = (
+    kind: "evaluate" | "apply" | "revise" | "reject",
+    pendingLabel: string,
+    unavailable: boolean,
+    onClick: () => void,
+    className = "sw-btn",
+  ) => html`<button
+    class="${className} ${busy === kind ? "is-busy" : ""}"
+    ?disabled=${unavailable}
+    @click=${onClick}
+  >
+    ${t(`skillWorkshop.actions.${busy === kind ? pendingLabel : kind}`)}
+  </button>`;
   return html`
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
-      <button
-        class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canEvaluate}
-        @click=${() => props.onEvaluate(proposal.key)}
-      >
-        ${
-          busy === "evaluate"
-            ? t("skillWorkshop.actions.evaluating")
-            : t("skillWorkshop.actions.evaluate")
-        }
-      </button>
-      <button
-        class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canApply}
-        @click=${() => props.onApply(proposalDecision(proposal))}
-      >
-        ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
-      </button>
-      <button
-        class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canRevise}
-        @click=${() => props.onRevise(proposal.key)}
-      >
-        ${
-          busy === "revise" ? t("skillWorkshop.actions.opening") : t("skillWorkshop.actions.revise")
-        }
-      </button>
-      <button
-        class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
-        ?disabled=${disabled || !props.access.canReject}
-        @click=${() => props.onReject(proposalDecision(proposal))}
-      >
-        ${
-          busy === "reject"
-            ? t("skillWorkshop.actions.rejecting")
-            : t("skillWorkshop.actions.reject")
-        }
-      </button>
+      ${action("evaluate", "evaluating", draftUnavailable || !props.access.canEvaluate, () => props.onEvaluate(proposal.key))}
+      ${action("apply", "applying", draftUnavailable || !props.access.canApply, () => props.onApply(proposalDecision(proposal)), "sw-btn sw-btn--primary")}
+      ${action("revise", "opening", draftUnavailable || !props.access.canRevise, () => props.onRevise(proposal.key))}
+      ${action("reject", "rejecting", disabled || !props.access.canReject, () => props.onReject(proposalDecision(proposal)), "sw-btn sw-btn--ghost sw-btn--danger")}
     </div>
   `;
 }
@@ -403,16 +391,13 @@ function resolveSkillWorkshopAgentName(props: SkillWorkshopProps, fallback: stri
 function groupByRecency(
   proposals: SkillWorkshopProposal[],
 ): Array<{ label: string; items: SkillWorkshopProposal[] }> {
-  const buckets = new Map<SkillWorkshopProposal["recencyGroup"], SkillWorkshopProposal[]>();
-  for (const proposal of proposals) {
-    const list = buckets.get(proposal.recencyGroup) ?? [];
-    list.push(proposal);
-    buckets.set(proposal.recencyGroup, list);
-  }
   const order: Array<SkillWorkshopProposal["recencyGroup"]> = ["today", "yesterday", "earlier"];
   return order
-    .filter((key) => buckets.has(key))
-    .map((key) => ({ label: GROUP_LABEL[key], items: buckets.get(key) ?? [] }));
+    .map((key) => ({
+      label: GROUP_LABEL[key],
+      items: proposals.filter((proposal) => proposal.recencyGroup === key),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 function queueEmptyText(props: SkillWorkshopProps): string {
@@ -426,8 +411,4 @@ function queueEmptyText(props: SkillWorkshopProps): string {
     return t("skillWorkshop.queue.noMatch");
   }
   return t("skillWorkshop.queue.noSuggestions");
-}
-
-function formatRelative(ms: number): string {
-  return formatRelativeTimestamp(ms, { dateFallback: true });
 }

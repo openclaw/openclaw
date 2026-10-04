@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { getJson, postJson } from "./http.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-function responseWithText(text: string, init?: ResponseInit): Response {
-  return new Response(text, init);
+function mockResponse(text: string, init: ResponseInit) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async () => new Response(text, init)),
+  );
 }
 
 describe("QA Lab dashboard HTTP", () => {
@@ -30,7 +33,7 @@ describe("QA Lab dashboard HTTP", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await getJson("/api/bootstrap");
-    await getJsonNoStore("/api/ui-version");
+    await getJson("/api/ui-version", "no-store");
     await postJson("/api/runner/start", { scenario: "baseline" });
 
     expect(timeout).toHaveBeenCalledTimes(3);
@@ -82,15 +85,10 @@ describe("QA Lab dashboard HTTP", () => {
   });
 
   it("fails closed on non-JSON success responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText("not json", {
-          status: 200,
-          headers: { "content-type": "text/plain" },
-        }),
-      ),
-    );
+    mockResponse("not json", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
 
     await expect(getJson("/api/bootstrap")).rejects.toThrow(
       /\/api\/bootstrap: expected JSON response/,
@@ -98,75 +96,50 @@ describe("QA Lab dashboard HTTP", () => {
   });
 
   it("fails closed on empty JSON success responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText("", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
+    mockResponse("", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 
-    await expect(getJsonNoStore("/api/ui-version")).rejects.toThrow(
+    await expect(getJson("/api/ui-version", "no-store")).rejects.toThrow(
       /\/api\/ui-version: empty JSON response/,
     );
   });
 
   it("labels malformed JSON success responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText("{", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
+    mockResponse("{", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 
     await expect(getJson("/api/state")).rejects.toThrow(/\/api\/state: malformed JSON response/);
   });
 
   it("accepts vendor JSON success responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/problem+json; charset=utf-8" },
-        }),
-      ),
-    );
+    mockResponse(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/problem+json; charset=utf-8" },
+    });
 
     await expect(getJson("/api/bootstrap")).resolves.toEqual({ ok: true });
   });
 
   it("keeps JSON API error messages readable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText(JSON.stringify({ error: "boom" }), {
-          status: 500,
-          statusText: "Internal Server Error",
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
+    mockResponse(JSON.stringify({ error: "boom" }), {
+      status: 500,
+      statusText: "Internal Server Error",
+      headers: { "content-type": "application/json" },
+    });
 
     await expect(postJson("/api/runner/start", { scenario: "baseline" })).rejects.toThrow("boom");
   });
 
   it("allows large successful JSON responses", async () => {
     const body = JSON.stringify({ data: "x".repeat(128 * 1024) });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () =>
-        responseWithText(body, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
+    mockResponse(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 
     await expect(getJson("/api/state")).resolves.toEqual({ data: "x".repeat(128 * 1024) });
   });

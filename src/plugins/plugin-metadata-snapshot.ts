@@ -16,16 +16,13 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
   selectInstalledPluginManifestRecords,
 } from "./manifest-registry-installed.js";
-import {
-  loadBundledPluginManifestRegistry,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -52,6 +49,7 @@ import type {
   PluginMetadataSnapshotOwnerMaps,
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
+import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import {
   canReusePluginRegistrySnapshot,
@@ -137,6 +135,7 @@ export function finalizePluginMetadataSnapshot(
   freezeSnapshotValue(snapshot);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  preparePluginNativeAdmissions(snapshot.index, cache);
   registerProviderPolicyOwnerIndexes(snapshot, cache);
   return snapshot;
 }

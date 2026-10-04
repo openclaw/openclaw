@@ -9,7 +9,7 @@ function signalError(signal: AbortSignal): Error {
     : new Error("node worker desktop launch aborted");
 }
 
-/** Directly runs one provider-attested zero-argument launcher without replay. */
+/** Directly runs one provider-attested launcher without replay. */
 export async function invokeNodeWorkerDesktopLaunch(params: {
   paramsJSON?: string | null;
   signal?: AbortSignal;
@@ -17,7 +17,7 @@ export async function invokeNodeWorkerDesktopLaunch(params: {
   const app = parseNodeWorkerDesktopLaunchInput(params.paramsJSON);
   const signal = params.signal;
   signal?.throwIfAborted();
-  const child = spawn(app.executablePath, [], {
+  const child = spawn(app.executablePath, app.args ?? [], {
     shell: false,
     stdio: "ignore",
     windowsHide: true,

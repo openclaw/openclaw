@@ -21,20 +21,25 @@ export async function initializeNodeWorkerGitWorkspace(params: {
   if (params.baseCommit.length !== 40 && params.baseCommit.length !== 64) {
     throw new Error("workspace transfer Git base object id is invalid");
   }
+  const gitPrefix = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
   const git = async (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
     await runWorkspaceCommand({
       workspaceDir: params.workspaceDir,
       homeDir: params.manifestHome,
-      argv: ["git", "-C", params.workspaceDir, ...args],
+      argv: ["git", ...gitPrefix, "-C", params.workspaceDir, ...args],
       ...(options.input === undefined ? {} : { input: options.input }),
       signal: params.signal,
       ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
     });
   await git(["init", "--quiet", `--object-format=${objectFormat}`, "."]);
+  if (process.platform === "win32") {
+    // Manifest capture and later worker Git commands reuse this private repository.
+    await git(["config", "--local", "core.longpaths", "true"]);
+  }
   if (params.packPath) {
     const pack = await fsp.open(params.packPath, "r");
     try {
-      await runExec("git", ["-C", params.workspaceDir, "index-pack", "--stdin"], {
+      await runExec("git", [...gitPrefix, "-C", params.workspaceDir, "index-pack", "--stdin"], {
         cwd: params.workspaceDir,
         baseEnv: workspaceCommandEnv(params.manifestHome),
         stdinFileDescriptor: pack.fd,

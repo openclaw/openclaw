@@ -1,9 +1,8 @@
-// Browser tests cover browser request.shared control state plugin behavior.
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   runtimeConfig: {} as OpenClawConfig,
@@ -16,8 +15,9 @@ const mocks = vi.hoisted(() => ({
   isChromeCdpReady: vi.fn(async () => false),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   return {
     ...actual,
     getRuntimeConfig: () => mocks.runtimeConfig,
@@ -61,28 +61,15 @@ const { runBrowserProxyCommand } = await import("../node-host/invoke-browser.js"
 const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
 const { browserHandlers } = await import("./browser-request.js");
 
-function browserConfig(params: {
-  gatewayPort: number;
-  executablePath?: string;
-  headless?: boolean;
-  noSandbox?: boolean;
-}): OpenClawConfig {
+const controlPort = 18_791;
+function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig {
   return {
-    gateway: {
-      port: params.gatewayPort,
-    },
+    gateway: { port: controlPort - 2 },
     browser: {
       enabled: true,
       defaultProfile: "openclaw",
-      ...(params.executablePath ? { executablePath: params.executablePath } : {}),
-      ...(typeof params.headless === "boolean" ? { headless: params.headless } : {}),
-      ...(typeof params.noSandbox === "boolean" ? { noSandbox: params.noSandbox } : {}),
-      profiles: {
-        openclaw: {
-          cdpPort: params.gatewayPort + 11,
-          color: "#FF4500",
-        },
-      },
+      profiles: { openclaw: { cdpPort: controlPort + 9 } },
+      ...browser,
     },
   };
 }
@@ -117,7 +104,6 @@ async function browserRequestStatus(): Promise<unknown> {
 }
 
 describe("browser.request local control state", () => {
-  const controlPort = 18_791;
   afterEach(async () => {
     await stopBrowserControlService();
     await stopBrowserControlServer();
@@ -126,10 +112,7 @@ describe("browser.request local control state", () => {
   });
 
   it("uses the same resolved browser config as the HTTP control service", async () => {
-    const gatewayPort = controlPort - 2;
-
     mocks.runtimeConfig = browserConfig({
-      gatewayPort,
       executablePath: "/usr/bin/google-chrome",
       headless: true,
       noSandbox: true,
@@ -142,7 +125,6 @@ describe("browser.request local control state", () => {
     // The runtime snapshot can lag behind source config after gateway startup;
     // browser.request must not fork a second stale control state from it.
     mocks.runtimeConfig = browserConfig({
-      gatewayPort,
       headless: false,
       noSandbox: false,
     });
@@ -157,8 +139,55 @@ describe("browser.request local control state", () => {
     expect(status.noSandbox).toBe(true);
   });
 
+  it.each(["gateway request", "HTTP server"] as const)(
+    "honors runtime plugin activation on a cold %s while retaining fresh browser options",
+    async (entrypoint) => {
+      const source = {
+        ...browserConfig({ headless: true }),
+        plugins: { allow: ["telegram"] },
+      };
+      const originalSource = structuredClone(source);
+      mocks.runtimeSourceConfig = source;
+      mocks.runtimeConfig = {
+        ...browserConfig({ headless: false }),
+        plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
+      };
+
+      if (entrypoint === "HTTP server") {
+        expect(await startBrowserControlServerFromConfig()).not.toBeNull();
+      }
+      expect(await browserRequestStatus()).toMatchObject({
+        enabled: true,
+        profile: "openclaw",
+        headless: true,
+      });
+      expect(source).toEqual(originalSource);
+    },
+  );
+
+  it("retains effective plugin disablement at both cold entrypoints", async () => {
+    const source = browserConfig();
+    mocks.runtimeSourceConfig = source;
+    mocks.runtimeConfig = { ...source, plugins: { allow: ["telegram"] } };
+    expect(await startBrowserControlServiceFromConfig()).toBeNull();
+    expect(await startBrowserControlServerFromConfig()).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
+    expect(getBrowserControlState()).toBeNull();
+  });
+
+  it("retains a fresh browser disable even when the activated runtime options lag", async () => {
+    mocks.runtimeConfig = {
+      ...browserConfig(),
+      plugins: { allow: ["browser"], entries: { browser: { enabled: true } } },
+    };
+    mocks.runtimeSourceConfig = { ...mocks.runtimeConfig, browser: { enabled: false } };
+    expect(await startBrowserControlServiceFromConfig()).toBeNull();
+    expect(await startBrowserControlServerFromConfig()).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
+  });
+
   it("retains port auth until a failed stop is retried successfully", async () => {
-    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeConfig = browserConfig();
     mocks.runtimeSourceConfig = mocks.runtimeConfig;
     mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
     const state = await startBrowserControlServerFromConfig();
@@ -174,7 +203,7 @@ describe("browser.request local control state", () => {
   });
 
   it("clears auth when a stop queues behind cold startup", async () => {
-    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeConfig = browserConfig();
     mocks.runtimeSourceConfig = mocks.runtimeConfig;
     const authStarted = createDeferred<void>();
     const authGate = createDeferred<void>();
@@ -195,7 +224,7 @@ describe("browser.request local control state", () => {
 
   it("restarts node proxy control after the shared service stops", async () => {
     const setEnabled = (enabled: boolean) => {
-      const cfg = browserConfig({ gatewayPort: controlPort - 2 });
+      const cfg = browserConfig();
       mocks.runtimeConfig = { ...cfg, browser: { ...cfg.browser, enabled } };
       mocks.runtimeSourceConfig = mocks.runtimeConfig;
     };

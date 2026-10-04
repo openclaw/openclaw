@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../infra/runtime-worker-url.js";
+import { agentProcessTestEntrypoints } from "../../process-runtime.test-support.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
 describe("createEmbeddedAttemptTranscriptLifecycle", () => {
@@ -89,20 +93,16 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
   });
 
   it("releases its per-attempt AsyncLocalStorage after dispose (retention child)", async () => {
-    const entrypoint = new URL(
-      "./attempt-transcript-lifecycle.retention.test-support.ts",
-      import.meta.url,
+    const entrypoint = resolveRuntimeWorkerUrl(
+      agentProcessTestEntrypoints.transcriptLifecycleRetention,
     );
-    // The leak control asserts that never-disposed stores stay retained. That is
-    // only true on the legacy AsyncLocalStorage (a global storageList). Node 24+
-    // defaults to AsyncContextFrame, where completed contexts are collected even
-    // without .disable(); select the legacy implementation there so the control
-    // stays meaningful on the repository's recommended runtime.
+    // Legacy Node stores require disable() to collect, so retain that regression coverage.
     const nodeMajor = Number(process.versions.node.split(".")[0]);
-    const contextFlag = nodeMajor >= 24 ? ["--no-async-context-frame"] : [];
+    const contextFlag =
+      !process.versions.bun && nodeMajor >= 24 ? ["--no-async-context-frame"] : [];
     const { stdout } = await promisify(execFile)(
       process.execPath,
-      ["--expose-gc", ...contextFlag, "--import", "tsx", fileURLToPath(entrypoint)],
+      ["--expose-gc", ...contextFlag, ...resolveRuntimeWorkerArgv(entrypoint)],
       { timeout: 20_000 },
     );
     expect(stdout).toContain("retention ok");

@@ -1,5 +1,8 @@
-// Setup wizard types describe onboarding choices and derived config.
-import type { GatewayAuthChoice } from "../commands/onboard-types.js";
+import type {
+  GatewayAuthMode,
+  GatewayBindMode,
+  GatewayTailscaleMode,
+} from "../config/types.gateway.js";
 import type { SecretInput } from "../config/types.secrets.js";
 
 // Shared setup wizard types for quickstart/advanced gateway flows and their
@@ -9,9 +12,9 @@ export type WizardFlow = "quickstart" | "advanced";
 export type QuickstartGatewayDefaults = {
   hasExisting: boolean;
   port: number;
-  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
-  authMode: GatewayAuthChoice;
-  tailscaleMode: "off" | "serve" | "funnel";
+  bind: GatewayBindMode;
+  authMode: GatewayAuthMode;
+  tailscaleMode: GatewayTailscaleMode;
   token?: SecretInput;
   password?: SecretInput;
   customBindHost?: string;
@@ -19,9 +22,8 @@ export type QuickstartGatewayDefaults = {
 
 export type GatewayWizardSettings = {
   port: number;
-  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  bind: GatewayBindMode;
   customBindHost?: string;
-  authMode: GatewayAuthChoice;
+  authMode: GatewayAuthMode;
   gatewayToken?: string;
-  tailscaleMode: "off" | "serve" | "funnel";
 };

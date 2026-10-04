@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import * as sessionReaders from "../infra/session-sqlite-migration-readers.js";
 import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
@@ -24,7 +25,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import * as sessionReaders from "./doctor-session-sqlite-readers.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const note = vi.hoisted(() => vi.fn());

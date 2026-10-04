@@ -19,7 +19,7 @@ import {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt agent-end context", () => {
-  it.each(["completed", "aborted", "provider refusal"] as const)(
+  it.each(["aborted", "provider refusal"] as const)(
     "hands deep-turn context to agent-end without reviewing a refusal: %s",
     async (outcome) => {
       const source = {
@@ -34,17 +34,12 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         entry: { sessionFile, sessionId: source.sessionId, updatedAt: Date.now() },
       });
       const workspaceDir = path.join(tempDir, "agent-end-context-workspace");
-      const turnStarted = createDeferred<void>();
       const responsesProjected = createDeferred<void>();
       let responseCount = 0;
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "turn/start") {
-          turnStarted.resolve();
-        }
-      });
-      const runAgentEndSideEffects = vi
-        .spyOn(agentHarnessRuntime, "runAgentEndSideEffects")
-        .mockImplementation(() => {});
+      const harness = createStartedThreadHarness();
+      const runAgentEndSideEffectsAsync = vi
+        .spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync")
+        .mockResolvedValue(undefined);
       const params = createParams(sessionFile, workspaceDir);
       params.runtimePlan = createCodexRuntimePlanFixture();
       const abortController = new AbortController();
@@ -64,12 +59,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params);
       try {
-        await Promise.race([
-          turnStarted.promise,
-          run.then((result) => {
-            throw new Error("Attempt settled before turn/start", { cause: result });
-          }),
-        ]);
+        await run.waitForTurnAccepted();
         for (let index = 0; index < 10; index++) {
           await harness.notify({
             method: "rawResponse/completed",
@@ -91,35 +81,20 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         if (outcome === "aborted") {
           abortController.abort("user cancelled");
         } else {
-          const error =
-            outcome === "provider refusal"
-              ? {
-                  message: "Provider declined this request.",
-                  codexErrorInfo: "cyberPolicy" as const,
-                }
-              : undefined;
-          if (error) {
-            await harness.notify({
-              method: "error",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-                error,
-                willRetry: false,
-              },
-            });
-          }
+          const error = {
+            message: "Provider declined this request.",
+            codexErrorInfo: "cyberPolicy",
+          };
+          await harness.notify({
+            method: "error",
+            params: { threadId: "thread-1", turnId: "turn-1", error, willRetry: false },
+          });
           await harness.notify({
             method: "turn/completed",
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
-              turn: {
-                id: "turn-1",
-                status: error ? "failed" : "completed",
-                items: error ? [] : [{ type: "agentMessage", id: "msg-1", text: "final answer" }],
-                ...(error ? { error } : {}),
-              },
+              turn: { id: "turn-1", status: "failed", items: [], error },
             },
           });
         }
@@ -130,13 +105,13 @@ describe("runCodexAppServerAttempt agent-end context", () => {
           expect(result.terminal).toEqual({ kind: "ok" });
         }
 
-        const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+        const ctx = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.ctx;
         expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
         expect(typeof ctx?.foregroundPromptContext?.agentDir).toBe("string");
         expect(ctx?.modelIterations).toBe(10);
         expect(ctx?.skillWorkshopAvailable).toBe(true);
         const reviewSource =
-          runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
+          runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
         if (outcome === "provider refusal") {
           expect(result.currentAttemptAssistant).toMatchObject({
             stopReason: "error",

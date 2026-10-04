@@ -1,11 +1,39 @@
+import { coerceSecretRef, hasLegacySecretRefExtraFields } from "../../config/types.secrets.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AuthProfileCredential } from "./types.js";
+
+/** Public SDK write ingress retains its legacy input contract and publishes canonical refs. */
+export function normalizeAuthProfileSecretRefs(
+  credential: AuthProfileCredential,
+): AuthProfileCredential {
+  const value =
+    credential.type === "api_key"
+      ? credential.keyRef
+      : credential.type === "token"
+        ? credential.tokenRef
+        : undefined;
+  if (hasLegacySecretRefExtraFields(value)) {
+    throw new Error(
+      "Auth profile SecretRef contains unsupported fields. Preserve that metadata separately and explicitly call coerceSecretRef before saving a source/provider/id reference.",
+    );
+  }
+  if (credential.type === "api_key") {
+    const keyRef = coerceSecretRef(credential.keyRef);
+    return keyRef && keyRef !== credential.keyRef ? { ...credential, keyRef } : credential;
+  }
+  if (credential.type === "token") {
+    const tokenRef = coerceSecretRef(credential.tokenRef);
+    return tokenRef && tokenRef !== credential.tokenRef ? { ...credential, tokenRef } : credential;
+  }
+  return credential;
+}
 
 // Upsert paths normalize literal secret strings but preserve SecretRef-backed
 // credentials for the secret resolver.
 export function normalizeAuthProfileCredential(
-  credential: AuthProfileCredential,
+  input: AuthProfileCredential,
 ): AuthProfileCredential {
+  const credential = normalizeAuthProfileSecretRefs(input);
   if (credential.type === "api_key") {
     if (typeof credential.key !== "string") {
       return credential;

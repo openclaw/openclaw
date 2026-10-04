@@ -39,6 +39,7 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+import type { MediaUnderstandingCapability, MediaUnderstandingOutput } from "./types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -52,22 +53,11 @@ export type {
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 
-type MediaUnderstandingCapability = "image" | "audio" | "video";
-type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
-
 const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
   audio: "audio.transcription",
   image: "image.description",
   video: "video.description",
 };
-
-function resolveDecisionFailureReason(
-  decision: Awaited<ReturnType<typeof runCapability>>["decision"],
-): string | undefined {
-  // runCapability stores detailed failed-attempt reasons; file APIs expose the
-  // first normalized reason as the thrown error message.
-  return normalizeDecisionReason(findDecisionReason(decision, "failed"));
-}
 
 function buildFileContext(params: {
   filePath: string;
@@ -100,14 +90,12 @@ function buildFileContext(params: {
       ? `${params.capability}/*`
       : extensionMime) ??
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
-  if (remoteRef) {
-    return {
-      media: [{ url: remoteRef, contentType: mediaType }],
-      ...scopeFields,
-    };
-  }
   return {
-    media: [{ path: params.filePath, contentType: mediaType }],
+    media: [
+      remoteRef
+        ? { url: remoteRef, contentType: mediaType }
+        : { path: params.filePath, contentType: mediaType },
+    ],
     ...scopeFields,
   };
 }
@@ -138,10 +126,6 @@ function basenameFromMediaReference(value: string): string {
   return path.basename(value);
 }
 
-function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
-  return input.some((entry) => entry.type === "image");
-}
-
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
@@ -160,11 +144,7 @@ async function runFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const ctx = buildFileContext({
-    ...params,
-    capability: params.capability,
-    scopeContext: params.scopeContext,
-  });
+  const ctx = buildFileContext(params);
   const attachments = normalizeMediaAttachments(ctx);
   const decisionBase = {
     capability: params.capability,
@@ -233,7 +213,7 @@ async function runFile(
     });
     if (result.outputs.length === 0 && result.decision.outcome === "failed") {
       throw new Error(
-        resolveDecisionFailureReason(result.decision) ??
+        normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
           `${params.capability} understanding failed`,
       );
     }
@@ -241,16 +221,13 @@ async function runFile(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );
     const text = output?.text?.trim();
-    const fileResult: RunMediaUnderstandingFileResult = {
+    return {
       text: text || undefined,
       provider: output?.provider,
       model: output?.model,
       output,
+      decision: result.decision,
     };
-    if (result.decision) {
-      fileResult.decision = result.decision;
-    }
-    return fileResult;
   } finally {
     await cache.cleanup();
   }
@@ -267,10 +244,7 @@ export async function describeImageFile(
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const image = await readImageDescriptionInput({
-    filePath: params.filePath,
-    mediaUrl: params.mediaUrl,
-    mime: params.mime,
-    cfg: params.cfg,
+    ...params,
     timeoutMs,
   });
   const normalizedImage = await normalizeImageDescriptionInput({
@@ -366,7 +340,7 @@ async function readImageDescriptionInput(params: {
 /** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
-  if (!hasStructuredImageInput(params.input)) {
+  if (!params.input.some((entry) => entry.type === "image")) {
     throw new Error("Structured extraction requires at least one image input.");
   }
   const provider = getMediaUnderstandingProvider(

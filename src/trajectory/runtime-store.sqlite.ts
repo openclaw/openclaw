@@ -13,6 +13,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -41,6 +42,16 @@ export type SqliteTrajectoryRuntimeScope = {
   maxRuntimeBytes?: number;
   sessionId: string;
   storePath: string;
+  assertCommitAllowed?: () => void;
+};
+
+export type SqliteTrajectoryRuntimeAppend = Pick<
+  SqliteTrajectoryRuntimeScope,
+  "sessionId" | "maxRuntimeBytes" | "maxGlobalRuntimeBytes"
+> & {
+  events: readonly TrajectoryEvent[];
+  /** The queued prefix exceeded this session's rolling window before admission. */
+  discardPrevious?: boolean;
 };
 
 type SqliteTrajectoryRuntimeReadScope = Omit<
@@ -71,61 +82,67 @@ const lastGlobalSweepAtByDatabase = new WeakMap<OpenClawAgentDatabase, number>()
 
 /** Appends runtime trajectory events to the per-agent SQLite session store. */
 export function appendSqliteTrajectoryRuntimeEvents(
-  scope: SqliteTrajectoryRuntimeScope,
+  scope: SqliteTrajectoryRuntimeScope & Pick<SqliteTrajectoryRuntimeAppend, "discardPrevious">,
   events: readonly TrajectoryEvent[],
 ): void {
   if (events.length === 0) {
     return;
   }
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      scope.assertCommitAllowed?.();
+      appendSqliteTrajectoryRuntimeEventsInTransaction(database, { ...scope, events });
+      scope.assertCommitAllowed?.();
+    },
+    options,
+    { operationLabel: "trajectory.runtime.append" },
+  );
+}
+
+export function appendSqliteTrajectoryRuntimeEventsInTransaction(
+  database: OpenClawAgentDatabase,
+  input: SqliteTrajectoryRuntimeAppend,
+): void {
+  const { events, sessionId } = input;
   const maxRuntimeBytes = Math.max(
     1,
-    Math.floor(scope.maxRuntimeBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
+    Math.floor(input.maxRuntimeBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
   const maxGlobalRuntimeBytes = Math.max(
     1,
-    Math.floor(scope.maxGlobalRuntimeBytes ?? TRAJECTORY_RUNTIME_GLOBAL_MAX_BYTES),
+    Math.floor(input.maxGlobalRuntimeBytes ?? TRAJECTORY_RUNTIME_GLOBAL_MAX_BYTES),
   );
   const sweepAt = Date.now();
-  let sweptDatabase: OpenClawAgentDatabase | undefined;
-  runOpenClawAgentWriteTransaction((database) => {
-    const db = getTrajectoryKysely(database.db);
-    let seq = readNextTrajectorySeq(database, scope.sessionId);
-    // Bound both native bindings and serialized payloads while keeping the full
-    // flush atomic. Canonical recorder events are at most 256 KiB each.
-    for (let index = 0; index < events.length; index += TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE) {
-      const rows = events
-        .slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE)
-        .map((event) => {
-          const eventJson = JSON.stringify(event);
-          return {
-            session_id: scope.sessionId,
-            seq: seq++,
-            run_id: event.runId ?? null,
-            event_json: eventJson,
-            created_at: readTrajectoryEventTimestamp(event) ?? Date.now(),
-          };
-        });
-      executeSqliteQuerySync(database.db, db.insertInto("trajectory_runtime_events").values(rows));
-    }
-    trimSqliteTrajectoryRuntimeWindow(database, scope.sessionId, maxRuntimeBytes);
-    const lastSweptAt = lastGlobalSweepAtByDatabase.get(database);
-    if (
-      lastSweptAt === undefined ||
-      sweepAt < lastSweptAt ||
-      sweepAt - lastSweptAt >= TRAJECTORY_RUNTIME_GLOBAL_SWEEP_INTERVAL_MS
-    ) {
-      sweepSqliteTrajectoryRuntimeRetention(
-        database,
-        scope.sessionId,
-        sweepAt,
-        maxGlobalRuntimeBytes,
-      );
-      sweptDatabase = database;
-    }
-  }, options);
-  if (sweptDatabase) {
-    lastGlobalSweepAtByDatabase.set(sweptDatabase, sweepAt);
+  const db = getTrajectoryKysely(database.db);
+  let seq = readNextTrajectorySeq(database, sessionId);
+  const discardBeforeSeq = input.discardPrevious ? seq : undefined;
+  // Bound both native bindings and serialized payloads while keeping the full
+  // flush atomic. Canonical recorder events are at most 256 KiB each.
+  for (let index = 0; index < events.length; index += TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE) {
+    const rows = events.slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE).map((event) => {
+      const eventJson = JSON.stringify(event);
+      return {
+        session_id: sessionId,
+        seq: seq++,
+        run_id: event.runId ?? null,
+        event_json: eventJson,
+        created_at: parseDateStringTimestampMs(event.ts) ?? Date.now(),
+      };
+    });
+    executeSqliteQuerySync(database.db, db.insertInto("trajectory_runtime_events").values(rows));
+  }
+  trimSqliteTrajectoryRuntimeWindow(database, sessionId, maxRuntimeBytes, discardBeforeSeq);
+  const lastSweptAt = lastGlobalSweepAtByDatabase.get(database);
+  if (
+    lastSweptAt === undefined ||
+    sweepAt < lastSweptAt ||
+    sweepAt - lastSweptAt >= TRAJECTORY_RUNTIME_GLOBAL_SWEEP_INTERVAL_MS
+  ) {
+    sweepSqliteTrajectoryRuntimeRetention(database, sessionId, sweepAt, maxGlobalRuntimeBytes);
+    deferSqlitePostCommitPublication(database.db, () => {
+      lastGlobalSweepAtByDatabase.set(database, sweepAt);
+    });
   }
 }
 
@@ -133,13 +150,6 @@ export function appendSqliteTrajectoryRuntimeEvents(
 export async function loadSqliteTrajectoryRuntimeEvents(
   scope: SqliteTrajectoryRuntimeReadScope,
 ): Promise<TrajectoryEvent[]> {
-  return loadSqliteTrajectoryRuntimeEventsSync(scope);
-}
-
-/** Loads runtime trajectory events synchronously for CLI and export paths. */
-function loadSqliteTrajectoryRuntimeEventsSync(
-  scope: SqliteTrajectoryRuntimeReadScope,
-): TrajectoryEvent[] {
   return loadSqliteTrajectoryRuntimeEventRowsSync(scope).map((row) => row.event);
 }
 
@@ -159,6 +169,12 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
           ? Math.max(0, Math.floor(scope.tailEvents))
           : undefined;
       const afterSeq = scope.afterSeq;
+      const events = db
+        .selectFrom("trajectory_runtime_events")
+        .where("session_id", "=", scope.sessionId)
+        .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+          query.where("seq", ">", Math.floor(afterSeq!)),
+        );
       // Budget checks and payload reads must share one snapshot so a concurrent
       // writer cannot cross the budget between admission and materialization.
       return runSqliteDeferredTransactionSync(
@@ -174,13 +190,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
             const countRow: { event_count: number | null } | undefined =
               executeSqliteQueryTakeFirstSync(
                 database.db,
-                db
-                  .selectFrom("trajectory_runtime_events")
-                  .select((eb) => [eb.fn.countAll<number>().as("event_count")])
-                  .where("session_id", "=", scope.sessionId)
-                  .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
-                    query.where("seq", ">", Math.floor(afterSeq!)),
-                  ),
+                events.select((eb) => [eb.fn.countAll<number>().as("event_count")]),
               );
             const eventCount = countRow?.event_count ?? 0;
             if (eventCount > eventLimit) {
@@ -197,26 +207,14 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
           ) {
             assertSqliteJsonlReadBudget(
               database.db,
-              db
-                .selectFrom("trajectory_runtime_events")
-                .select("event_json")
-                .where("session_id", "=", scope.sessionId)
-                .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
-                  query.where("seq", ">", Math.floor(afterSeq!)),
-                )
-                .as("events"),
+              events.select("event_json").as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
             );
           }
-          let query = db
-            .selectFrom("trajectory_runtime_events")
+          let query = events
             .select(["seq", "event_json"])
-            .where("session_id", "=", scope.sessionId)
             .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-          if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-            query = query.where("seq", ">", Math.floor(afterSeq));
-          }
           const normalizedMaxEvents =
             scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
               ? Math.max(0, Math.floor(scope.maxEvents))
@@ -227,8 +225,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
               : normalizedMaxEvents === undefined
                 ? tailEvents
                 : Math.min(tailEvents, normalizedMaxEvents);
-          if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-            query = query.limit(Math.max(0, Math.floor(maxEvents)));
+          if (maxEvents !== undefined) {
+            query = query.limit(maxEvents);
           }
           const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
             event: JSON.parse(row.event_json) as TrajectoryEvent,
@@ -370,6 +368,7 @@ function trimSqliteTrajectoryRuntimeWindow(
   database: OpenClawAgentDatabase,
   sessionId: string,
   maxRuntimeBytes: number,
+  discardBeforeSeq?: number,
 ): void {
   const db = getTrajectoryKysely(database.db);
   const rows = iterateSqliteQuerySync(
@@ -396,16 +395,21 @@ function trimSqliteTrajectoryRuntimeWindow(
       .orderBy("seq", "desc"),
   );
   let retainedBytes = 0;
-  let removeThroughSeq: number | undefined;
+  // An evicted queued prefix expires all rows before this batch, even when its
+  // retained suffix alone would leave room for them. Keep live cursors advancing.
+  let removeThroughSeq = discardBeforeSeq === undefined ? undefined : discardBeforeSeq - 1;
   // Retention removes an oldest prefix. Stop once the newest suffix fills the
   // UTF-8 byte budget, then close the iterator before deleting that prefix.
   for (const row of rows) {
+    if (discardBeforeSeq !== undefined && row.seq < discardBeforeSeq) {
+      break;
+    }
     retainedBytes +=
       (row.event_json === null
         ? sqliteNumber(row.event_bytes)
         : Buffer.byteLength(row.event_json, "utf8")) + 1;
     if (!(retainedBytes <= maxRuntimeBytes)) {
-      removeThroughSeq = row.seq;
+      removeThroughSeq = Math.max(removeThroughSeq ?? row.seq, row.seq);
       break;
     }
   }
@@ -419,8 +423,4 @@ function trimSqliteTrajectoryRuntimeWindow(
       .where("session_id", "=", sessionId)
       .where("seq", "<=", removeThroughSeq),
   );
-}
-
-function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {
-  return parseDateStringTimestampMs(event.ts);
 }

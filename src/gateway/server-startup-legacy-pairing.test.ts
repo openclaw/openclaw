@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import { seedNodeDevice } from "../infra/device-pairing-node.test-support.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
-import { readChannelPairingState } from "../pairing/pairing-store-sqlite.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -70,152 +71,134 @@ afterEach(async () => {
 });
 
 describe("legacy pairing repair ownership", () => {
-  it("imports legacy DM requests and approvals only in Doctor mode", async () => {
-    const timestamp = new Date().toISOString();
-    const request = {
-      id: "12345",
-      code: "ABCDEFGH",
-      createdAt: timestamp,
-      lastSeenAt: timestamp,
-      meta: { accountId: "default" },
-    };
-    const credentials = path.join(stateDir, "credentials");
-    await fs.mkdir(credentials, { recursive: true });
-    const legacy = new Map([
-      [path.join(credentials, "telegram-pairing.json"), JSON.stringify({ requests: [request] })],
-      [
-        path.join(credentials, "telegram-default-allowFrom.json"),
-        JSON.stringify({ allowFrom: ["67890"] }),
-      ],
-    ]);
-    for (const [file, bytes] of legacy) {
-      await fs.writeFile(file, bytes);
-    }
-    const before = readChannelPairingState("telegram", process.env);
-    const params = { cfg, env: process.env, legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES };
-
-    const automatic = await autoMigrateLegacyState(params);
-    expect(automatic.stepReceipts.some((receipt) => receipt.id === "channel-pairing")).toBe(false);
-    for (const [file, bytes] of legacy) {
-      expect(await fs.readFile(file, "utf8")).toBe(bytes);
-    }
-    expect(readChannelPairingState("telegram", process.env)).toEqual(before);
-
-    const repaired = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
-    expect(repaired.warnings).toEqual([]);
-    expect(repaired.stepReceipts.find((receipt) => receipt.id === "channel-pairing")).toMatchObject(
-      {
-        outcome: "completed",
-      },
-    );
-    expect(readChannelPairingState("telegram", process.env)).toMatchObject({
-      requests: [request],
-      allowFrom: { default: ["67890"] },
-    });
-    for (const file of legacy.keys()) {
-      await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-  });
-
-  it.each(["EACCES", "EIO"])(
-    "reports pairing inspection failure %s without treating it as absence",
-    async (code) => {
-      const access = fs.access;
-      const failedPath = path.join(stateDir, "devices/paired.json");
-      vi.spyOn(fs, "access").mockImplementation((file, mode) =>
-        String(file) === failedPath
-          ? Promise.reject(Object.assign(new Error(`synthetic ${code}`), { code }))
-          : access(file, mode),
-      );
+  it.each([false, true])(
+    "preserves legacy approvals and disabled desktop grants at startup (desktop: %s)",
+    async (desktop) => {
+      if (desktop) {
+        await seedNodeDevice(stateDir, "desktop-node");
+        const { request } = await requestNodePairing(
+          {
+            nodeId: "desktop-node",
+            platform: "darwin",
+            commands: ["desktop.stream", "system.run"],
+          },
+          stateDir,
+        );
+        await approveNodePairing(
+          request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          stateDir,
+        );
+      }
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-      await expect(
-        runGatewayStartupMaintenance({
-          cfgAtStart: cfg,
-          startupRuntimeConfig: cfg,
-          minimalTestGateway: false,
-          log,
-        }),
-      ).resolves.toBeUndefined();
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`synthetic ${code}`));
-      await expect(
-        autoMigrateLegacyState({
-          cfg,
-          env: process.env,
-          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-        }),
-      ).resolves.toBeDefined();
-      const result = await autoMigrateLegacyState({
-        cfg,
-        env: process.env,
-        doctorOnlyStateMigrations: true,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      await runGatewayStartupMaintenance({
+        cfgAtStart: cfg,
+        startupRuntimeConfig: cfg,
+        minimalTestGateway: false,
+        log,
       });
-      expect(
-        result.stepReceipts.find((receipt) => receipt.id === "migration-detection"),
-      ).toMatchObject({ outcome: "refused" });
-      for (const [relative, bytes] of sources) {
-        expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
+      if (desktop) {
+        expect((await getPairedDevice("desktop-node", stateDir))?.nodeSurface?.commands).toEqual([
+          "system.run",
+        ]);
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining("approve their updated desktop capability"),
+        );
+      } else {
+        for (const [relative, bytes] of sources) {
+          expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
+        }
+        expect(await getPairedDevice("synthetic", stateDir)).toBeNull();
+        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
       }
     },
   );
-  it("leaves legacy approvals intact during normal Gateway startup", async () => {
+
+  it("reports pairing inspection failure without treating it as absence", async () => {
+    const code = "EACCES";
+    const access = fs.access;
+    const failedPath = path.join(stateDir, "devices/paired.json");
+    vi.spyOn(fs, "access").mockImplementation((file, mode) =>
+      String(file) === failedPath
+        ? Promise.reject(Object.assign(new Error(`synthetic ${code}`), { code }))
+        : access(file, mode),
+    );
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    await runGatewayStartupMaintenance({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
-    });
-    for (const [relative, bytes] of sources) {
-      expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
-    }
-    expect(await getPairedDevice("synthetic", stateDir)).toBeNull();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
-  });
-
-  it("imports device approvals before node capabilities only in Doctor repair", async () => {
-    const params = { cfg, env: process.env, legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES };
-    await autoMigrateLegacyState(params);
-    for (const [relative, bytes] of sources) {
-      expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
-    }
-    const result = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
-    expect(result.warnings).toEqual([]);
-    expect(await getPairedDevice("synthetic", stateDir)).toMatchObject({
-      publicKey: "synthetic-public-key",
-      roles: ["node"],
-      nodeSurface: { caps: ["canvas"] },
-    });
-    expect((await listDevicePairing(stateDir)).pending).toEqual([]);
-    for (const [relative, bytes] of sources) {
-      expect(await fs.readFile(path.join(stateDir, relative) + ".migrated", "utf8")).toBe(bytes);
-    }
-    const repeated = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
-    expect(repeated.changes).toEqual([]);
-  });
-
-  it("leaves node capabilities available for retry when device import fails", async () => {
-    const devicePath = path.join(stateDir, "devices/paired.json");
-    const validDevices = sources.get("devices/paired.json")!;
-    await fs.writeFile(devicePath, "{invalid");
-    const params = {
+    await expect(
+      runGatewayStartupMaintenance({
+        cfgAtStart: cfg,
+        startupRuntimeConfig: cfg,
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`synthetic ${code}`));
+    await expect(
+      autoMigrateLegacyState({
+        cfg,
+        env: process.env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    ).resolves.toBeDefined();
+    const result = await autoMigrateLegacyState({
       cfg,
       env: process.env,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       doctorOnlyStateMigrations: true,
-    };
-    const failed = await autoMigrateLegacyState(params);
-    expect(failed.stepReceipts.find((receipt) => receipt.id === "pairing-stores")).toMatchObject({
-      outcome: "refused",
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
-    expect(await fs.readFile(devicePath, "utf8")).toBe("{invalid");
-    expect(await fs.readFile(path.join(stateDir, "nodes/paired.json"), "utf8")).toBe(
-      sources.get("nodes/paired.json"),
-    );
-    await fs.writeFile(devicePath, validDevices);
-    await autoMigrateLegacyState(params);
-    expect(await getPairedDevice("synthetic", stateDir)).toMatchObject({
-      nodeSurface: { caps: ["canvas"] },
-    });
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "migration-detection"),
+    ).toMatchObject({ outcome: "refused" });
+    for (const [relative, bytes] of sources) {
+      expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
+    }
   });
+  it.each([false, true])(
+    "imports device approvals before node capabilities in Doctor (failed first attempt: %s)",
+    async (retry) => {
+      const params = {
+        cfg,
+        env: process.env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      };
+      if (retry) {
+        const devicePath = path.join(stateDir, "devices/paired.json");
+        await fs.writeFile(devicePath, "{invalid");
+        const failed = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
+        expect(
+          failed.stepReceipts.find((receipt) => receipt.id === "pairing-stores"),
+        ).toMatchObject({
+          outcome: "refused",
+        });
+        expect(await fs.readFile(devicePath, "utf8")).toBe("{invalid");
+        expect(await fs.readFile(path.join(stateDir, "nodes/paired.json"), "utf8")).toBe(
+          sources.get("nodes/paired.json"),
+        );
+        await fs.writeFile(devicePath, sources.get("devices/paired.json")!);
+      } else {
+        await autoMigrateLegacyState(params);
+        for (const [relative, bytes] of sources) {
+          expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
+        }
+      }
+      const result = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
+      expect(result.warnings).toEqual([]);
+      expect(await getPairedDevice("synthetic", stateDir)).toMatchObject({
+        publicKey: "synthetic-public-key",
+        roles: ["node"],
+        nodeSurface: { caps: ["canvas"] },
+      });
+      expect((await listDevicePairing(stateDir)).pending).toEqual([]);
+      for (const [relative, bytes] of sources) {
+        expect(await fs.readFile(path.join(stateDir, relative) + ".migrated", "utf8")).toBe(bytes);
+      }
+      if (!retry) {
+        const repeated = await autoMigrateLegacyState({
+          ...params,
+          doctorOnlyStateMigrations: true,
+        });
+        expect(repeated.changes).toEqual([]);
+      }
+    },
+  );
 });

@@ -1,15 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createSubscribedSessionHarness,
   emitMessageStartAndEndForAssistantText,
   emitToolRun,
+  emitAssistantTextDelta,
   extractAgentEventPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
+  createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+
+type BlockReply = NonNullable<Parameters<typeof createSubscribedSessionHarness>[0]["onBlockReply"]>;
 
 describe("subscribeEmbeddedAgentSession deferred progress", () => {
   it.each([
@@ -115,4 +120,126 @@ describe("subscribeEmbeddedAgentSession deferred progress", () => {
       }
     },
   );
+});
+
+type FlushStep = {
+  chunks?: string[];
+  phase?: "commentary" | "final_answer";
+  final?: string;
+  beforeFlush?: string[];
+  expected: string[];
+};
+type FlushCase = {
+  name: string;
+  enforceFinalTag?: boolean;
+  chunked?: boolean;
+  steps: FlushStep[];
+};
+
+it.each<FlushCase>([
+  {
+    name: "commentary without a final item",
+    steps: [{ chunks: ["Working..."], phase: "commentary", expected: [] }],
+  },
+  {
+    name: "commentary followed by a final item",
+    steps: [
+      { chunks: ["Working..."], phase: "commentary", expected: [] },
+      { chunks: ["Final answer"], phase: "final_answer", expected: ["Final answer"] },
+    ],
+  },
+  {
+    name: "downgraded tool text",
+    steps: [{ chunks: ["Visible answer", " [Tool Call: some_fn]"], expected: ["Visible answer"] }],
+  },
+  { name: "empty buffer", steps: [{ expected: [] }] },
+  {
+    name: "unclosed final tag",
+    enforceFinalTag: true,
+    steps: [
+      {
+        chunks: ["Before ", "<final> content without close"],
+        expected: [" content without close"],
+      },
+    ],
+  },
+  {
+    name: "hidden-tag context across flushes",
+    steps: [
+      { chunks: ["Before ", "<think> reasoning without close"], expected: ["Before"] },
+      { chunks: ["secret continuation"], expected: ["Before"] },
+    ],
+  },
+  {
+    name: "orphan reasoning close retracting the flushed prefix",
+    steps: [
+      { chunks: ["private chain"], expected: ["private chain"] },
+      { chunks: ["</mm:think>Visible answer"], expected: ["Visible answer"] },
+    ],
+  },
+  {
+    name: "live chunks reconciled after an earlier flush",
+    chunked: true,
+    steps: [
+      { chunks: ["Hello world. "], expected: ["Hello world."] },
+      {
+        chunks: ["Next sentence. "],
+        beforeFlush: ["Hello world.", "Next sentence."],
+        expected: ["Hello world. Next sentence."],
+      },
+    ],
+  },
+  ...["Hello world", ""].map((final) => ({
+    name: `authoritative final ${JSON.stringify(final)}`,
+    steps: [
+      { chunks: ["Hello"], expected: ["Hello"] },
+      { final, expected: final ? [final] : [] },
+    ],
+  })),
+])("flushPartialAssistantText preserves $name", ({ enforceFinalTag, chunked, steps }) => {
+  const onBlockReply = vi.fn<BlockReply>();
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "run",
+    enforceFinalTag,
+    ...(chunked
+      ? {
+          onBlockReply,
+          blockReplyChunking: { minChars: 8, maxChars: 200, breakPreference: "sentence" },
+        }
+      : {}),
+  });
+  onTestFinished(() => subscription.unsubscribe());
+  if (steps.some((step) => step.chunks !== undefined)) {
+    emit({ type: "message_start", message: { role: "assistant" } });
+  }
+  for (const { chunks, phase, final, beforeFlush, expected } of steps) {
+    for (const delta of chunks ?? []) {
+      if (phase) {
+        emit(
+          createOpenAiResponsesTextEvent({
+            type: "text_delta",
+            text: delta,
+            delta,
+            id: `item-${phase}`,
+            signaturePhase: phase,
+            partialPhase: phase,
+          }),
+        );
+      } else {
+        emitAssistantTextDelta({ emit, delta });
+      }
+    }
+    if (final !== undefined) {
+      emit({ type: "message_end", message: textAssistant(final) });
+    } else {
+      if (beforeFlush) {
+        expect(subscription.assistantTexts).toEqual(beforeFlush);
+      }
+      subscription.flushPartialAssistantText();
+    }
+    expect(subscription.assistantTexts).toEqual(expected);
+  }
+  if (chunked) {
+    expect(onBlockReply).toHaveBeenCalled();
+  }
 });

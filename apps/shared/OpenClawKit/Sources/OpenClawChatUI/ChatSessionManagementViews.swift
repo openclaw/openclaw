@@ -1,11 +1,6 @@
 import Foundation
 import Observation
 import SwiftUI
-#if os(macOS)
-import AppKit
-#elseif os(iOS)
-import UIKit
-#endif
 
 enum ChatSessionBatchAction: Sendable, Equatable {
     case pin
@@ -42,25 +37,23 @@ enum ChatSessionBatchMutationRunner {
         maxConcurrent: Int = 4,
         operation: @escaping @Sendable (String) async throws -> Void) async -> ChatSessionBatchResult
     {
-        guard !keys.isEmpty else {
-            return ChatSessionBatchResult(succeededKeys: [], errorsByKey: [:])
+        let limit = min(keys.count, max(1, maxConcurrent))
+        let run: @Sendable (Int) async -> (Int, String, String?) = { index in
+            let key = keys[index]
+            do {
+                try await operation(key)
+                return (index, key, nil)
+            } catch {
+                return (index, key, error.localizedDescription)
+            }
         }
-        let limit = max(1, min(maxConcurrent, keys.count))
         var succeeded: [(Int, String)] = []
         var failures: [String: String] = [:]
         await withTaskGroup(of: (Int, String, String?).self) { group in
             var nextIndex = 0
             while nextIndex < limit {
                 let index = nextIndex
-                let key = keys[index]
-                group.addTask {
-                    do {
-                        try await operation(key)
-                        return (index, key, nil)
-                    } catch {
-                        return (index, key, error.localizedDescription)
-                    }
-                }
+                group.addTask { await run(index) }
                 nextIndex += 1
             }
             while let (index, key, error) = await group.next() {
@@ -71,15 +64,7 @@ enum ChatSessionBatchMutationRunner {
                 }
                 if nextIndex < keys.count {
                     let pendingIndex = nextIndex
-                    let pendingKey = keys[pendingIndex]
-                    group.addTask {
-                        do {
-                            try await operation(pendingKey)
-                            return (pendingIndex, pendingKey, nil)
-                        } catch {
-                            return (pendingIndex, pendingKey, error.localizedDescription)
-                        }
-                    }
+                    group.addTask { await run(pendingIndex) }
                     nextIndex += 1
                 }
             }
@@ -113,17 +98,17 @@ struct ChatSessionInspectorDetails: Equatable {
     init(session: OpenClawChatSessionEntry) {
         self.title = ChatSessionSidebarModel.displayName(for: session)
         self.key = session.key
-        self.kind = Self.normalized(session.kind)
-        self.agentID = Self.normalized(OpenClawChatSessionKey.agentID(from: session.key))
-        self.group = Self.normalized(session.category)
+        self.kind = ChatPayloadDecoding.trimmedNonEmptyString(session.kind)
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(OpenClawChatSessionKey.agentID(from: session.key))
+        self.group = ChatPayloadDecoding.trimmedNonEmptyString(session.category)
         self.runState = Self.runState(for: session)
-        self.model = Self.normalized(session.model)
-        self.provider = Self.normalized(session.modelProvider)
-        self.runtime = Self.normalized(session.agentRuntime?.id)
+        self.model = ChatPayloadDecoding.trimmedNonEmptyString(session.model)
+        self.provider = ChatPayloadDecoding.trimmedNonEmptyString(session.modelProvider)
+        self.runtime = ChatPayloadDecoding.trimmedNonEmptyString(session.agentRuntime?.id)
         self.runDurationMs = session.runtimeMs
-        self.worktreeID = Self.normalized(session.worktree?.id)
-        self.worktreeBranch = Self.normalized(session.worktree?.branch)
-        self.worktreeRoot = Self.normalized(session.worktree?.repoRoot)
+        self.worktreeID = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.id)
+        self.worktreeBranch = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.branch)
+        self.worktreeRoot = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.repoRoot)
         self.updatedAt = session.updatedAt
         self.lastActivityAt = session.lastActivityAt
         self.lastInteractionAt = session.lastInteractionAt
@@ -131,37 +116,53 @@ struct ChatSessionInspectorDetails: Equatable {
         self.endedAt = session.endedAt
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
-    }
-
     private static func runState(for session: OpenClawChatSessionEntry) -> String? {
-        if self.normalized(session.status)?.lowercased() == "queued" {
+        if ChatPayloadDecoding.trimmedNonEmptyString(session.status)?.lowercased() == "queued" {
             return String(localized: "Queued")
         }
         if session.hasActiveRun == true || session.hasActiveSubagentRun == true {
             return String(localized: "Running")
         }
-        return self.normalized(session.status)
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.status)
     }
 }
 
 @MainActor
 struct ChatSessionInspectorSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
-    let session: OpenClawChatSessionEntry
 
     @Environment(\.dismiss) private var dismiss
-    @State private var displayedSession: OpenClawChatSessionEntry
+    @State private var legacySession: OpenClawChatSessionEntry
+    private let target: OpenClawChatSessionTarget
+    private let sessionID: String?
+
+    private var canonicalSession: OpenClawChatSessionEntry? {
+        guard let owner = self.viewModel.sidebarData else { return self.legacySession }
+        guard let row = owner.row(key: self.target.sessionKey, agentID: self.target.agentID),
+              row.sessionId == self.sessionID else { return nil }
+        return row
+    }
+
+    private var displayedSession: OpenClawChatSessionEntry {
+        get {
+            var placeholder = OpenClawChatSessionEntry(key: self.target.sessionKey)
+            placeholder.agentId = self.target.agentID
+            return self.canonicalSession ?? placeholder
+        }
+        nonmutating set {
+            if self.viewModel.sidebarData == nil { self.legacySession = newValue }
+        }
+    }
+
     @State private var groups: [OpenClawChatSessionGroup] = []
     @State private var isMutatingGroup = false
     @State private var errorText: String?
 
     init(viewModel: OpenClawChatViewModel, session: OpenClawChatSessionEntry) {
         self.viewModel = viewModel
-        self.session = session
-        _displayedSession = State(initialValue: session)
+        self.target = OpenClawChatSessionTarget(sessionKey: session.key, agentID: session.agentId)
+        self.sessionID = session.sessionId
+        _legacySession = State(initialValue: viewModel.sidebarData == nil ? session : .init(key: session.key))
     }
 
     private var details: ChatSessionInspectorDetails {
@@ -176,7 +177,7 @@ struct ChatSessionInspectorSheet: View {
                     HStack(alignment: .firstTextBaseline) {
                         LabeledContent("Key", value: self.details.key)
                         Button {
-                            Self.copy(self.details.key)
+                            ChatPasteboard.copy(self.details.key)
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
@@ -184,7 +185,10 @@ struct ChatSessionInspectorSheet: View {
                         .help("Copy session key")
                     }
                     self.optionalRow("Kind", self.details.kind)
-                    self.optionalRow("Agent", self.details.agentID)
+                    self.optionalRow(
+                        "Agent",
+                        self.details
+                            .agentID ?? (self.viewModel.sidebarData == nil ? nil : self.displayedSession.agentId))
                 }
 
                 Section("Organization") {
@@ -207,6 +211,7 @@ struct ChatSessionInspectorSheet: View {
                             self.displayedSession,
                             mainSessionKey: self.viewModel.resolvedMainSessionKey))
                 }
+                .disabled(self.canonicalSession == nil)
 
                 Section("Run") {
                     self.optionalRow("Status", self.details.runState)
@@ -277,6 +282,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.category ?? "" },
             set: { next in
+                guard self.canonicalSession != nil else { return }
                 let previous = self.displayedSession.category
                 let nextGroup = next.isEmpty ? nil : next
                 self.displayedSession.category = nextGroup
@@ -302,6 +308,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.isPinned },
             set: { pinned in
+                guard self.canonicalSession != nil else { return }
                 self.displayedSession.pinned = pinned
                 self.viewModel.setSessionPinned(
                     key: self.displayedSession.key,
@@ -314,6 +321,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.isArchived },
             set: { archived in
+                guard self.canonicalSession != nil else { return }
                 self.displayedSession.archived = archived
                 self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })
@@ -337,15 +345,6 @@ struct ChatSessionInspectorSheet: View {
 
     private static func duration(_ milliseconds: Double) -> String {
         Duration.seconds(milliseconds / 1000).formatted(.units(allowed: [.hours, .minutes, .seconds]))
-    }
-
-    private static func copy(_ value: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        #elseif os(iOS)
-        UIPasteboard.general.string = value
-        #endif
     }
 }
 
@@ -484,52 +483,96 @@ struct ChatSessionGroupsSheet: View {
     }
 
     private func createGroup(named name: String) async {
-        defer { self.isMutating = false }
-        guard let routeLease = self.routeLease else {
-            self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
-            return
-        }
-        do {
-            self.groups = try await self.viewModel.createSessionGroup(
-                named: name,
-                using: routeLease)
+        await self.mutateGroups { routeLease in
+            let groups = try await self.viewModel.createSessionGroup(named: name, using: routeLease)
             self.newGroupName = ""
-            self.errorText = nil
-        } catch {
-            self.errorText = error.localizedDescription
+            return groups
         }
     }
 
     private func renameGroup(_ target: OpenClawChatSessionGroup, to name: String) async {
-        defer { self.isMutating = false }
         defer { self.renameTarget = nil }
+        await self.mutateGroups { routeLease in
+            try await self.viewModel.renameSessionGroup(target.name, to: name, using: routeLease)
+        }
+    }
+
+    private func deleteGroup(_ target: OpenClawChatSessionGroup) async {
+        defer { self.deleteTarget = nil }
+        await self.mutateGroups { routeLease in
+            try await self.viewModel.deleteSessionGroup(target.name, using: routeLease)
+        }
+    }
+
+    private func mutateGroups(
+        _ operation: (OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]) async
+    {
+        defer { self.isMutating = false }
         guard let routeLease = self.routeLease else {
             self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
             return
         }
         do {
-            self.groups = try await self.viewModel.renameSessionGroup(
-                target.name,
-                to: name,
-                using: routeLease)
+            self.groups = try await operation(routeLease)
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription
         }
     }
+}
 
-    private func deleteGroup(_ target: OpenClawChatSessionGroup) async {
-        defer { self.isMutating = false }
-        defer { self.deleteTarget = nil }
-        guard let routeLease = self.routeLease else {
-            self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
-            return
+@MainActor
+@Observable
+final class ChatNewSessionAgentOptions {
+    var agents: [OpenClawChatAgentChoice] = []
+    var selectedAgentID = ""
+    var isLoading = true
+    var routeLease: OpenClawChatNewSessionRouteLease?
+    var errorText: String?
+    private var generation = 0
+
+    var selectedAgent: OpenClawChatAgentChoice? {
+        self.agents.first { $0.id == self.selectedAgentID }
+    }
+
+    func load(
+        selectedAgentID: String?,
+        acquireRoute: () async throws -> OpenClawChatNewSessionRouteLease) async
+    {
+        self.generation &+= 1
+        let generation = self.generation
+        self.isLoading = true
+        self.errorText = nil
+        self.routeLease = nil
+        defer {
+            if generation == self.generation { self.isLoading = false }
         }
         do {
-            self.groups = try await self.viewModel.deleteSessionGroup(target.name, using: routeLease)
-            self.errorText = nil
+            let routeLease = try await acquireRoute()
+            try await routeLease.loadAgents { [weak self] response in
+                guard let self, generation == self.generation, !Task.isCancelled else { return }
+                self.isLoading = false
+                self.agents = response?.agents ?? []
+                // An empty roster must never enable creation through a stray defaultId.
+                guard let response, !response.agents.isEmpty else {
+                    self.routeLease = nil
+                    self.errorText = String(localized: "No agents are available on this gateway.")
+                    return
+                }
+                if self.routeLease == nil {
+                    self.selectedAgentID = response.agents.first(where: {
+                        $0.id.lowercased() == selectedAgentID?.lowercased()
+                    })?.id ?? (response.agents.contains(where: { $0.id == response.defaultId })
+                        ? response.defaultId
+                        : response.agents[0].id)
+                }
+                self.routeLease = routeLease
+            }
         } catch {
-            self.errorText = error.localizedDescription
+            guard generation == self.generation else { return }
+            self.routeLease = nil
+            self.agents = []
+            if !Task.isCancelled { self.errorText = error.localizedDescription }
         }
     }
 }
@@ -539,46 +582,19 @@ public struct ChatNewSessionOptionsPopover: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let onComplete: () -> Void
 
-    @State private var agents: [OpenClawChatAgentChoice] = []
-    @State private var selectedAgentID = ""
+    @State private var agentOptions = ChatNewSessionAgentOptions()
     @State private var usesWorktree = false
     @State private var baseRef = ""
-    @State private var isLoading = true
     @State private var isCreating = false
-    @State private var routeLease: OpenClawChatNewSessionRouteLease?
-    @State private var errorText: String?
 
     public init(viewModel: OpenClawChatViewModel, onComplete: @escaping () -> Void) {
         self.viewModel = viewModel
         self.onComplete = onComplete
     }
 
-    private var selectedAgent: OpenClawChatAgentChoice? {
-        self.agents.first { $0.id == self.selectedAgentID }
-    }
-
     private func loadOptions() async {
-        self.isLoading = true
-        self.errorText = nil
-        defer { self.isLoading = false }
-        do {
-            let routeLease = try await self.viewModel.newSessionRouteLease()
-            let response = try await routeLease.listAgents()
-            // An empty catalog must not retain the lease: a stray defaultId would
-            // enable Create for an agent the gateway never offered.
-            guard let response, !response.agents.isEmpty else {
-                self.errorText = String(localized: "No agents are available on this gateway.")
-                return
-            }
-            self.routeLease = routeLease
-            self.agents = response.agents
-            self.selectedAgentID = response.agents.first(where: {
-                $0.id.lowercased() == self.viewModel.selectedAgentID
-            })?.id ?? (response.agents.contains(where: { $0.id == response.defaultId })
-                ? response.defaultId
-                : response.agents[0].id)
-        } catch {
-            self.errorText = error.localizedDescription
+        await self.agentOptions.load(selectedAgentID: self.viewModel.selectedAgentID) {
+            try await self.viewModel.newSessionRouteLease()
         }
     }
 
@@ -596,8 +612,8 @@ public struct ChatNewSessionOptionsPopover: View {
                 Text("Agent")
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(.secondary)
-                Picker(selection: self.$selectedAgentID) {
-                    ForEach(self.agents) { agent in
+                Picker(selection: self.$agentOptions.selectedAgentID) {
+                    ForEach(self.agentOptions.agents) { agent in
                         Text(verbatim: agent.displayName)
                             .font(OpenClawChatTypography.formControl)
                             .tag(agent.id)
@@ -610,7 +626,7 @@ public struct ChatNewSessionOptionsPopover: View {
                 .pickerStyle(.menu)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .disabled(self.isLoading || self.isCreating || self.agents.isEmpty)
+                .disabled(self.agentOptions.isLoading || self.isCreating || self.agentOptions.agents.isEmpty)
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -619,8 +635,9 @@ public struct ChatNewSessionOptionsPopover: View {
                         .font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .toggleStyle(.switch)
-                .disabled(self.isLoading || self.isCreating || self.selectedAgent?.workspaceGit == false)
-                Text(self.selectedAgent?.workspaceGit == false
+                .disabled(self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgent?
+                    .workspaceGit == false)
+                Text(self.agentOptions.selectedAgent?.workspaceGit == false
                     ? "This agent needs a Git repository to use a worktree."
                     : "Keep code changes isolated in a Git worktree.")
                     .font(OpenClawChatTypography.caption)
@@ -644,7 +661,7 @@ public struct ChatNewSessionOptionsPopover: View {
             .padding(14)
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
 
-            if let errorText {
+            if let errorText = self.agentOptions.errorText {
                 Label(errorText, systemImage: "exclamationmark.circle")
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(OpenClawChatTheme.danger)
@@ -652,17 +669,17 @@ public struct ChatNewSessionOptionsPopover: View {
             }
 
             HStack(spacing: 10) {
-                if self.isLoading || self.isCreating {
+                if self.agentOptions.isLoading || self.isCreating {
                     ProgressView()
                         .controlSize(.small)
                 }
-                if self.errorText != nil, self.routeLease == nil {
+                if self.agentOptions.errorText != nil, self.agentOptions.routeLease == nil {
                     Button {
                         Task { await self.loadOptions() }
                     } label: {
                         Text("Retry").font(OpenClawChatTypography.formControl)
                     }
-                    .disabled(self.isLoading)
+                    .disabled(self.agentOptions.isLoading)
                 }
                 Spacer()
                 Button(action: self.onComplete) {
@@ -676,24 +693,25 @@ public struct ChatNewSessionOptionsPopover: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
-                    self.isLoading || self.isCreating || self.selectedAgentID.isEmpty || self.routeLease == nil)
+                    self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self
+                        .agentOptions.routeLease == nil)
             }
         }
         .padding(20)
         .frame(width: 360)
         .task { await self.loadOptions() }
-        .onChange(of: self.selectedAgentID) {
-            if self.selectedAgent?.workspaceGit == false {
+        .onChange(of: self.agentOptions.selectedAgentID) {
+            if self.agentOptions.selectedAgent?.workspaceGit == false {
                 self.usesWorktree = false
             }
         }
     }
 
     private func createThread() {
-        guard !self.isCreating, let routeLease = self.routeLease else { return }
+        guard !self.isCreating, let routeLease = self.agentOptions.routeLease else { return }
         self.isCreating = true
-        self.errorText = nil
-        let agentID = self.selectedAgentID
+        self.agentOptions.errorText = nil
+        let agentID = self.agentOptions.selectedAgentID
         let usesWorktree = self.usesWorktree
         let baseRef = self.baseRef.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
@@ -707,7 +725,7 @@ public struct ChatNewSessionOptionsPopover: View {
             if created {
                 self.onComplete()
             } else {
-                self.errorText = self.viewModel.errorText
+                self.agentOptions.errorText = self.viewModel.errorText
                     ?? String(localized: "The thread could not be created.")
             }
         }

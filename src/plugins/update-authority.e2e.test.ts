@@ -8,7 +8,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -66,7 +66,7 @@ describe("plugin update publication authority", () => {
             stateDir: state.stateDir,
           };
           const control = state.path("control");
-          await fs.mkdir(control);
+          await fs.mkdir(control, { mode: 0o700 });
           vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
           await withPluginInstallRoots(roots, async () => {
             const retainedFixture = await withPluginLifecycleLease(
@@ -370,7 +370,7 @@ describe("plugin update publication authority", () => {
             },
           };
           const control = state.path("control");
-          await fs.mkdir(control);
+          await fs.mkdir(control, { mode: 0o700 });
           vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
 
           for (const revoke of [true, false]) {

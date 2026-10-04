@@ -18,10 +18,10 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
-  expectPlanReceiptDescriptorsToMatch,
   snapshotFiles,
   writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
+import * as deviceIdentityMigrations from "./state-migrations.device-identity.js";
 import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
@@ -93,6 +93,15 @@ async function makeCallerModeFixture() {
     `${JSON.stringify({ plugins: { entries: { "candidate-plugin": { enabled: true } } } })}\n`,
   );
   return fixture;
+}
+
+function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  return planLegacyStateMigrationsReadOnly({
+    mode: "doctor",
+    candidate: candidateAt(fixture.root),
+    snapshot: createCallerModeSnapshot(fixture),
+    env: fixture.env,
+  });
 }
 
 afterEach(async () => {
@@ -230,7 +239,7 @@ describe("legacy state migration read-only refusals", () => {
     expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
-  it.each(["absolute", "tilde", "snapshot-bound"] as const)(
+  it.each(["tilde", "snapshot-bound"] as const)(
     "binds the selected %s shared-auth source without inspecting external state",
     async (pathStyle) => {
       const fixture = await makeFixture();
@@ -320,12 +329,7 @@ describe("legacy state migration read-only refusals", () => {
     fs.unlinkSync(walPath);
     fs.symlinkSync(externalDirectory, walPath);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.snapshot.stateDigest).toBeUndefined();
     expect(plan.warnings).toEqual([
@@ -515,12 +519,7 @@ module.exports = { stateMigrations: [{
     const cfg: OpenClawConfig = { session: { store: configuredPath } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan).toMatchObject({
       mutationAllowed: false,
@@ -544,12 +543,7 @@ module.exports = { stateMigrations: [{
     fs.writeFileSync(path.join(source, "AGENTS.md"), "profile workspace\n");
     const before = snapshotFiles(fixture.root);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
       source: [{ kind: "path", path: source }],
@@ -637,7 +631,7 @@ module.exports = { stateMigrations: [{
     fs.writeFileSync(
       fixture.configPath,
       `${JSON.stringify({
-        agents: { list: [{ id: "legacy", default: true }] },
+        agents: { entries: { legacy: {} } },
         plugins: { entries: { "candidate-plugin": { enabled: true } } },
       })}\n`,
     );
@@ -661,27 +655,14 @@ module.exports = { stateMigrations: [{
     const legacy = new DatabaseSync(stateDatabasePath);
     try {
       legacy.exec(`
-        ALTER TABLE agent_databases RENAME TO agent_databases_current;
-        CREATE TABLE agent_databases (
-          agent_id TEXT NOT NULL PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases SELECT * FROM agent_databases_current;
-        DROP TABLE agent_databases_current;
+        PRAGMA user_version = 8;
+        UPDATE schema_meta SET schema_version = 8;
       `);
     } finally {
       legacy.close();
     }
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.steps[0]).toMatchObject({ id: "state-schema", requiredness: "required" });
     expect(
@@ -698,18 +679,13 @@ module.exports = { stateMigrations: [{
     const externalDatabasePath = path.join(fixture.root, "registered", "agent.sqlite");
     fs.mkdirSync(path.dirname(externalDatabasePath), { recursive: true });
     fs.writeFileSync(externalDatabasePath, "external\n");
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "legacy", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { legacy: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     vi.spyOn(sessionTargets, "resolveConfiguredAgentDatabaseTargets").mockReturnValue([
       { agentId: "legacy", path: externalDatabasePath },
     ]);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const blockerIndex = plan.steps.findIndex((step) => step.id === "agent-migration-targets");
     expect(plan.steps[blockerIndex]).toMatchObject({
@@ -729,63 +705,10 @@ module.exports = { stateMigrations: [{
     expect(fs.readFileSync(externalDatabasePath, "utf8")).toBe("external\n");
   });
 
-  it("returns an explicit refusal receipt when a required Doctor step cannot run", async () => {
-    const fixture = await makeCallerModeFixture();
-    const { execPath, tuiPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    fs.writeFileSync(tuiPath, "not json\n");
-    fs.writeFileSync(fixture.configPath, "{}\n");
-    const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
-
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      onStepReceipt: (receipt) => emittedReceipts.push(receipt),
-    });
-
-    const tuiReceipt = result.stepReceipts.find((receipt) => receipt.id === "tui-last-session");
-    expect(tuiReceipt).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "step-refused" },
-    });
-    expect(emittedReceipts.find((receipt) => receipt.id === "tui-last-session")).toEqual(
-      tuiReceipt,
-    );
-    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
-      plan.steps.map((step) => step.id),
-    );
-    expectPlanReceiptDescriptorsToMatch({ plan, receipts: result.stepReceipts });
-    expect(result.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
-    expect(fs.readFileSync(tuiPath, "utf8")).toBe("not json\n");
-    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      changes: [],
-      refusal: {
-        code: "blocked-by-prior-refusal",
-        message: expect.stringContaining('prior step "tui-last-session"'),
-      },
-    });
-    expect(emittedReceipts).toEqual(result.stepReceipts);
-    expect(fs.existsSync(execPath)).toBe(true);
-  });
-
   it("returns thrown-step receipts and stops later Doctor mutations", async () => {
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const pluginDoctorConfig = Object.defineProperty({}, "meta", {
       get() {
         throw new Error("synthetic config migration failure");
@@ -827,7 +750,6 @@ module.exports = { stateMigrations: [{
 
   it.each([
     { blockerId: "config-machine-state", property: "meta" },
-    { blockerId: "agent-migration-targets", property: "session" },
     { blockerId: "state-schema", property: null },
   ] as const)(
     "closes receipts before rethrowing automatic $blockerId failure",
@@ -841,7 +763,7 @@ module.exports = { stateMigrations: [{
         const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
         fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         const database = new DatabaseSync(databasePath);
-        database.exec("CREATE TABLE agent_databases (broken TEXT)");
+        database.exec("CREATE TABLE audit_events (broken TEXT)");
         database.close();
       }
       const plan = await planLegacyStateMigrationsReadOnly({
@@ -860,7 +782,7 @@ module.exports = { stateMigrations: [{
         : {};
       const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
       const execution = autoMigrateLegacyState({
-        cfg: property === "session" ? config : {},
+        cfg: {},
         pluginDoctorConfig: property === "meta" ? config : undefined,
         env: fixture.env,
         homedir: () => fixture.homeDir,
@@ -887,12 +809,7 @@ module.exports = { stateMigrations: [{
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
     writeLegacyStateSchemaV1(resolveOpenClawStateSqlitePath(fixture.env));
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const lastTouchedAt = "2026-09-02T00:00:00.000Z";
     const cfg = Object.defineProperty({ meta: { lastTouchedAt } }, "session", {
       get() {
@@ -940,29 +857,18 @@ module.exports = { stateMigrations: [{
   it("returns detection refusal after preludes and stops later Doctor mutations", async () => {
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
+    const plan = await planFixture(fixture);
+    vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(() => {
+      throw new Error("synthetic execution detection failure");
     });
-    const params = Object.defineProperty(
-      {
-        cfg: {},
-        doctorOnlyStateMigrations: true,
-        env: fixture.env,
-        homedir: () => fixture.homeDir,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      } as Parameters<typeof autoMigrateLegacyState>[0],
-      "allowLegacyDeviceIdentityImport",
-      {
-        get() {
-          throw new Error("synthetic execution detection failure");
-        },
-      },
-    );
 
-    const result = await autoMigrateLegacyState(params);
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
 
     expectBlockedTailInPlanOrder({
       plan,

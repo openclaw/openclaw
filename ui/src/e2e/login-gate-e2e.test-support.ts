@@ -408,7 +408,7 @@ export async function renderLoginGate(
   page: Page,
   baseUrl: string,
   { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
-): Promise<void> {
+) {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -422,16 +422,31 @@ export async function renderLoginGate(
   });
   await page.locator(".login-gate").waitFor();
   await mountLoginGate(page, lastError);
+  return gateway;
 }
 
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
-      props: Record<string, unknown>;
-      updateComplete: Promise<unknown>;
-    };
-    document.body.dataset.connectCount = "0";
+    const app = document.querySelector<
+      HTMLElement & {
+        runtime: { context: { gateway: { stop(): void } } };
+        requestUpdate(): void;
+        updateComplete: Promise<unknown>;
+      }
+    >("openclaw-app")!;
+    if (failureMessage === null) {
+      // The app must also own the no-error state before it can render the gate again.
+      app.runtime.context.gateway.stop();
+      await app.updateComplete;
+    }
+    // Keep the production app wrapper: it owns the safe-area and viewport budget.
+    const gate = document.querySelector("openclaw-login-gate") as
+      | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
+      | null;
+    if (!gate) {
+      throw new Error("Missing mounted login gate");
+    }
     gate.props = {
       resourceBasePath: "",
       connected: false,
@@ -445,12 +460,13 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
       onGatewayUrlChange: () => {},
       onSecretChange: () => {},
       onToggleGatewaySecret: () => {},
-      onConnect: () => {
-        const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
-        document.body.dataset.connectCount = String(current + 1);
-      },
+      onConnect: gate.props.onConnect,
     };
-    document.body.replaceChildren(gate);
     await gate.updateComplete;
+    if (failureMessage === null) {
+      app.requestUpdate();
+      await app.updateComplete;
+      await gate.updateComplete;
+    }
   }, lastError);
 }

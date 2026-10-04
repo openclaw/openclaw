@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -17,6 +18,7 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
@@ -28,19 +30,21 @@ import {
   SESSION_KEY,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  database,
   placements,
   root,
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 describe("worker turn recovery after environment reconciliation errors", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
-    const store = createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+    const store = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
     let installation = {
       ...BUNDLE_ARTIFACT,
       protocolFeatures: [
@@ -72,6 +76,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
     const provider = createProvider({ supportedExecutionModes: ["worker-turn"], inspect });
     const warn = vi.fn();
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store,
       getConfig: () => ({}),
       resolveProvider: () => provider,
@@ -96,11 +101,11 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         resolveMoveDestination: async () => undefined,
         runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
-          await reclaim({ kind: "local", path: root }, begin()),
+          await reclaim({ kind: "local", path: root }, await begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+        ...createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: async () => ({ kind: "local", path: root }),
+        }),
       }),
       (_request, run) => run(),
     );
@@ -111,15 +116,19 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       isStopping: () => false,
     });
     try {
-      store.createIntent({
+      await store.createIntent({
         environmentId: ENVIRONMENT_ID,
         providerId: provider.id,
         profileId: "development",
         profileSnapshot: { executionMode: "worker-turn", settings: { device: "node-1" } },
         provisionOperationId: "shared-node-recovery",
       });
-      store.transition({ environmentId: ENVIRONMENT_ID, from: "requested", to: "provisioning" });
-      const ready = store.transition({
+      await store.transition({
+        environmentId: ENVIRONMENT_ID,
+        from: "requested",
+        to: "provisioning",
+      });
+      const ready = await store.transition({
         environmentId: ENVIRONMENT_ID,
         from: "provisioning",
         to: "ready",
@@ -146,40 +155,24 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         ownerEpoch: ready.ownerEpoch,
         sessionId: SESSION_ID,
       });
-      let placement = placements.startDispatch({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        executionMode: "worker-turn",
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: placement.generation,
-        patch: { environmentId: ENVIRONMENT_ID },
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "provisioning",
-        to: "syncing",
-        expectedGeneration: placement.generation,
-        patch: { workerBundleHash: installation.bundleHash },
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "syncing",
-        to: "starting",
-        expectedGeneration: placement.generation,
-        patch: { remoteWorkspaceDir: "/worker/workspace", workspaceBaseManifestRef: MANIFEST_REF },
-      });
-      placements.transition({
-        sessionId: SESSION_ID,
-        from: "starting",
-        to: "active",
-        expectedGeneration: placement.generation,
-        patch: { activeOwnerEpoch: attached.ownerEpoch },
-      });
+      await advancePlacementFixtureToActive(
+        placements,
+        database,
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          executionMode: "worker-turn",
+        },
+        {
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: attached.ownerEpoch,
+          workerBundleHash: installation.bundleHash,
+          remoteWorkspaceDir: "/worker/workspace",
+          workspaceBaseManifestRef: MANIFEST_REF,
+          seedEnvironment: false,
+        },
+      );
       installation = { ...installation, bundleHash: "d".repeat(64) };
       const startTunnel = vi.spyOn(environments, "startTunnel");
       const launcher = createWorkerSessionTurnPlacementProvider({
@@ -204,7 +197,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       expect(inspect).toHaveBeenCalledOnce();
       expect(stopRequests).toHaveBeenCalled();
       expect(store.getCredential(ENVIRONMENT_ID)).toBeUndefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
       expect(failure).toBeInstanceOf(Error);
       expect(warn).toHaveBeenCalledWith(

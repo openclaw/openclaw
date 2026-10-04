@@ -16,8 +16,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -61,7 +62,7 @@ export function collectPreparedModelRuntimeConfiguredRefs(
           ...config,
           agents: {
             ...(config.agents?.defaults ? { defaults: config.agents.defaults } : {}),
-            list: entry ? [entry] : [],
+            entries: toAgentEntriesRecord(entry ? [entry] : []),
           },
         }
       : config,
@@ -179,13 +180,9 @@ export function prepareConfiguredRuntimeModels(params: {
   matchesStaticModelId: StaticModelIdMatcher;
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
-  const seen = new Set<string>();
-  for (const { modelId, provider } of params.configuredModelRefs) {
-    const key = buildModelCatalogMergeKey(provider, modelId);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
+  for (const { modelId, provider } of dedupeByKey(params.configuredModelRefs, (ref) =>
+    buildModelCatalogMergeKey(ref.provider, ref.modelId),
+  )) {
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
     let model =
@@ -312,20 +309,26 @@ export function listConfiguredOwnerInputs(
   config: OpenClawConfig,
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
+  preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config)
     .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
     .map((agentId) => {
-      const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+      const agentDir = resolveAgentDir(config, agentId);
+      const launchWorkspaceDir =
+        preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
+        (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
+      const preserveWorkspaceDirOnRefresh =
+        launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
       const input: PreparedModelRuntimeInput = {
         agentId,
-        agentDir: resolveAgentDir(config, agentId),
+        agentDir,
         config,
         inheritedAuthDir,
         workspaceDir: preserveWorkspaceDirOnRefresh
-          ? defaultWorkspaceDir
+          ? launchWorkspaceDir
           : resolveAgentWorkspaceDir(config, agentId),
         runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
       };

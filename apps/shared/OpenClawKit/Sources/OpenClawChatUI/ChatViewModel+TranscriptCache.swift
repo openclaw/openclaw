@@ -13,10 +13,11 @@ extension OpenClawChatViewModel {
         var sessionRoutingContract: String?
     }
 
-    func replaceMessages(_ messages: [OpenClawChatMessage]) {
-        guard self.messages != messages else { return }
-        self.messages = messages
-        self.seedInputHistory(from: messages)
+    func replaceMessages(_ messages: [OpenClawChatMessage], narrationSettled: Bool = false) {
+        let reconciled = self.narration.reconcile(messages, settled: narrationSettled)
+        guard self.messages != reconciled.messages || reconciled.changed else { return }
+        self.messages = reconciled.messages
+        self.seedInputHistory(from: reconciled.messages)
         markTimelineChanged()
     }
 
@@ -47,9 +48,8 @@ extension OpenClawChatViewModel {
         let transcriptCache = self.transcriptCache
         let outbox = self.outbox
         let scope = self.outboxBranchScope(for: session)
-        let tip = messages.reversed().compactMap { message -> String? in
-            let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return entryID?.isEmpty == false ? entryID : nil
+        let tip = messages.reversed().compactMap {
+            ChatPayloadDecoding.trimmedNonEmptyString($0.transcriptMessageID)
         }.first
         guard transcriptCache != nil || (outbox != nil && scope != nil && tip != nil) else { return }
         let branchStateTask: Task<OpenClawChatOutboxBranchState?, Never>? = if let outbox, let scope {
@@ -100,6 +100,7 @@ extension OpenClawChatViewModel {
     func paintFromCacheIfNeeded(session: SessionSnapshot) {
         guard let transcriptCache else { return }
         if sessions.isEmpty, !hasAppliedLiveSessions {
+            let rosterRead = self.sidebarData?.beginRead()
             Task { [weak self] in
                 let cached = await transcriptCache.loadSessions(agentID: session.deliveryAgentID)
                 guard let self, !cached.isEmpty else { return }
@@ -125,8 +126,12 @@ extension OpenClawChatViewModel {
                 let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                     in: agentScoped,
                     activeAgentId: session.deliveryAgentID)
-                self.sessions = self.applyingLocalUnreadOverrides(
-                    to: scoped)
+                if let owner = self.sidebarData {
+                    guard let rosterRead else { return }
+                    owner.receive(scoped, read: rosterRead, replacingAgent: session.deliveryAgentID ?? "")
+                } else {
+                    self.sessions = self.applyingLocalUnreadOverrides(to: scoped)
+                }
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }
@@ -145,7 +150,6 @@ extension OpenClawChatViewModel {
 
     static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
         guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
-        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }

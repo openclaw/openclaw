@@ -23,6 +23,47 @@ vi.mock("../plugins/management-mutations.js", () => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const integrity = `sha256:${"a".repeat(64)}`;
+type InstallOptions = NonNullable<Parameters<typeof installClawPackages>[1]>;
+
+function packageDeps(
+  root: string,
+  loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
+) {
+  return {
+    preflightPlugin: (params) => preflightPluginInstall({ ...params, loadInstallRecords }),
+    probePlugin: async ({ spec }) => ({
+      ok: true,
+      packageName: spec,
+      pluginId: spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!,
+      targetDir: root,
+      extensions: [],
+      clawhub: {
+        source: "clawhub",
+        clawhubFamily: "code-plugin",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: spec,
+        integrity,
+      },
+    }),
+    persistPackageRef: (plan, pkg, persistOptions) => ({
+      schemaVersion: "openclaw.clawPackageRef.v1",
+      agentId: plan.agent.finalId,
+      clawName: plan.claw.name,
+      kind: pkg.kind,
+      source: pkg.source,
+      ref: pkg.ref,
+      version: pkg.version!,
+      integrity: pkg.integrity!,
+      status: persistOptions?.status ?? "pending",
+      relationship: "referenced",
+      origin: "claw-introduced",
+      independentOwner: false,
+      installedAtMs: 1,
+      updatedAtMs: 1,
+    }),
+    completePackageRef: (ref, status) => ({ ...ref, status }),
+  } satisfies InstallOptions["deps"];
+}
 
 describe("Claw committed plugin requirement handoff", () => {
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
@@ -48,40 +89,13 @@ describe("Claw committed plugin requirement handoff", () => {
             },
           },
           deps: {
-            acquirePackageLease: () => ({ heartbeat: () => {}, release: () => {} }),
-            preflightPlugin: (params) =>
-              preflightPluginInstall({ ...params, loadInstallRecords: async () => ({}) }),
-            probePlugin: async () => ({
-              ok: true,
-              pluginId: "demo",
-              packageName: "@owner/demo",
-              targetDir: root,
-              extensions: [],
-              clawhub: {
-                source: "clawhub",
-                clawhubFamily: "code-plugin",
-                clawhubUrl: "https://clawhub.ai",
-                clawhubPackage: "@owner/demo",
-                integrity,
-              },
-            }),
-            persistPackageRef: () => ({
-              schemaVersion: "openclaw.clawPackageRef.v1",
-              agentId: "incident-2",
-              clawName: "incident-claw",
-              kind: "plugin",
-              source: "clawhub",
-              ref: "@owner/demo",
-              version: "1.0.0",
-              integrity,
-              status: "pending",
-              relationship: "referenced",
-              origin: "claw-introduced",
-              independentOwner: false,
-              installedAtMs: 1,
-              updatedAtMs: 1,
-            }),
-            completePackageRef: (ref, status) => ({ ...ref, status }),
+            ...packageDeps(root, async () => ({})),
+            withPackageLease: async (_artifact, operation) =>
+              operation({
+                signal: new AbortController().signal,
+                assertOwned() {},
+                assertOwnedInTransaction() {},
+              }),
           },
         },
       ).catch((error: unknown) => error);
@@ -122,7 +136,7 @@ describe("Claw committed plugin requirement handoff", () => {
             warnings: ["Previous plugin cleanup did not finish."],
           };
         });
-        const options: NonNullable<Parameters<typeof installClawPackages>[1]> = {
+        const options: InstallOptions = {
           env,
           runtime: {
             log,
@@ -133,48 +147,19 @@ describe("Claw committed plugin requirement handoff", () => {
           },
           reloadPlugins,
           deps: {
-            acquirePackageLease: () => {
+            ...packageDeps(root, async () => records),
+            withPackageLease: async (_artifact, operation) => {
               heldPackages++;
-              return {
-                heartbeat: () => true,
-                release: () => {
-                  heldPackages--;
-                },
-              };
+              try {
+                return await operation({
+                  signal: new AbortController().signal,
+                  assertOwned() {},
+                  assertOwnedInTransaction() {},
+                });
+              } finally {
+                heldPackages--;
+              }
             },
-            preflightPlugin: (params) =>
-              preflightPluginInstall({ ...params, loadInstallRecords: async () => records }),
-            probePlugin: async ({ spec }) => ({
-              ok: true,
-              packageName: spec,
-              pluginId: spec.includes("first") ? "first" : "second",
-              targetDir: root,
-              extensions: [],
-              clawhub: {
-                source: "clawhub",
-                clawhubFamily: "code-plugin",
-                clawhubUrl: "https://clawhub.ai",
-                clawhubPackage: spec,
-                integrity,
-              },
-            }),
-            persistPackageRef: (plan, pkg, persistOptions) => ({
-              schemaVersion: "openclaw.clawPackageRef.v1",
-              agentId: plan.agent.finalId,
-              clawName: plan.claw.name,
-              kind: pkg.kind,
-              source: pkg.source,
-              ref: pkg.ref,
-              version: pkg.version!,
-              integrity: pkg.integrity!,
-              status: persistOptions?.status ?? "pending",
-              relationship: "referenced",
-              origin: "claw-introduced",
-              independentOwner: false,
-              installedAtMs: 1,
-              updatedAtMs: 1,
-            }),
-            completePackageRef: (ref, status) => ({ ...ref, status }),
             installPlugin: async (params) => {
               if (params.request.source !== "clawhub" || !params.request.expectedPluginId) {
                 throw new Error("Expected a pinned ClawHub plugin request");
@@ -217,18 +202,16 @@ describe("Claw committed plugin requirement handoff", () => {
             },
           },
         };
-        const pending = installClawPackages(
-          packageInstallPlan(
-            ["first", "second"].map((id) => ({
-              kind: "plugin",
-              source: "clawhub",
-              ref: `@owner/${id}`,
-              version: "1.0.0",
-              integrity,
-            })),
-          ),
-          options,
+        const plan = packageInstallPlan(
+          ["first", "second"].map((id) => ({
+            kind: "plugin",
+            source: "clawhub",
+            ref: `@owner/${id}`,
+            version: "1.0.0",
+            integrity,
+          })),
         );
+        const pending = installClawPackages(plan, options);
         let completed: Awaited<typeof pending> | undefined;
         if (lateFailure) {
           await expect(pending).rejects.toMatchObject({
@@ -257,21 +240,12 @@ describe("Claw committed plugin requirement handoff", () => {
               readPackageRefs: () => installedRefs,
             },
           };
-          const resumedPlan = packageInstallPlan(
-            ["first", "second"].map((id) => ({
-              kind: "plugin",
-              source: "clawhub",
-              ref: `@owner/${id}`,
-              version: "1.0.0",
-              integrity,
-            })),
-          );
           reloadPlugins.mockRejectedValueOnce(new Error("runtime reply lost"));
-          await expect(installClawPackages(resumedPlan, resumedOptions)).rejects.toMatchObject({
+          await expect(installClawPackages(plan, resumedOptions)).rejects.toMatchObject({
             code: "package_runtime_failed",
             message: expect.stringContaining("Runtime activation was not confirmed"),
           });
-          await expect(installClawPackages(resumedPlan, resumedOptions)).resolves.toHaveLength(2);
+          await expect(installClawPackages(plan, resumedOptions)).resolves.toHaveLength(2);
           expect(installPlugin).not.toHaveBeenCalled();
           expect(cleanup).not.toHaveBeenCalled();
           expect(reloadPlugins).toHaveBeenCalledTimes(3);

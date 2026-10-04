@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -19,15 +23,15 @@ type SharedAuthProfileDatabase = Pick<OpenClawStateKyselyDatabase, "config_machi
 
 // Auth profiles store one JSON blob for secrets and one JSON blob for runtime
 // state. SQLite owns durability/transactions; JSON shape owns compatibility.
-export const PRIMARY_ROW_KEY = "primary";
+const PRIMARY_ROW_KEY = "primary";
 // Shared-state auth payloads live in config_machine_state; the keys are listed
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
-export const SHARED_STORE_STATE_KEY = "authProfiles.store";
-export const SHARED_STATE_STATE_KEY = "authProfiles.state";
+const SHARED_STORE_STATE_KEY = "authProfiles.store";
+const SHARED_STATE_STATE_KEY = "authProfiles.state";
 export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 
 // Callers own transactions; opening another here would nest.
-export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {
+function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getSharedAuthProfileKysely(db)
@@ -38,11 +42,11 @@ export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string
   return row?.value_json;
 }
 
-export function getAgentAuthProfileKysely(db: DatabaseSync) {
+function getAgentAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AgentAuthProfileDatabase>(db);
 }
 
-export function getSharedAuthProfileKysely(db: DatabaseSync) {
+function getSharedAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SharedAuthProfileDatabase>(db);
 }
 
@@ -71,6 +75,35 @@ function inspectAuthProfileTable(
   return schemaObject.type === "table" ? null : { status: "unreadable" };
 }
 
+/** Read admitted auth cells without discarding malformed JSON needed for migration backups. */
+export function readAuthProfileJsonCellText(
+  db: DatabaseSync,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): string | undefined {
+  if (databaseKind === "shared-state") {
+    return readSharedAuthKvCell(
+      db,
+      target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
+    );
+  }
+  return target === "store"
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        getAgentAuthProfileKysely(db)
+          .selectFrom("auth_profile_store")
+          .select("store_json")
+          .where("store_key", "=", PRIMARY_ROW_KEY),
+      )?.store_json
+    : executeSqliteQueryTakeFirstSync(
+        db,
+        getAgentAuthProfileKysely(db)
+          .selectFrom("auth_profile_state")
+          .select("state_json")
+          .where("state_key", "=", PRIMARY_ROW_KEY),
+      )?.state_json;
+}
+
 export function inspectAuthProfileJsonCell(
   db: DatabaseSync,
   target: "store" | "state",
@@ -80,40 +113,9 @@ export function inspectAuthProfileJsonCell(
   if (tableInspection) {
     return tableInspection;
   }
-  let raw: string;
-  if (databaseKind === "shared-state") {
-    const cell = readSharedAuthKvCell(
-      db,
-      target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-    );
-    if (cell === undefined) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = cell;
-  } else if (target === "store") {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_store")
-        .select("store_json")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.store_json;
-  } else {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_state")
-        .select("state_json")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.state_json;
+  const raw = readAuthProfileJsonCellText(db, target, databaseKind);
+  if (raw === undefined) {
+    return { status: "missing", reason: "row" };
   }
   try {
     return { status: "readable", raw: JSON.parse(raw) as unknown };
@@ -176,4 +178,83 @@ export function readAuthProfileRows(
     state,
     cacheable: store.status !== "unreadable" && state.status !== "unreadable" && canCache(),
   };
+}
+
+/** Write one canonical auth cell on the caller's admitted transaction connection. */
+export function writeAuthProfileJsonCell(
+  database: DatabaseSync,
+  target: "store" | "state",
+  kind: "agent" | "shared-state",
+  payload: unknown,
+): void {
+  const value = JSON.stringify(payload);
+  const now = Date.now();
+  if (kind === "shared-state") {
+    executeSqliteQuerySync(
+      database,
+      getSharedAuthProfileKysely(database)
+        .insertInto("config_machine_state")
+        .values({
+          state_key: target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
+          value_json: value,
+          updated_at_ms: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ value_json: value, updated_at_ms: now }),
+        ),
+    );
+  } else if (target === "store") {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .insertInto("auth_profile_store")
+        .values({ store_key: PRIMARY_ROW_KEY, store_json: value, updated_at: now })
+        .onConflict((conflict) =>
+          conflict.column("store_key").doUpdateSet({ store_json: value, updated_at: now }),
+        ),
+    );
+  } else {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .insertInto("auth_profile_state")
+        .values({ state_key: PRIMARY_ROW_KEY, state_json: value, updated_at: now })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ state_json: value, updated_at: now }),
+        ),
+    );
+  }
+}
+
+export function deleteAuthProfileJsonCell(
+  database: DatabaseSync,
+  target: "store" | "state",
+  kind: "agent" | "shared-state",
+): void {
+  if (kind === "shared-state") {
+    executeSqliteQuerySync(
+      database,
+      getSharedAuthProfileKysely(database)
+        .deleteFrom("config_machine_state")
+        .where(
+          "state_key",
+          "=",
+          target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
+        ),
+    );
+  } else if (target === "store") {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .deleteFrom("auth_profile_store")
+        .where("store_key", "=", PRIMARY_ROW_KEY),
+    );
+  } else {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .deleteFrom("auth_profile_state")
+        .where("state_key", "=", PRIMARY_ROW_KEY),
+    );
+  }
 }

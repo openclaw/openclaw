@@ -5,11 +5,11 @@ import type { OpenAIResponsesCompactEndpointResult } from "./openai-responses-co
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import { isOpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import {
   buildOpenAIResponsesCompactSystemMessage,
   type buildOpenAIResponsesParams,
 } from "./openai-responses-params-internal.js";
-import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-websocket.js";
 import { buildOpenAISdkRequestOptions } from "./openai-transport-params.js";
 
 export async function postOpenAIResponsesCompaction(params: {

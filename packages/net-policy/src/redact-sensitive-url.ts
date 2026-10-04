@@ -69,10 +69,7 @@ function normalizeUrlQueryParamName(name: string): {
     try {
       decoded = decodeURIComponent(current).replace(URL_QUERY_NAME_SEPARATOR_RE, "");
     } catch {
-      return {
-        value: normalizeLowercaseStringOrEmpty(current).replaceAll("-", "_"),
-        unresolvedEncoding: current.includes("%"),
-      };
+      break;
     }
     if (decoded === current) {
       return {
@@ -92,14 +89,7 @@ function looksLikeNestedUrlValue(value: string): boolean {
   if (URL_SCHEME_RE.test(value)) {
     return true;
   }
-  const forwardAuthorityIndex = value.indexOf("//");
-  const backwardAuthorityIndex = value.indexOf("\\\\");
-  const authorityIndex =
-    forwardAuthorityIndex < 0
-      ? backwardAuthorityIndex
-      : backwardAuthorityIndex < 0
-        ? forwardAuthorityIndex
-        : Math.min(forwardAuthorityIndex, backwardAuthorityIndex);
+  const authorityIndex = value.search(/\/\/|\\\\/u);
   if (authorityIndex >= 0 && value.includes("@", authorityIndex + 2)) {
     return true;
   }
@@ -126,16 +116,13 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 
 /** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
-  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".cdpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".request.proxy.url")) {
-    return true;
-  }
-  return /^(?:nodeHost\.)?mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
+  return (
+    path.endsWith(".baseUrl") ||
+    path.endsWith(".httpUrl") ||
+    path.endsWith(".cdpUrl") ||
+    path.endsWith(".request.proxy.url") ||
+    /^(?:nodeHost\.)?mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path)
+  );
 }
 
 /** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */
@@ -176,12 +163,11 @@ function redactDirectSensitiveUrl(value: string): string {
 
 function redactQueryString(value: string, depth: number): string {
   const params = new URLSearchParams(value);
-  const entries = Array.from(params.entries());
   const redactedEntries: Array<[string, string]> = [];
   const seenSensitiveKeys = new Set<string>();
   let mutated = false;
 
-  for (const [key, entryValue] of entries) {
+  for (const [key, entryValue] of params) {
     if (isSensitiveUrlQueryParamName(key)) {
       mutated = true;
       if (!seenSensitiveKeys.has(key)) {
@@ -202,11 +188,7 @@ function redactQueryString(value: string, depth: number): string {
   if (!mutated) {
     return value;
   }
-  const redactedParams = new URLSearchParams();
-  for (const [key, entryValue] of redactedEntries) {
-    redactedParams.append(key, entryValue);
-  }
-  return redactedParams.toString();
+  return new URLSearchParams(redactedEntries).toString();
 }
 
 function redactUrlLikeFallback(value: string): string {
@@ -227,26 +209,24 @@ function redactAuthorityUserInfo(candidate: string, authorityStart: number): str
   return `${candidate.slice(0, authorityStart)}***:***@${authority.slice(userInfoEnd + 1)}`;
 }
 
+function skipAuthoritySeparators(candidate: string, start: number): number {
+  let cursor = start;
+  while (candidate[cursor] === "/" || candidate[cursor] === "\\") {
+    cursor += 1;
+  }
+  return cursor;
+}
+
 function redactEmbeddedUrlUserInfo(value: string): string {
   return value
-    .replace(SPECIAL_SCHEME_AUTHORITY_RE, (candidate) => {
-      let authorityStart = candidate.indexOf(":") + 1;
-      while (
-        authorityStart < candidate.length &&
-        (candidate[authorityStart] === "/" || candidate[authorityStart] === "\\")
-      ) {
-        authorityStart += 1;
-      }
-      return redactAuthorityUserInfo(candidate, authorityStart);
-    })
+    .replace(SPECIAL_SCHEME_AUTHORITY_RE, (candidate) =>
+      redactAuthorityUserInfo(
+        candidate,
+        skipAuthoritySeparators(candidate, candidate.indexOf(":") + 1),
+      ),
+    )
     .replace(SPECIAL_SCHEME_SPILLED_USERINFO_RE, (candidate) => {
-      let authorityStart = candidate.indexOf(":") + 1;
-      while (
-        authorityStart < candidate.length &&
-        (candidate[authorityStart] === "/" || candidate[authorityStart] === "\\")
-      ) {
-        authorityStart += 1;
-      }
+      const authorityStart = skipAuthoritySeparators(candidate, candidate.indexOf(":") + 1);
       const userInfoEnd = candidate.lastIndexOf("@");
       const firstReservedDelimiter = candidate.slice(authorityStart).search(/[\\/?#]/u);
       if (userInfoEnd < 0 || firstReservedDelimiter < 0) {
@@ -268,16 +248,9 @@ function redactEmbeddedUrlUserInfo(value: string): string {
       }
       return `${candidate.slice(0, authorityStart)}***:***@${candidate.slice(userInfoEnd + 1)}`;
     })
-    .replace(PROTOCOL_RELATIVE_AUTHORITY_RE, (candidate) => {
-      let authorityStart = 0;
-      while (
-        authorityStart < candidate.length &&
-        (candidate[authorityStart] === "/" || candidate[authorityStart] === "\\")
-      ) {
-        authorityStart += 1;
-      }
-      return redactAuthorityUserInfo(candidate, authorityStart);
-    });
+    .replace(PROTOCOL_RELATIVE_AUTHORITY_RE, (candidate) =>
+      redactAuthorityUserInfo(candidate, skipAuthoritySeparators(candidate, 0)),
+    );
 }
 
 function hasUnresolvedEmbeddedUrlUserInfo(value: string): boolean {
@@ -326,24 +299,23 @@ function redactFragment(value: string, depth: number): string {
     return redactUrlLikeFallback(wholeUrl.value);
   }
 
-  const candidate = value;
   // Query-only fragments do not have a leading `?`, so the URL-like fallback cannot see them.
-  const firstQueryDelimiter = candidate.search(/[?&]/u);
-  const firstEquals = candidate.indexOf("=");
+  const firstQueryDelimiter = value.search(/[?&]/u);
+  const firstEquals = value.indexOf("=");
   if (firstEquals >= 0 && (firstQueryDelimiter < 0 || firstEquals < firstQueryDelimiter)) {
-    return redactQueryString(candidate, depth);
+    return redactQueryString(value, depth);
   }
 
-  const hashRouterQueryIndex = candidate.indexOf("?");
+  const hashRouterQueryIndex = value.indexOf("?");
   if (hashRouterQueryIndex >= 0) {
-    const query = candidate.slice(hashRouterQueryIndex + 1);
+    const query = value.slice(hashRouterQueryIndex + 1);
     const redactedQuery = redactQueryString(query, depth);
-    const prefix = candidate.slice(0, hashRouterQueryIndex + 1);
+    const prefix = value.slice(0, hashRouterQueryIndex + 1);
     const redactedPrefix = redactEncodedUrlLikeString(redactUrlLikeFallback(prefix), depth + 1);
     return `${redactedPrefix}${redactedQuery}`;
   }
 
-  const fallback = redactUrlLikeFallback(candidate);
+  const fallback = redactUrlLikeFallback(value);
   if (!looksLikeNestedUrlValue(fallback)) {
     return fallback;
   }

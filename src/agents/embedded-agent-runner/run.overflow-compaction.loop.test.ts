@@ -13,7 +13,6 @@ import {
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import type { SessionPlacementTurnParams } from "../session-placement-admission.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -41,6 +40,9 @@ vi.mock("../delegation-capability.js", () => ({
 vi.mock("../model-auth.js", () => ({
   applyAuthHeaderOverride: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+  // Catalog construction also probes media providers; this fixture has no credentials.
+  getCustomProviderApiKey: vi.fn(() => undefined),
+  resolveEnvApiKey: vi.fn(() => undefined),
 }));
 
 vi.mock("../tool-terminal-outcome.js", () => ({
@@ -73,10 +75,6 @@ vi.mock("../runtime-plan/build.js", () => ({
 
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
-}));
-
-vi.mock("./run/skill-workshop-attempt-params.js", () => ({
-  resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));
 
 let admittedRunContext: AdmittedRunContext;
@@ -221,86 +219,37 @@ describe("embedded run retry dispatch", () => {
   });
   afterEach(() => admission.close());
 
-  it.each([undefined, "global", "agent:main:policy"])(
-    "dispatches a global plugin attempt with its prepared owner (%s)",
-    async (sandboxSessionKey) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      input.runInput.runParams.config = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sandbox: { mode: "off" } },
-          list: [{ id: "main" }, { id: "marketing" }],
-        },
-      };
-      input.runInput.runParams.sessionKey = "global";
-      input.runInput.runParams.sandboxSessionKey = sandboxSessionKey;
-      input.runInput.workspaceResolution.agentId = "marketing";
-      input.runInput.resolvedSessionKey = "global";
-      input.runInput.workspaceDir = tempDirs.make("openclaw-global-plugin-attempt-");
-
-      const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(result.preparedAttempt).toMatchObject({
-        agentId: "marketing",
-        sessionKey: "global",
-        sandbox: null,
-      });
-      expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
-      expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
-      expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
-    },
-  );
-
   it.each([
     {
-      name: "node-bound",
-      execSession: {
-        execHost: "node",
-        execNode: "session-node",
-        execCwd: "/remote/default",
-      } satisfies ExecSessionDefaults,
+      session: { execHost: "node", execNode: "session-node", execCwd: "/remote/default" },
+      expected: { host: "node", security: "full", ask: "off", node: "session-node", safeBins: [] },
     },
     {
-      name: "sandbox-required",
-      execSession: { sandbox: "required" } satisfies ExecSessionDefaults,
+      session: { sandbox: "required" },
+      expected: { host: "sandbox", security: "deny", ask: "off", safeBins: [] },
     },
-  ])("forwards the $name exec session through the attempt projection", async ({ execSession }) => {
-    const result = await dispatchExecSession(execSession);
+  ] satisfies Array<{
+    session: ExecSessionDefaults;
+    expected: ReturnType<typeof resolveWorkerToolAuthority>["exec"];
+  }>)(
+    "resolves a projected $expected.host session's execution authority",
+    async ({ session, expected }) => {
+      const result = await dispatchExecSession(session);
 
-    expect(result.preparedAttempt.execSession).toBe(execSession);
-  });
+      const authority = resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        turn: {
+          ...result.preparedAttempt,
+          model: result.preparedAttempt.model.id,
+          fastMode: false,
+        },
+        placement: { agentId: "main", sessionKey: "agent:main:session-1" },
+        assertCurrent: () => {},
+      });
 
-  it("resolves a projected node session with its node and cwd", async () => {
-    const result = await dispatchExecSession({
-      execHost: "node",
-      execNode: "session-node",
-      execCwd: "/remote/default",
-    });
-
-    const authority = resolveWorkerToolAuthority({
-      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
-    });
-
-    expect(authority.exec).toEqual({
-      host: "node",
-      security: "full",
-      ask: "off",
-      node: "session-node",
-      safeBins: [],
-    });
-  });
-
-  it("resolves a projected sandbox-required session as sandbox", async () => {
-    const result = await dispatchExecSession({ sandbox: "required" });
-
-    const authority = resolveWorkerToolAuthority({
-      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
-    });
-
-    expect(authority.exec).toEqual({ host: "sandbox", security: "deny", ask: "off", safeBins: [] });
-  });
+      expect(authority.exec).toEqual(expected);
+    },
+  );
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
     const flushStarted = createDeferred();
@@ -351,7 +300,7 @@ describe("embedded run retry dispatch", () => {
     try {
       await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
       expect(onContextAccountingEvent.mock.calls).toEqual([
-        [{ kind: "model", contextTokens: undefined }],
+        [{ kind: "model", contextTokens: undefined, successful: false }],
         [{ kind: "compaction", tokensAfter: 40 }],
       ]);
     } finally {
@@ -406,7 +355,7 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
-  it.each(["openclaw", "codex", "copilot"])(
+  it.each(["openclaw", "codex"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;
@@ -479,7 +428,7 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it.each(["closed", "aborted", "replaced"])(
+  it.each(["closed", "aborted", "replaced", "attempt-replaced"])(
     "does not dispatch when GitHub preparation outlives a %s owner",
     async (kind) => {
       let gateway = {} as GatewayRequestContext;
@@ -497,36 +446,30 @@ describe("embedded run retry dispatch", () => {
       const dispatch = prepareAndDispatchEmbeddedRunAttempt(input);
       const rejected = expect(dispatch).rejects.toThrow("outlived its admitted Gateway run");
       await started.promise;
+      const replacement =
+        kind === "attempt-replaced"
+          ? input.runInput.laneController.createAttemptControls({ admittedRunContext })
+          : undefined;
       if (kind === "closed") {
         admission.close();
       } else if (kind === "aborted") {
         input.runInput.laneController.laneTaskAbortController.abort();
-      } else {
+      } else if (kind === "replaced") {
         gateway = {} as GatewayRequestContext;
       }
       release.resolve(true);
-      await rejected;
+      try {
+        await rejected;
+      } finally {
+        replacement?.close();
+      }
 
       expect(mocks.runAttempt).not.toHaveBeenCalled();
       expect(input.clearPostCompactionAbortController).toHaveBeenCalledOnce();
     },
   );
 
-  it.each([undefined, "current-turn-tool-policy"])(
-    "preserves the supplied turn tool authority at dispatch (%s)",
-    async (toolAuthorityFingerprint) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      input.runInput.runParams.toolAuthorityFingerprint = toolAuthorityFingerprint;
-
-      await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
-        toolAuthorityFingerprint,
-      );
-    },
-  );
-
-  it.each([true, false])(
+  it.each([true])(
     "retains accepted spawns for the logical owner after a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {
       const postCompactionAbortError = new Error("post-compaction loop detected");

@@ -1,15 +1,30 @@
+import { createHash } from "node:crypto";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
 import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { wrapExternalContent } from "../security/external-content.js";
 
-const SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS = 200;
-const SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
-const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 100;
+const SESSION_CATALOG_CONTINUATION_LIMITS = { maxItems: 200, maxBytes: 512 * 1024 };
+export const SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS = {
+  maxItems: 50_000,
+  maxBytes: 64 * 1024 * 1024,
+} as const;
+
+type SessionCatalogHistory = {
+  /** Retained source items in oldest-first order. */
+  items: SessionCatalogTranscriptItem[];
+  /** Items fetched, including the unretained remainder of the final page. */
+  totalItems: number;
+  complete: boolean;
+};
+// Claude and Codex transcript reads reject pages above 50 items; stay within every provider's cap.
+const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 50;
 
 function importedSessionCatalogMessage(params: {
   catalogId: string;
@@ -42,41 +57,28 @@ function importedSessionCatalogMessage(params: {
           : params.item.type === "other"
             ? "Other\n\n"
             : "";
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: `${prefix}${text}` }],
+  return sessionCatalogAssistantMessage(
+    `${prefix}${text}`,
     timestamp,
-    api: "openai-responses",
-    provider: params.catalogId,
-    model: params.item.model ?? "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-  };
+    params.catalogId,
+    params.item.model ?? "native-history",
+  );
 }
 
-function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
+function sessionCatalogAssistantMessage(
+  text: string,
+  timestamp: number,
+  provider: string,
+  model: string,
+): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp,
     api: "openai-responses",
-    provider: "openclaw",
-    model: "session-catalog",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    provider,
+    model,
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
   };
 }
@@ -111,59 +113,64 @@ function fitSessionCatalogItemToBytes(
   return Buffer.byteLength(JSON.stringify(bounded), "utf8") <= maxBytes ? bounded : undefined;
 }
 
-function importableSessionCatalogItem(
-  item: SessionCatalogTranscriptItem,
-): SessionCatalogTranscriptItem {
-  const { raw: _raw, ...importable } = item;
-  return importable;
-}
-
-async function readBoundedSessionCatalogHistory(params: {
+export async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
-}): Promise<SessionCatalogTranscriptItem[]> {
+  limits: { maxItems: number; maxBytes: number };
+}): Promise<SessionCatalogHistory> {
   const items: SessionCatalogTranscriptItem[] = [];
   let cursor: string | undefined;
   let bytes = 0;
-  while (items.length < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
+  let totalItems = 0;
+  let complete = true;
+  const result = (retainedAll: boolean): SessionCatalogHistory => ({
+    items: items.toReversed(),
+    totalItems,
+    complete: complete && retainedAll,
+  });
+  while (items.length < params.limits.maxItems) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
-        SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS - items.length,
+        params.limits.maxItems - items.length,
       ),
       ...(cursor ? { cursor } : {}),
     });
+    totalItems += page.items.length;
     // Catalog reads are newest-first. Bound that recent suffix before restoring
     // source order for persistence; timestamps do not define transcript order.
-    for (const item of page.items) {
-      const importableItem = importableSessionCatalogItem(item);
+    for (const [index, item] of page.items.entries()) {
+      const { raw: _raw, ...importableItem } = item;
       const itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
-      const remainingBytes = SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES - bytes;
+      const remainingBytes = params.limits.maxBytes - bytes;
       if (items.length > 0 && itemBytes > remainingBytes) {
-        return items.toReversed();
+        return result(false);
       }
       const retainedItem =
         itemBytes <= remainingBytes
           ? importableItem
           : fitSessionCatalogItemToBytes(importableItem, remainingBytes);
+      if (retainedItem !== importableItem) {
+        complete = false;
+      }
       if (!retainedItem) {
         continue;
       }
       const retainedItemBytes = Buffer.byteLength(JSON.stringify(retainedItem), "utf8");
       items.push(retainedItem);
       bytes += retainedItemBytes;
-      if (
-        items.length === SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS ||
-        bytes === SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES
-      ) {
-        return items.toReversed();
+      if (items.length === params.limits.maxItems || bytes === params.limits.maxBytes) {
+        return result(index === page.items.length - 1 && !page.nextCursor);
       }
     }
-    if (!page.nextCursor || page.nextCursor === cursor) {
-      break;
+    if (!page.nextCursor) {
+      return result(true);
+    }
+    if (page.nextCursor === cursor) {
+      return result(false);
     }
     cursor = page.nextCursor;
   }
-  return items.toReversed();
+  return result(false);
 }
 
 export async function importSessionCatalogHistory(params: {
@@ -178,7 +185,10 @@ export async function importSessionCatalogHistory(params: {
   continuationNotice?: string;
   commitGuard?: () => void;
 }): Promise<void> {
-  const items = await readBoundedSessionCatalogHistory({ read: params.read });
+  const { items } = await readBoundedSessionCatalogHistory({
+    read: params.read,
+    limits: SESSION_CATALOG_CONTINUATION_LIMITS,
+  });
   const fallbackTimestamp = Date.now();
   await withSessionTranscriptWriteLock(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
@@ -205,7 +215,12 @@ export async function importSessionCatalogHistory(params: {
     if (notice) {
       await transcript.appendMessage({
         message: {
-          ...sessionCatalogContinuationNotice(notice, fallbackTimestamp + items.length),
+          ...sessionCatalogAssistantMessage(
+            notice,
+            fallbackTimestamp + items.length,
+            "openclaw",
+            "session-catalog",
+          ),
           idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:continuation-notice`,
         },
         idempotencyLookup: "scan",
@@ -214,4 +229,99 @@ export async function importSessionCatalogHistory(params: {
       });
     }
   });
+}
+
+/** Preserve a prepared catalog snapshot without binding the session to its source runtime. */
+export async function preserveSessionCatalogHistory(params: {
+  catalogId: string;
+  threadId: string;
+  history: SessionCatalogHistory;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  config: OpenClawConfig;
+  notice: string;
+  commitGuard?: () => void;
+}): Promise<{ importedItems: number }> {
+  const fallbackTimestamp = Date.now();
+  const occurrences = new Map<string, number>();
+  let importedItems = 0;
+  params.commitGuard?.();
+  await withSessionTranscriptWriteLock(params, async (transcript) => {
+    params.commitGuard?.();
+    await transcript.appendMessage({
+      message: {
+        ...sessionCatalogAssistantMessage(
+          params.notice,
+          fallbackTimestamp,
+          "openclaw",
+          "session-catalog",
+        ),
+        idempotencyKey: "catalog-preservation:notice",
+      },
+      idempotencyLookup: "scan",
+      // Replays retain the first notice's timestamp, just as source items retain
+      // their first fallback timestamp and randomized untrusted-content boundary.
+      prepareMessageAfterIdempotencyCheck: (message) => message,
+      beforeFreshMessageCommit: params.commitGuard,
+    });
+    for (const [index, item] of params.history.items.entries()) {
+      const imported = importedSessionCatalogMessage({
+        catalogId: params.catalogId,
+        item,
+        fallbackTimestamp: fallbackTimestamp + index + 1,
+      });
+      if (!imported) {
+        continue;
+      }
+      let identity: (string | number)[];
+      if (item.id) {
+        identity = ["id", item.id];
+      } else {
+        const hash = createHash("sha256")
+          .update(
+            JSON.stringify([
+              item.type,
+              item.text ?? null,
+              item.timestamp ?? null,
+              item.model ?? null,
+            ]),
+          )
+          .digest("hex");
+        const ordinal = occurrences.get(hash) ?? 0;
+        occurrences.set(hash, ordinal + 1);
+        identity = ["content", hash, ordinal];
+      }
+      const idempotencyKey = `catalog-preservation:${JSON.stringify([params.catalogId, params.threadId, ...identity])}`;
+      params.commitGuard?.();
+      const appended = await transcript.appendMessage({
+        message: { ...imported, idempotencyKey },
+        // Despite its name, scan uses the transcript identity index, not a
+        // transcript walk. Each source item needs one indexed lookup.
+        idempotencyLookup: "scan",
+        prepareMessageAfterIdempotencyCheck: (message) => {
+          const wrapped = importedSessionCatalogMessage({
+            catalogId: params.catalogId,
+            item: {
+              ...item,
+              text: wrapExternalContent(
+                item.text?.trim() || "[Unsupported catalog transcript item]",
+                {
+                  source: "unknown",
+                  includeWarning: false,
+                },
+              ),
+            },
+            fallbackTimestamp: fallbackTimestamp + index + 1,
+          });
+          return wrapped ? { ...wrapped, idempotencyKey } : message;
+        },
+        beforeFreshMessageCommit: params.commitGuard,
+      });
+      if (appended?.appended) {
+        importedItems += 1;
+      }
+    }
+  });
+  return { importedItems };
 }

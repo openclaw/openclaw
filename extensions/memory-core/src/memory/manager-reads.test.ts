@@ -1,9 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
   sessionPathForSessionIdentity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -119,6 +120,68 @@ describe("memory manager reads", () => {
     expect(sourceReads.reduce((total, read) => total + read.rows, 0)).toBeLessThanOrEqual(7);
   });
 
+  it("inspects readonly session corpus diagnostics without changing the published index", async () => {
+    const sessionId = "diagnostic-corpus";
+    await fixture.seedSessionTranscript({
+      sessionId,
+      messages: [
+        {
+          role: "user",
+          timestamp: Date.now(),
+          content: "Violet diagnostic preference remains indexed.",
+          senderIsOwner: true,
+        },
+      ],
+    });
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["sessions"],
+      sessionMemory: true,
+    });
+    const writer = await fixture.getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "diagnostic-baseline", force: true });
+    const database: unknown = Reflect.get(writer, "db");
+    if (!(database instanceof DatabaseSync)) {
+      throw new Error("Expected the fixture's actual published database");
+    }
+    const snapshot = () => ({
+      sources: database.prepare("SELECT * FROM memory_index_sources ORDER BY id").all(),
+      chunks: database.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
+      provenance: database
+        .prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id")
+        .all(),
+      metadata: database.prepare("SELECT * FROM memory_index_meta ORDER BY key").all(),
+      revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
+      nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
+      windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+    });
+    const before = snapshot();
+    expect(before.sources).toHaveLength(1);
+    expect(before.sources[0]).toMatchObject({
+      path: sessionPathForSessionIdentity("main", sessionId),
+      source: "sessions",
+    });
+    expect(before.chunks).toHaveLength(1);
+    expect(before.chunks[0]).toMatchObject({
+      source: "sessions",
+      text: expect.stringContaining("Violet diagnostic preference remains indexed."),
+    });
+
+    const diagnostic = await fixture.getFreshManager(cfg, "status", true);
+    try {
+      expect(diagnostic.status()).toMatchObject({
+        files: 1,
+        chunks: 1,
+        sourceCounts: [{ source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] }],
+      });
+      expect(snapshot()).toEqual(before);
+    } finally {
+      await diagnostic.close();
+    }
+    expect(database.isOpen).toBe(true);
+    expect(snapshot()).toEqual(before);
+  });
+
   it("reuses diagnostic cache totals and the synchronous sync existence check", async () => {
     const cfg = fixture.createConfig({ provider: "none", cacheEnabled: true });
     const manager = await fixture.getFreshManager(cfg, "cli");
@@ -127,8 +190,8 @@ describe("memory manager reads", () => {
     database
       .prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('previous', 'previous', 'previous', 'retained', '[1,2]', 2, 1)`)
-      .run();
+      VALUES ('previous', 'previous', 'previous', 'retained', ?, 2, 1)`)
+      .run(encodeMemoryEmbedding([1, 2]));
     const ordinary = manager.status();
     expect(ordinary.storage).toBeUndefined();
     expect(ordinary.cache?.entries).toBe(1);
@@ -137,7 +200,10 @@ describe("memory manager reads", () => {
     try {
       const inspected = diagnostic.status();
       expect(inspected.cache?.entries).toBe(1);
-      expect(inspected.storage).toMatchObject({ embeddingCacheEntries: 1, embeddingCacheBytes: 5 });
+      expect(inspected.storage).toMatchObject({
+        embeddingCacheEntries: 1,
+        embeddingCacheBytes: 16,
+      });
       expect(
         diagnosticReads.reads.filter(({ sql }) => /\bmemory_embedding_cache\b/i.test(sql)),
       ).toHaveLength(1);

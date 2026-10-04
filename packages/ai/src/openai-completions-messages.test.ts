@@ -62,30 +62,6 @@ describe("convertMessages assistant text replay", () => {
     ]);
   });
 
-  it("keeps separate assistant text blocks apart", () => {
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [
-        { type: "text", text: "Let me check the file." },
-        { type: "text", text: "The file contains X." },
-      ],
-      usage: emptyUsage,
-      stopReason: "stop",
-      timestamp: 2,
-    };
-    const context: Context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }, assistant],
-    };
-
-    const converted = convertMessages(model, context, resolveOpenAICompletionsCompat(model));
-
-    const replayed = converted.find((message) => message.role === "assistant");
-    expect(replayed?.content).toBe("Let me check the file.\nThe file contains X.");
-  });
-
   it.each([false, true])(
     "preserves interleaved text, thinking, and tool replay with thinking-as-text %s",
     (requiresThinkingAsText) => {
@@ -310,27 +286,6 @@ describe("convertMessages parallel tool-result image ownership", () => {
       { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
       { type: "text", text: "Image(s) from tool result #2 (camera):" },
       { type: "image_url", image_url: { url: "data:image/png;base64,CCCC" } },
-    ]);
-  });
-
-  it("labels single tool-result images with result position and tool name", () => {
-    const context: Context = {
-      messages: [
-        makeToolCallAssistant(["call_x"], ["screenshot"]),
-        makeImageToolResult("call_x", "screenshot", [{ mimeType: "image/png", data: "aW1n" }]),
-      ],
-    };
-
-    const converted = convertMessages(
-      imageModel,
-      context,
-      resolveOpenAICompletionsCompat(imageModel),
-    );
-
-    const userMsg = converted.find((m) => m.role === "user" && Array.isArray(m.content));
-    expect(userMsg?.content).toEqual([
-      { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
     ]);
   });
 
@@ -644,7 +599,12 @@ describe("convertMessages relocatable region", () => {
           isError: false,
           timestamp: 3,
         },
-        { role: "user", content: "later context", runtimeContextCarrier: true, timestamp: 4 },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nlater context",
+          timestamp: 4,
+          runtimeContext: {},
+        },
       ],
     };
     const cacheOptOutIndexes = new Set<number>();
@@ -673,9 +633,100 @@ describe("convertMessages relocatable region", () => {
           { type: "text", text: "Runtime facts" },
         ],
       },
-      { role: "user", content: "later context" },
+      { role: "system", content: "OpenClaw runtime context:\nlater context" },
     ]);
     expect(cacheOptOutIndexes).toEqual(new Set([3, 4]));
+  });
+
+  it("recognizes the shipped plugin carrier flag at the provider boundary", () => {
+    const legacyCarrier: UserMessage = {
+      role: "user",
+      content: "legacy plugin runtime context",
+      timestamp: 1,
+      runtimeContextCarrier: true,
+      runtimeContextCarrierRetained: false,
+    };
+    const cacheOptOutIndexes = new Set<number>();
+
+    const converted = convertMessages(
+      model,
+      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
+      compat(),
+      { cacheOptOutIndexes },
+    );
+
+    expect(converted).toEqual([
+      { role: "system", content: "Stable prefix" },
+      { role: "system", content: "legacy plugin runtime context" },
+    ]);
+    expect(cacheOptOutIndexes).toEqual(new Set([1]));
+  });
+
+  it("keeps mixed-media shipped carriers out of the prompt cache", () => {
+    const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
+    const legacyCarrier: UserMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "legacy plugin runtime context" },
+        { type: "image", mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 1,
+      runtimeContextCarrier: true,
+      runtimeContextCarrierRetained: false,
+    };
+    const cacheOptOutIndexes = new Set<number>();
+
+    const converted = convertMessages(
+      imageModel,
+      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
+      compat(),
+      { cacheOptOutIndexes },
+    );
+
+    expect(converted).toEqual([
+      { role: "system", content: "Stable prefix" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "legacy plugin runtime context" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+        ],
+      },
+    ]);
+    expect(cacheOptOutIndexes).toEqual(new Set([1]));
+  });
+
+  it("keeps mixed-media canonical carriers out of the prompt cache", () => {
+    const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
+    const carrier: UserMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "current runtime context" },
+        { type: "image", mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 1,
+      runtimeContext: {},
+    };
+    const cacheOptOutIndexes = new Set<number>();
+
+    const converted = convertMessages(
+      imageModel,
+      { systemPrompt: "Stable prefix", messages: [carrier] },
+      compat(),
+      { cacheOptOutIndexes },
+    );
+
+    expect(converted).toEqual([
+      { role: "system", content: "Stable prefix" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "current runtime context" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+        ],
+      },
+    ]);
+    expect(cacheOptOutIndexes).toEqual(new Set([1]));
   });
 
   it("leaves the boundary in place when the caller preserves it", () => {

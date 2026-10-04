@@ -1,13 +1,41 @@
 import "./test/dom.setup.ts";
-import type { ControlUiAccessory } from "openclaw/plugin-sdk/control-ui";
+import { expectDefined } from "@openclaw/normalization-core";
+import type {
+  ControlUiAccessory,
+  ControlUiNavigationItem,
+  ControlUiPage,
+} from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import workboardPlugin from "./index.ts";
 import { createGatewaySession, createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 
-it("keeps an existing reassigned session card available without registering a session action", async () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function sessionsBoard(name: string) {
+  return {
+    id: "sessions",
+    name,
+    kind: "sessions",
+    total: 0,
+    active: 0,
+    archived: 0,
+    byStatus: {},
+    sessions: {
+      columns: [
+        { id: "working", label: "Working", description: "Active work", match: { run: ["active"] } },
+        { id: "done", label: "Done", description: "Completed work", fallback: true },
+      ],
+    },
+  };
+}
+
+it("keeps reassigned session cards current through events without polling", async () => {
+  vi.useFakeTimers();
   const fixture = workboardTestHost();
   const { host, connection, registrations } = fixture;
   connection.connected = true;
@@ -40,14 +68,16 @@ it("keeps an existing reassigned session card available without registering a se
   const container = document.createElement("div");
   let disposeAccessory = () => {};
   try {
-    await vi.waitFor(() => expect(registrations.has("navigation/board-ops")).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations.has("navigation/board-ops")).toBe(true);
     const context = { sessionKey: session.key, session };
     expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
 
     const accessory = registrations.get("accessory/linked-card") as ControlUiAccessory;
     const mounted = accessory.mount(container, createViewContext(host, context));
     disposeAccessory = () => mounted?.dispose?.();
-    await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+    expect(container.textContent).toContain(card.title);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
 
     // The session accessory follows the catalog's refreshed card state.
@@ -57,11 +87,179 @@ it("keeps an existing reassigned session card available without registering a se
       updatedAt: card.updatedAt + 1,
     };
     request.mockClear();
-    fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(container.textContent).toContain(currentCard.title));
+    fixture.emit("plugin.workboard.changed", { epoch: "catalog-epoch", revision: 1 });
+    await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain(currentCard.title);
+    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
   } finally {
     disposeAccessory();
+    dispose?.();
+  }
+});
+
+it("keeps catalog navigation ordered and disambiguates names only while boards share them", async () => {
+  vi.useFakeTimers();
+  const fixture = workboardTestHost();
+  const { host, connection, registrations } = fixture;
+  connection.connected = true;
+  const empty = { total: 0, active: 0, archived: 0, byStatus: {} };
+  const operations = { ...empty, id: "ops", name: "Zebra", icon: "rocket", color: "blue" };
+  const sessions = sessionsBoard("Alpha");
+  let boards = [operations, sessions];
+  host.request = vi.fn(async () => ({ cards: [], boards })) as typeof host.request;
+  const register = vi.spyOn(host.ui, "registerNavigation");
+  const dispose = await workboardPlugin.activate(host);
+  const boardNavigation = () =>
+    [...registrations.entries()]
+      .filter(([key]) => key.startsWith("navigation/board-"))
+      .map(([, item]) => item as ControlUiNavigationItem)
+      .toSorted((left, right) => (left.order ?? 0) - (right.order ?? 0));
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation()).toMatchObject([
+      {
+        id: "board-ops",
+        parent: "workboard",
+        label: "Zebra",
+        icon: "rocket",
+        defaultVisible: false,
+        page: { id: "workboard", path: ["ops"] },
+      },
+      {
+        id: "board-sessions",
+        parent: "workboard",
+        label: "Alpha",
+        defaultVisible: false,
+        page: { id: "workboard", path: ["sessions"] },
+      },
+    ]);
+    register.mockClear();
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(register).not.toHaveBeenCalled();
+
+    boards = [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions", "board-ops"]);
+    expect(boardNavigation().map(({ label }) => label)).toEqual([
+      "Alpha (sessions)",
+      "Alpha (cards)",
+    ]);
+    expect(registrations.get("navigation/board-ops")).toMatchObject({
+      icon: "kanban",
+    });
+
+    boards = [sessions, { ...operations, name: "Operations" }];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha", "Operations"]);
+
+    boards = [sessions, { ...operations, name: "Alpha" }];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ label }) => label)).toEqual([
+      "Alpha (sessions)",
+      "Alpha (cards)",
+    ]);
+    boards = [sessions];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions"]);
+    expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha"]);
+    expect(host.ui.pinNavigation).not.toHaveBeenCalled();
+  } finally {
+    dispose?.();
+  }
+  expect([...registrations.keys()].filter((key) => key.startsWith("navigation/"))).toEqual([]);
+});
+
+it("disambiguates a created board and its sibling before pinning through a stale catalog completion", async () => {
+  vi.useFakeTimers();
+  const fixture = workboardTestHost();
+  const { host, connection, registrations } = fixture;
+  connection.connected = true;
+  const board = { id: "created", name: "Created", icon: "rocket", createdAt: 1, updatedAt: 1 };
+  const existing = sessionsBoard("Created");
+  const stale = createDeferred<unknown>();
+  const refreshed = createDeferred<unknown>();
+  let refreshing = false;
+  let created = false;
+  host.request = vi.fn(async (method: string) => {
+    if (method === "workboard.boards.upsert") {
+      created = true;
+      return { board };
+    }
+    if (method === "workboard.cards.list") {
+      return created
+        ? refreshed.promise
+        : refreshing
+          ? stale.promise
+          : { cards: [], boards: [existing] };
+    }
+    return {};
+  }) as typeof host.request;
+  let pinnedNavigation: unknown;
+  let siblingAtPin: unknown;
+  vi.mocked(host.ui.pinNavigation).mockImplementation((id) => {
+    pinnedNavigation = registrations.get(`navigation/${id}`);
+    siblingAtPin = registrations.get("navigation/board-sessions");
+  });
+  const register = vi.spyOn(host.ui, "registerNavigation");
+  const dispose = await workboardPlugin.activate(host);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const page = registrations.get("page/workboard") as ControlUiPage;
+  const mounted = page.mount(container, createViewContext(host, {}));
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations.get("navigation/board-sessions")).toMatchObject({ label: "Created" });
+    expectDefined(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "New board",
+      ),
+      "new board button",
+    ).click();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshing = true;
+    fixture.emit("plugin.workboard.changed", {});
+    const form = expectDefined(
+      container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+      "new board form",
+    );
+    const name = expectDefined(
+      form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+      "board name",
+    );
+    name.value = board.name;
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.ui.pinNavigation).toHaveBeenCalledExactlyOnceWith("board-created");
+    expect(pinnedNavigation).toMatchObject({
+      id: "board-created",
+      parent: "workboard",
+      label: "Created (cards)",
+      icon: "rocket",
+      defaultVisible: false,
+    });
+    expect(siblingAtPin).toMatchObject({ label: "Created (sessions)" });
+
+    stale.resolve({ cards: [], boards: [existing] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registrations.get("navigation/board-created")).toBe(pinnedNavigation);
+    refreshed.resolve({
+      cards: [],
+      boards: [existing, { ...board, total: 0, active: 0, archived: 0, byStatus: {} }],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    register.mockClear();
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(register).not.toHaveBeenCalled();
+    expect(host.ui.pinNavigation).toHaveBeenCalledOnce();
+  } finally {
+    mounted?.dispose?.();
     dispose?.();
   }
 });

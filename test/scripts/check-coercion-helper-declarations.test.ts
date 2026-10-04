@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { API } from "typescript/unstable/sync";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,
   auditCoercionHelperDeclarations,
@@ -13,6 +14,9 @@ import {
   type CoercionHelperDeclaration,
 } from "../../scripts/check-coercion-helper-declarations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const parser = new API();
+afterAll(() => parser.close());
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,7 +40,13 @@ describe("coercion helper declaration AST guard", () => {
       "function containsAsciiControlCharacter() {}",
     ].join("\n");
 
-    expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
+    expect(
+      findBannedCoercionHelperDeclarations(
+        source,
+        "src/example.ts",
+        parser.createSourceFile("src/example.ts", source),
+      ),
+    ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
       { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
       { file: "src/example.ts", kind: "variable", line: 3, name: "readOptionalString" },
@@ -66,7 +76,13 @@ describe("coercion helper declaration AST guard", () => {
       'const fixture = "function toError() {}";',
     ].join("\n");
 
-    expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([]);
+    expect(
+      findBannedCoercionHelperDeclarations(
+        source,
+        "src/example.ts",
+        parser.createSourceFile("src/example.ts", source),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps substring admission independent across source files", () => {
@@ -75,7 +91,7 @@ function read\u0053tring() {}`;
 
     expect(
       ["src/first.ts", "src/second.ts"].map((file) =>
-        findBannedCoercionHelperDeclarations(source, file),
+        findBannedCoercionHelperDeclarations(source, file, parser.createSourceFile(file, source)),
       ),
     ).toEqual([
       [{ file: "src/first.ts", kind: "function", line: 2, name: "readString" }],
@@ -121,29 +137,26 @@ function read\u0053tring() {}`;
     });
   });
 
-  it.each(["method", "field", "property"] as const)(
-    "treats %s drift as both excess and stale function ownership",
-    (kind) => {
-      const declaration: CoercionHelperDeclaration = {
-        file: "src/owner.ts",
-        kind,
-        line: 3,
-        name: "isRecord",
-      };
-      const carveOut: CoercionHelperCarveOut = {
-        file: "src/owner.ts",
-        name: "isRecord",
-        kind: "function",
-        reason: "Exact function owner.",
-      };
+  it("treats declaration-kind drift as both excess and stale function ownership", () => {
+    const declaration: CoercionHelperDeclaration = {
+      file: "src/owner.ts",
+      kind: "property",
+      line: 3,
+      name: "isRecord",
+    };
+    const carveOut: CoercionHelperCarveOut = {
+      file: "src/owner.ts",
+      name: "isRecord",
+      kind: "function",
+      reason: "Exact function owner.",
+    };
 
-      expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
-        excessDeclarations: [declaration],
-        invalidCarveOuts: [],
-        staleCarveOuts: [carveOut],
-      });
-    },
-  );
+    expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
+      excessDeclarations: [declaration],
+      invalidCarveOuts: [],
+      staleCarveOuts: [carveOut],
+    });
+  });
 
   it("rejects duplicate, non-banned, and malformed carve-outs", () => {
     const valid: CoercionHelperCarveOut = {
@@ -204,7 +217,10 @@ function read\u0053tring() {}`;
       "export const VALUE = 1;",
     ].join("\n");
 
-    expect(findExportedCallableNames(source, "src/owner.ts")).toEqual(["alias", "canonical"]);
+    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
+      "alias",
+      "canonical",
+    ]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {

@@ -1,5 +1,9 @@
 import type { NativeHookRelayProcessResponse } from "./native-hook-relay-types.js";
 
+function renderJsonResponse(payload: object): NativeHookRelayProcessResponse {
+  return { stdout: `${JSON.stringify(payload)}\n`, stderr: "", exitCode: 0 };
+}
+
 /** Render the native Codex hook responses shared by server and cold client paths. */
 export const codexNativeHookRelayResponseCodec = {
   renderNoopResponse(): NativeHookRelayProcessResponse {
@@ -11,15 +15,13 @@ export const codexNativeHookRelayResponseCodec = {
     failureDisposition?: NativeHookRelayProcessResponse["failureDisposition"],
   ): NativeHookRelayProcessResponse {
     return {
-      stdout: `${JSON.stringify({
+      ...renderJsonResponse({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
           permissionDecisionReason: reason,
         },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
+      }),
       ...(failureDisposition ? { failureDisposition } : {}),
     };
   },
@@ -27,21 +29,24 @@ export const codexNativeHookRelayResponseCodec = {
     decision: "allow" | "deny",
     message?: string,
   ): NativeHookRelayProcessResponse {
-    return {
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision:
-            decision === "allow"
-              ? { behavior: "allow" }
-              : {
-                  behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
-                },
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    };
+    return renderJsonResponse({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision:
+          decision === "allow"
+            ? { behavior: "allow" }
+            : {
+                behavior: "deny",
+                message: message?.trim() || "Denied by OpenClaw",
+              },
+      },
+    });
   },
+  renderBeforeAgentFinalizeReviseResponse: (reason: string) =>
+    renderJsonResponse({ decision: "block", reason }),
+  renderBeforeAgentFinalizeStopResponse: (reason?: string) =>
+    renderJsonResponse({
+      continue: false,
+      ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
+    }),
 };

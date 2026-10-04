@@ -176,6 +176,7 @@ export function createClaudeSessionCatalogRuntime(
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
       const {
         allowProcessHomeFallback,
+        allowPartialResults: _allowPartialResults,
         agentId: _agentId,
         listNodes,
         onHost,

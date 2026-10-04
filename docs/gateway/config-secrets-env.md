@@ -52,6 +52,30 @@ Reference env vars in any config string with `${VAR_NAME}`:
 - Escape with `$${VAR}` to produce a literal `${VAR}` value.
 - Works with `$include`.
 
+#### Default values
+
+Add a fallback with `${VAR_NAME:-fallback}`. It is used when the variable is unset or empty:
+
+```json5
+{
+  mcp: {
+    servers: {
+      nautobot: {
+        env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" },
+      },
+    },
+  },
+}
+```
+
+- A reference with a fallback always resolves, so it never emits a missing-var warning.
+- An empty fallback is allowed: `${VAR:-}` resolves to an empty string.
+- The fallback is literal text. It must not contain `$` or `{`, so a nested reference such as `${A:-${B}}` is not a fallback expression; it stays literal and only the inner `${B}` substitutes.
+- Only `:-` is supported. Other shell operators (`:=`, `:?`, `:+`, `-`, `#`, `%`, `/`, `^`) are left untouched as literal text. Bash's `-` is omitted deliberately: OpenClaw treats unset and empty as the same state, so it could not differ from `:-`.
+- Escaping still wins: `$${VAR:-x}` produces the literal `${VAR:-x}` and reads nothing from the environment.
+- Authored fallbacks survive config write-back; OpenClaw restores `${VAR:-fallback}` rather than inlining the value it resolved to.
+- A fallback is config text, not a secret store. Put credentials in `env.vars` or a [SecretRef](#secretref) and reference them bare.
+
 ---
 
 ## Secrets

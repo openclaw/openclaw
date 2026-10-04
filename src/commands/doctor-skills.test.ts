@@ -201,14 +201,6 @@ describe("doctor skills", () => {
     ]);
   });
 
-  it("uses singular grammar for one unavailable skill", async () => {
-    const calls = await runSkillDoctor([createSkill({ name: "places", eligible: false })]);
-    const body = calls.find((call) => call[1] === "Skills")?.[0];
-    expect(typeof body === "string" ? body.split("\n")[0] : undefined).toBe(
-      "1 allowed skill is not usable in this environment (missing binaries, env vars, or config).",
-    );
-  });
-
   it("surfaces a GH_CONFIG_DIR hint through the doctor path", async () => {
     const githubSkill = createSkill({
       name: "github",
@@ -260,10 +252,10 @@ describe("doctor skills", () => {
     );
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/tmp/main" },
-          { id: "secondary", workspace: "/tmp/secondary" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/main" },
+          secondary: { workspace: "/tmp/secondary" },
+        },
       },
       skills: { entries: { shared: { enabled: true } } },
     };

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
@@ -51,10 +52,12 @@ describe("AppSidebar delegated activity", () => {
       updatedAt: 3,
     };
     sessions.list.mockResolvedValue({ ...result, ts: 3, sessions: [finished] });
+    vi.useFakeTimers();
     gateway.publishEvent("sessions.changed", {
       sessionKey: childKey,
       session: finished,
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => expect(parent().querySelector(".session-glyph__ring")).toBeNull());
   });
 
@@ -183,6 +186,7 @@ describe("AppSidebar delegated activity", () => {
       rosterRows[2]!,
     ];
     mixed.sessions.publishList({ result: mixed.result });
+    await rosterActivityStore(mixed.context).refresh();
     await waitForFast(() =>
       expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
     );

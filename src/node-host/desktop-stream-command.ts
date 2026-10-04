@@ -6,6 +6,7 @@ import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, connectRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import { isWorkerDesktopArdPassword } from "../shared/worker-desktop-descriptor.js";
 import { parseNodeWorkerDesktopStreamInput } from "../worker/node-desktop-protocol.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
@@ -14,17 +15,26 @@ const PROBE_TIMEOUT_MS = 1_500;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_VNC_PASSWORD_BYTES = 4 * 1024;
 
-type NodeDesktopStreamCommandParams = {
-  ticket: string;
-  attachPath: string;
-};
+/** One node-local decision serves both the declaration and stream invocation. */
+export function resolveNodeDesktopHostConfig(params: {
+  config?: DesktopHostConfig;
+  desktopSharingEnabled?: boolean;
+  platform: NodeJS.Platform;
+  ephemeral?: boolean;
+}): DesktopHostConfig {
+  return {
+    ...params.config,
+    // Disposable worker desktops stay behind their provider-attested carrier.
+    enabled:
+      params.ephemeral !== true &&
+      (params.platform === "darwin" ||
+        params.platform === "linux" ||
+        params.platform === "win32") &&
+      (params.desktopSharingEnabled ?? params.config?.enabled ?? true),
+  };
+}
 
-type NodeDesktopStreamTarget = {
-  host: string;
-  port: number;
-};
-
-function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamCommandParams {
+function decodeDesktopStreamParams(raw?: string | null) {
   let value: unknown;
   try {
     value = raw ? JSON.parse(raw) : undefined;
@@ -41,10 +51,6 @@ function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamComman
     attachPath !== `${NODE_DESKTOP_ATTACH_PATH}?ticket=${ticket}`
   ) {
     throw new Error("INVALID_REQUEST: desktop stream ticket and attachPath required");
-  }
-  const attachUrl = new URL(attachPath, "http://127.0.0.1");
-  if (attachUrl.searchParams.get("ticket") !== ticket) {
-    throw new Error("INVALID_REQUEST: desktop stream ticket does not match attachPath");
   }
   if (Object.keys(value).some((key) => key !== "ticket" && key !== "attachPath")) {
     throw new Error("INVALID_REQUEST: desktop stream params contain unsupported fields");
@@ -93,38 +99,31 @@ async function readVncPassword(
 
 /** Splices a node-local loopback RFB socket to a ticket-authenticated Gateway WebSocket. */
 async function runNodeDesktopStreamCommand(params: {
-  command: NodeDesktopStreamCommandParams;
+  command: ReturnType<typeof decodeDesktopStreamParams>;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
-  target: NodeDesktopStreamTarget;
+  port: number;
   passwordFile?: string;
   username?: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
-  if (params.target.host !== "127.0.0.1") {
-    throw new Error("desktop stream target must be loopback");
-  }
-  if (
-    !Number.isInteger(params.target.port) ||
-    params.target.port < 1 ||
-    params.target.port > 65535
-  ) {
+  if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) {
     throw new Error("desktop stream target port is invalid");
   }
   void params.emitStatus?.("probing local RFB server\n").catch(() => undefined);
   const probe = await connectRfbServer({
     host: "127.0.0.1",
-    port: params.target.port,
+    port: params.port,
     timeoutMs: PROBE_TIMEOUT_MS,
     signal: params.signal,
   });
   if (probe.kind !== "rfb") {
     throw new Error(
       probe.kind === "not-rfb"
-        ? "desktop stream target is not an RFB server"
-        : "desktop stream loopback RFB server is unavailable",
+        ? `desktop stream target 127.0.0.1:${params.port} is not an RFB server; set desktop.host.port to the node's VNC server port`
+        : `desktop stream loopback RFB server is unavailable on port ${params.port}; enable System Settings -> General -> Sharing -> Screen Sharing on macOS, or start an authenticated loopback VNC server on Linux or Windows`,
     );
   }
   try {
@@ -143,6 +142,11 @@ async function runNodeDesktopStreamCommand(params: {
       auth === "vnc-password" || (auth === "ard-account" && params.username)
         ? await readVncPassword(params.passwordFile, params.signal)
         : undefined;
+    if (params.username && !isWorkerDesktopArdPassword(vncPassword)) {
+      throw new Error(
+        "lease-owned desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
+      );
+    }
     if (params.signal.aborted) {
       return;
     }
@@ -184,19 +188,12 @@ export async function invokeNodeDesktopStream(params: {
   await runNodeDesktopStreamCommand({
     command,
     gatewayUrl: params.gatewayUrl,
-    ...(params.gatewayTlsFingerprint
-      ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-      : {}),
-    ...(params.gatewayCloudflareAccess
-      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-      : {}),
-    target: {
-      host: "127.0.0.1",
-      port: params.config.port ?? DEFAULT_DESKTOP_PORT,
-    },
-    ...(params.config.passwordFile ? { passwordFile: params.config.passwordFile } : {}),
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+    port: params.config.port ?? DEFAULT_DESKTOP_PORT,
+    passwordFile: params.config.passwordFile,
     signal: params.signal,
-    ...(params.emitStatus ? { emitStatus: params.emitStatus } : {}),
+    emitStatus: params.emitStatus,
   });
 }
 
@@ -215,15 +212,11 @@ export async function invokeNodeWorkerDesktopStream(params: {
   await runNodeDesktopStreamCommand({
     command,
     gatewayUrl: params.gatewayUrl,
-    ...(params.gatewayTlsFingerprint
-      ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-      : {}),
-    ...(params.gatewayCloudflareAccess
-      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-      : {}),
-    target: { host: "127.0.0.1", port: command.port },
-    ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
-    ...(command.username ? { username: command.username } : {}),
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+    port: command.port,
+    passwordFile: command.passwordFilePath,
+    username: command.username,
     signal: params.signal,
   });
 }

@@ -59,6 +59,7 @@ export function createMessageActionRuntimeAuthority(
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
+    assertClientUploadAllowed?: () => void;
   },
 ) {
   const assertScheduledSourceCurrent =
@@ -74,28 +75,56 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent ??
     assertScheduledWriteCurrent ??
     params.authorization?.scheduled?.assertCurrent;
+  const assertDeliveryCurrent = !isFencedProviderReadAction(params.request.action)
+    ? params.authorization?.deliveryAttempt?.assertCurrent
+    : undefined;
   const scheduledPolicy =
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
       : undefined;
+  const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
+    params.client,
+    params.context,
+    params.respond,
+    assertActionCurrent || assertDeliveryCurrent
+      ? () => {
+          params.sessionMutationCommitGuard?.();
+          assertActionCurrent?.();
+          assertDeliveryCurrent?.();
+        }
+      : params.sessionMutationCommitGuard,
+  );
+  const assertDirectAdapterHandoff = params.assertClientUploadAllowed
+    ? () => {
+        agentRuntimeAuthority.commitGuard?.();
+        params.assertClientUploadAllowed?.();
+      }
+    : agentRuntimeAuthority.commitGuard;
+  const beforeDeliveryAttempt = () =>
+    isFencedProviderReadAction(params.request.action)
+      ? undefined
+      : params.authorization?.deliveryAttempt?.beforeAttempt();
+  const prepareUse = params.authorization?.scheduled?.prepareUse;
   return {
+    prepareEffect: prepareUse
+      ? () =>
+          prepareUse(
+            Boolean(assertReadCurrent || assertScheduledWriteCurrent),
+            assertDirectAdapterHandoff,
+          )
+      : undefined,
     assertReadCurrent,
     assertScheduledWriteCurrent,
+    beforeDeliveryAttempt,
+    onPlatformSendDispatch: assertDirectAdapterHandoff
+      ? async () => assertDirectAdapterHandoff()
+      : undefined,
     routeAccountId:
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??
       (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
-    agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
-      params.client,
-      params.context,
-      params.respond,
-      assertActionCurrent
-        ? () => {
-            params.sessionMutationCommitGuard?.();
-            assertActionCurrent();
-          }
-        : params.sessionMutationCommitGuard,
-    ),
+    agentRuntimeAuthority,
+    assertDirectAdapterHandoff,
   };
 }
 

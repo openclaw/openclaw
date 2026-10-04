@@ -31,6 +31,8 @@ openclaw mcp doctor <name> --probe
 
 Saving a definition proves nothing about reachability — the probe does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
+When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+
 ## Add a server from the composer
 
 In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
@@ -92,6 +94,14 @@ The same `docs` server, written straight into config:
 ```
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+
+## Interactive apps and plugin extensions
+
+MCP servers can also supply sandboxed interactive views. Enable the opt-in
+[MCP Apps host](/cli/mcp/apps) to use those views and supported
+[plugin extensions](/cli/mcp/apps#plugin-extensions), including app entrypoints,
+settings, composer resources, and workspace file viewers. Connecting a server
+does not enable its UI code automatically or bypass session tool permissions.
 
 ## Approvals
 

@@ -1,5 +1,4 @@
 import type { lookup as dnsLookupCb } from "node:dns";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { CdpProtocolSend, RawAXNode } from "./cdp-ax.js";
 import { prepareCdpPageSession } from "./cdp-page-session.js";
 import {
@@ -11,21 +10,70 @@ import {
   buildRoleTree,
   renderRoleTree,
   type CdpRoleRef,
-  type CdpRoleSnapshotOptions,
   type CursorInteractiveInfo,
 } from "./cdp-role-snapshot-tree.js";
 import { withCdpSocket } from "./cdp.helpers.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
+  type RoleSnapshotOptions,
+  type RoleSnapshotResult,
+} from "./pw-role-snapshot.js";
 import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
+async function readScopedAXNodes(
+  send: CdpProtocolSend,
+  backendNodeId: number,
+): Promise<RawAXNode[]> {
+  // Chromium queryAXTree omits an ignored root, including its visible descendants.
+  // SAFETY: queryAXTree returns native AXNodes in its protocol-defined nodes array.
+  const queried = (await send("Accessibility.queryAXTree", { backendNodeId })) as {
+    nodes: RawAXNode[];
+  };
+  if (queried.nodes.some((node) => node.backendDOMNodeId === backendNodeId)) {
+    return queried.nodes;
+  }
+  const partial = (await send("Accessibility.getPartialAXTree", {
+    backendNodeId,
+    fetchRelatives: true,
+  })) as { nodes: RawAXNode[] }; // SAFETY: getPartialAXTree returns native AXNodes and their ancestors.
+  const root = partial.nodes.find((node) => node.backendDOMNodeId === backendNodeId);
+  if (!root?.ignored || !root.nodeId) {
+    throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+  }
+  if (!root.childIds?.length) {
+    return [root];
+  }
+  const frameId = partial.nodes.find((node) => node.frameId)?.frameId;
+  if (!frameId) {
+    throw new Error("Snapshot frame identity is unavailable; retry.");
+  }
+  // SAFETY: getFullAXTree returns native AXNodes for the identified frame.
+  const full = (await send("Accessibility.getFullAXTree", { frameId })) as {
+    nodes: RawAXNode[];
+  };
+  const byId = new Map(full.nodes.map((node) => [node.nodeId, node]));
+  const nodes = [root];
+  const included = new Set([root.nodeId]);
+  for (const node of nodes) {
+    for (const id of node.childIds ?? []) {
+      const child = byId.get(id);
+      if (child && !included.has(id)) {
+        included.add(id);
+        nodes.push(child);
+      }
+    }
+  }
+  return nodes;
+}
+
 async function buildCdpRoleSnapshot(params: {
   send: CdpProtocolSend;
   rootBackendNodeId?: number;
-  sessionId?: string;
   frameId?: string;
-  options: CdpRoleSnapshotOptions;
+  options: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   nextRef: { value: number };
@@ -34,17 +82,13 @@ async function buildCdpRoleSnapshot(params: {
   refs: Record<string, CdpRoleRef>;
   truncated: boolean;
 }> {
-  const res = (await params.send(
+  const res =
     params.rootBackendNodeId !== undefined
-      ? "Accessibility.queryAXTree"
-      : "Accessibility.getFullAXTree",
-    params.rootBackendNodeId !== undefined
-      ? { backendNodeId: params.rootBackendNodeId }
-      : params.frameId
-        ? { frameId: params.frameId }
-        : undefined,
-    params.sessionId,
-  )) as { nodes?: RawAXNode[] }; // SAFETY: Both selected Accessibility commands return AXNode arrays; missing nodes are handled below.
+      ? { nodes: await readScopedAXNodes(params.send, params.rootBackendNodeId) }
+      : ((await params.send(
+          "Accessibility.getFullAXTree",
+          params.frameId ? { frameId: params.frameId } : undefined,
+        )) as { nodes?: RawAXNode[] }); // SAFETY: Accessibility commands return native AXNode arrays.
   const { tree, roots } = buildRoleTree(
     Array.isArray(res.nodes) ? res.nodes : [],
     params.rootBackendNodeId,
@@ -54,7 +98,7 @@ async function buildCdpRoleSnapshot(params: {
   const cursorElements =
     params.rootBackendNodeId !== undefined
       ? new Map<number, CursorInteractiveInfo>()
-      : await findCursorInteractiveElements(params.send, params.sessionId);
+      : await findCursorInteractiveElements(params.send);
   for (const node of tree) {
     if (node.backendDOMNodeId && cursorElements.has(node.backendDOMNodeId)) {
       const cursorInfo = cursorElements.get(node.backendDOMNodeId);
@@ -98,18 +142,19 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);
+  const iframeFrameIds = await resolveIframeFrameIds(params.send, tree);
   for (const node of tree) {
     if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
       node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
-      if (node.ref && refs[node.ref]) {
-        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
+      const ref = node.ref ? refs[node.ref] : undefined;
+      if (ref) {
+        ref.frameId = node.frameId;
       }
     }
   }
 
   if (params.urls) {
-    const urls = await resolveLinkUrls(params.send, refs, params.sessionId);
+    const urls = await resolveLinkUrls(params.send, refs);
     for (const node of tree) {
       if (node.backendDOMNodeId && urls.has(node.backendDOMNodeId)) {
         node.url = urls.get(node.backendDOMNodeId);
@@ -128,7 +173,7 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   if (params.recurseIframes) {
-    let childLinesByIndex: Map<number, string[]> | undefined;
+    const childLinesByIndex = new Map<number, string[]>();
     for (const iframe of tree) {
       if (iframe.iframeLineIndex === undefined || !iframe.frameId) {
         continue;
@@ -146,21 +191,12 @@ async function buildCdpRoleSnapshot(params: {
         continue;
       }
       Object.assign(refs, child.refs);
-      (childLinesByIndex ??= new Map()).set(iframe.iframeLineIndex, child.lines);
+      childLinesByIndex.set(iframe.iframeLineIndex, child.lines);
     }
-    if (childLinesByIndex) {
-      const expanded: string[] = [];
-      for (let index = 0; index < lines.length; index++) {
-        expanded.push(lines[index]!);
-        const childLines = childLinesByIndex.get(index);
-        if (childLines) {
-          for (const childLine of childLines) {
-            expanded.push(`  ${childLine}`);
-          }
-        }
-      }
-      lines = expanded;
-    }
+    lines = lines.flatMap((line, index) => [
+      line,
+      ...(childLinesByIndex.get(index) ?? []).map((childLine) => `  ${childLine}`),
+    ]);
   }
 
   return {
@@ -173,7 +209,7 @@ async function buildCdpRoleSnapshot(params: {
 /** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 type CdpRoleSnapshotRequest = {
   urlEntries?: SnapshotUrlEntry[];
-  options?: CdpRoleSnapshotOptions;
+  options?: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   timeoutMs?: number;
@@ -187,13 +223,7 @@ export async function snapshotRoleViaCdpSession(
     send: CdpProtocolSend;
     rootBackendNodeId?: number;
   },
-): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, CdpRoleRef>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+): Promise<RoleSnapshotResult<CdpRoleRef>> {
   await prepareCdpPageSession(opts.send);
   const built = await buildCdpRoleSnapshot({
     send: opts.send,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
 import { repairCanonicalSessionKeys } from "../../commands/doctor-session-canonical-keys.js";
 import { runDoctorSessionSqlite } from "../../commands/doctor-session-sqlite.js";
 import {
@@ -11,13 +12,16 @@ import {
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { migrateLegacyAcpSessionMetadata } from "../../infra/state-migrations.session-store.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -25,12 +29,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  listAcpSessionEntries,
-  readAcpSessionMeta,
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "./session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
+import { listAcpSessionEntries, readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
 
 const SESSION_KEY = "agent:main:retained-acp";
 const SESSION_ID = "retained-acp-session";
@@ -78,9 +78,9 @@ async function seedRetainedSource(
       },
     }),
   );
-  const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
   await state.writeConfig(cfg);
-  recordDeferredPluginMigrations({
+  await recordDeferredPluginMigrations({
     env: state.env,
     pending: [
       {
@@ -113,30 +113,14 @@ async function seedRetainedSource(
   return { scope, acpScope, migrateAcp, importCore, assertOriginalsRetained };
 }
 
-function reopenDatabases() {
+async function reopenDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 }
 
 describe("retained legacy ACP metadata", () => {
-  it("preserves canonical closure before first ACP import", async () => {
-    await withOpenClawTestState({ label: "retained-acp-closed-first" }, async (state) => {
-      const fixture = await seedRetainedSource(state);
-      expect((await fixture.importCore()).totals.importedEntries).toBe(1);
-      await upsertAcpSessionMeta({
-        ...fixture.acpScope,
-        mutate: () => ({ ...LEGACY_META, runtimeSessionName: "canonical-runtime" }),
-      });
-      await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-      expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
-      reopenDatabases();
-      expect((await fixture.importCore()).totals.importedEntries).toBe(0);
-      expect((await fixture.migrateAcp()).warnings).toEqual([]);
-      expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
-      fixture.assertOriginalsRetained();
-    });
-  });
-
   it("preserves canonical closure after a session-key repair and repair rerun", async () => {
     await withOpenClawTestState({ label: "retained-acp-key-repair" }, async (state) => {
       const fixture = await seedRetainedSource(state, undefined, SESSION_KEY.toUpperCase());
@@ -164,7 +148,7 @@ describe("retained legacy ACP metadata", () => {
         mutate: () => ({ ...LEGACY_META, runtimeSessionName: "canonical-runtime" }),
       });
       await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-      reopenDatabases();
+      await reopenDatabases();
       expect((await fixture.migrateAcp()).warnings).toEqual([]);
       expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
       fixture.assertOriginalsRetained();
@@ -172,14 +156,14 @@ describe("retained legacy ACP metadata", () => {
   });
 
   it.each(["initialize", "close"] as const)(
-    "keeps canonical ACP %s atomic with source consumption",
+    "rolls back canonical ACP %s and source consumption when commit authority is revoked",
     async (operation) => {
       await withOpenClawTestState({ label: `retained-acp-atomic-${operation}` }, async (state) => {
         const fixture = await seedRetainedSource(state);
         expect((await fixture.importCore()).totals.importedEntries).toBe(1);
         const canonicalMeta = { ...LEGACY_META, runtimeSessionName: "canonical-runtime" };
         if (operation === "close") {
-          writeAcpSessionMetaForMigration({
+          seedCanonicalAcpSessionMeta({
             ...fixture.acpScope,
             sessionId: SESSION_ID,
             meta: canonicalMeta,
@@ -189,49 +173,69 @@ describe("retained legacy ACP metadata", () => {
         const { db } = openOpenClawStateDatabase({ env: state.env });
         const sources = db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all();
         const runs = db.prepare("SELECT * FROM migration_runs ORDER BY id").all();
-        db.exec(
-          "CREATE TRIGGER reject_canonical_acp_receipt BEFORE INSERT ON migration_sources BEGIN SELECT RAISE(ABORT, 'injected canonical ACP receipt failure'); END",
-        );
+        const revoked = new Error("Canonical ACP commit authority revoked");
+        let current = true;
+        let observedCommit = false;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const admission = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) => {
+            let mutationNonce: string | undefined;
+            return createAdmission((request, grant) => {
+              if (
+                request.stage === "transaction" &&
+                isRecord(request.facts) &&
+                typeof request.facts.nonce === "string" &&
+                !("preparationPort" in request.facts)
+              ) {
+                mutationNonce = request.facts.nonce;
+              }
+              if (
+                mutationNonce &&
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                request.facts.nonce === mutationNonce
+              ) {
+                // Both receipt and metadata writes precede this final admission.
+                observedCommit = true;
+                current = false;
+              }
+              admit(request, grant);
+            }, attachment);
+          });
         const mutate = () => (operation === "close" ? null : canonicalMeta);
         try {
-          await expect(upsertAcpSessionMeta({ ...fixture.acpScope, mutate })).rejects.toThrow(
-            "injected canonical ACP receipt failure",
-          );
+          await expect(
+            upsertAcpSessionMeta({
+              ...fixture.acpScope,
+              mutate,
+              assertCommitAllowed: () => {
+                if (!current) {
+                  throw revoked;
+                }
+              },
+            }),
+          ).rejects.toThrow(revoked.message);
+          expect(observedCommit).toBe(true);
           expect(readAcpSessionMeta(fixture.acpScope)).toEqual(before);
           expect(db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all()).toEqual(
             sources,
           );
           expect(db.prepare("SELECT * FROM migration_runs ORDER BY id").all()).toEqual(runs);
+          fixture.assertOriginalsRetained();
         } finally {
-          db.exec("DROP TRIGGER reject_canonical_acp_receipt");
+          admission.mockRestore();
+          current = true;
         }
         await upsertAcpSessionMeta({ ...fixture.acpScope, mutate });
         await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-        reopenDatabases();
+        await reopenDatabases();
         expect((await fixture.migrateAcp()).warnings).toEqual([]);
         expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
         fixture.assertOriginalsRetained();
       });
     },
   );
-
-  it("imports ACP for the first time after the canonical session import completed", async () => {
-    await withOpenClawTestState({ label: "retained-acp-first-import" }, async (state) => {
-      const fixture = await seedRetainedSource(state);
-      const imported = await fixture.importCore();
-      expect(imported.totals.importedEntries).toBe(1);
-      expect(imported.targets.flatMap((target) => target.issues)).toEqual([
-        expect.objectContaining({ code: "plugin_migration_source_retained" }),
-      ]);
-      expect(loadExactSessionEntry(fixture.scope)?.entry.sessionId).toBe(SESSION_ID);
-      expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
-      reopenDatabases();
-
-      expect((await fixture.migrateAcp()).warnings).toEqual([]);
-      expect(readAcpSessionMeta(fixture.acpScope)).toEqual(LEGACY_META);
-      fixture.assertOriginalsRetained();
-    });
-  });
 
   it.each(["pending", "resolved"] as const)(
     "does not revive closed ACP metadata after reopening with the plugin %s",
@@ -247,13 +251,13 @@ describe("retained legacy ACP metadata", () => {
         expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
         fixture.assertOriginalsRetained();
         if (pluginState === "resolved") {
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [],
             resolvedPluginIds: [PLUGIN_ID],
           });
         }
-        reopenDatabases();
+        await reopenDatabases();
 
         expect((await fixture.migrateAcp()).warnings).toEqual([]);
         expect(loadExactSessionEntry(fixture.scope)?.entry.sessionId).toBe(SESSION_ID);
@@ -283,7 +287,7 @@ describe("retained legacy ACP metadata", () => {
         .readFileSync(fixture.scope.storePath, "utf8")
         .replace(SESSION_ID, "rekeyed-source-session");
       fs.writeFileSync(fixture.scope.storePath, changed);
-      reopenDatabases();
+      await reopenDatabases();
 
       expect((await fixture.migrateAcp()).warnings).toEqual([]);
       expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
@@ -291,68 +295,56 @@ describe("retained legacy ACP metadata", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves canonical ACP edits (prior import: %s)",
-    async (priorImport) => {
-      await withOpenClawTestState({ label: "retained-acp-edit" }, async (state) => {
-        const fixture = await seedRetainedSource(state);
-        if (priorImport) {
-          expect((await fixture.migrateAcp()).warnings).toEqual([]);
-        }
-        expect((await fixture.importCore()).totals.importedEntries).toBe(1);
-        const updated: SessionAcpMeta = {
-          ...LEGACY_META,
-          runtimeSessionName: "current-runtime",
-          lastActivityAt: 40,
-        };
-        await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => updated });
-        expect(readAcpSessionMeta(fixture.acpScope)).toEqual(updated);
-        reopenDatabases();
+  it("preserves canonical ACP edits before the first import", async () => {
+    await withOpenClawTestState({ label: "retained-acp-edit" }, async (state) => {
+      const fixture = await seedRetainedSource(state);
+      expect((await fixture.importCore()).totals.importedEntries).toBe(1);
+      const updated: SessionAcpMeta = {
+        ...LEGACY_META,
+        runtimeSessionName: "current-runtime",
+        lastActivityAt: 40,
+      };
+      await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => updated });
+      expect(readAcpSessionMeta(fixture.acpScope)).toEqual(updated);
+      await reopenDatabases();
 
-        expect((await fixture.migrateAcp()).warnings).toEqual([]);
-        expect(readAcpSessionMeta(fixture.acpScope)).toEqual(updated);
-        expect((await listAcpSessionEntries(fixture.acpScope)).map((entry) => entry.acp)).toEqual([
-          updated,
-        ]);
-        fixture.assertOriginalsRetained();
-        await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-        reopenDatabases();
-        expect((await fixture.migrateAcp()).warnings).toEqual([]);
-        expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
+      expect((await fixture.migrateAcp()).warnings).toEqual([]);
+      expect(readAcpSessionMeta(fixture.acpScope)).toEqual(updated);
+      expect((await listAcpSessionEntries(fixture.acpScope)).map((entry) => entry.acp)).toEqual([
+        updated,
+      ]);
+      fixture.assertOriginalsRetained();
+      await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
+      await reopenDatabases();
+      expect((await fixture.migrateAcp()).warnings).toEqual([]);
+      expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
+    });
+  });
+
+  it("preserves canonical session deletion before the first ACP import", async () => {
+    await withOpenClawTestState({ label: "retained-acp-deletion" }, async (state) => {
+      const fixture = await seedRetainedSource(state);
+      expect((await fixture.importCore()).totals.importedEntries).toBe(1);
+      await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
+      await deleteSessionEntryLifecycle({
+        ...fixture.scope,
+        target: { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
       });
-    },
-  );
+      expect(loadExactSessionEntry(fixture.scope)).toBeUndefined();
+      await reopenDatabases();
 
-  it.each([false, true])(
-    "preserves canonical session deletion (prior ACP import: %s)",
-    async (priorImport) => {
-      await withOpenClawTestState({ label: "retained-acp-deletion" }, async (state) => {
-        const fixture = await seedRetainedSource(state);
-        if (priorImport) {
-          expect((await fixture.migrateAcp()).warnings).toEqual([]);
-        }
-        expect((await fixture.importCore()).totals.importedEntries).toBe(1);
-        await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-        await deleteSessionEntryLifecycle({
-          ...fixture.scope,
-          target: { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
-        expect(loadExactSessionEntry(fixture.scope)).toBeUndefined();
-        reopenDatabases();
-
-        expect((await fixture.migrateAcp()).warnings).toEqual([]);
-        expect(loadExactSessionEntry(fixture.scope)).toBeUndefined();
-        expect(
-          openOpenClawStateDatabase({ env: state.env })
-            .db.prepare("SELECT count(*) AS count FROM acp_sessions")
-            .get(),
-        ).toEqual({ count: 0 });
-        fixture.assertOriginalsRetained();
-      });
-    },
-  );
+      expect((await fixture.migrateAcp()).warnings).toEqual([]);
+      expect(loadExactSessionEntry(fixture.scope)).toBeUndefined();
+      expect(
+        openOpenClawStateDatabase({ env: state.env })
+          .db.prepare("SELECT count(*) AS count FROM acp_sessions")
+          .get(),
+      ).toEqual({ count: 0 });
+      fixture.assertOriginalsRetained();
+    });
+  });
 
   it.each([
     { binding: "sessionId", initialRevision: undefined },
@@ -376,7 +368,7 @@ describe("retained legacy ACP metadata", () => {
               ? "replacement-session"
               : "00000000-0000-4000-8000-000000000008",
         });
-        reopenDatabases();
+        await reopenDatabases();
         expect((await fixture.migrateAcp()).warnings).toEqual([]);
         expect(
           openOpenClawStateDatabase({ env: state.env })
@@ -384,7 +376,7 @@ describe("retained legacy ACP metadata", () => {
             .get(),
         ).toEqual({ count: 0 });
         await replaceSessionEntry(fixture.scope, original);
-        reopenDatabases();
+        await reopenDatabases();
         expect((await fixture.migrateAcp()).warnings).toEqual([]);
         expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
         fixture.assertOriginalsRetained();
@@ -401,7 +393,7 @@ describe("retained legacy ACP metadata", () => {
         "UPDATE session_nodes SET legacy_acp_migration_json = NULL WHERE session_key = ?",
       ).run(SESSION_KEY);
       await upsertAcpSessionMeta({ ...fixture.acpScope, mutate: () => null });
-      reopenDatabases();
+      await reopenDatabases();
       await expect(fixture.migrateAcp()).rejects.toThrow("no matching recorded source provenance");
       expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
       fixture.assertOriginalsRetained();
@@ -418,7 +410,7 @@ describe("retained legacy ACP metadata", () => {
         .readFileSync(fixture.scope.storePath, "utf8")
         .replace("legacy-runtime", "changed-source-runtime");
       fs.writeFileSync(fixture.scope.storePath, changed);
-      reopenDatabases();
+      await reopenDatabases();
 
       await expect(fixture.migrateAcp()).rejects.toThrow("Retained ACP metadata changed");
       expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();

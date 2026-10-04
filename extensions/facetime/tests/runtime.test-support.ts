@@ -1,14 +1,15 @@
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { vi } from "vitest";
+import { afterAll, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   helperParams: undefined as
     | undefined
     | {
-        onMessage(message: unknown, peer?: unknown): void;
+        onMessage(message: unknown, peer?: unknown): void | Promise<void>;
         onConnect(bundleIdentifier: string): void;
         onDisconnect(bundleIdentifier: string): void;
       },
@@ -106,7 +107,7 @@ vi.mock("../src/config.js", async (importOriginal) => {
 });
 
 import { resolveFaceTimeConfig } from "../src/config.js";
-export { FaceTimeHelperActionError } from "../src/helper-rpc.js";
+export { FaceTimeHelperActionError } from "../src/helper-results.js";
 import { createFaceTimeRuntime } from "../src/runtime.js";
 
 export function completeAction(owner: Record<string, unknown>) {
@@ -144,13 +145,13 @@ export function completeAbsence() {
   };
 }
 
-export function pendingDialState(overrides: Record<string, unknown> = {}) {
-  const store = createPluginStateSyncKeyedStoreForTests<unknown>("facetime", {
+export async function pendingDialState(overrides: Record<string, unknown> = {}) {
+  const store = createPluginStateKeyedStoreForTests<unknown>("facetime", {
     namespace: "pending-dial",
     maxEntries: 1,
     overflowPolicy: "reject-new",
   });
-  store.register("active", {
+  await store.register("active", {
     dialID: "approved-dial",
     version: 1,
     ownerEpoch: 1,
@@ -231,7 +232,7 @@ export function incomingCall(status = 4) {
 }
 
 export async function createRuntime(
-  state = createPluginStateSyncKeyedStoreForTests<unknown>("facetime", {
+  state: PluginStateKeyedStore<unknown> = createPluginStateKeyedStoreForTests<unknown>("facetime", {
     namespace: "pending-dial",
     maxEntries: 1,
     overflowPolicy: "reject-new",
@@ -246,7 +247,7 @@ export async function createRuntime(
         runCommandWithTimeout: mocks.systemRun,
       },
       state: {
-        openSyncKeyedStore: () => state,
+        openKeyedStore: () => state,
       },
     } as never,
     logger: {
@@ -280,29 +281,36 @@ export function createTalkDriver(params: {
     suspendMedia: vi.fn(async () => {
       realtimeActive = false;
     }),
-    failClosed: vi.fn(async () => {
-      realtimeActive = false;
-    }),
     close: vi.fn(async () => {
       realtimeActive = false;
     }),
   };
 }
 
-export function resetRuntimeTestState() {
-  resetPluginStateStoreForTests();
-  createPluginStateSyncKeyedStoreForTests<unknown>("facetime", {
+afterAll(() => resetPluginStateStoreForTests());
+
+export async function resetRuntimeTestState() {
+  resetPluginStateStoreForTests({ closeDatabase: false });
+  await createPluginStateKeyedStoreForTests<unknown>("facetime", {
     namespace: "pending-dial",
     maxEntries: 1,
     overflowPolicy: "reject-new",
-  }).delete("active");
+  }).clear();
   vi.clearAllMocks();
   mocks.helperParams = undefined;
   mocks.helper.connectedSockets = 2;
   mocks.helper.connectedHelperBundles = ["com.apple.FaceTime", "com.apple.mobilephone"];
   mocks.carrierProcessAlive = false;
+  const exitedCarrierPids = new Set<string>();
   mocks.systemRun.mockImplementation(async (argv: string[]) => {
+    const pid = argv[2];
+    if (!pid) {
+      throw new Error("Expected a carrier process ID");
+    }
     if (argv[0] === "/bin/ps") {
+      if (exitedCarrierPids.has(pid)) {
+        return { code: 1, stdout: "", stderr: "" };
+      }
       return argv.includes("lstart=")
         ? { code: 0, stdout: "Tue Nov 14 22:13:20 2023\n", stderr: "" }
         : {
@@ -311,8 +319,8 @@ export function resetRuntimeTestState() {
             stderr: "",
           };
     }
-    if (argv[0] === "/bin/kill" && argv[1] === "-0") {
-      return { code: mocks.carrierProcessAlive ? 0 : 1, stdout: "", stderr: "" };
+    if (argv[0] === "/bin/kill" && !mocks.carrierProcessAlive) {
+      exitedCarrierPids.add(pid);
     }
     return { code: 0, stdout: "", stderr: "" };
   });

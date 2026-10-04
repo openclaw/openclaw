@@ -1,34 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { Value } from "typebox/value";
-import {
-  WorkerPortalParamsSchema,
-  WorkerSessionsSendParamsSchema,
-  WorkerSessionsSpawnParamsSchema,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerConnectParams,
   WorkerLiveEventParams,
-  WorkerPortalParams,
   WorkerProtocolCloseReason,
-  WorkerSessionsSendParams,
-  WorkerSessionsSpawnParams,
-  WorkerSessionToolResult,
   WorkerTranscriptCommitParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerGatewayToolCancelParams,
+  WorkerGatewayToolInvokeParams,
+} from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type {
   WorkerInferenceCancelParams,
-  WorkerInferenceCancelResult,
-  WorkerInferenceErrorReason,
   WorkerInferenceStartParams,
-  WorkerInferenceStartResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  WorkerSkillWorkshopParamsSchema,
-  type WorkerSkillWorkshopParams,
-} from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
-import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
 import {
   admitWorkerConnection,
   validateWorkerConnectionIdentity,
@@ -37,80 +23,39 @@ import {
 } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
-import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
-import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerLiveEventReceiver } from "./live-events.js";
+import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
+  getWorkerTurnToolSurface,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import {
-  serializeWorkerSessionToolResult,
-  workerSessionToolErrorResult,
-  type WorkerSessionToolExecutor,
-} from "./worker-session-tool-result.js";
+import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
+import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
   type WorkerComputerExecutor,
 } from "./worker-turn-computer-rpc.js";
-
-type WorkerProcessTurnBinding = {
-  turnClaim: WorkerSessionTurnClaim;
-  credentialHash: string;
-};
-
-type WorkerTerminalTurnFence = WorkerProcessTurnBinding & {
-  transcriptSeq: number;
-  liveSeq: number;
-};
-
-type WorkerPendingTerminalTurnFence = WorkerProcessTurnBinding & {
-  terminalLiveSeq: number;
-};
-
-type WorkerTurnRequest =
-  | { kind: "inference" }
-  | { kind: "live"; seq: number }
-  | { kind: "transcript"; seq: number }
-  | { kind: "session-tool" };
-
-type WorkerPlacementValidation = "sessionless" | "durable" | "invalid";
-
-type WorkerTranscriptCommitServiceResult =
-  | WorkerTranscriptCommitOutcome
-  | { ok: false; closeReason: WorkerProtocolCloseReason };
+import type {
+  WorkerProcessTurnBinding,
+  WorkerTerminalTurnFence,
+  WorkerPendingTerminalTurnFence,
+  WorkerTurnRequest,
+  WorkerPlacementValidation,
+  WorkerTranscriptCommitServiceResult,
+  WorkerLiveEventServiceResult,
+  WorkerInferenceServiceResult,
+} from "./worker-turn-rpc.types.js";
+import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 class WorkerTranscriptAuthorityError extends Error {
   constructor(readonly outcome: Exclude<WorkerTranscriptCommitServiceResult, { ok: true }>) {
     super("Worker transcript authority closed");
   }
 }
-
-type WorkerLiveEventServiceResult =
-  | WorkerLiveEventApplicationResult
-  | { ok: false; closeReason: WorkerProtocolCloseReason };
-
-type WorkerInferenceStartServiceResult =
-  | {
-      ok: true;
-      result: WorkerInferenceStartResult;
-      launch: () => void;
-    }
-  | { ok: false; reason: WorkerInferenceErrorReason }
-  | { ok: false; closeReason: WorkerProtocolCloseReason };
-
-type WorkerInferenceCancelServiceResult =
-  | { ok: true; result: WorkerInferenceCancelResult }
-  | { ok: false; reason: WorkerInferenceErrorReason }
-  | { ok: false; closeReason: WorkerProtocolCloseReason };
-
-type WorkerSessionToolServiceResult =
-  | { ok: true; result: WorkerSessionToolResult }
-  | { ok: false; closeReason: WorkerProtocolCloseReason }
-  | { ok: false; reason: WorkerProtocolCloseReason };
 
 type WorkerTurnRpcOptions = {
   store: WorkerEnvironmentStore;
@@ -121,7 +66,6 @@ type WorkerTurnRpcOptions = {
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
   executeComputer?: WorkerComputerExecutor;
-  executeSessionTool?: WorkerSessionToolExecutor;
   inference: ReturnType<typeof createWorkerInferenceManager>;
   isStopping: () => boolean;
   now: () => number;
@@ -140,6 +84,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   let workerAdmissionOrdinal = 0;
 
   const placementClaim = (identity: WorkerConnectionIdentity) => identity.turnClaim ?? undefined;
+
+  const sourceFor = (identity: WorkerConnectionIdentity) => {
+    const claim = placementClaim(identity);
+    return claim ? options.placementStore?.getExecutionIdentityCapability?.(claim) : undefined;
+  };
 
   const processTurnBinding = (
     identity: WorkerConnectionIdentity,
@@ -248,7 +197,9 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       liveSeq:
         "liveSeq" in cursor
           ? Math.max(currentTurn?.liveSeq ?? 0, cursor.liveSeq)
-          : (currentTurn?.liveSeq ?? 0),
+          : (currentTurn?.liveSeq ??
+            options.placementStore?.readWorkerTurnLiveAckCursor(binding.turnClaim) ??
+            0),
     };
     observedAckCursors.set(binding.turnClaim.sessionId, next);
     return next;
@@ -286,6 +237,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     identity: WorkerConnectionIdentity,
     runEpoch: number,
     request: WorkerTurnRequest,
+    preparedPlacement?: WorkerPlacementValidation,
   ):
     | { ok: true }
     | { ok: false; closeReason: WorkerProtocolCloseReason }
@@ -293,7 +245,12 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (options.isStopping()) {
       return { ok: false, closeReason: "environment-unavailable" };
     }
-    const placement = validateWorkerPlacement(identity);
+    const placement =
+      request.kind === "tool-surface"
+        ? request.surface && getWorkerTurnToolSurface(identity) === request.surface
+          ? "durable"
+          : "invalid"
+        : (preparedPlacement ?? validateWorkerPlacement(identity));
     if (placement === "invalid") {
       return { ok: false, closeReason: "placement-mismatch" };
     }
@@ -351,21 +308,33 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     request: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitServiceResult> =>
     withLock(identity.environmentId, async () => {
-      const assertCurrent: () => undefined = () => {
-        const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-          kind: "transcript",
-          seq: request.seq,
-        });
+      const source = sourceFor(identity);
+      if (!source) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
+      const assertCurrent = (preparedPlacement?: WorkerPlacementValidation): undefined => {
+        const binding = validateAttachedWorkerRequest(
+          identity,
+          request.runEpoch,
+          { kind: "transcript", seq: request.seq },
+          preparedPlacement,
+        );
         if (!binding.ok) {
           throw new WorkerTranscriptAuthorityError(binding);
         }
+        source.receiptAuthority();
       };
       try {
         assertCurrent();
         if (!options.applyTranscriptCommit) {
           return { ok: false, closeReason: "gateway-unavailable" };
         }
-        const result = await options.applyTranscriptCommit({ identity, request, assertCurrent });
+        const result = await options.applyTranscriptCommit({
+          identity,
+          request,
+          sessionTarget: source.sessionTarget,
+          assertCurrent,
+        });
         // Persistence checks this owner after its queues and before commit; ACKs
         // also require the claim to remain live after post-commit publication.
         assertCurrent();
@@ -376,10 +345,13 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           if (!placement || !processTurn) {
             return { ok: false, closeReason: "placement-mismatch" };
           }
-          options.placementStore?.updateAckCursors({
+          await options.placementStore?.updateAckCursors({
             claim: placement,
             transcriptSeq: request.seq,
+            // The ACK worker owns durable placement validation under its transaction.
+            assertCurrent: () => assertCurrent("durable"),
           });
+          assertCurrent();
           recordAckCursor(processTurn, { transcriptSeq: request.seq });
         }
         return result;
@@ -391,87 +363,79 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
     });
 
-  const validateTool = (
-    identity: WorkerConnectionIdentity,
-    toolName: WorkerSessionToolName | "computer",
-  ) => {
-    const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
-      kind: "session-tool",
-    });
-    if (!requestAdmission.ok) {
-      return "closeReason" in requestAdmission
-        ? requestAdmission
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
-    }
-    const binding = placementClaim(identity);
-    if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
-      return { ok: false as const, closeReason: "method-not-allowed" as const };
-    }
-    return { ok: true as const };
-  };
-
   const executeComputer = createWorkerComputerRpc({
     execute: options.executeComputer,
-    validate: (identity) => validateTool(identity, "computer"),
+    validate: (identity) => {
+      const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+        kind: "session-tool",
+      });
+      if (!requestAdmission.ok) {
+        return "closeReason" in requestAdmission
+          ? requestAdmission
+          : { ok: false as const, closeReason: "placement-mismatch" as const };
+      }
+      const binding = placementClaim(identity);
+      if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, "computer")) {
+        return { ok: false as const, closeReason: "method-not-allowed" as const };
+      }
+      return { ok: true as const };
+    },
   });
 
-  const executeSessionTool = async (
+  const withToolSurface = async <T>(
     identity: WorkerConnectionIdentity,
-    toolName: WorkerSessionToolName,
-    request:
-      | WorkerSkillWorkshopParams
-      | WorkerSessionsSpawnParams
-      | WorkerSessionsSendParams
-      | WorkerPortalParams,
-    signal?: AbortSignal,
-  ): Promise<WorkerSessionToolServiceResult> => {
-    const validate = () => validateTool(identity, toolName);
+    run: (runtime: NonNullable<ReturnType<typeof getWorkerTurnToolSurface>>) => Promise<T> | T,
+  ) => {
+    const runtime = getWorkerTurnToolSurface(identity);
+    const validate = () =>
+      validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+        kind: "tool-surface",
+        surface: runtime,
+      });
     const admitted = validate();
     if (!admitted.ok) {
-      return admitted;
+      return "closeReason" in admitted
+        ? admitted
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
     }
-    if (!options.executeSessionTool) {
-      return { ok: false, reason: "gateway-unavailable" };
+    if (!runtime) {
+      return { ok: false as const, closeReason: "method-not-allowed" as const };
     }
-    const operation =
-      toolName === "skill_workshop" && Value.Check(WorkerSkillWorkshopParamsSchema, request)
-        ? { toolName, request }
-        : toolName === "sessions_spawn" && Value.Check(WorkerSessionsSpawnParamsSchema, request)
-          ? { toolName, request }
-          : toolName === "sessions_send" && Value.Check(WorkerSessionsSendParamsSchema, request)
-            ? { toolName, request }
-            : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
-              ? { toolName, request }
-              : undefined;
-    if (!operation) {
-      return { ok: false, closeReason: "invalid-frame" };
-    }
-    let result: WorkerSessionToolResult;
-    try {
-      result = await options.executeSessionTool({
-        identity,
-        ...operation,
-        ...(signal ? { signal } : {}),
-      });
-    } catch (error) {
-      result = {
-        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
-      };
-    }
-    // The tool may have awaited provider provisioning or another session turn.
-    // Neither success nor failure may return after the source turn or placement was revoked.
+    const result = await run(runtime);
     const current = validate();
-    return current.ok ? { ok: true, result } : current;
+    return current.ok
+      ? { ok: true as const, result }
+      : "closeReason" in current
+        ? current
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
   };
+  const getToolSurface = (identity: WorkerConnectionIdentity) =>
+    withToolSurface(identity, (runtime) => runtime.getSurface(identity));
+  const invokeGatewayTool = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerGatewayToolInvokeParams,
+    sink: WorkerGatewayToolSink,
+    signal?: AbortSignal,
+  ) =>
+    withToolSurface(identity, (runtime) =>
+      runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult),
+    );
+  const cancelGatewayTool = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerGatewayToolCancelParams,
+  ) => withToolSurface(identity, (runtime) => runtime.cancel(request));
 
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
+    preparedPlacement?: WorkerPlacementValidation,
   ): Exclude<WorkerLiveEventServiceResult, { ok: true }> | undefined => {
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "live",
-      seq: request.seq,
-    });
+    const binding = validateAttachedWorkerRequest(
+      identity,
+      request.runEpoch,
+      { kind: "live", seq: request.seq },
+      preparedPlacement,
+    );
     if (!binding.ok) {
       if ("closeReason" in binding) {
         return binding;
@@ -496,21 +460,39 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!options.liveEvents) {
         return { ok: false, closeReason: "gateway-unavailable" };
       }
-      const placement = placementClaim(identity);
-      const processTurn = processTurnBinding(identity);
-      if (!placement || !processTurn) {
+      const source = sourceFor(identity);
+      if (!source) {
         return { ok: false, closeReason: "placement-mismatch" };
       }
+      const placement = placementClaim(identity);
+      const processTurn = processTurnBinding(identity);
+      const placementStore = options.placementStore;
+      if (!placement || !processTurn || !placementStore) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
+      let durableAckedSeq: number | undefined;
+      const readAckedSeq = () =>
+        (durableAckedSeq ??= placementStore.readWorkerTurnLiveAckCursor(placement));
       const observed = observedAckCursorFor(processTurn);
-      const wasNewSequence = request.seq > (observed?.liveSeq ?? 0);
+      const wasNewSequence = request.seq > (observed?.liveSeq ?? readAckedSeq());
       // The environment lock owns trajectory settlement along with transcript
       // commits and terminal fences. Revocation remains immediate during this wait.
-      const result = await options.liveEvents.apply({ identity, request });
+      const runOwner = captureWorkerTurnLiveEventOwner(identity);
+      const result = await options.liveEvents.apply({ identity, request, source, readAckedSeq });
       const stale = validateLiveEvent(identity, request);
       if (stale) {
         return stale;
       }
       if (!result.ok) {
+        if (result.details.reason === "resync-required") {
+          // The receiver discarded its speculative suffix, including any buffered terminal.
+          observedAckCursors.set(placement.sessionId, {
+            ...processTurn,
+            transcriptSeq: observed?.transcriptSeq ?? 0,
+            liveSeq: result.details.ackedSeq,
+          });
+          pendingTerminalTurnFences.delete(placement.sessionId);
+        }
         return result;
       }
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
@@ -532,10 +514,28 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       ) {
         // Only finishing authority crosses the durable boundary. Its live cursor
         // and workspace-result recovery fence commit in one placement transaction.
-        options.placementStore?.updateAckCursors({
+        await placementStore.updateAckCursors({
           claim: placement,
           liveSeq: result.result.ackedSeq,
+          assertCurrent: () => {
+            const ackInvalid = validateLiveEvent(identity, request, "durable");
+            if (ackInvalid) {
+              throw new Error("Worker live event authority closed during ACK");
+            }
+            if (!runOwner?.isCancelledFinishing(request)) {
+              source.receiptAuthority();
+            }
+          },
         });
+        const staleAfterAck = validateLiveEvent(identity, request);
+        if (staleAfterAck) {
+          return staleAfterAck;
+        }
+        // Cancellation closes execution authority; only this captured owner may
+        // finish its aborted receipt while the exact durable claim remains current.
+        if (!runOwner?.isCancelledFinishing(request)) {
+          source.receiptAuthority();
+        }
         acknowledgeWorkerTurnFinishing(
           identity,
           result.result.ackedSeq,
@@ -554,51 +554,64 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     });
   };
 
+  const validateInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  ) => {
+    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
+      return { ok: false, reason: "session-not-attached" } as const;
+    }
+    return validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "inference",
+    });
+  };
   const revalidateInference = (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
   ): "epoch-mismatch" | "session-not-attached" | null => {
-    if (request.sessionId !== identity.sessionId) {
-      return "session-not-attached";
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+    const binding = validateInference(identity, request);
     return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
   };
 
-  const startInference = (
+  const startInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams,
     sink: WorkerInferenceSink,
-  ): WorkerInferenceStartServiceResult => {
-    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
-      return { ok: false, reason: "session-not-attached" };
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+  ): Promise<WorkerInferenceServiceResult<"start">> => {
+    const binding = validateInference(identity, request);
     if (!binding.ok) {
       return binding;
+    }
+    const source = sourceFor(identity);
+    if (!source) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    if (request.context.tools?.length) {
+      const runtime = getWorkerTurnToolSurface(identity);
+      if (!runtime) {
+        return { ok: false, reason: "invalid-context" };
+      }
+      const { tools } = await runtime.getPromptProjection(identity);
+      source.receiptAuthority();
+      if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
+        return { ok: false, reason: "invalid-context" };
+      }
     }
     return inference.start({
       identity,
       request,
       sink,
+      sessionTarget: source.sessionTarget,
+      assertSourceCurrent: source.receiptAuthority,
       revalidate: () => revalidateInference(identity, request),
     });
   };
 
-  const cancelInference = (
+  const cancelInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceCancelParams,
-  ): WorkerInferenceCancelServiceResult => {
-    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
-      return { ok: false, reason: "session-not-attached" };
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+  ): Promise<WorkerInferenceServiceResult<"cancel">> => {
+    const binding = validateInference(identity, request);
     if (!binding.ok) {
       return binding;
     }
@@ -669,11 +682,18 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
       return finish(admitted);
     },
-    validateWorkerConnection: (identity: WorkerConnectionIdentity) => {
+    validateWorkerConnection: (
+      identity: WorkerConnectionIdentity,
+      request?: { toolSurface: true },
+    ) => {
       if (options.isStopping()) {
         return "environment-unavailable" as const;
       }
-      const placement = validateWorkerPlacement(identity);
+      const placement = request?.toolSurface
+        ? getWorkerTurnToolSurface(identity)
+          ? "durable"
+          : "invalid"
+        : validateWorkerPlacement(identity);
       if (placement === "invalid") {
         return "placement-mismatch" as const;
       }
@@ -692,16 +712,12 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     },
     commitTranscript,
     pushLiveEvent,
-    executeSessionTool,
+    getToolSurface,
+    invokeGatewayTool,
+    cancelGatewayTool,
     executeComputer,
     startInference,
     cancelInference,
-    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>
-      inference.cancelSession(params.sessionId, params.runId),
-    hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
-      inference.hasSession(sessionId, runId),
-    resolveInferenceSessionForRunId: (runId: string): string | undefined =>
-      inference.resolveSessionIdForRunId(runId),
     clear: () => {
       observedAckCursors.clear();
       pendingTerminalTurnFences.clear();

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
-import type { SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
@@ -27,72 +26,112 @@ describe("CommandPalette session search", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "keeps transcript snippets with a server metadata match: %s",
-    async (serverMatch) => {
-      const metadata = createSessionResult("agent:main:metadata", "needle");
-      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-      const roster = {
-        ...metadata,
-        count: 2,
-        totalCount: 2,
-        sessions: [...metadata.sessions, ...contextOnly.sessions],
-      } as SessionsListResult;
-      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-        options?.search && !serverMatch ? metadata : roster,
-      );
-      const searchResult: SessionsSearchResult = {
-        sessions: contextOnly.sessions,
-        results: [
-          {
-            sessionKey: "agent:main:context",
-            sessionId: "context",
-            messageId: "message-context",
-            role: "assistant",
-            timestamp: 42,
-            snippet: "The needle appears only in the conversation body.",
-            score: 10,
-          },
-        ],
-      };
-      const request = vi.fn(async (method: string) =>
-        method === "models.list" ? { models: [] } : searchResult,
-      );
-      const { gateway } = createGateway(true, {
-        methods: ["sessions.search"],
-        request,
-      });
-      const { palette } = await mountPalette(createContext(gateway, list));
-
-      await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
-          1,
-        ),
-      );
-      await palette.updateComplete;
-
-      expect(request).toHaveBeenCalledWith("sessions.search", {
-        query: "needle",
-        limit: 25,
-        scope: {
-          includeGlobal: false,
-          includeUnknown: false,
-          configuredAgentsOnly: true,
-          excludeSubagents: true,
-          excludeCron: true,
-          excludeSystem: true,
-        },
-      });
-      const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
-      expect(chatItems).toHaveLength(2);
-      expect(chatItems[0]?.textContent).toContain("needle");
-      expect(chatItems[1]?.textContent).toContain("Unrelated title");
-      expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
-      expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
+  it.each([
+    {
+      name: "punctuation-normalized title",
+      query: "per session communi",
+      title: "Per-session communication controls in UI",
+      sameSession: true,
     },
-  );
+    { name: "transcript-only match", serverMatch: false },
+    { name: "server metadata match", serverMatch: true },
+    {
+      name: "indexing",
+      response: { indexing: true },
+      notice: "Indexing older messages — search again shortly.",
+    },
+    { name: "truncated", response: { truncated: true } },
+    {
+      name: "archived",
+      response: { archivedTranscriptsExcluded: 3 },
+      notice: "3 archived transcripts excluded; open a session to restore its searchable history.",
+    },
+    {
+      name: "transcript failure",
+      failure: true,
+      notice: "Transcript search unavailable — showing chat titles and metadata",
+    },
+  ])("keeps metadata and transcript results selectable: $name", async (scenario) => {
+    const query = scenario.query ?? "needle";
+    const title = scenario.title ?? "needle";
+    const metadata = createSessionResult("agent:main:metadata", title);
+    const contextOnly = scenario.sameSession
+      ? metadata
+      : createSessionResult("agent:main:context", "Unrelated title");
+    const roster = {
+      ...metadata,
+      count: 2,
+      totalCount: 2,
+      sessions: [...metadata.sessions, ...contextOnly.sessions],
+    };
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
+      options?.search && !scenario.serverMatch ? metadata : roster,
+    );
+    const searchResult: SessionsSearchResult = {
+      sessions: contextOnly.sessions,
+      results: [
+        {
+          sessionKey: contextOnly.sessions[0]!.key,
+          sessionId: "context",
+          messageId: "message-context",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "The needle appears only in the conversation body.",
+          score: 10,
+        },
+      ],
+      ...scenario.response,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (scenario.failure) {
+        throw new Error("transcript index unavailable");
+      }
+      return searchResult;
+    });
+    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, query);
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith("sessions.search", {
+      query,
+      limit: 25,
+      scope: {
+        includeGlobal: false,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+        excludeSubagents: true,
+        excludeCron: true,
+        excludeSystem: true,
+      },
+    });
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    const items = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
+    expect(items).toHaveLength(scenario.sameSession || scenario.failure ? 1 : 2);
+    expect(items[0]?.textContent).toContain(title);
+    expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
+    if (scenario.sameSession) {
+      const buttons = [...palette.querySelectorAll("button")];
+      expect(buttons.some((button) => button.textContent?.match(/Sessions\s*1/u))).toBe(true);
+      expect(buttons.some((button) => button.textContent?.match(/Messages\s*0/u))).toBe(true);
+    } else if (!scenario.failure) {
+      expect(items[1]?.textContent).toContain("Unrelated title");
+      expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
+    }
+    if (scenario.notice) {
+      expect(palette.textContent).toContain(scenario.notice);
+    } else {
+      expect(palette.textContent).not.toContain("Search notices");
+      expect(palette.textContent).not.toContain("may be incomplete");
+    }
+    expect(palette.textContent).not.toContain("Chat search failed");
+    findPaletteOption(palette, title)!.click();
+    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
+  });
 
   it("finds an older transcript beyond the first 200 sessions without downloading the roster", async () => {
     const older = createSessionResult("agent:main:older", "Older planning discussion");
@@ -141,7 +180,7 @@ describe("CommandPalette session search", () => {
     const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "uncommonneedle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(palette.textContent).toContain("Older planning discussion");
@@ -149,114 +188,4 @@ describe("CommandPalette session search", () => {
     expect(list.mock.calls.every(([options]) => Boolean(options?.search))).toBe(true);
     expect(palette.textContent).not.toContain("Search notices");
   });
-
-  it("keeps metadata matches selectable when transcript search fails", async () => {
-    const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => metadata);
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      throw new Error("transcript index unavailable");
-    });
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request,
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
-
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
-    );
-    await palette.updateComplete;
-
-    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    const metadataItem = findPaletteOption(palette, "Needle planning");
-    expect(metadataItem?.textContent).toContain("Needle planning");
-    metadataItem?.click();
-    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
-    expect(palette.textContent).toContain(
-      "Transcript search unavailable — showing chat titles and metadata",
-    );
-    expect(palette.textContent).not.toContain("Chat search failed");
-  });
-
-  it.each([
-    {
-      state: "indexing",
-      response: { indexing: true },
-      notice: "Indexing older messages — search again shortly.",
-    },
-    {
-      state: "truncated",
-      response: { truncated: true },
-      notice: null,
-    },
-    {
-      state: "archived",
-      response: { archivedTranscriptsExcluded: 3 },
-      notice: "3 archived transcripts excluded; open a session to restore its searchable history.",
-    },
-  ])(
-    "shows a partial-search notice when transcript results are $state",
-    async ({ response, notice }) => {
-      const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-      const roster = {
-        ...metadata,
-        count: 2,
-        totalCount: 2,
-        sessions: [...metadata.sessions, ...contextOnly.sessions],
-      } as SessionsListResult;
-      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-        options?.search ? metadata : roster,
-      );
-      const request = vi.fn(async (method: string) =>
-        method === "models.list"
-          ? { models: [] }
-          : {
-              sessions: contextOnly.sessions,
-              results: [
-                {
-                  sessionKey: "agent:main:context",
-                  sessionId: "context",
-                  messageId: "message-context",
-                  role: "assistant" as const,
-                  timestamp: 42,
-                  snippet: "The needle also appears in this transcript.",
-                  score: 10,
-                },
-              ],
-              ...response,
-            },
-      );
-      const { gateway } = createGateway(true, {
-        methods: ["sessions.search"],
-        request,
-      });
-      const { palette } = await mountPalette(createContext(gateway, list));
-
-      await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
-          1,
-        ),
-      );
-      await palette.updateComplete;
-
-      expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-      if (notice) {
-        expect(palette.textContent).toContain(notice);
-      } else {
-        expect(palette.textContent).not.toContain("Search notices");
-        expect(palette.textContent).not.toContain("may be incomplete");
-      }
-      expect(palette.textContent).toContain("Needle planning");
-      expect(palette.textContent).toContain("Unrelated title");
-      expect(palette.textContent).toContain("needle also appears in this transcript");
-    },
-  );
 });

@@ -36,9 +36,39 @@ openclaw status --usage --agent work
 
 Status starts one monotonic probe deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local probes report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel probes. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
 
+When no matching Gateway service or live foreground owner exists and its port is
+free, status probes directly instead of waiting for a Gateway startup. Local-only
+agent environments therefore report an unavailable Gateway promptly. Observed startup
+migrations retain startup grace across the handoff to Gateway ownership; unverifiable
+ownership also retains that grace. Lock and native process inspection consume the
+same remaining probe allowance.
+
 Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
+
+The Update run row preserves the last recorded update outcome. When the local
+Gateway passes the current readiness and connection checks and its serving
+version matches the recorded update target, a previous failure is labeled as
+historical: `Last update run failed (post-update-failed) — Gateway is serving
+2026.9.7; run openclaw update to clear the record.` Build IDs must also match when
+both the target and the live probe expose them. A healthy old version, a different
+build, or unknown identity keeps the warning and its recorded failure details,
+with the serving and target versions when known. Rollback and recovery observations
+cannot by themselves establish the intended candidate identity. A
+same-version rollback stays warned when the intended candidate build cannot be
+verified. Status does not rewrite the failed run or claim the update succeeded.
+Starting, unreachable, degraded, and
+remote Gateways do not qualify for this note. Use
+`openclaw update status` to inspect the saved verification failure.
+
+`--deep` also asks the running Gateway whether the Node executable it still holds can be started. A Homebrew upgrade can delete that Cellar path while the LaunchAgent plist still points at a valid symlink and the Gateway port stays reachable. Status then warns:
+
+```text
+Gateway runtime is stale after Node upgrade: child workers are using <path>, which no longer exists. Restart the Gateway.
+```
+
+The check does not restart the Gateway. Run `openclaw gateway restart` after the warning.
 
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked
@@ -77,10 +107,15 @@ existing read-only SQLite path.
 
 JSON `collection.notCollected` names fields that were not inspected and explains
 why. Online status leaves workspace and bootstrap checks unknown, including
-`agents.bootstrapPendingCount: null`. It also skips local config validation,
-channel and memory credential inspection, and the local plugin inspections
-normally requested by `--all` or `--deep`. Requested security audit and plugin
-compatibility sections report `collected: false`; memory remains `null`. Use
+`agents.bootstrapPendingCount: null`. It returns `channelSummary: []` without
+loading channel plugins and records `channelSummary` in `collection.notCollected`.
+An empty list there means the field was not collected, not that no channels are
+configured. Use `openclaw channels status` for the configured inventory, or
+`openclaw channels status --probe` for live account checks. Online status skips
+local config validation, channel and memory credential inspection, and the local
+plugin inspections normally requested by `--all` or `--deep`. Requested security
+audit and plugin compatibility sections report `collected: false`; memory remains
+`null`. Use
 `openclaw security audit`, `openclaw plugins inspect --all`, or
 `openclaw memory status --deep` for those local inspections. `--deep` still requests
 Gateway health, and `--usage --agent <id>` retains its credential scope.
@@ -133,6 +168,13 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   backend, or an ACP backend such as `codex (acp/acpx)`. See
   [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
   distinction.
+- The `/status` chat command shows `Endpoint`: the upstream base URL
+  from the same prepared model/auth decision used to select the route. It
+  describes the current selection, not a previous request or billing attribution.
+  The URL is the API base; the transport adds operation paths such as
+  `/responses` when sending requests.
+  Routes without a resolved endpoint display `unknown`. Displayed URLs omit
+  user information, query parameters, and fragments; custom paths are hidden.
 - When the current session snapshot is sparse, the `/status` chat command (see
   [Slash commands](/tools/slash-commands)) can backfill token and cache counters
   from the most recent transcript usage log. Existing nonzero live values still
@@ -177,6 +219,15 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   They do not mean the Gateway or channels are unhealthy.
 
 ## Overview and update status
+
+The Gateway service row compares its installed package with the active CLI.
+If they resolve to different installations, status names both package paths and
+versions. It recommends `openclaw doctor --fix` or `openclaw gateway install --force`
+when service installation is allowed, or reports the installation owner's refusal.
+This local diagnostic remains available when the Gateway connection fails,
+including a protocol mismatch. JSON exposes the comparison as
+`gatewayService.installationDrift`.
+If local session state requires Doctor, status prints any installation drift to stderr alongside the original error and preserves the failure exit status.
 
 - The **Sessions** overview counts stored conversation rows, including archived
   rows. Running turns and recent activity are separate from this inventory.

@@ -26,7 +26,7 @@ If access was denied or the prompt no longer appears, use the adjacent
 **Open System Settings** action. Permissions with a confirmed denial offer
 that action instead of **Grant**.
 
-Enabling camera access, Computer Control, Keep computer awake, the Peekaboo bridge, browser cookie
+Enabling camera access, Computer Control, Desktop sharing, Keep computer awake, the Peekaboo bridge, browser cookie
 sync, or continuous Voice Wake listening requires a native confirmation with
 **Cancel** selected by default. Increasing location access (from Off to While
 Using or Always, or from While Using to Always) and enabling precise location

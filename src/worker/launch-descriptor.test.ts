@@ -74,6 +74,14 @@ function expectExecDeniedOrDescriptorRejected(candidate: unknown): void {
   expect(exec?.security).not.toBe("full");
 }
 
+function expectInvalidDescriptor(candidate: unknown) {
+  expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow("invalid worker launch descriptor");
+}
+
+function withAssignment(overrides: Record<string, unknown>, descriptor = launchDescriptor()) {
+  return { ...descriptor, assignment: { ...descriptor.assignment, ...overrides } };
+}
+
 describe("worker launch descriptor", () => {
   it("admits bounded image-only input and replay without raising the text budget", () => {
     const descriptor = launchDescriptor();
@@ -94,40 +102,19 @@ describe("worker launch descriptor", () => {
       { ...image, type: "text" },
       { ...image, extra: true },
     ]) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, prompt: [invalidImage] },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ prompt: [invalidImage] }, descriptor));
     }
-    descriptor.assignment.prompt = [
-      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
-      image,
-    ];
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
-      "invalid worker launch descriptor",
-    );
-    descriptor.assignment.prompt = [
-      { ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
-    ];
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
-      "invalid worker launch descriptor",
-    );
-  });
-  it("accepts the exact admitted single-session launch shape", () => {
-    const descriptor = launchDescriptor();
-
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-    expect(buildWorkerConnectParams(descriptor)).toMatchObject({
-      role: "worker",
-      client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
-      admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
-    });
+    for (const prompt of [
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+      [{ type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) }, image],
+      [{ ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) }],
+    ]) {
+      expectInvalidDescriptor(withAssignment({ prompt }, descriptor));
+    }
   });
 
   it.each(["workspaceDir", "workerContainmentRoot"] as const)(
-    "accepts absolute %s paths through the project preparation limit",
+    "requires absolute bounded %s paths through the project preparation limit",
     (field) => {
       for (const root of ["/", "C:\\", "\\\\server\\share\\"]) {
         for (const length of [257, 4_096]) {
@@ -137,12 +124,6 @@ describe("worker launch descriptor", () => {
           expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
         }
       }
-    },
-  );
-
-  it.each(["workspaceDir", "workerContainmentRoot"] as const)(
-    "rejects invalid %s paths",
-    (field) => {
       for (const value of [
         "/" + "a".repeat(4_096),
         "/workspace\0other",
@@ -152,13 +133,7 @@ describe("worker launch descriptor", () => {
         "workspace",
         null,
       ]) {
-        const descriptor = launchDescriptor();
-        expect(() =>
-          parseWorkerLaunchDescriptor({
-            ...descriptor,
-            assignment: { ...descriptor.assignment, [field]: value },
-          }),
-        ).toThrow("invalid worker launch descriptor");
+        expectInvalidDescriptor(withAssignment({ [field]: value }));
       }
     },
   );
@@ -171,6 +146,7 @@ describe("worker launch descriptor", () => {
       branch: "session/worker-1",
     };
     for (const github of [
+      undefined,
       identity,
       {
         ...identity,
@@ -178,16 +154,26 @@ describe("worker launch descriptor", () => {
         gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
       },
     ]) {
-      descriptor.assignment.github = github;
+      if (github) {
+        descriptor.assignment.github = github;
+      }
       const parsed = parseWorkerLaunchDescriptor(structuredClone(descriptor));
+      expect(parsed).toEqual(descriptor);
       expect(parsed.assignment.github).toEqual(github);
-      expect(buildWorkerConnectParams(parsed)).not.toHaveProperty("github");
-      expect(JSON.stringify(buildWorkerConnectParams(parsed))).not.toContain(github.token);
+      const connectParams = buildWorkerConnectParams(parsed);
+      expect(connectParams).toMatchObject({
+        role: "worker",
+        client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
+        admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
+      });
+      expect(connectParams).not.toHaveProperty("github");
+      if (github) {
+        expect(JSON.stringify(connectParams)).not.toContain(github.token);
+      }
     }
   });
 
   it("rejects malformed or open GitHub launch bindings", () => {
-    const descriptor = launchDescriptor();
     const github: WorkerGitHubLaunchBinding = {
       token: "worker-github-token",
       login: "worker-bot",
@@ -239,26 +225,8 @@ describe("worker launch descriptor", () => {
       { ...github, gitAuthor: Object.create({ email: "inherited@example.test" }) },
     ];
     for (const binding of invalidBindings) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, github: binding },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ github: binding }));
     }
-  });
-
-  it("rejects a launch version inherited from the prototype", () => {
-    const descriptor = launchDescriptor();
-    const { version, ...ownFields } = descriptor;
-    const candidate = Object.assign(
-      Object.create({ version }) as Record<string, unknown>,
-      ownFields,
-    );
-
-    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
-      "invalid worker launch descriptor",
-    );
   });
 
   it("accepts the permission context pair only when both fields are present", () => {
@@ -276,9 +244,7 @@ describe("worker launch descriptor", () => {
       { ...withoutContext, permissionMode: "workspace" },
       { ...withoutContext, workerContainmentRoot: "/tmp/openclaw-worker/workspace" },
     ]) {
-      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, assignment })).toThrow(
-        "invalid worker launch descriptor",
-      );
+      expectInvalidDescriptor({ ...descriptor, assignment });
     }
   });
 
@@ -317,141 +283,72 @@ describe("worker launch descriptor", () => {
           clientSecret: "cf-worker-plaintext-secret",
         },
       },
-      {
+      ...["", "ab:cd:ef", "g".repeat(64)].map((tlsFingerprint) => ({
         kind: "websocket",
         url: "wss://gateway.example/__openclaw__/worker",
-        tlsFingerprint: "",
-      },
-      {
-        kind: "websocket",
-        url: "wss://gateway.example/__openclaw__/worker",
-        tlsFingerprint: "ab:cd:ef",
-      },
-      {
-        kind: "websocket",
-        url: "wss://gateway.example/__openclaw__/worker",
-        tlsFingerprint: "g".repeat(64),
-      },
+        tlsFingerprint,
+      })),
       { ...descriptor.connectionEndpoint, unexpected: true },
     ];
     for (const connectionEndpoint of invalidEndpoints) {
-      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, connectionEndpoint })).toThrow(
-        "invalid worker launch descriptor",
-      );
+      expectInvalidDescriptor({ ...descriptor, connectionEndpoint });
     }
   });
 
-  it("rejects unknown fields at every launch-owned boundary", () => {
+  it("requires closed own fields at every launch-owned boundary", () => {
     const descriptor = launchDescriptor();
+    const { version, ...ownFields } = descriptor;
     const cases: unknown[] = [
+      Object.assign(Object.create({ version }), ownFields),
       { ...descriptor, unexpected: true },
-      {
-        ...descriptor,
-        admission: { ...descriptor.admission, unexpected: true },
-      },
-      {
-        ...descriptor,
-        assignment: { ...descriptor.assignment, unexpected: true },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          modelRef: { ...descriptor.assignment.modelRef, unexpected: true },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          inferenceOptions: { ...descriptor.assignment.inferenceOptions, unexpected: true },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          transcript: { ...descriptor.assignment.transcript, unexpected: true },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          liveEvents: { ...descriptor.assignment.liveEvents, unexpected: true },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: { ...descriptor.assignment.toolAuthority, unexpected: true },
-        },
-      },
+      { ...descriptor, admission: { ...descriptor.admission, unexpected: true } },
+      withAssignment({ unexpected: true }),
+      withAssignment({
+        operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
+      }),
     ];
+    for (const field of [
+      "modelRef",
+      "inferenceOptions",
+      "transcript",
+      "liveEvents",
+      "toolAuthority",
+    ] as const) {
+      cases.push(
+        withAssignment({ [field]: { ...descriptor.assignment[field], unexpected: true } }),
+      );
+    }
 
     for (const candidate of cases) {
-      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
-        "invalid worker launch descriptor",
-      );
+      expectInvalidDescriptor(candidate);
     }
   });
 
-  it("requires a unique closed worker tool authority", () => {
+  it("requires bounded unique tool names and admits Gateway-owned tools", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
-    const cases: unknown[] = [
-      { ...descriptor, version: 3 },
-      { ...descriptor, assignment: assignmentWithoutAuthority },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "read"] },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "gateway"] },
-        },
-      },
-    ];
-
-    for (const candidate of cases) {
-      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
-        "invalid worker launch descriptor",
-      );
+    expectInvalidDescriptor({ ...descriptor, version: 3 });
+    expectInvalidDescriptor({ ...descriptor, assignment: assignmentWithoutAuthority });
+    for (const allowedToolNames of [
+      ["read", "read"],
+      [""],
+      [" read"],
+      ["x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)],
+      Array.from({ length: 257 }, (_, index) => `tool_${index}`),
+    ]) {
+      expectInvalidDescriptor(withAssignment({ toolAuthority: { allowedToolNames } }));
     }
-
-    descriptor.assignment.toolAuthority.allowedToolNames = [];
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-
-    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    for (const allowedToolNames of [[], ["browser"], ["read", "web_search", "custom_tool"]]) {
+      descriptor.assignment.toolAuthority.allowedToolNames = allowedToolNames;
+      expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    }
   });
 
-  it("never gives a name-only legacy descriptor permissive exec authority", () => {
+  it("rejects or denies absent, malformed, and partially populated exec authority", () => {
     const descriptor = launchDescriptor();
     const { exec: _exec, ...nameOnlyAuthority } = descriptor.assignment.toolAuthority;
-
-    expectExecDeniedOrDescriptorRejected({
-      ...descriptor,
-      assignment: { ...descriptor.assignment, toolAuthority: nameOnlyAuthority },
-    });
-  });
-
-  it("rejects or denies malformed and partially populated exec authority", () => {
-    const descriptor = launchDescriptor();
-    const cases = [
+    expectExecDeniedOrDescriptorRejected(withAssignment({ toolAuthority: nameOnlyAuthority }));
+    for (const exec of [
       null,
       {},
       { security: "deny" },
@@ -477,20 +374,14 @@ describe("worker launch descriptor", () => {
       { host: "node", security: "full", ask: "off", nodeCwd: 42 },
       { host: "node", security: "full", ask: "off", nodeCwd: "" },
       { host: "node", security: "full", ask: "off", nodeCwd: " /remote/workspace" },
-    ];
-
-    for (const exec of cases) {
-      expectExecDeniedOrDescriptorRejected({
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: { ...descriptor.assignment.toolAuthority, exec },
-        },
-      });
+    ]) {
+      expectExecDeniedOrDescriptorRejected(
+        withAssignment({ toolAuthority: { ...descriptor.assignment.toolAuthority, exec } }),
+      );
     }
   });
 
-  it("round-trips every reachable exec authority the Gateway can resolve", () => {
+  it("preserves resolved exec authority and optional fields while rejecting inherited grants", () => {
     const descriptor = launchDescriptor();
     for (const host of ["sandbox", "gateway", "node"] as const) {
       for (const security of ["deny", "allowlist", "full"] as const) {
@@ -508,10 +399,6 @@ describe("worker launch descriptor", () => {
         }
       }
     }
-  });
-
-  it("preserves omitted optional authority fields and rejects inherited grants", () => {
-    const descriptor = launchDescriptor();
     const allowedToolNames = ["read"];
     const exec = { host: "node", security: "full", ask: "off" };
     for (const [authority, expected] of [
@@ -529,10 +416,8 @@ describe("worker launch descriptor", () => {
       ],
     ]) {
       expect(
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, toolAuthority: authority },
-        }).assignment.toolAuthority,
+        parseWorkerLaunchDescriptor(withAssignment({ toolAuthority: authority })).assignment
+          .toolAuthority,
       ).toStrictEqual(expected);
     }
     for (const toolAuthority of [
@@ -544,12 +429,7 @@ describe("worker launch descriptor", () => {
         exec: Object.assign(Object.create({ node: "other" }), { ...exec, host }),
       })),
     ]) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, toolAuthority },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ toolAuthority }));
     }
   });
 
@@ -558,6 +438,7 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      launcherArgs: ["literal;$(text)", "arg with spaces"],
     };
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
@@ -569,14 +450,15 @@ describe("worker launch descriptor", () => {
       { ...browser, cdpUrl: "http://127.0.0.1" },
       { ...browser, cdpUrl: "http://127.0.0.1:9222/json/version" },
       { ...browser, launcherPath: "openclaw-worker-browser" },
+      { ...browser, launcherPath: "/app\0" },
+      { ...browser, launcherPath: `/${"x".repeat(4096)}` },
+      { ...browser, launcherArgs: ["arg\0"] },
+      { ...browser, launcherArgs: Array(33).fill("a") },
+      { ...browser, launcherArgs: ["x".repeat(4097)] },
+      { ...browser, launcherArgs: Array(3).fill("x".repeat(4096)) },
     ];
     for (const invalidBrowser of cases) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, browser: invalidBrowser },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ browser: invalidBrowser }, descriptor));
     }
   });
 
@@ -594,9 +476,7 @@ describe("worker launch descriptor", () => {
         features: { recording: false, agentCursor: false, multiDisplay: false },
       },
     };
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
-      "invalid worker launch descriptor",
-    );
+    expectInvalidDescriptor(descriptor);
     descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
     descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
     expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
@@ -605,12 +485,7 @@ describe("worker launch descriptor", () => {
       Object.create({ computer }),
       assignmentFields,
     );
-    expect(() =>
-      parseWorkerLaunchDescriptor({
-        ...descriptor,
-        assignment: inheritedComputerAssignment,
-      }),
-    ).toThrow("invalid worker launch descriptor");
+    expectInvalidDescriptor({ ...descriptor, assignment: inheritedComputerAssignment });
     const { nodeId, ...computerFields } = descriptor.assignment.computer;
     const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
     for (const candidateComputer of [
@@ -619,16 +494,11 @@ describe("worker launch descriptor", () => {
       { ...descriptor.assignment.computer, nodeId: "" },
       inheritedNodeIdComputer,
     ]) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, computer: candidateComputer },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ computer: candidateComputer }, descriptor));
     }
   });
 
-  it("rejects the legacy v2 assignment without admitted execution context", () => {
+  it("requires admitted execution context and a bounded host-assigned agent identity", () => {
     const descriptor = launchDescriptor();
     const {
       operationalRunInstance: _operationalRunInstance,
@@ -636,64 +506,23 @@ describe("worker launch descriptor", () => {
       ...legacyAssignment
     } = descriptor.assignment;
 
-    expect(() =>
-      parseWorkerLaunchDescriptor({ ...descriptor, assignment: legacyAssignment }),
-    ).toThrow("invalid worker launch descriptor");
-  });
-
-  it("requires the host-assigned agent identity", () => {
-    const descriptor = launchDescriptor();
     const { agentId: _agentId, ...assignmentWithoutAgent } = descriptor.assignment;
-
-    expect(() =>
-      parseWorkerLaunchDescriptor({ ...descriptor, assignment: assignmentWithoutAgent }),
-    ).toThrow("invalid worker launch descriptor");
+    for (const assignment of [legacyAssignment, assignmentWithoutAgent]) {
+      expectInvalidDescriptor({ ...descriptor, assignment });
+    }
     for (const agentId of ["", " agent-1", "a".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)]) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, agentId },
-        }),
-      ).toThrow("invalid worker launch descriptor");
+      expectInvalidDescriptor(withAssignment({ agentId }));
     }
   });
 
-  it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {
+  it("rejects unattached sessions and discontinuous event sequences", () => {
     const descriptor = launchDescriptor();
-    const cases: unknown[] = [
-      {
-        ...descriptor,
-        connectionEndpoint: { kind: "unix", socketPath: "gateway.sock" },
-      },
-      {
-        ...descriptor,
-        assignment: { ...descriptor.assignment, workspaceDir: "workspace" },
-      },
-      {
-        ...descriptor,
-        assignment: { ...descriptor.assignment, workerContainmentRoot: "workspace" },
-      },
-      {
-        ...descriptor,
-        admission: { ...descriptor.admission, sessionId: null },
-      },
-      {
-        ...descriptor,
-        admission: { ...descriptor.admission, ownerEpoch: 0 },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          liveEvents: { ackedSeq: 12, nextSeq: 14 },
-        },
-      },
-    ];
-
-    for (const candidate of cases) {
-      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
-        "invalid worker launch descriptor",
-      );
+    for (const candidate of [
+      { ...descriptor, admission: { ...descriptor.admission, sessionId: null } },
+      { ...descriptor, admission: { ...descriptor.admission, ownerEpoch: 0 } },
+      withAssignment({ liveEvents: { ackedSeq: 12, nextSeq: 14 } }),
+    ]) {
+      expectInvalidDescriptor(candidate);
     }
   });
 
@@ -714,17 +543,6 @@ describe("worker launch descriptor", () => {
       () => structuredClone(message),
     );
 
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
-      "invalid worker launch descriptor",
-    );
-  });
-
-  it("rejects a prompt that cannot fit its transcript frame", () => {
-    const descriptor = launchDescriptor();
-    descriptor.assignment.prompt = "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
-
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
-      "invalid worker launch descriptor",
-    );
+    expectInvalidDescriptor(descriptor);
   });
 });

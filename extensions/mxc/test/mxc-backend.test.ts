@@ -193,15 +193,13 @@ async function withProcessEnv(
   overrides: Partial<Record<MxcTestEnvKey, string | undefined>>,
   run: () => Promise<void>,
 ): Promise<void> {
+  const originalEnv = process.env;
+  // Synthetic host variables belong to the fixture, not the native Windows environment.
+  process.env = { ...originalEnv, ...overrides };
   try {
-    for (const key of MXC_TEST_ENV_KEYS) {
-      if (Object.hasOwn(overrides, key)) {
-        vi.stubEnv(key, overrides[key]);
-      }
-    }
     await run();
   } finally {
-    vi.unstubAllEnvs();
+    process.env = originalEnv;
   }
 }
 
@@ -271,7 +269,6 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect(cfg.containment).toBe("process");
     expect(cfg.lxc).toBeUndefined();
     expect(processContainer).toEqual({
-      name: "openclaw-mxc-test-abc12345",
       leastPrivilege: true,
       capabilities: [],
       ui: {
@@ -453,8 +450,9 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const processContainer = objectField(decodeContainerConfig(spec.argv), "processContainer");
-    expect(String(processContainer.name).length).toBeLessThanOrEqual(64);
+    // MXC names the AppContainer profile after the containerId.
+    const cfg = decodeContainerConfig(spec.argv);
+    expect(String(cfg.containerId).length).toBeLessThanOrEqual(64);
   });
 
   test("buildExecSpec passes configured MXC binary path to the launcher options", async () => {

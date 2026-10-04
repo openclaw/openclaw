@@ -266,24 +266,53 @@ pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-fn is_private_host(host: &str) -> bool {
+/// Node pairing follows the logical SSH endpoint, not a replacement tunnel's local port.
+pub(crate) fn desktop_node_identity_scope(
+    request: &RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> Result<String, String> {
+    let context = gateway_url.path().trim_end_matches('/');
+    if request.transport == "ssh" {
+        let (target, ssh_port) = validate_ssh_target(
+            request
+                .ssh_target
+                .as_deref()
+                .ok_or("The SSH Gateway target is missing.")?,
+        )?;
+        return Ok(format!(
+            "ssh://{target}:{}/{remote_port}{context}",
+            ssh_port.unwrap_or(22),
+            remote_port = request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)
+        ));
+    }
+    Ok(format!(
+        "{}{context}",
+        gateway_url.origin().ascii_serialization()
+    ))
+}
+
+pub(crate) fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") || host.ends_with(".ts.net") {
         return true;
     }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(address)) => {
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| is_private_address(&address))
+}
+
+pub(crate) fn is_private_address(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
             let [first, second, _, _] = address.octets();
             address.is_loopback()
                 || address.is_private()
                 || address.is_link_local()
                 || (first == 100 && (64..=127).contains(&second))
         }
-        Ok(IpAddr::V6(address)) => {
+        IpAddr::V6(address) => {
             let first = address.segments()[0];
             address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
-        Err(_) => false,
     }
 }
 

@@ -1,5 +1,7 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
+  resolveSidebarAttentionKey,
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
 } from "../components/sidebar-attention-dismissals.ts";
@@ -61,7 +63,7 @@ export function createSidebarAttentionStore(
       scopes &&
       !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
     ) {
-      clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
+      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
     }
     controller?.syncDismissals();
   };
@@ -79,10 +81,7 @@ export function createSidebarAttentionStore(
     dismiss(dismissal) {
       controller?.dismiss(dismissal);
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       stopScopeUpgrade();

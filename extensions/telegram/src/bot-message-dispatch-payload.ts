@@ -10,9 +10,6 @@ import type {
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
-export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload =>
-  payload.text === text ? payload : copyReplyPayloadMetadata(payload, { ...payload, text });
-
 export const projectPayloadForDelivery = (
   turn: Turn,
   payload: ReplyPayload,
@@ -68,7 +65,7 @@ export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPaylo
   // rich blocks. Converting a presentation here would strip it while the
   // final funnel is still undecided, so rich accounts defer canonicalization
   // to the sender which knows the text mode.
-  if (turn.telegramCfg.richMessages === true && payload.presentation) {
+  if (turn.richMessages && payload.presentation) {
     return payload;
   }
   return canonicalizeTelegramPresentationPayload(payload, {
@@ -76,6 +73,11 @@ export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPaylo
     richTables: false,
   });
 }
+
+export const usesNativeTelegramQuote = (turn: Turn, payload: ReplyPayload): boolean =>
+  (turn.replyToMode !== "off" || payload.replyToTag === true || payload.replyToCurrent === true) &&
+  (turn.replyQuoteText != null ||
+    (payload.replyToId != null && turn.replyQuoteByMessageId[payload.replyToId] != null));
 
 export function applyQuoteReplyTarget(turn: Turn, payload: ReplyPayload): ReplyPayload {
   if (
@@ -91,4 +93,12 @@ export function applyQuoteReplyTarget(turn: Turn, payload: ReplyPayload): ReplyP
     ...payload,
     replyToId: turn.implicitQuoteReplyTargetId,
   });
+}
+
+export function formatTelegramGroupThreadReply(
+  text: string,
+  participant: { name: string },
+): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
 }

@@ -5,10 +5,9 @@ import {
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createProjectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
-
-type ProjectWorktreeService = Parameters<typeof createProjectsHandlers>[0];
 
 const seededSessions = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
@@ -73,9 +72,15 @@ async function listObservedProjects(params: {
   };
   client?: GatewayClient;
 }) {
-  const handlers = createProjectsHandlers(params.service as never);
+  const handlers = createProjectsHandlers({
+    listRegistryRecords: params.service.listRegistryRecords,
+    resolveRepositoryIdentities: (roots: string[]) =>
+      Promise.all(
+        roots.map((root) => params.service.resolveRepositoryIdentity(root).catch(() => undefined)),
+      ),
+  } as never);
   const responses: Parameters<RespondFn>[] = [];
-  const cfg = { agents: { list: [{ id: "main", default: true }] } };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
   await handlers["projects.list"]?.({
     params: { includeObserved: true },
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
@@ -99,6 +104,46 @@ beforeEach(() => {
 });
 
 describe("projects.list observed projects", () => {
+  it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
+    seededSessions.store = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [
+        `agent:main:session-${index}`,
+        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
+      ]),
+    );
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
+      if (checkoutPath === "/repos/3") {
+        throw new Error("checkout unavailable");
+      }
+      return {
+        checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
+        repoRoot: "/physical/main",
+        originUrl: "https://example.test/project.git",
+        fingerprint: "project",
+      };
+    });
+
+    await expect(
+      listObservedProjects({
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
+      }),
+    ).resolves.toEqual([
+      {
+        name: "7",
+        originUrl: "https://example.test/project.git",
+        lastUsedAt: 4_999,
+        checkouts: [7, 6, 5, 4, 2, 1, 0].map((index) => ({
+          runnerId: "gateway",
+          path: `/physical/${index}`,
+        })),
+      },
+    ]);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(8);
+    expect(new Set(resolveRepositoryIdentity.mock.calls.map(([checkout]) => checkout)).size).toBe(
+      8,
+    );
+  });
+
   it.each([["operator.write"], ["operator.admin"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {
@@ -294,11 +339,11 @@ describe("projects.list observed projects", () => {
         { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
       ]),
     );
-    const resolveRepositoryIdentity = vi.fn<ProjectWorktreeService["resolveRepositoryIdentity"]>(
-      async (_checkoutPath) => {
-        throw new Error("checkout unavailable");
-      },
-    );
+    const resolveRepositoryIdentity = vi.fn<
+      Parameters<typeof listObservedProjects>[0]["service"]["resolveRepositoryIdentity"]
+    >(async (_checkoutPath) => {
+      throw new Error("checkout unavailable");
+    });
 
     await expect(
       listObservedProjects({
@@ -307,7 +352,7 @@ describe("projects.list observed projects", () => {
     ).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(PROJECTS_LIST_MAX_IDENTITY_PROBES);
     expect(resolveRepositoryIdentity.mock.calls.length).toBeLessThanOrEqual(rawCandidateLimit);
-    expect(resolveRepositoryIdentity.mock.calls[0]?.[0]).toBe(`/repos/${rawCandidateLimit + 4}`);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledWith(`/repos/${rawCandidateLimit + 4}`);
     expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/repos/0");
   });
 });

@@ -2,17 +2,39 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { withAgentDatabasePreparationGuard } from "../state/agent-database-admission.js";
 import type { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+
+function assertAgentDatabaseConfiguration(
+  cfg: OpenClawConfig,
+  agentId: string,
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+) {
+  const configuredPaths = resolveConfiguredAgentDatabaseTargets(cfg, { env }).filter(
+    (target) => target.agentId === agentId,
+  );
+  if (
+    configuredPaths.length === 0 ||
+    paths.some(
+      (pathname) =>
+        !configuredPaths.some((target) => isSameOpenClawAgentDatabasePath(target.path, pathname)),
+    )
+  ) {
+    throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
+  }
+}
 
 /** Finish only the deferred agent's preparation before its admission owner recovers it. */
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
+  preparationReady: Promise<void>;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -22,8 +44,63 @@ export function activateGatewayAgentDatabaseStartup(params: {
   const broker = getSpawnBroker();
   params.admission?.activate({
     isCurrent: params.isCurrent,
+    openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
+      runWithSpawnBroker(broker, async () => {
+        const [
+          { captureOpenClawAgentDatabaseExecution },
+          { runOpenClawAgentWorkerWrite },
+          { createSqliteWorkerOperationAdmission },
+        ] = await Promise.all([
+          import("../state/openclaw-agent-execution.js"),
+          import("../state/openclaw-agent-write-admission.js"),
+          import("../infra/sqlite-worker-operation-admission.js"),
+        ]);
+        assertCurrent();
+        let cfg = params.getConfig();
+        assertAgentDatabaseConfiguration(cfg, agentId, paths, env);
+        const assertOpenCurrent = () => {
+          signal.throwIfAborted();
+          assertCurrent();
+          const currentConfig = params.getConfig();
+          if (currentConfig !== cfg) {
+            assertAgentDatabaseConfiguration(currentConfig, agentId, paths, env);
+            cfg = currentConfig;
+          }
+        };
+        for (const pathname of paths) {
+          const options = { agentId, path: pathname, env };
+          const execution = captureOpenClawAgentDatabaseExecution(options);
+          try {
+            await runOpenClawAgentWorkerWrite(
+              options,
+              () =>
+                execution.prepare(
+                  {
+                    assertCurrent: assertOpenCurrent,
+                    createAdmission: (binding) => () => ({
+                      nativeLocations: binding.nativeLocations,
+                      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                        binding.authorize(request);
+                        assertOpenCurrent();
+                        if (!grant()) {
+                          throw new Error(`Agent ${agentId} startup admission expired`);
+                        }
+                      }, binding.attachment),
+                    }),
+                  },
+                  signal,
+                ),
+              undefined,
+              signal,
+            );
+          } finally {
+            await execution.release();
+          }
+        }
+      }),
     prepareAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
+        await racePromiseWithAbortSignal(params.preparationReady, signal);
         const [
           { runStartupSessionMigration },
           { refreshPreparedModelRuntimeSnapshots, getPreparedModelRuntimeSnapshot },
@@ -43,22 +120,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const beforeConfig = params.getConfig();
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
-        const configuredPaths = resolveConfiguredAgentDatabaseTargets(beforeConfig, { env }).filter(
-          (target) => target.agentId === agentId,
-        );
-        if (
-          configuredPaths.length === 0 ||
-          paths.some(
-            (pathname) =>
-              !configuredPaths.some((target) =>
-                isSameOpenClawAgentDatabasePath(target.path, pathname),
-              ),
-          )
-        ) {
-          throw new Error(
-            `Agent ${agentId} database configuration changed during startup inspection`,
-          );
-        }
+        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         if (
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({

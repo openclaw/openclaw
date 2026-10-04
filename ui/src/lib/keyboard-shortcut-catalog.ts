@@ -6,14 +6,6 @@ import {
 
 registerCommandPaletteEnglish();
 
-export {
-  formatKeyboardShortcutCombo,
-  formatKeyboardShortcutParts,
-  isApplePlatform,
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "./keyboard-shortcut-contract.ts";
-
 type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
 type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;
 
@@ -28,6 +20,7 @@ function keyboardShortcutSection(id: string, entries: readonly KeyboardShortcutE
 const KEYBOARD_SHORTCUT_SECTIONS = [
   keyboardShortcutSection("general", [
     keyboardShortcutEntry("commandPalette", KEYBOARD_SHORTCUT_COMBOS.commandPalette),
+    keyboardShortcutEntry("newSession", KEYBOARD_SHORTCUT_COMBOS.newSession),
     keyboardShortcutEntry("paletteStartSession", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
     keyboardShortcutEntry("keyboardShortcuts", KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts),
     keyboardShortcutEntry("toggleSidebar", KEYBOARD_SHORTCUT_COMBOS.toggleSidebar),
@@ -37,6 +30,7 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
+    keyboardShortcutEntry("archiveSession", KEYBOARD_SHORTCUT_COMBOS.archiveSession),
     keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
     keyboardShortcutEntry("newline", KEYBOARD_SHORTCUT_COMBOS.newline),
     keyboardShortcutEntry("steerImmediately", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
@@ -57,7 +51,6 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     keyboardShortcutEntry("sideChat", KEYBOARD_SHORTCUT_COMBOS.sideChat),
     keyboardShortcutEntry("browserPanel", KEYBOARD_SHORTCUT_COMBOS.browserPanel),
-    keyboardShortcutEntry("tasksPanel", KEYBOARD_SHORTCUT_COMBOS.tasksPanel),
     keyboardShortcutEntry("desktopPanel", KEYBOARD_SHORTCUT_COMBOS.desktopPanel),
     keyboardShortcutEntry("discussionPanel", KEYBOARD_SHORTCUT_COMBOS.discussionPanel),
     keyboardShortcutEntry("dashboardPanel", KEYBOARD_SHORTCUT_COMBOS.dashboardPanel),
@@ -71,6 +64,16 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("zoomIn", KEYBOARD_SHORTCUT_COMBOS.zoomIn),
     keyboardShortcutEntry("zoomOut", KEYBOARD_SHORTCUT_COMBOS.zoomOut),
     keyboardShortcutEntry("zoomReset", KEYBOARD_SHORTCUT_COMBOS.zoomReset),
+    keyboardShortcutEntry(
+      "panImageHorizontal",
+      KEYBOARD_SHORTCUT_COMBOS.imagePanLeft,
+      KEYBOARD_SHORTCUT_COMBOS.imagePanRight,
+    ),
+    keyboardShortcutEntry(
+      "panImageVertical",
+      KEYBOARD_SHORTCUT_COMBOS.imagePanUp,
+      KEYBOARD_SHORTCUT_COMBOS.imagePanDown,
+    ),
   ]),
   keyboardShortcutSection("approvals", [
     keyboardShortcutEntry("approveOnce", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),

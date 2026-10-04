@@ -4,6 +4,8 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type ExecTarget,
+  normalizeExecAsk,
+  normalizeExecSecurity,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals-core.js";
 import {
@@ -31,29 +33,12 @@ type ExecDirectiveParse = {
   invalidNode: boolean;
 };
 
-function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeExecAsk(value?: string): ExecAsk | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized as ExecAsk;
-  }
-  return undefined;
-}
-
 function parseExecDirectiveArgs(raw: string): Omit<
   ExecDirectiveParse,
   "cleaned" | "hasDirective"
 > & {
   consumed: number;
 } {
-  const len = raw.length;
   let i = skipDirectiveArgPrefix(raw);
   let consumed = i;
   let execHost: ExecTarget | undefined;
@@ -70,12 +55,6 @@ function parseExecDirectiveArgs(raw: string): Omit<
   let invalidAsk = false;
   let invalidNode = false;
 
-  const takeToken = (): string | null => {
-    const res = takeDirectiveToken(raw, i);
-    i = res.nextIndex;
-    return res.token;
-  };
-
   const splitToken = (token: string): { key: string; value: string } | null => {
     const eq = token.indexOf("=");
     const colon = token.indexOf(":");
@@ -91,11 +70,9 @@ function parseExecDirectiveArgs(raw: string): Omit<
     return { key, value };
   };
 
-  for (;;) {
-    if (i >= len) {
-      break;
-    }
-    const token = takeToken();
+  while (i < raw.length) {
+    const { token, nextIndex } = takeDirectiveToken(raw, i);
+    i = nextIndex;
     if (!token) {
       break;
     }
@@ -107,46 +84,27 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (key === "host") {
       rawExecHost = value;
       execHost = normalizeExecTarget(value) ?? undefined;
-      if (!execHost) {
-        invalidHost = true;
-      }
-      hasExecOptions = true;
-      consumed = i;
-      continue;
-    }
-    if (key === "security") {
+      invalidHost ||= !execHost;
+    } else if (key === "security") {
       rawExecSecurity = value;
-      execSecurity = normalizeExecSecurity(value);
-      if (!execSecurity) {
-        invalidSecurity = true;
-      }
-      hasExecOptions = true;
-      consumed = i;
-      continue;
-    }
-    if (key === "ask") {
+      execSecurity = normalizeExecSecurity(value) ?? undefined;
+      invalidSecurity ||= !execSecurity;
+    } else if (key === "ask") {
       rawExecAsk = value;
-      execAsk = normalizeExecAsk(value);
-      if (!execAsk) {
-        invalidAsk = true;
-      }
-      hasExecOptions = true;
-      consumed = i;
-      continue;
-    }
-    if (key === "node") {
+      execAsk = normalizeExecAsk(value) ?? undefined;
+      invalidAsk ||= !execAsk;
+    } else if (key === "node") {
       rawExecNode = value;
-      const trimmed = value.trim();
-      if (!trimmed) {
+      if (!value) {
         invalidNode = true;
       } else {
-        execNode = trimmed;
+        execNode = value;
       }
-      hasExecOptions = true;
-      consumed = i;
-      continue;
+    } else {
+      break;
     }
-    break;
+    hasExecOptions = true;
+    consumed = i;
   }
 
   return {
@@ -168,18 +126,8 @@ function parseExecDirectiveArgs(raw: string): Omit<
 }
 
 /** Extracts and removes `/exec` options from message text. */
-export function extractExecDirective(body?: string): ExecDirectiveParse {
-  if (!body) {
-    return {
-      cleaned: "",
-      hasDirective: false,
-      hasExecOptions: false,
-      invalidHost: false,
-      invalidSecurity: false,
-      invalidAsk: false,
-      invalidNode: false,
-    };
-  }
+export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
+  const body = rawBody ?? "";
   const re = /(?<!\S)\/exec(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
@@ -195,24 +143,12 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
   }
   const start = match.index;
   const argsStart = start + "/exec".length;
-  const parsed = parseExecDirectiveArgs(body.slice(argsStart));
+  const { consumed, ...parsed } = parseExecDirectiveArgs(body.slice(argsStart));
   // Remove only consumed key/value options so remaining text still reaches the agent.
-  const cleaned = removeDirectiveSpan(body, start, argsStart + parsed.consumed);
+  const cleaned = removeDirectiveSpan(body, start, argsStart + consumed);
   return {
     cleaned,
     hasDirective: true,
-    execHost: parsed.execHost,
-    execSecurity: parsed.execSecurity,
-    execAsk: parsed.execAsk,
-    execNode: parsed.execNode,
-    rawExecHost: parsed.rawExecHost,
-    rawExecSecurity: parsed.rawExecSecurity,
-    rawExecAsk: parsed.rawExecAsk,
-    rawExecNode: parsed.rawExecNode,
-    hasExecOptions: parsed.hasExecOptions,
-    invalidHost: parsed.invalidHost,
-    invalidSecurity: parsed.invalidSecurity,
-    invalidAsk: parsed.invalidAsk,
-    invalidNode: parsed.invalidNode,
+    ...parsed,
   };
 }

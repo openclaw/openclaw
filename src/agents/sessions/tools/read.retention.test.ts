@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { beforeAll, expect, it } from "vitest";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../../../infra/runtime-worker-url.js";
+import { agentProcessTestEntrypoints } from "../../process-runtime.test-support.js";
 
 type Observation = {
   mode: string;
@@ -13,11 +15,9 @@ let observations: Observation[] = [];
 
 beforeAll(async () => {
   const result = await runNodeScript(
-    [
+    (workerArgv) => [
       "--expose-gc",
-      "--import",
-      "./scripts/tsx.mjs",
-      fileURLToPath(new URL("./read.retention.test-support.ts", import.meta.url)),
+      ...workerArgv(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.readRetention)),
       "all",
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },

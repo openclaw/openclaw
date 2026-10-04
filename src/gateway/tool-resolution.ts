@@ -1,4 +1,9 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
+import {
+  getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
@@ -45,6 +50,11 @@ import {
   type CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.js";
 import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
+import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
+import {
+  hasSessionControlAuthority,
+  prepareSandboxSessionRename,
+} from "../agents/tools/sessions-operator-authority.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -85,6 +95,7 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -96,6 +107,8 @@ export function resolveGatewayScopedTools(
     isGrantCurrent?: () => boolean;
     /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
     assertInvocationCurrent?: () => void;
+    /** SQL-safe input policy, separate from invocation authority that may read state. */
+    assertInputCommitAllowed?: () => void;
     excludeToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
@@ -202,6 +215,11 @@ export function resolveGatewayScopedTools(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy
       ? "never"
       : nodeExecSurface
@@ -213,6 +231,12 @@ export function resolveGatewayScopedTools(
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  if (
+    params.trustedInternalHandoff &&
+    requesterPolicies.requesterPolicySource !== "completion-handoff"
+  ) {
+    throw new Error("CLI completion tool grant no longer matches its requester policy");
+  }
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -223,11 +247,19 @@ export function resolveGatewayScopedTools(
   const sandboxed = params.rootedExecution
     ? Boolean(params.rootedExecution.sandbox)
     : sandboxRuntime.sandboxed;
-  const sandboxPolicy = params.rootedExecution
+  const preparedSandboxPolicy = params.rootedExecution
     ? params.rootedExecution.sandbox?.tools
     : sandboxRuntime.sandboxed
       ? sandboxRuntime.toolPolicy
       : undefined;
+  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
+    prepareSandboxSessionRename({
+      policy: preparedSandboxPolicy,
+      senderIsOwner:
+        surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
+      authority: sessionControlAuthority,
+    });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
@@ -235,6 +267,14 @@ export function resolveGatewayScopedTools(
     ),
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
+  const sessionPortalTarget =
+    surface === "loopback" && params.senderIsOwner === false && !sandboxed
+      ? prepareSessionPortalToolTarget({
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+          sessionId: params.sessionId,
+        })
+      : undefined;
   const defaultGatewayDeny =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
@@ -246,15 +286,28 @@ export function resolveGatewayScopedTools(
             ),
         )
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
-      : [];
+  const assignmentAdmitted =
+    surface === "loopback" &&
+    params.admittedRunContext &&
+    getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const ownerOnlyGatewayDeny = [
+    ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+          (name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget),
+        )
+      : []),
+    // Attach grants also use loopback; session binding is not run authority.
+    ...(params.senderIsOwner !== true &&
+    !assignmentAdmitted &&
+    !(surface === "loopback" && hasSessionControlAuthority(sessionControlAuthority))
+      ? ["sessions"]
+      : []),
+  ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
     (params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
-  const explicitDenylist = collectExplicitDenylist([
+  const basePolicies = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -266,6 +319,13 @@ export function resolveGatewayScopedTools(
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+  ];
+  const requestedPolicies = [
+    ...basePolicies,
+    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+  ];
+  const explicitDenylist = collectExplicitDenylist([
+    ...basePolicies,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
@@ -277,20 +337,7 @@ export function resolveGatewayScopedTools(
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef | undefined =
     surface === "loopback" ? {} : undefined;
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist = requestedPolicies.some(hasRestrictiveAllowPolicy);
 
   // CLI backends reach OpenClaw tools through this resolver instead of the
   // embedded runner, and the loopback grant carries no collector fields, so the
@@ -306,10 +353,12 @@ export function resolveGatewayScopedTools(
   // bound to that same collector session.
   const swarmCollectorAdmission = {
     childSessionKey: params.sessionKey,
+    childAgentId: sessionAgentId,
     admittedRunId: surface === "loopback" ? params.runId : undefined,
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const openClawTools = createOpenClawTools({
+    sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
@@ -325,6 +374,7 @@ export function resolveGatewayScopedTools(
         })
       : undefined,
     runId: params.runId,
+    assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent:
       params.assertInvocationCurrent || params.isGrantCurrent
         ? () => {
@@ -380,6 +430,8 @@ export function resolveGatewayScopedTools(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
+    sessionControlAuthority,
+    sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
@@ -414,20 +466,7 @@ export function resolveGatewayScopedTools(
             : true,
         }
       : {}),
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-    ]),
+    pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
@@ -468,6 +507,7 @@ export function resolveGatewayScopedTools(
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          operationalRunInstance: params.admittedRunContext?.operationalRunInstance,
           workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
           ...params.rootedExecution,
@@ -496,6 +536,8 @@ export function resolveGatewayScopedTools(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          inputProvenance: params.inputProvenance,
+          trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,

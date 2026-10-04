@@ -1,11 +1,10 @@
 // Prepare the real check graph before test-scoped deadlines and stdout captures begin.
 import "../flows/doctor-core-checks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
-import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -19,13 +18,16 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 const runtime = createTestRuntime();
+let stdout: MockInstance<typeof process.stdout.write>;
 
 describe("runDoctorLintCli config snapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockReset();
     clearHealthChecksForTest();
+    stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("shares one captured config across registration and checks without freezing the source", async () => {
     const config = { agents: { entries: { main: { name: "original" } } } };
@@ -41,132 +43,71 @@ describe("runDoctorLintCli config snapshot", () => {
       detect,
     });
     const registration = vi.spyOn(bundledHealthChecks, "registerBundledHealthChecks");
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      expect(
-        await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/captured-config"] }),
-      ).toBe(0);
-      expect(detect).toHaveBeenCalledOnce();
-      const captured = detect.mock.calls[0]?.[0].cfg;
-      expect(captured).toEqual(config);
-      expect(captured).not.toBe(config);
-      expect(registration.mock.calls[0]?.[0].cfg).toBe(captured);
-      config.agents.entries.main.name = "changed";
-      expect(captured?.agents?.entries?.main?.name).toBe("original");
-    } finally {
-      registration.mockRestore();
-      stdout.mockRestore();
-    }
+    expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/captured-config"] })).toBe(
+      0,
+    );
+    expect(detect).toHaveBeenCalledOnce();
+    const captured = detect.mock.calls[0]?.[0].cfg;
+    expect(captured).toEqual(config);
+    expect(captured).not.toBe(config);
+    expect(registration.mock.calls[0]?.[0].cfg).toBe(captured);
+    config.agents.entries.main.name = "changed";
+    expect(captured?.agents?.entries?.main?.name).toBe("original");
   });
 
-  it("bases exit code on the selected severity threshold", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        severityMin: "error",
-        onlyIds: ["core/doctor/final-config-validation"],
-      });
-
-      expect(exitCode).toBe(0);
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.schemaVersion).toBe(1);
-      expect(payload.findings).toEqual([]);
-      expect(parseReleasedDoctorLintReport(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-        ok: true,
-        checksRun: 1,
-        findings: [],
-      });
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it.each([1, 480])(
-    "validates one shared config for %s agents and retains warnings",
-    async (count) => {
-      const snapshot = createTestConfigSnapshot({
-        agents: {
-          entries: Object.fromEntries(
-            Array.from({ length: count }, (_, index) => [`agent-${index}`, {}]),
-          ),
-        },
-      });
-      snapshot.warnings.push({
+  it.each(["warning", "error"] as const)(
+    "emits structured %s findings from one config snapshot",
+    async (severity) => {
+      const warning = {
         path: "plugins.load.paths",
         code: "configured-plugin-path-inspection-failed",
         source: "/fixture/plugin",
         errorCode: "EACCES",
         message: "Configured plugin path could not be inspected.",
         fixHint: "Restore access to /fixture/plugin, then run `openclaw doctor --fix`.",
+      } as const;
+      const snapshot = createTestConfigSnapshot({
+        agents: {
+          entries: Object.fromEntries(
+            Array.from({ length: 480 }, (_, index) => [`agent-${index}`, {}]),
+          ),
+        },
       });
-      mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
-
-      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      try {
-        expect(
-          await runDoctorLintCli(runtime, {
-            json: true,
-            onlyIds: ["core/doctor/final-config-validation"],
-          }),
-        ).toBe(1);
-        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-          ok: false,
-          checksRun: 1,
-          findings: [
-            {
-              checkId: "core/doctor/final-config-validation",
-              severity: "warning",
-              path: "plugins.load.paths",
-              requirement: "configured-plugin-path-inspection-failed",
-              source: "/fixture/plugin",
-              errorCode: "EACCES",
-              message: "Configured plugin path could not be inspected.",
-              fixHint: "Restore access to /fixture/plugin, then run `openclaw doctor --fix`.",
-            },
-          ],
+      if (severity === "warning") {
+        snapshot.warnings.push(warning);
+        mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+      } else {
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: false,
+          config: {},
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.mode", message: "Required" }],
         });
-        expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
-      } finally {
-        stdout.mockRestore();
       }
-    },
-  );
-
-  it("emits structured JSON for invalid config snapshots", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      path: "/tmp/openclaw.json",
-      issues: [{ path: "gateway.mode", message: "Required" }],
-    });
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, { json: true });
-
-      expect(exitCode).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload).toMatchObject({
+      const { code, ...warningDetails } = warning;
+      expect(
+        await runDoctorLintCli(runtime, {
+          json: true,
+          ...(severity === "warning" ? { onlyIds: ["core/doctor/final-config-validation"] } : {}),
+        }),
+      ).toBe(1);
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        schemaVersion: 1,
         ok: false,
         checksRun: 1,
         findings: [
           {
             checkId: "core/doctor/final-config-validation",
-            severity: "error",
-            message: "Required",
-            path: "gateway.mode",
+            severity,
+            ...(severity === "warning"
+              ? { ...warningDetails, requirement: code }
+              : { message: "Required", path: "gateway.mode" }),
           },
         ],
       });
       expect(runtime.error).not.toHaveBeenCalled();
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
-    } finally {
-      stdout.mockRestore();
-    }
-  });
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledExactlyOnceWith({ observe: false });
+    },
+  );
 });

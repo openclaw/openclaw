@@ -18,6 +18,7 @@ import {
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   createDiscordCodexBindRequest,
+  createTelegramCodexBindRequest,
   seedPluginConversationBindingApprovalForTest,
 } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -199,28 +200,6 @@ afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
   vi.useRealTimers();
 });
-
-function createTelegramCodexBindRequest(
-  conversationId: string,
-  threadId: string,
-  summary: string,
-  pluginRoot = "/plugins/codex-a",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot,
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "telegram",
-      accountId: "default",
-      conversationId,
-      parentConversationId: "-10099",
-      threadId,
-    },
-    binding: { summary },
-  };
-}
 
 function createCodexBindRequest(params: {
   channel: "discord" | "telegram";
@@ -575,6 +554,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const request = await requestPendingBinding(
@@ -593,6 +573,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.useFakeTimers();
     const requests = [];
     for (let index = 0; index < 513; index += 1) {
@@ -953,34 +934,21 @@ describe("plugin conversation binding approvals", () => {
       decision: "allow-once" as const,
       expectedStatus: "approved" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: {
-            pluginId: string;
-            pluginRoot: string;
-            conversationId: string;
-          };
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "approved",
+          binding: {
+            pluginId: "codex",
+            pluginRoot: "/plugins/callback-test",
+            conversationId: "channel:callback-test",
+          },
+          decision: "allow-once",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("approved");
-        expect(callback.binding?.pluginId).toBe("codex");
-        expect(callback.binding?.pluginRoot).toBe("/plugins/callback-test");
-        expect(callback.binding?.conversationId).toBe("channel:callback-test");
-        expect(callback.decision).toBe("allow-once");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread abc.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread abc.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "discord",
           accountId: "isolated",
           conversationId: "channel:callback-test",
@@ -1005,28 +973,17 @@ describe("plugin conversation binding approvals", () => {
       decision: "deny" as const,
       expectedStatus: "denied" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: unknown;
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "denied",
+          binding: undefined,
+          decision: "deny",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("denied");
-        expect(callback.binding).toBeUndefined();
-        expect(callback.decision).toBe("deny");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread deny.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread deny.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "telegram",
           accountId: "default",
           conversationId: "8460800771",
@@ -1139,113 +1096,48 @@ describe("plugin conversation binding approvals", () => {
     ).toEqual({ removed: true });
   });
 
-  it("refuses to claim a conversation already bound by core", async () => {
-    sessionBindingState.setRecord({
-      bindingId: "binding-core",
-      targetSessionKey: "agent:main:discord:channel:1",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
-      status: "active",
-      boundAt: Date.now(),
-      metadata: { owner: "core" },
-    });
-
-    const result = await requestPluginConversationBinding({
-      pluginId: "codex",
-      pluginName: "Codex App Server",
-      pluginRoot: "/plugins/codex-a",
-      requestedBySenderId: "user-1",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
-      binding: { summary: "Bind this conversation to Codex thread 123." },
-    });
-
-    expect(result).toEqual({
-      status: "error",
-      message:
-        "This conversation is already bound by core routing and cannot be claimed by a plugin.",
-    });
-  });
-
   it.each([
-    {
-      name: "migrates a legacy plugin binding record through the new approval flow even if the old plugin id differs",
-      existingRecord: {
-        bindingId: "binding-legacy",
-        targetSessionKey: "plugin-binding:old-codex-plugin:legacy123",
-        targetKind: "session" as const,
+    "agent:main:discord:channel:1",
+    "plugin-binding:old-codex-plugin:legacy123",
+    "openclaw-app-server:thread:legacy-thread",
+    "openclaw-codex-app-server:thread:legacy-thread",
+  ])(
+    "refuses to claim a binding without plugin ownership metadata: %s",
+    async (targetSessionKey) => {
+      sessionBindingState.setRecord({
+        bindingId: "binding-core",
+        targetSessionKey,
+        targetKind: "session",
         conversation: {
-          channel: "telegram",
+          channel: "discord",
           accountId: "default",
-          conversationId: "-10099:topic:77",
+          conversationId: "channel:1",
         },
-        status: "active" as const,
-        metadata: {
-          label: "legacy plugin bind",
-        },
-      },
-      requestInput: createCodexBindRequest({
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        threadId: "77",
-        summary: "Bind this conversation to Codex thread abc.",
-      }),
-      expectedBinding: {
+        status: "active",
+        boundAt: Date.now(),
+        metadata: { owner: "core" },
+      });
+
+      const result = await requestPluginConversationBinding({
         pluginId: "codex",
+        pluginName: "Codex App Server",
         pluginRoot: "/plugins/codex-a",
-        conversationId: "-10099:topic:77",
-      },
-    },
-    {
-      name: "migrates a legacy codex thread binding session key through the new approval flow",
-      existingRecord: {
-        bindingId: "binding-legacy-codex-thread",
-        targetSessionKey: "openclaw-app-server:thread:019ce411-6322-7db2-a821-1a61c530e7d9",
-        targetKind: "session" as const,
+        requestedBySenderId: "user-1",
         conversation: {
-          channel: "telegram",
+          channel: "discord",
           accountId: "default",
-          conversationId: "8460800771",
+          conversationId: "channel:1",
         },
-        status: "active" as const,
-        metadata: {
-          label: "legacy codex thread bind",
-        },
-      },
-      requestInput: createCodexBindRequest({
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "8460800771",
-        summary: "Bind this conversation to Codex thread 019ce411-6322-7db2-a821-1a61c530e7d9.",
-        pluginId: "openclaw-codex-app-server",
-      }),
-      expectedBinding: {
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/plugins/codex-a",
-        conversationId: "8460800771",
-      },
+        binding: { summary: "Bind this conversation to Codex thread 123." },
+      });
+
+      expect(result).toEqual({
+        status: "error",
+        message:
+          "This conversation is already bound by core routing and cannot be claimed by a plugin.",
+      });
+      expect(sessionBindingState.bind).not.toHaveBeenCalled();
     },
-  ] as const)("$name", async ({ existingRecord, requestInput, expectedBinding }) => {
-    sessionBindingState.setRecord({
-      ...existingRecord,
-      boundAt: Date.now(),
-    });
-
-    const request = await requestPluginConversationBinding(requestInput);
-    const binding = await resolveRequestedBinding(request);
-
-    expect(binding.pluginId).toBe(expectedBinding.pluginId);
-    expect(binding.pluginRoot).toBe(expectedBinding.pluginRoot);
-    expect(binding.conversationId).toBe(expectedBinding.conversationId);
-  });
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

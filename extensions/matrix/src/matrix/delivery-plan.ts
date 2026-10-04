@@ -40,6 +40,14 @@ type MatrixDeliveryIdentity = {
   partCount: number;
 };
 
+type MatrixDeliveryTarget = {
+  identity: MatrixDeliveryIdentity;
+  accountId?: string | null;
+  roomId: string;
+  transactionScopeId: string;
+  wireEventType: "m.room.message" | "m.room.encrypted";
+};
+
 type MatrixDeliveryPlan = {
   version: typeof DELIVERY_PLAN_VERSION;
   queueId: string;
@@ -161,16 +169,7 @@ function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   return value;
 }
 
-function assertPlanIdentity(
-  plan: MatrixDeliveryPlan,
-  params: {
-    identity: MatrixDeliveryIdentity;
-    accountId?: string | null;
-    roomId: string;
-    transactionScopeId: string;
-    wireEventType: "m.room.message" | "m.room.encrypted";
-  },
-): void {
+function assertPlanIdentity(plan: MatrixDeliveryPlan, params: MatrixDeliveryTarget): void {
   if (
     plan.queueId !== params.identity.queueId ||
     plan.partIndex !== params.identity.partIndex ||
@@ -229,13 +228,9 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   };
 }
 
-export async function loadMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-}): Promise<MatrixDeliveryPlan | null> {
+export async function loadMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget,
+): Promise<MatrixDeliveryPlan | null> {
   const entry = await createDeliveryPlanStore().lookup(planKey(params.identity));
   if (!entry) {
     return null;
@@ -248,15 +243,12 @@ export async function loadMatrixDeliveryPlan(params: {
   return structuredClone(plan);
 }
 
-export async function persistMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-  events: readonly MatrixPreparedEvent[];
-  dispatch: MatrixMessageWireDispatch;
-}): Promise<MatrixDeliveryPlan> {
+export async function persistMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget & {
+    events: readonly MatrixPreparedEvent[];
+    dispatch: MatrixMessageWireDispatch;
+  },
+): Promise<MatrixDeliveryPlan> {
   if (params.events.length === 0) {
     throw new Error("Matrix durable delivery plan must contain at least one event");
   }
@@ -312,21 +304,21 @@ async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
   const entries = await store.entries();
   const prefix = entries.length > 0 ? queuePrefix(queueId) : "";
   const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
-  return await Promise.all(
-    keys.map(async (key) => {
-      const entry = await store.lookup(key);
-      if (!entry) {
-        throw new MatrixDeliveryPlanInvariantError(
-          "Matrix durable delivery plan disappeared during reconciliation",
-        );
-      }
-      const plan = decodePlan(entry.bytes);
-      if (key !== planKey(plan)) {
-        throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-      }
-      return plan;
-    }),
-  );
+  const plans: MatrixDeliveryPlan[] = [];
+  for (const key of keys) {
+    const entry = await store.lookup(key);
+    if (!entry) {
+      throw new MatrixDeliveryPlanInvariantError(
+        "Matrix durable delivery plan disappeared during reconciliation",
+      );
+    }
+    const plan = decodePlan(entry.bytes);
+    if (key !== planKey(plan)) {
+      throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
+    }
+    plans.push(plan);
+  }
+  return plans;
 }
 
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
@@ -469,5 +461,7 @@ export async function cleanupMatrixDeliveryPlans(ctx: { queueId: string }): Prom
   const entries = await store.entries();
   const prefix = entries.length > 0 ? queuePrefix(ctx.queueId) : "";
   const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
-  await Promise.all(keys.map(async (key) => await store.delete(key)));
+  for (const key of keys) {
+    await store.delete(key);
+  }
 }

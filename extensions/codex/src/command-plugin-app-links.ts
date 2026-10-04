@@ -47,24 +47,44 @@ export function buildCodexPluginAppLinks(
   return blocks;
 }
 
+export function buildCodexPluginStatusButtons(
+  pluginId: string,
+  canRefreshHostedApps: boolean,
+): MessagePresentationBlock {
+  return {
+    type: "buttons",
+    buttons: [
+      ...(canRefreshHostedApps
+        ? [
+            {
+              label: "Refresh hosted apps",
+              action: { type: "command" as const, command: "/codex plugins refresh" },
+            },
+          ]
+        : []),
+      {
+        label: "Check status",
+        action: { type: "command", command: `/codex plugins status ${pluginId}` },
+      },
+    ],
+  };
+}
+
 function safeCodexAppLink(value: string | null): string | undefined {
   if (!value || value.length > 2048 || /[\s\p{Cc}\p{Cf}<>]/u.test(value)) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    // Match Codex's hosted app-auth destinations; never send sign-in to a
-    // metadata-supplied lookalike host or rewrite a staging origin to production.
-    const host = url.hostname;
-    const hosted =
-      host === "chatgpt.com" ||
-      host === "chatgpt-staging.com" ||
-      host.endsWith(".chatgpt.com") ||
-      host.endsWith(".chatgpt-staging.com");
-    return url.protocol === "https:" && !url.username && !url.password && hosted
-      ? value
-      : undefined;
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return undefined;
   }
+  // Match Codex's hosted app-auth destinations; never send sign-in to a
+  // metadata-supplied lookalike host or rewrite a staging origin to production.
+  const host = url.hostname;
+  const hosted =
+    host === "chatgpt.com" ||
+    host === "chatgpt-staging.com" ||
+    host.endsWith(".chatgpt.com") ||
+    host.endsWith(".chatgpt-staging.com");
+  return url.protocol === "https:" && !url.username && !url.password && hosted ? value : undefined;
 }

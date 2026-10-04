@@ -1,14 +1,19 @@
-import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
+import {
+  flushClientVoiceSessionWrites,
+  isClientVoiceSessionConfirmable,
+} from "../../../talk/client-voice-session.js";
 import {
   AGENT_ID,
   CONNECTION_ID,
@@ -28,10 +33,72 @@ import {
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
 
+  it("reports setup rejection before a backend registration exists", async () => {
+    const preparation = vi
+      .spyOn(workspace, "ensureAgentWorkspace")
+      .mockRejectedValueOnce(new Error("Synthetic workspace preparation failure"));
+    const assertions = vi.fn<Parameters<typeof withParkedNativeTask>[0]>();
+    await expect(withParkedNativeTask(assertions)).rejects.toThrow(
+      "Native delegation completed before backend registration",
+    );
+    expect(preparation).toHaveBeenCalledOnce();
+    expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(assertions).not.toHaveBeenCalled();
+    expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
+    expect(
+      upstream.sockets.every((socket) => socket.readyState === upstream.NativeSocket.CLOSED),
+    ).toBe(true);
+  });
+
+  it("waits for session preparation before observing backend registration readiness", async () => {
+    const preparing = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const ensureWorkspace = workspace.ensureAgentWorkspace;
+    vi.spyOn(workspace, "ensureAgentWorkspace").mockImplementationOnce(async (...args) => {
+      const result = await ensureWorkspace(...args);
+      preparing.resolve();
+      await releasePreparation.promise;
+      return result;
+    });
+    const assertions = vi.fn<Parameters<typeof withParkedNativeTask>[0]>(
+      async ({ settleBackend }) => {
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        await settleBackend();
+      },
+    );
+    const parked = withParkedNativeTask(assertions);
+    const outcome = parked.then(
+      () => ({ error: undefined }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await Promise.race([
+        preparing.promise,
+        parked.then(() => {
+          throw new Error("Native task completed before workspace preparation");
+        }),
+      ]);
+      // Hold a real setup boundary past the separate registration deadline.
+      await delay(1100);
+    } finally {
+      releasePreparation.resolve();
+    }
+    expect(await outcome).toEqual({ error: undefined });
+    expect(assertions).toHaveBeenCalledOnce();
+    expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
+  });
+
   it("negotiates Gateway control and persists native sideband speech without client control", async () => {
     await withNativePlugin(async ({ create, offer, invoke, broadcast }) => {
       const { result, socket } = await connectNativeSession({ create, offer });
       expect(talkEventTypes(broadcast).filter((type) => type === "session.ready")).toHaveLength(1);
+      expect(
+        isClientVoiceSessionConfirmable({
+          agentId: AGENT_ID,
+          sessionKey: SESSION_KEY,
+          voiceSessionId: requireString(result, "voiceSessionId"),
+        }),
+      ).toBe(true);
       socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "Hello voice" } });
       socket.serverEvent({
         type: "turn.done",

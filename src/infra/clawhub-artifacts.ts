@@ -9,10 +9,11 @@ import {
   withClawHubResponse,
   resolveClawHubBaseUrl,
   type ClawHubFetch,
+  type ClawHubFetchOptions,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
-import { sha256Base64, sha256Hex } from "./crypto-digest.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
@@ -48,15 +49,6 @@ function buildGitHubZipUrl(repo: string, commit: string): string {
   return url.toString();
 }
 
-function formatSha512Integrity(bytes: Uint8Array): string {
-  const digest = createHash("sha512").update(bytes).digest("base64");
-  return `sha512-${digest}`;
-}
-
-function formatSha1Hex(bytes: Uint8Array): string {
-  return createHash("sha1").update(bytes).digest("hex");
-}
-
 function safePackageTarballName(name: string, version: string): string {
   const base = name
     .replace(/^@/, "")
@@ -72,8 +64,7 @@ async function stageClawHubArchive(params: {
   sha256Hex?: string;
   result?: Omit<ClawHubDownloadResult, "archivePath" | "integrity" | "sha256Hex" | "cleanup">;
 }): Promise<ClawHubDownloadResult> {
-  const sha256Digest =
-    params.sha256Hex ?? Buffer.from(sha256Base64(params.bytes), "base64").toString("hex");
+  const sha256Digest = params.sha256Hex ?? sha256Hex(params.bytes);
   const target = await createTempDownloadTarget(params);
   try {
     await fs.writeFile(target.path, params.bytes);
@@ -106,35 +97,30 @@ async function fetchClawHubArchive(params: ClawHubRequestParams, resourceLabel: 
   });
 }
 
-export async function downloadClawHubPackageArchive(params: {
-  name: string;
-  version?: string;
-  tag?: string;
-  artifact?: "archive" | "clawpack";
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubPackageArchive(
+  params: ClawHubFetchOptions & {
+    name: string;
+    version?: string;
+    tag?: string;
+    artifact?: "archive" | "clawpack";
+  },
+): Promise<ClawHubDownloadResult> {
   if (params.artifact === "clawpack") {
     if (!params.version) {
       throw new Error("ClawPack package downloads require an explicit version.");
     }
     const { bytes, headers } = await fetchClawHubArchive(
       {
-        baseUrl: params.baseUrl,
+        ...params,
         path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
           params.version,
         )}/artifact/download`,
-        token: params.token,
-        timeoutMs: params.timeoutMs,
-        fetchImpl: params.fetchImpl,
       },
       `ClawPack download for ${params.name}@${params.version}`,
     );
     const sha256Digest = sha256Hex(bytes);
-    const npmIntegrity = formatSha512Integrity(bytes);
-    const npmShasum = formatSha1Hex(bytes);
+    const npmIntegrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const npmShasum = createHash("sha1").update(bytes).digest("hex");
     const headerSha256 = normalizeClawHubSha256Hex(
       headers.get("X-ClawHub-Artifact-Sha256") ?? headers.get("X-ClawHub-ClawPack-Sha256") ?? "",
     );
@@ -173,9 +159,7 @@ export async function downloadClawHubPackageArchive(params: {
       result: {
         artifact: "clawpack",
         clawpackHeaderSha256: headerSha256,
-        ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
-          ? { clawpackHeaderSpecVersion: specVersion }
-          : {}),
+        ...(specVersion !== undefined ? { clawpackHeaderSpecVersion: specVersion } : {}),
         npmIntegrity,
         npmShasum,
         npmTarballName,
@@ -189,12 +173,9 @@ export async function downloadClawHubPackageArchive(params: {
       : undefined;
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
       search,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     },
     `package archive download for ${params.name}`,
   );
@@ -205,23 +186,18 @@ export async function downloadClawHubPackageArchive(params: {
   });
 }
 
-export async function downloadClawHubSkillArchive(params: {
-  slug: string;
-  ownerHandle?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubSkillArchive(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    version?: string;
+    tag?: string;
+  },
+): Promise<ClawHubDownloadResult> {
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: "/api/v1/download",
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       search: {
         slug: params.slug,
         ownerHandle: params.ownerHandle,
@@ -238,24 +214,19 @@ export async function downloadClawHubSkillArchive(params: {
   });
 }
 
-export async function downloadClawHubSkillArchiveUrl(params: {
-  url: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubSkillArchiveUrl(
+  params: ClawHubFetchOptions & {
+    url: string;
+  },
+): Promise<ClawHubDownloadResult> {
   const providedToken = normalizeOptionalString(params.token);
   const requestUrl = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
   const registryOrigin = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
   const skipAuth = providedToken == null && requestUrl.origin !== registryOrigin;
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
-      url: params.url,
+      ...params,
       token: providedToken,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       skipAuth,
     },
     `skill archive download at ${requestUrl.pathname}`,
@@ -276,10 +247,9 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
   const { bytes } = await fetchClawHubArchive(
     {
+      ...params,
       url: downloadUrl,
       skipAuth: true,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     },
     `GitHub source archive for ${params.repo}@${params.commit}`,
   );

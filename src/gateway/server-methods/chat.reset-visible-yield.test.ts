@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -12,7 +12,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -105,10 +104,10 @@ function streamReply(
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("visible yielded session continuation", () => {
-  it.each(["reset", "complete"] as const)(
+  it.for(["reset", "complete"] as const)(
     "preserves real chat yield metadata and the held descendant's %s outcome",
     { timeout: 90_000 },
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const home = tempDirs.make("openclaw-visible-yield-reset-");
       const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
@@ -139,9 +138,10 @@ describe("visible yielded session continuation", () => {
       const resetId = randomUUID();
       const rootFinished = createDeferred();
       const nestedOpen = createDeferred();
-      const nestedClosed = createDeferred();
+      const nestedClosed = createDeferred<{ writableEnded: boolean; fixtureStopping: boolean }>();
       const requesterWaitAttached = createDeferred();
       const requesterYielded = createDeferred();
+      const requesterFinished = createDeferred();
       const resumedCatalog = createDeferred<string[]>();
       const publicationCatalogs: string[][] = [];
       let childResponse: ServerResponse | undefined;
@@ -153,7 +153,6 @@ describe("visible yielded session continuation", () => {
       const resetAcknowledged = createDeferred<{ state?: string }>();
       const attachedChatRuns = new Set<string>();
       const handlers = new Set<Promise<void>>();
-      const evidence: Array<Record<string, unknown>> = [];
       const failureTrace: Array<Record<string, unknown>> = [];
       const runAliases = new Map<string, number>();
       const fixtureStartedAt = Date.now();
@@ -165,12 +164,11 @@ describe("visible yielded session continuation", () => {
       let childRequests = 0;
       let providerRequests = 0;
       let yieldDispatched = false;
+      let resetComplete = false;
       let unexpectedInference = 0;
       let stopping = false;
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      const bound = <T>(promise: PromiseLike<T>, label: string) =>
-        withTestTimeout(promise, 30_000, label);
       const snapshot = (): Array<Record<string, unknown>> =>
         [requester, child].flatMap<Record<string, unknown>>((receipt) => {
           if (!receipt) {
@@ -201,9 +199,12 @@ describe("visible yielded session continuation", () => {
             }),
           ];
         });
-      const record = (kind: string, facts: Record<string, unknown> = {}) => {
-        evidence.push({ at: Date.now(), kind, ...facts, runs: snapshot() });
-      };
+      onTestFailed(() => {
+        console.error(
+          "Visible yield fixture failed",
+          JSON.stringify({ fixtureErrors, runs: snapshot(), trace: failureTrace.slice(-12) }),
+        );
+      });
       const originalWait = agentJob.waitForAgentJob;
       const waiterSpy = vi.spyOn(agentJob, "waitForAgentJob").mockImplementation((params) => {
         const pending = originalWait(params);
@@ -213,44 +214,20 @@ describe("visible yielded session continuation", () => {
             requesterWaitAttached.resolve();
           }
         }
-        record("wait-attached", { runId: params.runId, source: params.source });
         void pending.then(
           (result) => {
-            record("wait-result", { runId: params.runId, source: params.source, result });
             if (params.source === "chat" && params.runId === requester?.runId) {
               requesterWaitFinished.resolve(result);
             }
           },
-          (error: unknown) => {
-            record("wait-rejected", { runId: params.runId, error: String(error) });
-          },
+          () => {},
         );
         return pending;
       });
-      const originalInterrupt = sessionAdmission.interruptSessionWorkAdmissions;
-      const admissionSpy = vi
-        .spyOn(sessionAdmission, "interruptSessionWorkAdmissions")
-        .mockImplementation((params) => {
-          record("admission-interrupt-entry");
-          const pending = originalInterrupt(params);
-          void pending.then(
-            (released) => {
-              record("admission-interrupt-release", { released });
-            },
-            (error: unknown) => {
-              record("admission-interrupt-rejected", { error: String(error) });
-            },
-          );
-          return pending;
-        });
       const unsubscribe = onAgentEvent((event) => {
         if (event.stream !== "lifecycle") {
           return;
         }
-        record("lifecycle", {
-          runId: event.runId,
-          data: event.data,
-        });
         if (!runAliases.has(event.runId)) {
           runAliases.set(event.runId, runAliases.size + 1);
         }
@@ -296,7 +273,6 @@ describe("visible yielded session continuation", () => {
           runId: expect.any(String),
           childSessionKey: expect.any(String),
         });
-        record("spawn-receipt", { callId, receipt: result });
         return result;
       }
       function tool(
@@ -336,7 +312,6 @@ describe("visible yielded session continuation", () => {
             const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
               Buffer.concat(chunks).toString(),
             );
-            record("provider-request", { body });
             expect(request.url).toBe("/v1/responses");
             failureTrace.push({
               kind: "provider-request",
@@ -346,7 +321,7 @@ describe("visible yielded session continuation", () => {
               requesterStep,
               childRequests,
               yieldDispatched,
-              resetAcknowledged: evidence.some((event) => event.kind === "reset-acknowledged"),
+              resetAcknowledged: resetComplete,
               stopping,
               input: body.input.map((item) => {
                 const text =
@@ -408,7 +383,6 @@ describe("visible yielded session continuation", () => {
                 return;
               }
               unexpectedInference++;
-              record("unexpected-requester-inference");
               response.writeHead(400, { "content-type": "application/json" }).end(
                 JSON.stringify({
                   error: { message: "Fixture refuses requester inference after yield." },
@@ -498,11 +472,10 @@ describe("visible yielded session continuation", () => {
             expect(++childRequests, "held nested request must not replay").toBe(1);
             childResponse = response;
             response.once("close", () => {
-              record("nested-stream-close", {
+              nestedClosed.resolve({
                 writableEnded: response.writableEnded,
                 fixtureStopping: stopping,
               });
-              nestedClosed.resolve();
             });
             if (outcome === "reset") {
               response.writeHead(200, { "content-type": "text/event-stream" });
@@ -510,7 +483,6 @@ describe("visible yielded session continuation", () => {
                 `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
               );
             }
-            record("nested-stream-open");
             nestedOpen.resolve();
           })().catch((error: unknown) => {
             if (!stopping) {
@@ -549,11 +521,13 @@ describe("visible yielded session continuation", () => {
                 },
                 subagents: { maxSpawnDepth: 2, maxConcurrent: 4 },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             tools: {
               profile: "full",
               codeMode: false,
+              // The scripted lifecycle proof also asserts direct publication tools after resume.
+              toolSearch: false,
               allow: [
                 "sessions_spawn",
                 "sessions_yield",
@@ -571,7 +545,19 @@ describe("visible yielded session continuation", () => {
               runId?: string;
               sessionKey?: string;
               state?: string;
+              yielded?: boolean;
+              message?: Record<string, unknown>;
             };
+            // Yield and queued admission also emit finals; wait for the resumed reply.
+            if (
+              requester &&
+              payload.sessionKey === requester.childSessionKey &&
+              payload.state === "final" &&
+              payload.yielded !== true &&
+              payload.message !== undefined
+            ) {
+              requesterFinished.resolve();
+            }
             if (payload.sessionKey !== sessionKey) {
               return;
             }
@@ -592,16 +578,10 @@ describe("visible yielded session continuation", () => {
           idempotencyKey: randomUUID(),
         });
         expect(started.status).toBe("started");
-        await bound(rootFinished.promise, "root did not finish");
-        await bound(
-          requesterYielded.promise,
-          "requester did not emit a real yield lifecycle event",
-        );
-        const waitResult = await bound(
-          requesterWaitFinished.promise,
-          "real requester chat waiter did not finish",
-        );
-        record("before-reset", { waitResult });
+        // Bind waits to the test signal so a stall still reaches the Gateway cleanup below.
+        await withinTest(rootFinished.promise, signal);
+        await withinTest(requesterYielded.promise, signal);
+        const waitResult = await withinTest(requesterWaitFinished.promise, signal);
         expect
           .soft(waitResult, "chat waiter must retain actual yield metadata")
           .toMatchObject({ status: "ok", yielded: true });
@@ -613,20 +593,7 @@ describe("visible yielded session continuation", () => {
             status: "completed",
             content: [{ type: "output_text", text: "Reviewer finished.", annotations: [] }],
           });
-          publicationCatalogs.push(
-            await bound(resumedCatalog.promise, "requester did not resume").catch(
-              (cause: unknown) => {
-                throw new Error(
-                  JSON.stringify({
-                    fixtureErrors,
-                    runs: snapshot(),
-                    trace: failureTrace.slice(-12),
-                  }),
-                  { cause },
-                );
-              },
-            ),
-          );
+          publicationCatalogs.push(await withinTest(resumedCatalog.promise, signal));
           expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
           for (const catalog of publicationCatalogs) {
             expect(catalog).toEqual(
@@ -634,17 +601,13 @@ describe("visible yielded session continuation", () => {
             );
           }
           const client = gateway.client;
-          await vi.waitFor(
-            async () => {
-              const history = await client.request("chat.history", {
-                sessionKey: expectDefined(requester, "requester session").childSessionKey,
-                agentId: "main",
-                limit: 20,
-              });
-              expect(JSON.stringify(history)).toContain("Review complete.");
-            },
-            { timeout: 30_000, interval: 50 },
-          );
+          await withinTest(requesterFinished.promise, signal);
+          const history = await client.request("chat.history", {
+            sessionKey: expectDefined(requester, "requester session").childSessionKey,
+            agentId: "main",
+            limit: 20,
+          });
+          expect(JSON.stringify(history)).toContain("Review complete.");
           expect(fixtureErrors).toEqual([]);
           return;
         }
@@ -653,20 +616,16 @@ describe("visible yielded session continuation", () => {
           { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
           { timeoutMs: 30_000 },
         );
-        const reset = await bound(resetAcknowledged.promise, "reset did not acknowledge");
+        const reset = await withinTest(resetAcknowledged.promise, signal);
         expect(reset.state).toBe("final");
-        record("reset-acknowledged");
-        await bound(nestedClosed.promise, "reset did not close nested provider stream");
-        await bound(
-          settleSubagentRegistryPersistenceWork(),
-          "registry work did not settle after reset",
-        );
+        resetComplete = true;
+        const closed = await withinTest(nestedClosed.promise, signal);
+        await withinTest(settleSubagentRegistryPersistenceWork(), signal);
         // The reported continuation arrived 127 ms after acknowledgement on 2026-09-10.
         // This window observes absence after synchronization with real cancellation.
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 1_000);
         });
-        record("observation-complete");
         expect(fixtureErrors, `provider fixture failures: ${JSON.stringify(failureTrace)}`).toEqual(
           [],
         );
@@ -674,22 +633,17 @@ describe("visible yielded session continuation", () => {
           unexpectedInference,
           `requester must not reach inference after reset: ${JSON.stringify(failureTrace)}`,
         ).toBe(0);
-        expect(evidence.find((event) => event.kind === "nested-stream-close")).toMatchObject({
+        expect(closed).toEqual({
           writableEnded: false,
           fixtureStopping: false,
         });
-        const tasks = await gateway.client.request<{
-          tasks: Array<{ runId: string; status: string }>;
-        }>("tasks.list", { agentId: "main" });
-        record("public-cancelled-tasks", { tasks });
-        expect(tasks.tasks.find((task) => task.runId === requester?.runId)).toMatchObject({
-          status: "cancelled",
-        });
-        expect(tasks.tasks.find((task) => task.runId === child?.runId)).toMatchObject({
-          status: "cancelled",
-        });
+        for (const receipt of [requester, child]) {
+          expect(receipt).toBeDefined();
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          expect(run?.execution).toMatchObject({ status: "terminal" });
+          expect(run?.endedReason).toBe("subagent-killed");
+        }
       } finally {
-        record("fixture-cleanup-start", { fixtureErrors, unexpectedInference });
         stopping = true;
         fixtureAbort.abort();
         providerServer?.closeAllConnections();
@@ -706,7 +660,6 @@ describe("visible yielded session continuation", () => {
         await Promise.allSettled(handlers);
         unsubscribe();
         waiterSpy.mockRestore();
-        admissionSpy.mockRestore();
         publicationSpy.mockRestore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();

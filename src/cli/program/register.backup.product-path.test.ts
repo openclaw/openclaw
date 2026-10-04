@@ -1,52 +1,38 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
+import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
   env: NodeJS.ProcessEnv;
   outputPath: string;
-  preloadPath?: string;
   includeWorkspace?: boolean;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        ...(params.preloadPath ? ["--import", params.preloadPath] : []),
-        "--import",
-        "tsx",
-        path.resolve("src/entry.ts"),
-        "backup",
-        "create",
-        "--output",
-        params.outputPath,
-        ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
-        "--verify",
-        "--json",
-      ],
-      {
-        env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
+  return runCliProcessChild({
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      "backup",
+      "create",
+      "--output",
+      params.outputPath,
+      ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
+      "--verify",
+      "--json",
+    ],
+    env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 
@@ -164,7 +150,14 @@ describe("backup create CLI", () => {
       const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
       expect(result.code).toBe(1);
       expect(result.stderr).not.toContain("Config invalid");
-      expect(result.stderr).toContain("Cannot read shared state for discovery");
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      const failure = JSON.parse(result.stdout);
+      expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
+      expect(failure.error.message).toContain(
+        `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+      );
+      expect(failure.error.message).toContain("file is not a database");
       await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -186,18 +179,33 @@ describe("backup create CLI", () => {
         );
         const markerPath = state.path("sqlite-backup-entered");
         const preloadPath = await state.writeText(
-          "stall-at-sqlite-backup.mjs",
+          "shift-clock-at-sqlite-backup.cjs",
           `
-            import fs from "node:fs";
-            import { syncBuiltinESMExports } from "node:module";
+            const fs = require("node:fs");
+            const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
-            let stalled = false;
+            if (process.versions.bun) {
+              const workerThreads = require("node:worker_threads");
+              const OriginalWorker = workerThreads.Worker;
+              const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
+              // The CLI's nested Workers do not inherit the Vitest parent's preload spy.
+              workerThreads.Worker = class Worker extends OriginalWorker {
+                constructor(filename, options = {}) {
+                  super(filename, {
+                    ...options,
+                    execArgv: [...(options.execArgv ?? process.execArgv), "--preload", preload],
+                  });
+                }
+              };
+            }
+            const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
+            const realNow = Date.now.bind(Date);
+            // Acquisition runs in a worker; every isolate must observe the same elapsed time.
+            Date.now = () => realNow() + (fs.existsSync(markerPath) ? 61_000 : 0);
             sqlite.backup = async (...args) => {
-              if (!stalled) {
-                stalled = true;
-                fs.writeFileSync(process.env.PROOF_SNAPSHOT_MARKER, "entered\\n", { mode: 0o600 });
-                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 61_000);
+              if (!fs.existsSync(markerPath)) {
+                fs.writeFileSync(markerPath, "entered\\n", { mode: 0o600 });
               }
               return await originalBackup(...args);
             };
@@ -210,11 +218,11 @@ describe("backup create CLI", () => {
           env: {
             ...process.env,
             ...state.env,
+            ...sqliteWorkerPreloadEnv(preloadPath),
             OPENCLAW_TEST_CONSOLE: "1",
             PROOF_SNAPSHOT_MARKER: markerPath,
           },
           outputPath,
-          preloadPath,
         });
 
         expect(result.code, result.stderr).toBe(0);

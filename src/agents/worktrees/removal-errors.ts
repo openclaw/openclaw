@@ -1,4 +1,12 @@
-import { WorktreeRemovalContentionError } from "./registry.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { WorktreeRemovalContentionError, WorktreeRemovalLockError } from "./errors.js";
+export { WorktreeRemovalLockError } from "./errors.js";
+
+export function isWorktreePermissionError(error: unknown): boolean {
+  return hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM");
+}
+
+export class WorktreeBranchMovedError extends Error {}
 
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
@@ -14,16 +22,6 @@ export type WorktreeRemovalFailureReason =
   | "foreign-lock"
   | "snapshot-failed"
   | "cleanup-failed";
-
-export class WorktreeRemovalLockError extends Error {
-  constructor(
-    readonly kind: "busy" | "foreign-lock",
-    message: string,
-  ) {
-    super(message);
-    this.name = "WorktreeRemovalLockError";
-  }
-}
 
 export function classifyWorktreeRemovalError(error: unknown): WorktreeRemovalFailureReason {
   if (error instanceof WorktreeRemovalContentionError) {

@@ -1,9 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  LEGACY_AGENT_ROSTER_RULES,
+  retireLegacyAgentDefaultMarkers,
+} from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-transition.js";
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
+import { restoreEnvVarRefsFromResolved } from "./env-preserve.js";
 import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 import { coerceConfig } from "./io.read-helpers.js";
@@ -12,7 +17,9 @@ import type {
   ConfigWriteOptions,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+import { prepareConfigWriteValues } from "./io.write-prepare.js";
+import { findLegacyConfigRuleIssues } from "./legacy.js";
+import { resolveLegacyAgentRosterOwner } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./validation.js";
 
@@ -41,27 +48,48 @@ function cloneConfigPathParents(
   }
 }
 
-// Validation and commits share ownership preparation. Cron migration, runtime refresh,
-// and persistence remain in the committing writer.
+// Validation and commits share ownership preparation. The committing writer owns
+// cron safety rechecks, runtime refresh, and persistence; Doctor owns cron repair.
 export function prepareConfigWriteTopology(
   params: ReadConfigFileSnapshotWithPluginMetadataResult & {
     nextConfig: OpenClawConfig;
     options: Pick<
       ConfigWriteOptions,
-      "explicitSetPaths" | "explicitSetValueSource" | "persistCanonicalAgentRoster"
+      | "explicitSetPaths"
+      | "explicitSetValueSource"
+      | "persistCanonicalAgentRoster"
+      | "expectedConfigPath"
+      | "envSnapshotForRestore"
     >;
     unsetPaths: readonly (readonly string[])[];
     env: NodeJS.ProcessEnv;
+    lowerPrecedenceEnv?: Readonly<Record<string, string>>;
     homedir?: () => string;
   },
 ) {
   const { snapshot, options, unsetPaths, env, homedir, pluginMetadataSnapshot } = params;
-  let nextConfig = params.nextConfig;
-  const sourceRosterMigration = migratePersistedImplicitMainRoster(
-    snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
-    { env, homedir },
+  const values = prepareConfigWriteValues({
+    snapshot,
+    nextConfig: params.nextConfig,
+    writeOptions: options,
+    env,
+    lowerPrecedenceEnv: params.lowerPrecedenceEnv,
+    explicitSetPaths: options.explicitSetPaths,
+    explicitSetValueSource: options.explicitSetValueSource,
+  });
+  const sourceRosterIssues = findLegacyConfigRuleIssues(
+    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+    LEGACY_AGENT_ROSTER_RULES,
   );
-  const retainedLegacyDefaultAgentId = sourceRosterMigration.retainedLegacyDefaultAgentId;
+  // Adapt newly submitted aliases; persisted markers must keep their provenance until Doctor repairs them.
+  const retiredMarkers =
+    sourceRosterIssues.length === 0
+      ? retireLegacyAgentDefaultMarkers(values.resolvedConfig)
+      : undefined;
+  let nextConfig = retiredMarkers?.config ?? values.resolvedConfig;
+  const retainedLegacyDefaultAgentId = resolveLegacyAgentRosterOwner(
+    snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
+  );
   const previousEntries = listAgentEntries(snapshot.config);
   const nextEntries = listAgentEntries(nextConfig);
   const nextAgentIds = new Set(nextEntries.map((entry) => normalizeAgentId(entry.id)));
@@ -87,13 +115,6 @@ export function prepareConfigWriteTopology(
   const stampOwnership =
     (persistOwnership || keepOwnership) && nextConfig.agents?.ownership === undefined;
   if (stampOwnership) {
-    if (nextEntries.some((entry) => entry.default === true)) {
-      // This writer owns role transitions; retire only the submitted roster marker.
-      nextConfig = coerceConfig(
-        migratePersistedImplicitMainRoster(nextConfig, { materializeRoles: false, env, homedir })
-          .config,
-      );
-    }
     nextConfig = {
       ...nextConfig,
       agents: { ...nextConfig.agents, ownership: "explicit" },
@@ -142,18 +163,6 @@ export function prepareConfigWriteTopology(
     : { config: nextConfig, insertedPaths: [] };
   nextConfig = ownershipMaterialization.config;
   const insertedPaths = [
-    ...(persistOwnership || keepOwnership
-      ? (sourceRosterMigration.insertedPaths ?? []).filter(
-          (entry) =>
-            sameFixedSessionStore || entry.join(".") !== "agents.defaults.sessionStore.agentId",
-        )
-      : []),
-    ...((persistOwnership || keepOwnership) &&
-    retainedLegacyDefaultAgentId &&
-    Array.isArray(snapshot.config.bindings) &&
-    !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)
-      ? [["bindings"]]
-      : []),
     ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
     ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
     ...sessionStoreOwnership.ownershipPaths, // Parent writes must not restore a removed fixed-store owner.
@@ -195,7 +204,7 @@ export function prepareConfigWriteTopology(
     ownershipPaths: topologyPaths,
   });
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyPaths];
-  const explicitSource = options.explicitSetValueSource ?? nextConfig;
+  const explicitSource = values.explicitSetValueSource;
   const explicitSetValueSource = { ...explicitSource };
   for (const ownershipPath of topologyPaths) {
     cloneConfigPathParents(explicitSource, explicitSetValueSource, ownershipPath);
@@ -208,14 +217,27 @@ export function prepareConfigWriteTopology(
   return {
     nextConfig,
     clearedSessionStoreOwner: sessionStoreOwnership.ownershipPaths.length > 0,
+    resolutionEnv: values.resolutionEnv,
+    // Apply topology changes to the paired authored view without materializing untouched refs.
+    authoredConfig:
+      nextConfig === values.resolvedConfig
+        ? values.authoredConfig
+        : coerceConfig(
+            restoreEnvVarRefsFromResolved(nextConfig, values.authoredConfig, values.resolvedConfig),
+          ),
+    authoredSourceConfig: values.authoredSourceConfig,
+    authoredRuntimeConfig: values.authoredRuntimeConfig,
     explicitSetPaths,
     explicitSetValueSource,
     persistCanonicalAgentRoster:
-      options.persistCanonicalAgentRoster === true || persistOwnership || stampOwnership,
+      options.persistCanonicalAgentRoster === true ||
+      persistOwnership ||
+      stampOwnership ||
+      (retiredMarkers?.changes.length ?? 0) > 0,
     preserveLegacyAgentRoster: Boolean(retainedLegacyDefaultAgentId) && !writesOwnershipTopology,
     cronOwner: persistOwnership
-      ? retainedFleetOwner
-        ? { provenOwnerAgentId: retainedFleetOwner }
+      ? retainedLegacyDefaultAgentId
+        ? { provenOwnerAgentId: retainedLegacyDefaultAgentId }
         : {}
       : undefined,
   };

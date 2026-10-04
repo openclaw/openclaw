@@ -16,6 +16,15 @@ import { prepareSystemRunMutableFileBinding } from "./system-run-approval-bindin
 
 const POSIX_ENV = { PATH: "/usr/bin:/bin" };
 
+async function render(
+  command: string,
+  options: Omit<Parameters<typeof buildAuthorizedShellCommandFromPlan>[0], "plan">,
+  env: NodeJS.ProcessEnv = POSIX_ENV,
+) {
+  const plan = await planShellAuthorization({ command, env });
+  return buildAuthorizedShellCommandFromPlan({ plan, ...options });
+}
+
 function renderOk(result: ReturnType<typeof buildAuthorizedShellCommandFromPlan>): string {
   expect(result).toEqual(expect.objectContaining({ ok: true }));
   if (!result.ok) {
@@ -46,292 +55,158 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
 }
 
 describe("exec authorization renderer", () => {
-  it("exposes ordered top-level executable spans for pipeline candidates", async () => {
-    const plan = await planShellAuthorization({ command: "git diff | head", env: POSIX_ENV });
-
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) {
-      return;
-    }
-    expect(
-      plan.groups.flatMap((group) =>
-        group.candidates.map((candidate) => ({
-          argv: candidate.sourceSegment.argv,
-          span: candidate.sourceStep.executableSpan,
-        })),
-      ),
-    ).toEqual([
-      { argv: ["git", "diff"], span: expect.objectContaining({ startIndex: 0, endIndex: 3 }) },
-      { argv: ["head"], span: expect.objectContaining({ startIndex: 11, endIndex: 15 }) },
-    ]);
-  });
-
-  it("exposes wrapper payload candidates while retaining wrapper transport", async () => {
-    const plan = await planShellAuthorization({
-      command: "sh -c 'git status && head -c 16'",
-      env: POSIX_ENV,
-    });
-
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) {
-      return;
-    }
-    expect(
-      plan.groups.flatMap((group) =>
-        group.candidates.map((candidate) => ({
-          argv: candidate.sourceSegment.argv,
-          executableSpan: candidate.sourceStep.executableSpan,
-          transport: candidate.transport,
-        })),
-      ),
-    ).toEqual([
-      {
-        argv: ["git", "status"],
-        executableSpan: expect.objectContaining({ startIndex: 7, endIndex: 10 }),
-        transport: expect.objectContaining({
-          kind: "shell-wrapper",
-          wrapperArgv: ["sh", "-c", "git status && head -c 16"],
-        }),
-      },
-      {
-        argv: ["head", "-c", "16"],
-        executableSpan: expect.objectContaining({ startIndex: 21, endIndex: 25 }),
-        transport: expect.objectContaining({
-          kind: "shell-wrapper",
-          wrapperArgv: ["sh", "-c", "git status && head -c 16"],
-        }),
-      },
-    ]);
-  });
-
-  it("fails closed when POSIX safe-bin arguments contain shell expansion source", async () => {
-    const plan = await planShellAuthorization({
-      command: "rg foo src/*.ts | head -n {5,/etc/passwd} && echo ok",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
-        mode: "safeBins",
-        segmentSatisfiedBy: [null, "safeBins", null],
-      }),
-    ).toEqual({ ok: false, reason: "shell expansion in safe-bin arguments" });
-  });
-
-  it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
-    const binDir = makeExecApprovalsTempDir();
-    const plan = await planShellAuthorization({
-      command: "env rg -n needle",
-      env: makePathEnv(binDir),
-    });
-
+  it("rewrites only approved executables while preserving pipeline arguments", async () => {
     const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins"],
-      }),
-    );
-
-    expect(command).toBe("rg -n needle");
-  });
-
-  it("renders shell-wrapper payloads by preserving wrapper transport", async () => {
-    const plan = await planShellAuthorization({
-      command: "sh -c 'tr a b && head -c 16'",
-      env: POSIX_ENV,
-    });
-
-    const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins", "safeBins"],
-      }),
-    );
-
-    expect(command).toMatch(/^sh -c '\/.+\/tr a b && \/.+\/head -c 16'$/);
-  });
-
-  it("preserves non-rewritten wrapper payload commands", async () => {
-    const plan = await planShellAuthorization({
-      command: "sh -c 'git status && head -c 16'",
-      env: POSIX_ENV,
-    });
-
-    const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+      await render("git diff | head", {
         mode: "safeBins",
         segmentSatisfiedBy: [null, "safeBins"],
       }),
     );
+    expect(command).toMatch(/^git diff \| \/.+\/head$/);
+  });
 
+  it("fails closed when POSIX safe-bin arguments contain shell expansion source", async () => {
+    await expect(
+      render("rg foo src/*.ts | head -n {5,/etc/passwd} && echo ok", {
+        mode: "safeBins",
+        segmentSatisfiedBy: [null, "safeBins", null],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in safe-bin arguments" });
+  });
+
+  it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
+    const command = renderOk(
+      await render(
+        "env rg -n needle",
+        {
+          mode: "safeBins",
+          segmentSatisfiedBy: ["safeBins"],
+        },
+        makePathEnv(makeExecApprovalsTempDir()),
+      ),
+    );
+    expect(command).toBe("rg -n needle");
+  });
+
+  it("renders shell-wrapper payloads by preserving wrapper transport", async () => {
+    const command = renderOk(
+      await render("sh -c 'tr a b && head -c 16'", {
+        mode: "safeBins",
+        segmentSatisfiedBy: ["safeBins", "safeBins"],
+      }),
+    );
+    expect(command).toMatch(/^sh -c '\/.+\/tr a b && \/.+\/head -c 16'$/);
+  });
+
+  it("preserves non-rewritten wrapper payload commands", async () => {
+    const command = renderOk(
+      await render("sh -c 'git status && head -c 16'", {
+        mode: "safeBins",
+        segmentSatisfiedBy: [null, "safeBins"],
+      }),
+    );
     expect(command).toMatch(/^sh -c 'git status && \/.+\/head -c 16'$/);
   });
 
   it("source-preserves arguments for enforced POSIX commands", async () => {
-    const plan = await planShellAuthorization({
-      command: "head -c 16",
-      env: POSIX_ENV,
-    });
-
     const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+      await render("head -c 16", {
         mode: "enforced",
         segmentSatisfiedBy: ["safeBins"],
       }),
     );
-
     expect(command).toMatch(/^\/.+\/head -c 16$/);
   });
 
   it("leaves POSIX safe builtins unrewritten in enforced mode", async () => {
-    const plan = await planShellAuthorization({
-      command: "cd .",
-      env: POSIX_ENV,
-    });
-
     const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+      await render("cd .", {
         mode: "enforced",
         segmentSatisfiedBy: ["safeBuiltins"],
       }),
     );
-
-    // Builtins run in the shell, not via a filesystem executable, so enforced
-    // mode must not rewrite `cd` to a resolved path like /usr/bin/cd.
     expect(command).toBe("cd .");
   });
 
   it("rejects shell expansion in safe builtins without rewriting them", async () => {
-    const plan = await planShellAuthorization({
-      command: "true *.txt && head -n 1",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+    await expect(
+      render("true *.txt && head -n 1", {
         mode: "enforced",
         segmentSatisfiedBy: ["safeBuiltins", "allowlist"],
       }),
-    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
   it("rewrites quoted POSIX executable source spans", async () => {
-    const plan = await planShellAuthorization({
-      command: '"head" -c 16',
-      env: POSIX_ENV,
-    });
-
     const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+      await render('"head" -c 16', {
         mode: "safeBins",
         segmentSatisfiedBy: ["safeBins"],
       }),
     );
-
     expect(command).toMatch(/^\/.+\/head -c 16$/);
   });
 
   it("fails closed for enforced POSIX commands with shell glob arguments", async () => {
-    const plan = await planShellAuthorization({
-      command: "ls *.ts",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+    await expect(
+      render("ls *.ts", {
         mode: "enforced",
         segmentSatisfiedBy: ["allowlist"],
       }),
-    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
   it("fails closed for enforced POSIX commands with tilde-expanded arguments", async () => {
-    const plan = await planShellAuthorization({
-      command: "cat ~/secret",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+    await expect(
+      render("cat ~/secret", {
         mode: "enforced",
         segmentSatisfiedBy: ["allowlist"],
       }),
-    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
   it("preserves env assignment prefixes for enforced POSIX commands", async () => {
-    const plan = await planShellAuthorization({
-      command: "LIMIT=1 head -n 5",
-      env: POSIX_ENV,
-    });
-
     const command = renderOk(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+      await render("LIMIT=1 head -n 5", {
         mode: "enforced",
         segmentSatisfiedBy: ["allowlist"],
       }),
     );
-
     expect(command).toMatch(/^LIMIT=1 \/.+\/head -n 5$/);
   });
 
   it("fails closed for enforced shell-wrapper payload rewrites", async () => {
-    const plan = await planShellAuthorization({
-      command: "sh -c 'head -n 5'",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+    await expect(
+      render("sh -c 'head -n 5'", {
         mode: "enforced",
         segmentSatisfiedBy: ["allowlist"],
       }),
-    ).toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
+    ).resolves.toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
   });
 
   it("fails closed when shell-wrapper safe-bin rewrites would need outer quote escaping", async () => {
     const dir = path.join(makeExecApprovalsTempDir(), "safe bin dir");
     fs.mkdirSync(dir);
     makeExecutable(dir, "head");
-    const plan = await planShellAuthorization({
-      command: "sh -c 'head -n 5'",
-      env: makePathEnv(dir),
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins"],
-      }),
-    ).toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
+    await expect(
+      render(
+        "sh -c 'head -n 5'",
+        {
+          mode: "safeBins",
+          segmentSatisfiedBy: ["safeBins"],
+        },
+        makePathEnv(dir),
+      ),
+    ).resolves.toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
   });
 
   it("fails closed when candidate metadata does not match the plan", async () => {
-    const plan = await planShellAuthorization({
-      command: "git diff | head",
-      env: POSIX_ENV,
-    });
-
-    expect(
-      buildAuthorizedShellCommandFromPlan({
-        plan,
+    await expect(
+      render("git diff | head", {
         mode: "safeBins",
         segmentSatisfiedBy: ["safeBins"],
       }),
-    ).toEqual({ ok: false, reason: "segment metadata mismatch" });
+    ).resolves.toEqual({ ok: false, reason: "segment metadata mismatch" });
   });
 });
 

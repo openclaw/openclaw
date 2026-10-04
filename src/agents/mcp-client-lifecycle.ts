@@ -1,9 +1,15 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { settlesWithin } from "../shared/settle-within.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
-import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import {
+  McpSseSessionExpiredError,
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "./mcp-http-transport.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
@@ -17,11 +23,17 @@ type LifecycleSession = {
 
 export class McpClientConnectTimeoutError extends Error {}
 
-/** Matches the SDK's terminal signal for an expired stateful Streamable HTTP session. */
-export function isStatefulMcpHttpSessionExpired(
+/** Matches an expired HTTP session without treating stateless HTTP 404s as expiration. */
+export function isMcpHttpSessionExpired(
   session: Pick<LifecycleSession, "transport" | "transportType">,
   error: unknown,
 ): boolean {
+  if (session.transportType === "sse") {
+    return (
+      session.transport instanceof OpenClawSSEClientTransport &&
+      error instanceof McpSseSessionExpiredError
+    );
+  }
   return (
     session.transportType === "streamable-http" &&
     session.transport instanceof OpenClawStreamableHTTPClientTransport &&
@@ -160,4 +172,73 @@ export async function disposeMcpClient(
     // Shutdown itself may emit the last diagnostic; detach only after it settles.
     session.detachStderr?.();
   }
+}
+
+export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
+  const timeouts = new WeakSet<object>();
+  return {
+    didTimeout: (error: unknown) =>
+      error !== null && typeof error === "object" && timeouts.has(error),
+    run: async <T>(
+      { requestTimeoutMs: timeoutMs }: { requestTimeoutMs: number },
+      request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
+      parentSignal?: AbortSignal,
+    ): Promise<T> => {
+      const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
+      const abortController = new AbortController();
+      const onParentAbort = () => abortController.abort(requestSignal?.reason);
+      if (requestSignal?.aborted) {
+        onParentAbort();
+      } else {
+        requestSignal?.addEventListener("abort", onParentAbort, { once: true });
+      }
+      const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
+        timeout: timeoutMs,
+      });
+      const onTimeout = () => {
+        timeouts.add(timeoutError);
+        abortController.abort(timeoutError);
+      };
+      let deadline = Date.now() + timeoutMs;
+      let humanInputRemainingMs = humanInputTimeoutMs;
+      let humanInputStartedAt = 0;
+      let humanInputWaits = 0;
+      let finished = false;
+      let timeout = setTimeout(onTimeout, timeoutMs);
+      timeout.unref?.();
+      const armTimeout = (expiresAt: number) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
+        timeout.unref?.();
+      };
+      const holdForHumanInput = () => {
+        if (humanInputWaits++ === 0) {
+          humanInputStartedAt = Date.now();
+          armTimeout(deadline + humanInputRemainingMs);
+        }
+        return () => {
+          if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
+            const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
+            humanInputRemainingMs -= elapsed;
+            deadline += elapsed;
+            armTimeout(deadline);
+          }
+        };
+      };
+      try {
+        const signal = abortController.signal;
+        signal.throwIfAborted();
+        const result = await request(signal, holdForHumanInput);
+        requestSignal?.throwIfAborted();
+        return result;
+      } catch (error) {
+        requestSignal?.throwIfAborted();
+        throw error;
+      } finally {
+        finished = true;
+        requestSignal?.removeEventListener("abort", onParentAbort);
+        clearTimeout(timeout);
+      }
+    },
+  };
 }

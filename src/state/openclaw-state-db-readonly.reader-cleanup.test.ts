@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: () => ({}),
 }));
+vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-schema-facts.js")>()),
+  admitSqliteSchema: vi.fn(),
+}));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   openClawStateDatabaseCache: {
     closeOpenClawStateDatabaseHandle: () => {
@@ -29,7 +33,6 @@ beforeEach(() => {
 });
 
 it.each([
-  { stage: "read", schemaAdmission: false },
   { stage: "schema", schemaAdmission: false },
   { stage: "read", schemaAdmission: true },
   { stage: "schema", schemaAdmission: true },

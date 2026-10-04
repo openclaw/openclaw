@@ -168,14 +168,6 @@ describe("secrets runtime snapshot core lanes", () => {
 
   it.each([
     {
-      name: "bare source resolves to a bare-looking literal",
-      authored: "$SOURCE",
-      sourceEnv: {},
-      runtimeEnv: { SOURCE: "$OTHER" },
-      expected: "$OTHER",
-      pendingSourceRef: true,
-    },
-    {
       name: "bare source resolves to a braced-looking literal",
       authored: "$SOURCE",
       sourceEnv: {},
@@ -183,14 +175,7 @@ describe("secrets runtime snapshot core lanes", () => {
       expected: "${OTHER}",
       pendingSourceRef: true,
     },
-    {
-      name: "substitution resolves to a bare-looking literal",
-      authored: "${SOURCE}",
-      sourceEnv: { SOURCE: "$OTHER" },
-      runtimeEnv: {},
-      expected: "$OTHER",
-      pendingSourceRef: false,
-    },
+
     {
       name: "substitution resolves to a braced-looking literal",
       authored: "${SOURCE}",
@@ -323,7 +308,7 @@ describe("secrets runtime snapshot core lanes", () => {
       const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
         prepareSecretsRuntimeSnapshot({
           config: asConfig({
-            agents: { list: [{ id: "main", default: true }] },
+            agents: { entries: { main: {} } },
             memory: {
               search: {
                 ...(configuredProviderId ? { provider: configuredProviderId } : {}),

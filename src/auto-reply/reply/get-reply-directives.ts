@@ -1,6 +1,7 @@
 // Coordinates parsed reply directives before get-reply executes commands or agents.
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
@@ -36,7 +37,6 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
@@ -48,6 +48,7 @@ import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
@@ -94,11 +95,9 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
-  hasOneTurnModelOverride?: boolean;
-  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   skillFilter?: string[];
   preparedModelCatalog?: ModelCatalogSnapshot;
 }) {
@@ -107,14 +106,12 @@ export async function resolveReplyDirectives(params: {
     cfg,
     agentId,
     agentCfg,
-    agentDir,
     workspaceDir,
     sessionCtx,
     sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
-    sessionScope,
     conversation,
     isGroup,
     triggerBodyNormalized,
@@ -126,8 +123,6 @@ export async function resolveReplyDirectives(params: {
     primaryModel,
     provider: initialProvider,
     model: initialModel,
-    hasOneTurnModelOverride,
-    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -277,11 +272,9 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
-    ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
-    : normalizeOptionalString(ctx.Provider)
-      ? normalizeLowercaseStringOrEmpty(ctx.Provider)
-      : "";
+  const messageProviderKey =
+    normalizeOptionalLowercaseString(sessionCtx.Provider) ??
+    normalizeLowercaseStringOrEmpty(ctx.Provider);
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
@@ -401,11 +394,10 @@ export async function resolveReplyDirectives(params: {
       provider,
       model,
       hasModelDirective: directives.hasModelDirective,
-      hasOneTurnModelOverride,
-      skipStoredModelOverride,
       hasResolvedHeartbeatModelOverride,
       isHeartbeat: opts?.isHeartbeat === true,
       preparedModelCatalog: params.preparedModelCatalog,
+      operatorAuthority: opts?.operatorAuthority,
     });
   } catch (error) {
     if (
@@ -439,37 +431,22 @@ export async function resolveReplyDirectives(params: {
   const isModelInfoDirective =
     directives.hasModelDirective &&
     directives.modelDirectiveSource !== "alias" &&
-    ["status", "list"].includes(
-      normalizeLowercaseStringOrEmpty(normalizeOptionalString(directives.rawModelDirective)),
-    );
+    ["status", "list"].includes(normalizeLowercaseStringOrEmpty(directives.rawModelDirective));
   const effectiveModelDirective = isModelInfoDirective ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && canInterpretMessageDirectives;
 
   const applyResult = await applyInlineDirectiveOverrides({
-    ctx,
-    cfg,
-    agentId,
-    agentDir,
-    workspaceDir,
-    agentCfg,
+    ...params,
+    abortSignal: opts?.abortSignal,
     agentEntry,
     sessionEntry: targetSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    isGroup,
     allowTextCommands,
     command,
     directives,
-    messageProviderKey,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
-    defaultProvider,
-    defaultModel,
-    aliasIndex: params.aliasIndex,
     provider,
     model,
     modelState,
@@ -479,7 +456,6 @@ export async function resolveReplyDirectives(params: {
     defaultActivation: () => defaultActivation,
     contextTokens,
     effectiveModelDirective,
-    typing,
   });
   if (applyResult.kind === "reply") {
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
@@ -554,6 +530,7 @@ export async function resolveReplyDirectives(params: {
       defaultActivation,
       resolveModelLevels: createReplyModelLevelResolver({
         modelState,
+        abortSignal: opts?.abortSignal,
         selection: {
           provider,
           model,

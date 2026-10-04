@@ -1,4 +1,101 @@
 import { expect } from "vitest";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
+
+type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
+  Partial<Pick<LoadedSessionEntryBase, "agentId">>;
+
+export function createRestartSentinelSessionFixture(
+  canonicalKey: string,
+  entry: RestartSentinelSessionFixture["entry"],
+  overrides: Partial<RestartSentinelSessionFixture> = {},
+): RestartSentinelSessionFixture {
+  return {
+    cfg: {},
+    entry,
+    store: {},
+    storePath: "/tmp/sessions.json",
+    canonicalKey,
+    storeKeys: [canonicalKey],
+    legacyKey: undefined,
+    ...overrides,
+  };
+}
+
+export async function appendRestartSentinelTranscriptReceipt(
+  params: Parameters<
+    typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
+  >[0],
+): ReturnType<
+  typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
+> {
+  const { completeSessionTranscriptCommit } =
+    await import("../config/sessions/session-transcript-commit-completion.js");
+  await completeSessionTranscriptCommit(
+    [
+      {
+        appended: true,
+        messageId: "generated-media-transcript",
+        message: {
+          role: "assistant",
+          content: params.content ?? [],
+          openclawDisplayContent: params.displayContent,
+        },
+      },
+    ],
+    params.onMessageCommitted,
+  );
+  return {
+    ok: true,
+    target: {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "main",
+      storePath: "/tmp/sessions.json",
+    },
+    messageId: "generated-media-transcript",
+  };
+}
+
+type GeneratedMediaDeliveryEntry = Extract<
+  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
+  { kind: "agentTurn" }
+>;
+
+export function createGeneratedMediaDeliveryEntry(
+  overrides: Partial<GeneratedMediaDeliveryEntry> &
+    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
+): GeneratedMediaDeliveryEntry {
+  return {
+    kind: "agentTurn",
+    sessionKey: "agent:main:main",
+    message: "generated image ready",
+    enqueuedAt: 1,
+    retryCount: 0,
+    route: { channel: "discord", to: "channel:123", chatType: "channel" },
+    inputProvenance: {
+      kind: "inter_session",
+      sourceChannel: "internal",
+      sourceTool: "image_generate",
+    },
+    sourceReplyDeliveryMode: "automatic",
+    ...overrides,
+  };
+}
+
+export function expectCapturedQueueContext(stateDir: string) {
+  return expect.objectContaining({
+    environment: expect.objectContaining({ OPENCLAW_STATE_DIR: stateDir }),
+    admission: expect.objectContaining({
+      databasePath: resolveOpenClawStateSqlitePath({
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    }),
+  });
+}
 
 export function expectRecordFields(
   record: unknown,
@@ -40,4 +137,35 @@ export function expectMockCallFields(
   callIndex = 0,
 ): Record<string, unknown> {
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
+}
+
+export function expectContinuationDispatchFields(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  expected: Record<string, unknown>,
+  expectedCtx?: Record<string, unknown>,
+  callIndex = 0,
+): Record<string, unknown> {
+  const params = expectMockCallFields(mock, expected, callIndex);
+  if (expectedCtx) {
+    expectRecordFields(params.ctxPayload, expectedCtx);
+  }
+  return params;
+}
+
+export function expectRestartSentinelTranscriptBroadcast(
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn,
+  params: { sessionKey: string; report: string; subscribers: ReadonlySet<string> },
+): void {
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "session.message",
+    expect.objectContaining({
+      sessionKey: params.sessionKey,
+      message: expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: params.report }],
+      }),
+    }),
+    params.subscribers,
+    { prepareSessionProjection: expect.any(Function) },
+  );
 }

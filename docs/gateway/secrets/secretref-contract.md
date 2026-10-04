@@ -18,6 +18,23 @@ One object shape everywhere:
 
 `env` and `store` refs have an implicit provider at their source's effective default alias: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. A matching same-source `secrets.providers` entry takes precedence; otherwise, the ref uses the built-in reader without a provider entry.
 
+Structured refs always include `provider`. Run `openclaw doctor --fix` for older
+objects containing only `source` and `id`. Doctor adds the source's configured
+default provider to registered config credentials. Stored auth-profile refs keep
+their historical `default` provider, independently of config defaults. Doctor
+backs up config and auth databases before rewriting them; updates run the same
+repair. The Plugin SDK's input coercion remains compatible, and SDK auth writes
+persist canonical refs.
+
+SecretRefs contain exactly those three fields. If an older providerless ref in
+a registered config credential or auth profile includes other fields, Doctor
+reports their removal and preserves the original config or auth row in its
+backup or source archive before writing the canonical ref. Opaque values outside
+registered credential paths stay unchanged. New SDK auth writes reject extended
+inputs before changing stored or published state.
+Keep that metadata separately and explicitly call `coerceSecretRef` to choose
+the canonical reference before saving.
+
 Other aliases and all `file`/`exec` refs require a registered `secrets.providers` entry with the same `source`. Changing a source's default does not rewrite explicit refs: a ref that still names `default` after an override must match a registered same-source provider, or resolution fails.
 
 <Tabs>

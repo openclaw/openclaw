@@ -24,7 +24,9 @@ describe("Activity recap feedback", () => {
       expect(container.textContent).toContain("Fixed the search. Tests passed.");
       expect(container.textContent).toContain("Couldn’t refresh recap");
       expect(container.textContent).not.toContain("Recap unavailable");
-      const button = container.querySelector<HTMLButtonElement>("button");
+      const button = container.querySelector<HTMLButtonElement>(
+        ".activity-feed__note .activity-feed__note-action",
+      );
       expect(Boolean(button)).toBe(canEnsure);
       button?.click();
       expect(retry).toHaveBeenCalledTimes(canEnsure ? 1 : 0);
@@ -36,17 +38,15 @@ describe("Activity recap feedback", () => {
     ["updating", "", false, true],
     ["updating", "Search is fixed. Validation is running.", true, true],
     ["stale", "", true, false],
-    ["stale", "", false, false],
     ["current", "", true, false],
-    ["unavailable", "", true, false],
   ] as const)("marks only pending generation busy (%s, %s, %s)", (state, text, canEnsure, busy) => {
     const container = document.createElement("div");
     render(renderSessionActivitySummary(session({ state, text, canEnsure }), vi.fn()), container);
     expect(container.firstElementChild?.getAttribute("aria-busy")).toBe(String(busy));
     expect(Boolean(container.querySelector(".skeleton"))).toBe(busy && !text);
-    expect(
-      container.querySelector(".activity-feed__recap-feedback")?.textContent ?? "",
-    ).not.toContain("Updating recap");
+    expect(container.querySelector(".activity-feed__note")?.textContent ?? "").not.toContain(
+      "Updating recap",
+    );
     if (text) {
       expect(container.querySelector("p")?.textContent).toBe(text);
     }

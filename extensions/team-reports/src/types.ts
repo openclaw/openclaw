@@ -1,29 +1,16 @@
+import type { RuntimeLogger } from "openclaw/plugin-sdk/core";
 import type { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
 export type { Period, PeriodDescriptor } from "./periods.js";
 
 export type ActivityWindow = { sinceMs: number; untilMs: number };
 
+export type ActivityEntry<T> = { key: string; value: T };
+
 /** Identity map entry supplied by the operator (config `people` or `peopleFile`) or derived from a GitHub team roster. */
-export type Person = {
-  /** GitHub logins; the first entry is the primary/display login. */
-  github: string[];
-  display?: string;
-  /** Public company/affiliation label. */
-  affiliation?: string;
-  roleGroup?: "core" | "volunteer" | "readonly" | (string & {});
-  roleLabel?: string;
-  /** Free-form access flags, e.g. ["security", "release", "moderation"]. */
-  access?: string[];
-  /** Ownership/steward areas. */
-  areas?: string[];
-  discordUserId?: string;
-  discordUsername?: string;
-  status?: "active" | "archived";
-  /** YYYY-MM-DD */
-  archivedAt?: string;
-};
+export type Person = NonNullable<TeamReportsConfig["people"]>[number];
 
 export type Roster = {
   /** Current (non-archived) members. */
@@ -63,61 +50,50 @@ export type ReportDocument = z.infer<typeof reportDocumentSchema>;
 
 export type SummaryDocument = z.infer<typeof summaryDocumentSchema>;
 
-type SourceLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
-};
-
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 /** Per-run context handed to sources. Sources must honor `signal` and never log credentials. */
 export type SourceRuntime = {
-  logger: SourceLogger;
+  logger: RuntimeLogger;
   signal?: AbortSignal;
   /** Test seam; production uses the SDK guarded fetch. */
   fetchImpl?: FetchLike;
 };
 
 /** Resolved (secret already materialized) GitHub source configuration. */
-export type GithubSourceConfig = {
+export type GithubSourceConfig = Omit<
+  TeamReportsConfig["github"],
+  "token" | "ignoreCommentPatterns"
+> & {
   token: string;
-  orgs: string[];
-  teams: Array<{ org: string; slug: string }>;
-  includeDirectCollaborators: boolean;
-  /** "owner/name" entries to skip. */
-  excludeRepos: string[];
-  apiBaseUrl: string;
   /** Compiled from config `github.ignoreCommentPatterns`. */
   ignoreCommentPatterns: RegExp[];
 };
 
 /** Resolved (secret already materialized) Discord source configuration. */
-export type DiscordSourceConfig = {
+export type DiscordSourceConfig = Omit<NonNullable<TeamReportsConfig["discord"]>, "token"> & {
   token: string;
-  guildId: string;
-  channels: Array<{ id: string; excerpts: boolean }>;
-  excerptMaxChars: number;
   apiBaseUrl: string;
 };
 
 export interface GithubSource {
   /** Roster from configured org teams (and direct collaborators when enabled). Returns people with `github: [login]`. */
   loadRoster(config: GithubSourceConfig): Promise<{ people: Person[]; status: SourceStatus }>;
-  /** All GitHub items in the window across configured orgs; attribution rules live in aggregate, not here, except merged_by lookup. */
+  /** Emits bounded batches with stable event keys; attribution rules live in aggregate, except merged_by lookup. */
   collect(
     config: GithubSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ items: GithubItem[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<GithubItem>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }
 
 export interface DiscordSource {
-  /** Messages in the window from configured channels and their threads. */
+  /** Emits bounded message batches keyed by snowflake from configured channels and their threads. */
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ messages: DiscordMessage[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }

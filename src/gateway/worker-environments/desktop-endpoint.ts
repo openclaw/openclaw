@@ -1,43 +1,58 @@
-import { posix, win32 } from "node:path";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   WorkerDesktopApp,
   WorkerDesktopEndpoint,
 } from "../../plugins/capability-provider.types.js";
+import {
+  isWorkerDesktopArgs,
+  isWorkerDesktopString,
+  isWorkerDesktopUsername,
+} from "../../shared/worker-desktop-descriptor.js";
+import { hasExactOwnKeys } from "../../worker/protocol-record.js";
 
 const MAX_WORKER_DESKTOP_APPS = 8;
 
-export function normalizeWorkerDesktopEndpoint(
-  value: WorkerDesktopEndpoint,
-): WorkerDesktopEndpoint {
+function isAbsoluteDesktopPath(value: unknown): value is string {
+  return (
+    isWorkerDesktopString(value) && (path.posix.isAbsolute(value) || path.win32.isAbsolute(value))
+  );
+}
+
+export function normalizeWorkerDesktopEndpoint(value: unknown): WorkerDesktopEndpoint {
   if (!isRecord(value) || value.protocol !== "rfb") {
     throw new Error('Worker environment desktop protocol must be "rfb"');
   }
-  if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
+  if (
+    !hasExactOwnKeys(
+      value,
+      ["protocol", "port"],
+      ["passwordFilePath", "username", "apps", "allowsResize"],
+    )
+  ) {
+    throw new Error("Worker environment desktop endpoint contains unknown fields");
+  }
+  if (
+    typeof value.port !== "number" ||
+    !Number.isSafeInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
     throw new Error("Worker environment desktop port must be an integer from 1 through 65535");
   }
   const passwordFilePath = value.passwordFilePath;
-  if (
-    passwordFilePath !== undefined &&
-    (typeof passwordFilePath !== "string" ||
-      !(posix.isAbsolute(passwordFilePath) || win32.isAbsolute(passwordFilePath)))
-  ) {
+  if (passwordFilePath !== undefined && !isAbsoluteDesktopPath(passwordFilePath)) {
     throw new Error("Worker environment desktop password file path must be absolute");
   }
   if (value.allowsResize !== undefined && typeof value.allowsResize !== "boolean") {
     throw new Error("Worker environment desktop allowsResize must be a boolean");
   }
-  const username = value.username;
   if (
-    username !== undefined &&
-    (typeof username !== "string" ||
-      !username.trim() ||
-      username.includes("\0") ||
-      Buffer.byteLength(username, "utf8") > 63 ||
-      !passwordFilePath)
+    value.username !== undefined &&
+    (!isWorkerDesktopUsername(value.username) || !passwordFilePath)
   ) {
     throw new Error(
-      "Worker environment desktop username requires a bounded account name and password file",
+      "Worker environment desktop username requires a bounded ARD account and password file",
     );
   }
   if (value.apps !== undefined && !Array.isArray(value.apps)) {
@@ -55,45 +70,49 @@ export function normalizeWorkerDesktopEndpoint(
       throw new Error(`Worker environment desktop app id ${app.id} must be unique`);
     }
     seenAppIds.add(app.id);
-    if (
-      typeof app.executablePath !== "string" ||
-      !(posix.isAbsolute(app.executablePath) || win32.isAbsolute(app.executablePath))
-    ) {
+    if (!isAbsoluteDesktopPath(app.executablePath)) {
       throw new Error("Worker environment desktop app executable path must be absolute");
     }
+    if (app.args !== undefined && !isWorkerDesktopArgs(app.args)) {
+      throw new Error("Worker environment desktop app args must be bounded strings");
+    }
+    let normalized: WorkerDesktopApp;
     if (app.id === "terminal") {
-      if (Object.keys(app).some((key) => key !== "id" && key !== "executablePath")) {
+      if (!hasExactOwnKeys(app, ["id", "executablePath"], ["args"])) {
         throw new Error("Worker environment terminal desktop app contains unknown fields");
       }
-      return { id: "terminal", executablePath: app.executablePath };
+      normalized = { id: "terminal", executablePath: app.executablePath };
+    } else {
+      if (!hasExactOwnKeys(app, ["id", "executablePath", "cdpPort"], ["args"])) {
+        throw new Error("Worker environment browser desktop app contains unknown fields");
+      }
+      if (
+        typeof app.cdpPort !== "number" ||
+        !Number.isSafeInteger(app.cdpPort) ||
+        app.cdpPort < 1 ||
+        app.cdpPort > 65_535
+      ) {
+        throw new Error(
+          "Worker environment browser CDP port must be an integer from 1 through 65535",
+        );
+      }
+      normalized = {
+        id: "browser",
+        executablePath: app.executablePath,
+        cdpPort: app.cdpPort,
+      };
     }
-    if (
-      Object.keys(app).some((key) => key !== "id" && key !== "executablePath" && key !== "cdpPort")
-    ) {
-      throw new Error("Worker environment browser desktop app contains unknown fields");
+    if (app.args !== undefined) {
+      normalized.args = [...app.args];
     }
-    if (
-      typeof app.cdpPort !== "number" ||
-      !Number.isSafeInteger(app.cdpPort) ||
-      app.cdpPort < 1 ||
-      app.cdpPort > 65_535
-    ) {
-      throw new Error(
-        "Worker environment browser CDP port must be an integer from 1 through 65535",
-      );
-    }
-    return {
-      id: "browser",
-      executablePath: app.executablePath,
-      cdpPort: app.cdpPort,
-    };
+    return normalized;
   });
   return {
     protocol: "rfb",
     port: value.port,
     ...(passwordFilePath === undefined ? {} : { passwordFilePath }),
+    ...(value.username === undefined ? {} : { username: value.username }),
     ...(value.allowsResize === undefined ? {} : { allowsResize: value.allowsResize }),
-    ...(username === undefined ? {} : { username }),
     ...(value.apps === undefined ? {} : { apps }),
   };
 }

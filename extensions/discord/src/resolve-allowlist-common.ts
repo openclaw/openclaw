@@ -6,24 +6,6 @@ export function resolveDiscordAllowlistToken(token: string): string | undefined 
   return normalizeDiscordToken(token, "channels.discord.token");
 }
 
-export function buildDiscordUnresolvedResults<T extends { input: string; resolved: boolean }>(
-  entries: string[],
-  buildResult: (input: string) => T,
-): T[] {
-  return entries.map(buildResult);
-}
-
-function findDiscordGuildByName(
-  guilds: DiscordGuildSummary[],
-  input: string,
-): DiscordGuildSummary | undefined {
-  const slug = normalizeDiscordSlug(input);
-  if (!slug) {
-    return undefined;
-  }
-  return guilds.find((guild) => guild.slug === slug);
-}
-
 export function filterDiscordGuilds(
   guilds: DiscordGuildSummary[],
   params: { guildId?: string; guildName?: string },
@@ -32,7 +14,8 @@ export function filterDiscordGuilds(
     return guilds.filter((guild) => guild.id === params.guildId);
   }
   if (params.guildName) {
-    const match = findDiscordGuildByName(guilds, params.guildName);
+    const slug = normalizeDiscordSlug(params.guildName);
+    const match = slug ? guilds.find((guild) => guild.slug === slug) : undefined;
     return match ? [match] : [];
   }
   return guilds;

@@ -36,7 +36,8 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
-If work still ignores cancellation at the shutdown deadline under systemd or launchd, the process logs
+If work still ignores cancellation at the shutdown deadline under systemd or launchd,
+a native service stop or supervisor-owned restart logs
 the remaining work categories, writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
@@ -64,10 +65,18 @@ retains exit status `78` and parks a managed LaunchAgent when possible. A refuse
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
 
-Foreground/manual Gateways and other supervisors retain exit status `1` when
+Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 
-`--force` skips the active-work drain and restarts immediately. Plain `restart` normally uses the service-manager restart path.
+`--force` begins restart immediately and closes new admissions. The current CLI supplies the normal drain budget, capped by the native service shutdown deadline. Only work remaining at that deadline is canceled before cleanup. A safe restart whose deferral budget has already expired does not get a second drain budget. Plain `restart` normally uses the service-manager restart path.
+
+Forced requests from older callers that supply no drain budget get at most
+45 seconds to drain. Their 60-second replacement window reserves 10 seconds for
+cleanup and 5 seconds for replacement. This applies to interactive and update
+callers alike. If work remains when the drain expires, the Gateway records a
+warning with the remaining work categories in its restart history and log, then
+cancels that work through normal terminal recovery. Callers that supply a budget
+retain that budget, subject to native service deadlines.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
@@ -108,11 +117,17 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 
 Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the canonical `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
 
-`OPENCLAW_HOME`, or an `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` that points elsewhere, is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+`OPENCLAW_HOME` may explicitly select the OS account home, including a filesystem alias of that home. Both the process home (`HOME` or `USERPROFILE`) and the effective OpenClaw home must resolve to the account home. An `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, or `OPENCLAW_CONFIG_PATH` that points elsewhere is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+
+Doctor also validates the environment saved in the installed service. A canonical `OPENCLAW_HOME` there does not prevent `openclaw doctor --fix` from entering maintenance and importing legacy credentials. Doctor remains the migration owner: it verifies the imported credentials and archives the original bytes before normal runtime reads resume.
 
 On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
 
 Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
+
+On Linux, discovery also recognizes legacy `openclaw-<profile>` unit names. A custom system unit can belong to the default installation when its OpenClaw launcher, service account, profile, and state/config paths identify that installation. Discovery uses systemd's effective command and environment, including drop-ins and environment files. If multiple custom units match or a wrapper makes their identity unclear, specify the intended unit with `OPENCLAW_SYSTEMD_UNIT`; OpenClaw does not choose the first unit carrying its marker.
+
+Doctor offers duplicate user-unit cleanup only when both managers' loaded Gateway commands identify the selected account, profile, state/config paths, and matching port selection. It rechecks the units after confirmation. Different or unverifiable identities leave the user unit in place. Cleanup removes only the confirmed user unit, then reports any remaining matching user unit or unverifiable discovery; another unit requires its own inspection and confirmation on a later Doctor run.
 
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing

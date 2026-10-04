@@ -5,6 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -26,20 +27,20 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
+import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import { renderOmittedMedia } from "./chat-message-attachment-status.ts";
 import {
-  readAsyncQuestions,
-  renderAsyncQuestionSummary,
-  type AsyncQuestionPresentation,
-} from "./chat-async-question.ts";
-import {
+  hasUserFileAttachments,
   renderAssistantAttachments,
   renderMessageAttachment,
-  renderOmittedMedia,
 } from "./chat-message-attachments.ts";
 import { renderMessageWorkContext } from "./chat-message-context.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
@@ -53,25 +54,23 @@ import {
   projectMessageMedia,
   schedulePairingQrExpiryRefresh,
   type ArtifactDownloadResolver,
+  type AttachmentItem,
 } from "./chat-message-media.ts";
 import {
-  detectJson,
   renderMessageJson,
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderReplyPreview, type ReplyPreview } from "./chat-reply-preview-render.ts";
+import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,
   renderToolIcon,
   renderPluginToolResult,
-  renderToolPreview,
   resolveCollapsedToolDetail,
-  shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import {
@@ -80,8 +79,21 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 registerChatMessageMetadataEnglish();
+
+function messageVideoSlots(
+  projection: Pick<
+    ReturnType<typeof projectMessageMedia>,
+    "orderedContent" | "supplementalAttachments"
+  >,
+): AttachmentItem[] {
+  return [...projection.orderedContent, ...projection.supplementalAttachments].filter(
+    (item): item is AttachmentItem =>
+      item.type === "attachment" && item.attachment.kind === "video",
+  );
+}
 
 function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
@@ -136,17 +148,21 @@ function renderPairingQrExpiryNotices(count: number) {
           <div
             class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired"
           >
-            <div class="chat-assistant-attachment-card__header">
-              <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
-              <span class="chat-assistant-attachment-card__title"
-                >${t("chat.pairingQrExpired.title")}</span
-              >
-              <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                >${t("chat.pairingQrExpired.badge")}</span
-              >
-            </div>
-            <div class="chat-assistant-attachment-card__reason">
-              ${t("chat.pairingQrExpired.reason")}
+            <span class="chat-pairing-qr-expired__icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <div class="chat-pairing-qr-expired__content">
+              <div class="chat-pairing-qr-expired__heading">
+                <span class="chat-pairing-qr-expired__title"
+                  >${t("chat.pairingQrExpired.title")}</span
+                >
+                <span class="chat-pairing-qr-expired__badge"
+                  >${t("chat.pairingQrExpired.badge")}</span
+                >
+              </div>
+              <div class="chat-assistant-attachment-card__reason">
+                ${t("chat.pairingQrExpired.reason")}
+              </div>
             </div>
           </div>
         `,
@@ -163,7 +179,7 @@ export function renderGroupedMessage(
     isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
-    transcriptVisible?: boolean;
+    transcriptVisible?: PresentationValue;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -188,6 +204,9 @@ export function renderGroupedMessage(
     connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
+    getTurnVideoMessages?: (
+      key: string,
+    ) => readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[] | undefined;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     onAssistantAttachmentLoaded?: () => void;
@@ -198,12 +217,13 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
-    onResolveReply?: (replyToId: string) => void;
+    /** This message's own "Replying to" line, drawn inside the bubble. */
+    replyLine?: ReplyLine;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
   },
@@ -227,7 +247,8 @@ export function renderGroupedMessage(
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
-  const hasToolCards = toolCards.length > 0;
+  // Nested cards moved under their parent must not leave empty message shells.
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== nothing);
   const {
     images,
     attachments: visibleAttachments,
@@ -246,16 +267,33 @@ export function renderGroupedMessage(
         )
       : [];
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
-  const hasUserFiles =
-    normalizedRole === "user" &&
-    cardAttachments.some(
-      (item) =>
-        item.attachment.kind === "document" &&
-        !isSentCommentAttachment(item) &&
-        !isSentPastedTextAttachment(item),
-    );
+  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,
+    galleryVideos: (selected: AttachmentItem) => {
+      const local = messageVideoSlots({ orderedContent, supplementalAttachments });
+      const slot = local.indexOf(selected);
+      const turn = opts.getTurnVideoMessages?.(messageKey);
+      if (!turn || slot < 0) {
+        return { index: slot, items: local };
+      }
+      const items: AttachmentItem[] = [];
+      let index = -1;
+      for (const entry of turn) {
+        if (entry.key === messageKey) {
+          index = items.length + slot;
+          items.push(...local);
+        } else {
+          const prepared = prepareChatMessageRender(entry.message);
+          items.push(
+            ...messageVideoSlots(
+              projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
+            ),
+          );
+        }
+      }
+      return { index, items };
+    },
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
@@ -299,8 +337,8 @@ export function renderGroupedMessage(
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
 
-  // Detect pure-JSON messages and render as collapsible block
-  const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
+  // Classify completed bare JSON before Markdown can interpret its literal values.
+  const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
   const onlyPreviewChips =
     normalizedRole === "user" &&
@@ -333,7 +371,7 @@ export function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  // Suppress bubbles with no visible content, including relocated tool cards.
   if (
     !markdown &&
     !asyncQuestions &&
@@ -455,10 +493,6 @@ export function renderGroupedMessage(
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
 
-  if (onlyToolCards && toolCards.every((card) => opts.toolCardOverrides?.get(card) === nothing)) {
-    return nothing;
-  }
-
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>
     asyncQuestions
@@ -466,7 +500,9 @@ export function renderGroupedMessage(
       : jsonResult
         ? renderMessageJson(
             jsonResult,
-            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
           )
         : bodyMarkdown
           ? renderMessageMarkdown(
@@ -509,6 +545,10 @@ export function renderGroupedMessage(
   const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
+  const transcriptVisible =
+    typeof opts.transcriptVisible === "object"
+      ? opts.transcriptVisible.isPresented()
+      : opts.transcriptVisible;
   const renderBody = () => html`
     ${
       sourceRole === "assistant"
@@ -527,7 +567,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+            ${transcriptVisible === false ? nothing : presentedContent(opts.transcriptVisible ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
           </div>
         `,
       ),
@@ -582,21 +622,12 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
+      data-file-session-key=${opts.fileLinkSessionKey ?? nothing}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${renderReplyPreview(
-        normalizedMessage.replyTarget,
-        normalizedMessage.replyTarget?.kind === "id"
-          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-              normalizedMessage.replyPreview)
-          : undefined,
-        opts.onOpenReply,
-        opts.onResolveReply,
-        normalizedMessage.replyTarget?.kind === "id" &&
-          opts.replyNavigationId === normalizedMessage.replyTarget.id,
-      )}
+      ${opts.replyLine ? renderReplyLine(opts.replyLine, opts, true) : nothing}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)
@@ -616,14 +647,11 @@ export function renderGroupedMessage(
                       aria-expanded=${String(toolMessageExpanded)}
                       @pointerenter=${syncToolDisclosureOverflow}
                       @focus=${syncToolDisclosureOverflow}
-                      @click=${(event: MouseEvent) => {
-                        if (shouldToggleSelectableDisclosure(event)) {
-                          opts.onToggleToolMessageExpanded?.(
-                            toolMessageDisclosureId,
-                            toolMessageExpanded,
-                          );
-                        }
-                      }}
+                      @click=${() =>
+                        opts.onToggleToolMessageExpanded?.(
+                          toolMessageDisclosureId,
+                          toolMessageExpanded,
+                        )}
                     >
                       <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                       <span class="chat-tool-disclosure__content">
@@ -654,6 +682,16 @@ export function renderGroupedMessage(
                 `,
               )
             : renderBody()
+      }
+      ${
+        sourceRole === "assistant" && assistantMessageIsInterrupted(message)
+          ? html`<div
+              class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
+              role="status"
+            >
+              ${t("chat.composer.runInterrupted")}
+            </div>`
+          : nothing
       }
       ${
         duplicateCount > 1 && (!markdown || jsonResult)

@@ -90,9 +90,9 @@ describe("Git ref mutation ownership", () => {
     };
     let held = false;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      const args = argv.slice(3);
+      const args = argv.slice(argv.indexOf("-C") + 2);
       if (args[0] === "update-ref" || (args[0] === "branch" && args[1] === "-D")) {
-        mutations.push({ cwd: argv[2]!, args });
+        mutations.push({ cwd: argv[argv.indexOf("-C") + 1]!, args });
         if (!held && args[0] === "update-ref" && args[2] === snapshotRef) {
           held = true;
           started.resolve();
@@ -139,7 +139,7 @@ describe("Git ref mutation ownership", () => {
     await expect(requireGit(root, ["update-ref", "-d", queuedRef])).rejects.toThrow(
       `git update-ref -d ${queuedRef} failed (terminated):\n.git`,
     );
-    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(3))).toEqual([
+    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))).toEqual([
       ["rev-parse", "--git-common-dir"],
     ]);
     expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
@@ -156,7 +156,8 @@ describe("Git ref mutation ownership", () => {
       let discoveries = 0;
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         const result = await run(argv, options);
-        if (argv[3] === "rev-parse" && argv[4] === "--git-common-dir") {
+        const commandIndex = argv.indexOf("-C") + 2;
+        if (argv[commandIndex] === "rev-parse" && argv[commandIndex + 1] === "--git-common-dir") {
           discoveries += 1;
           return { ...result, stdout: `${msysCommonDir}\n` };
         }
@@ -295,6 +296,12 @@ describe("Git ref mutation ownership", () => {
       recordRef: "origin/main",
       remote: true,
     });
+    expect(
+      vi
+        .mocked(processExec.runCommandWithTimeout)
+        .mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))
+        .filter((args) => args[0] === "fetch"),
+    ).toEqual([["fetch", "--no-auto-maintenance", "origin"]]);
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({
@@ -411,7 +418,6 @@ describe("Git execution environment", () => {
   });
 
   it.each([
-    ["noglob winsymlinks:native", "noglob winsymlinks:native noglob"],
     ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
     ["winsymlinks:native noglob", "winsymlinks:native noglob"],
   ])("keeps noglob final for %s", (value, expected) => {
@@ -483,31 +489,63 @@ describe("Git checkout discovery", () => {
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
 
-  it("parses existing linked worktree paths and lock reasons", async () => {
-    const root = tempDirs.make("openclaw-git-worktree-list-");
-    const repo = path.join(root, "repo");
-    const linked = path.join(root, "linked");
-    expect((await runGit(root, ["init", "-b", "main", repo])).code).toBe(0);
-    expect((await runGit(repo, ["config", "user.name", "OpenClaw Test"])).code).toBe(0);
-    expect(
-      (await runGit(repo, ["config", "user.email", "openclaw-test@example.invalid"])).code,
-    ).toBe(0);
-    await fs.writeFile(path.join(repo, "README.md"), "base\n");
-    expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
-    expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
-    expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(0);
-    expect(
-      (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
-    ).toBe(0);
+  it.for(["files", "reftable"] as const)(
+    "parses native %s worktree paths, locks, symbolic heads, and detached tips",
+    async (refStorage, context) => {
+      const root = tempDirs.make("openclaw-git-worktree-list-");
+      const repo = path.join(root, "repo");
+      const linked = path.join(root, "linked");
+      const detached = path.join(root, "detached");
+      const initialized = await runGit(root, [
+        "init",
+        "--template=",
+        ...(refStorage === "reftable" ? ["--ref-format=reftable"] : []),
+        "-b",
+        "main",
+        repo,
+      ]);
+      if (
+        refStorage === "reftable" &&
+        initialized.termination === "exit" &&
+        initialized.code !== 0 &&
+        /unknown option.*ref-format|unknown ref storage format.*reftable/u.test(initialized.stderr)
+      ) {
+        context.skip("Installed Git does not support reftable repositories");
+      }
+      expect(initialized.code, initialized.stderr).toBe(0);
+      await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
+      await requireGit(repo, ["config", "user.email", "openclaw-test@example.invalid"]);
+      await requireGit(repo, ["config", "commit.gpgSign", "false"]);
+      await fs.writeFile(path.join(repo, "README.md"), "base\n");
+      await requireGit(repo, ["add", "README.md"]);
+      await requireGit(repo, ["commit", "-m", "initial"]);
+      const initialHead = await requireGit(repo, ["rev-parse", "HEAD"]);
+      await requireGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"]);
+      await requireGit(repo, ["worktree", "add", "--detach", detached, "HEAD"]);
+      await requireGit(linked, ["commit", "--allow-empty", "-m", "linked tip"]);
+      const linkedHead = await requireGit(linked, ["rev-parse", "HEAD"]);
+      await requireGit(repo, ["symbolic-ref", "refs/heads/alias-middle", "refs/heads/linked"]);
+      await requireGit(repo, ["symbolic-ref", "refs/heads/alias", "refs/heads/alias-middle"]);
+      await requireGit(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]);
+      await requireGit(repo, ["worktree", "lock", "--reason", "held by test", linked]);
 
-    // These fixtures exist; compare identity without imposing Git's separator spelling.
-    const worktrees = await listGitWorktrees(repo);
-    for (const entry of worktrees) {
-      entry.path = await fs.realpath(entry.path);
-    }
-    expect(worktrees).toContainEqual({
-      path: await fs.realpath(linked),
-      lockedReason: "held by test",
-    });
-  });
+      // These fixtures exist; compare identity without imposing Git's separator spelling.
+      const worktrees = await listGitWorktrees(repo);
+      for (const entry of worktrees) {
+        entry.path = await fs.realpath(entry.path);
+      }
+      expect(worktrees).toEqual(
+        expect.arrayContaining([
+          { path: await fs.realpath(repo), branch: "refs/heads/main", head: initialHead },
+          {
+            path: await fs.realpath(linked),
+            lockedReason: "held by test",
+            branch: "refs/heads/linked",
+            head: linkedHead,
+          },
+          { path: await fs.realpath(detached), branch: null, head: initialHead },
+        ]),
+      );
+    },
+  );
 });

@@ -23,19 +23,16 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 it.each(
   (["single", "batched"] as const).flatMap((writer) =>
     (["clear", "preserve-tail"] as const).flatMap((context) =>
-      (["markdown", "plan"] as const).flatMap((content) =>
-        (context === "clear" ? [false, true] : [false]).map((rollback) => ({
-          writer,
-          context,
-          content,
-          rollback,
-        })),
-      ),
+      (context === "clear" ? [false, true] : [false]).map((rollback) => ({
+        writer,
+        context,
+        rollback,
+      })),
     ),
   ),
 )(
-  "$writer $context reset owns the $content card lifetime (rollback=$rollback)",
-  async ({ writer, context, content, rollback }) => {
+  "$writer $context reset owns the card lifetime (rollback=$rollback)",
+  async ({ writer, context, rollback }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:reset-progress";
       const sessionId = "same-reset-session";
@@ -62,11 +59,10 @@ it.each(
       const boardBefore = await boards.getSnapshot({ sessionKey });
       const historyBefore = await loadTranscriptEvents(scope);
       const entryBefore = loadSessionEntry(scope);
-      const input =
-        content === "markdown"
-          ? { markdown: "Previous task" }
-          : { steps: [{ step: "Previous task", status: "in_progress" as const }] };
-      writeSessionProgressCard(database.db, sessionKey, input);
+      writeSessionProgressCard(database.db, sessionKey, {
+        markdown: "Previous task",
+        steps: [{ step: "Previous task", status: "in_progress" }],
+      });
       const before = readSessionProgressCard(database.db, sessionKey);
       const invalidations: Array<{ agentId?: string; sessionKey: string; inTransaction: boolean }> =
         [];
@@ -79,7 +75,12 @@ it.each(
           });
         }
       });
-      const entry = { ...previous, lifecycleRevision: "after", updatedAt: 2 };
+      const entry = {
+        ...previous,
+        ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+        lifecycleRevision: "after",
+        updatedAt: 2,
+      };
       const resetBoundary = { context, reason: "reset" as const, cwd: state.workspaceDir };
       const reset = async () => {
         if (writer === "single") {
@@ -99,15 +100,11 @@ it.each(
           });
         }
       };
-      if (rollback) {
-        // Fail the entry write after the boundary/card mutation, not its admission guard.
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-          BEFORE UPDATE OF entry_json ON session_nodes
-          BEGIN SELECT RAISE(ABORT, 'injected reset entry failure'); END;`);
-      }
       try {
         if (rollback) {
-          await expect(reset()).rejects.toThrow("injected reset entry failure");
+          await expect(reset()).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
@@ -115,9 +112,6 @@ it.each(
         }
       } finally {
         unsubscribe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
       expect(readSessionProgressCard(database.path, sessionKey)).toEqual(

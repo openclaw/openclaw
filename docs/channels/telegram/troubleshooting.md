@@ -47,6 +47,9 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
   <Accordion title="Polling or network instability">
 
+    The `Node 22+` references below describe Node networking behavior, not OpenClaw's
+    supported runtime versions. See [Node.js](/install/node) for current requirements.
+
     - Node 22+ with a custom fetch/proxy can trigger immediate abort behavior if `AbortSignal` types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress causes intermittent API failures.
     - Logs with `TypeError: fetch failed` or `Network request for 'getUpdates' failed!` are retried as recoverable network errors.

@@ -7,6 +7,7 @@ import {
   setEmbeddedQuestionBroker,
 } from "../../infra/embedded-question-broker.js";
 import { createDeferredCore as deferred } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createAskUserTool,
   isAskUserPromptPending,
@@ -16,6 +17,7 @@ import {
 } from "../tools/ask-user-tool.js";
 import {
   QuestionAnswerUnconfirmedError,
+  QuestionDispatchUnsupportedError,
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
@@ -51,7 +53,7 @@ async function withEmbeddedBroker(
   run: (broker: EmbeddedQuestionBroker) => Promise<void>,
 ) {
   const previousMode = isEmbeddedMode();
-  const broker = new EmbeddedQuestionBroker();
+  const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
   setEmbeddedMode(embedded);
   if (registered) {
     setEmbeddedQuestionBroker(broker);
@@ -460,6 +462,9 @@ describe("question dispatch ownership", () => {
           const result = await outcome;
           if (mode === "legacy-source" || mode === "v2-closed") {
             expect(result).toBeInstanceOf(Error);
+            if (mode === "legacy-source") {
+              expect(result).toBeInstanceOf(QuestionDispatchUnsupportedError);
+            }
             expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
               [],
             );
@@ -684,12 +689,8 @@ describe("question dispatch ownership", () => {
         if (status === "cancelled") {
           fixture.manager.cancel(pending.id);
         } else {
-          const clock = vi.spyOn(Date, "now").mockReturnValue(pending.expiresAtMs + 1);
-          try {
-            fixture.manager.get(pending.id);
-          } finally {
-            clock.mockRestore();
-          }
+          fixture.clock.setTime(pending.expiresAtMs + 1);
+          fixture.manager.get(pending.id);
         }
         expect(await question.run).toMatchObject({
           status: owner === "harness" ? status : "no_answer",

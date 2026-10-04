@@ -1,8 +1,8 @@
-// Xiaomi provider module implements model/runtime integration.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -37,31 +37,13 @@ const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
 type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
 
-type XiaomiTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  format: XiaomiTtsFormat;
-  style?: string;
-};
-
-type XiaomiTtsOverrides = {
-  model?: string;
-  voice?: string;
-  format?: XiaomiTtsFormat;
-  style?: string;
-};
-
 function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
   return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
 }
 
 function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
-  return XIAOMI_TTS_FORMATS.includes(normalized as XiaomiTtsFormat)
-    ? (normalized as XiaomiTtsFormat)
-    : undefined;
+  return XIAOMI_TTS_FORMATS.find((format) => format === normalized);
 }
 
 function resolveXiaomiTtsConfigRecord(
@@ -75,10 +57,9 @@ function resolveXiaomiTtsConfigRecord(
   );
 }
 
-function normalizeXiaomiTtsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): XiaomiTtsProviderConfig {
+function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveXiaomiTtsConfigRecord(rawConfig);
+  const options = readXiaomiTtsOptions(raw);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -88,48 +69,19 @@ function normalizeXiaomiTtsProviderConfig(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
     ),
     model:
-      trimToUndefined(raw?.model) ??
-      trimToUndefined(raw?.modelId) ??
-      trimToUndefined(process.env.XIAOMI_TTS_MODEL) ??
-      DEFAULT_XIAOMI_TTS_MODEL,
+      options.model ?? trimToUndefined(process.env.XIAOMI_TTS_MODEL) ?? DEFAULT_XIAOMI_TTS_MODEL,
     voice:
-      trimToUndefined(raw?.speakerVoice) ??
-      trimToUndefined(raw?.speakerVoiceId) ??
-      trimToUndefined(raw?.voice) ??
-      trimToUndefined(raw?.voiceId) ??
-      trimToUndefined(process.env.XIAOMI_TTS_VOICE) ??
-      DEFAULT_XIAOMI_TTS_VOICE,
+      options.voice ?? trimToUndefined(process.env.XIAOMI_TTS_VOICE) ?? DEFAULT_XIAOMI_TTS_VOICE,
     format:
-      normalizeXiaomiTtsFormat(raw?.format) ??
+      options.format ??
       normalizeXiaomiTtsFormat(process.env.XIAOMI_TTS_FORMAT) ??
       DEFAULT_XIAOMI_TTS_FORMAT,
-    style: trimToUndefined(raw?.style),
+    style: options.style,
   };
 }
 
-function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
-  const normalized = normalizeXiaomiTtsProviderConfig({});
-  return {
-    apiKey:
-      normalizeResolvedSecretInputString({
-        value: config.apiKey,
-        path: "tts.providers.xiaomi.apiKey",
-      }) ?? normalized.apiKey,
-    baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
-    model: trimToUndefined(config.model) ?? trimToUndefined(config.modelId) ?? normalized.model,
-    voice:
-      trimToUndefined(config.speakerVoice) ??
-      trimToUndefined(config.speakerVoiceId) ??
-      trimToUndefined(config.voice) ??
-      trimToUndefined(config.voiceId) ??
-      normalized.voice,
-    format: normalizeXiaomiTtsFormat(config.format) ?? normalized.format,
-    style: trimToUndefined(config.style) ?? normalized.style,
-  };
-}
-
-function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
-  const providerConfig = readXiaomiTtsProviderConfig(config);
+function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig) {
+  const providerConfig = normalizeXiaomiTtsProviderConfig({ xiaomi: config });
   const resolvedKey = resolveSpeechProviderApiKey(
     providerConfig.apiKey,
     process.env.XIAOMI_API_KEY,
@@ -140,29 +92,22 @@ function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTts
   };
 }
 
-function readXiaomiTtsOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): XiaomiTtsOverrides {
-  if (!overrides) {
-    return {};
-  }
+function readXiaomiTtsOptions(options: SpeechProviderOverrides | undefined) {
   return {
-    model: trimToUndefined(overrides.model) ?? trimToUndefined(overrides.modelId),
+    model: trimToUndefined(options?.model) ?? trimToUndefined(options?.modelId),
     voice:
-      trimToUndefined(overrides.speakerVoice) ??
-      trimToUndefined(overrides.speakerVoiceId) ??
-      trimToUndefined(overrides.voice) ??
-      trimToUndefined(overrides.voiceId),
-    format: normalizeXiaomiTtsFormat(overrides.format),
-    style: trimToUndefined(overrides.style),
+      trimToUndefined(options?.speakerVoice) ??
+      trimToUndefined(options?.speakerVoiceId) ??
+      trimToUndefined(options?.voice) ??
+      trimToUndefined(options?.voiceId),
+    format: normalizeXiaomiTtsFormat(options?.format),
+    style: trimToUndefined(options?.style),
   };
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voice":
     case "voiceid":
@@ -204,32 +149,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function buildXiaomiTtsMessages(params: { text: string; style?: string }) {
-  const style = trimToUndefined(params.style);
-  return [
-    ...(style ? [{ role: "user" as const, content: style }] : []),
-    { role: "assistant" as const, content: params.text },
-  ];
-}
-
-function isXiaomiVoiceDesignModel(model: string): boolean {
-  return model === XIAOMI_TTS_VOICE_DESIGN_MODEL;
-}
-
-function resolveXiaomiVoiceDesignStyle(style: string | undefined): string {
-  return trimToUndefined(style) ?? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE;
-}
-
-function buildXiaomiTtsAudio(params: { model: string; voice: string; format: XiaomiTtsFormat }): {
-  format: XiaomiTtsFormat;
-  voice?: string;
-} {
-  if (isXiaomiVoiceDesignModel(params.model)) {
-    return { format: params.format };
-  }
-  return { format: params.format, voice: params.voice };
-}
-
 async function xiaomiTTS(params: {
   text: string;
   apiKey: string;
@@ -242,16 +161,16 @@ async function xiaomiTTS(params: {
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, format, style, timeoutMs } = params;
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
+  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/blob-runtime");
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
-  const resolvedStyle = isXiaomiVoiceDesignModel(model)
-    ? resolveXiaomiVoiceDesignStyle(style)
-    : style;
+  const voiceDesign = model === XIAOMI_TTS_VOICE_DESIGN_MODEL;
+  const resolvedStyle =
+    trimToUndefined(style) ?? (voiceDesign ? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE : undefined);
 
   try {
     const { response, release } = await fetchWithSsrFGuard({
@@ -264,8 +183,11 @@ async function xiaomiTTS(params: {
         },
         body: JSON.stringify({
           model,
-          messages: buildXiaomiTtsMessages({ text, style: resolvedStyle }),
-          audio: buildXiaomiTtsAudio({ model, voice, format }),
+          messages: [
+            ...(resolvedStyle ? [{ role: "user", content: resolvedStyle }] : []),
+            { role: "assistant", content: text },
+          ],
+          audio: voiceDesign ? { format } : { format, voice },
         }),
         signal: controller.signal,
       },
@@ -314,7 +236,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey),
     synthesize: async (req) => {
       const config = resolveXiaomiTtsProviderConfig(req.providerConfig);
-      const overrides = readXiaomiTtsOverrides(req.providerOverrides);
+      const overrides = readXiaomiTtsOptions(req.providerOverrides);
       if (!config.apiKey) {
         throw new Error("Xiaomi API key missing");
       }

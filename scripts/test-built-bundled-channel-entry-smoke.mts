@@ -74,23 +74,30 @@ function smokeInInstalledLayout() {
       path.join(installedPackageRoot, "node_modules"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    const result = spawnSync(
-      process.execPath,
-      [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
-      {
-        env: { ...process.env, [installedLayoutEnv]: "1" },
-        stdio: "inherit",
-      },
-    );
-    return result.status ?? 1;
+    return smokeInstalledPackageOnPlainNode(installedPackageRoot);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-if (process.env[installedLayoutEnv] !== "1" && !packageRootLooksInstalled(packageRoot)) {
+// tsx's CJS hook would resolve the plugin loader's require(esm) graph (execa ->
+// npm-run-path -> unicorn-magic) with the require condition; probe on plain Node.
+function smokeInstalledPackageOnPlainNode(installedPackageRoot: string) {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
+    { env: { ...process.env, [installedLayoutEnv]: "1" }, stdio: "inherit" },
+  );
+  return result.status ?? 1;
+}
+
+if (process.env[installedLayoutEnv] !== "1") {
   // Let the layout owner's finally run before terminating this process.
-  process.exit(smokeInInstalledLayout());
+  process.exit(
+    packageRootLooksInstalled(packageRoot)
+      ? smokeInstalledPackageOnPlainNode(packageRoot)
+      : smokeInInstalledLayout(),
+  );
 }
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {
@@ -182,24 +189,23 @@ function assertSecretContractShape(secrets: unknown, context: string) {
   );
 }
 
-function assertEntryFileExists(entry: BuiltEntryFile) {
+async function importEntry(entryFile: BuiltEntryFile) {
   assert.ok(
-    fs.existsSync(entry.path),
-    `${entry.id} ${entry.kind} entry missing from packed dist: ${entry.path}`,
+    fs.existsSync(entryFile.path),
+    `${entryFile.id} ${entryFile.kind} entry missing from packed dist: ${entryFile.path}`,
   );
-}
-
-async function smokeChannelEntry(entryFile: BuiltEntryFile) {
-  assertEntryFileExists(entryFile);
-  let entry: unknown;
   try {
-    entry = await importBuiltModule(entryFile.path);
+    return await importBuiltModule(entryFile.path);
   } catch (error) {
     throw new Error(
       `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
   }
+}
+
+async function smokeChannelEntry(entryFile: BuiltEntryFile) {
+  const entry = await importEntry(entryFile);
   assert.ok(isRecord(entry));
   assert.equal(entry.kind, "bundled-channel-entry", `${entryFile.id} channel entry kind mismatch`);
   assert.ok("loadChannelPlugin" in entry && typeof entry.loadChannelPlugin === "function");
@@ -214,24 +220,10 @@ async function smokeChannelEntry(entryFile: BuiltEntryFile) {
 }
 
 async function smokeSetupEntry(entryFile: BuiltEntryFile) {
-  assertEntryFileExists(entryFile);
-  let entry: unknown;
-  try {
-    entry = await importBuiltModule(entryFile.path);
-  } catch (error) {
-    throw new Error(
-      `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  const entry = await importEntry(entryFile);
   if (!isRecord(entry) || entry.kind !== "bundled-channel-setup-entry") {
     return false;
   }
-  assert.equal(
-    entry.kind,
-    "bundled-channel-setup-entry",
-    `${entryFile.id} setup entry kind mismatch`,
-  );
   assert.ok("loadSetupPlugin" in entry && typeof entry.loadSetupPlugin === "function");
   const plugin = entry.loadSetupPlugin();
   assert.equal(plugin?.id, entryFile.id, `${entryFile.id} setup plugin failed to load`);

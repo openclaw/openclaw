@@ -1,5 +1,7 @@
+import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -22,7 +24,10 @@ import {
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
-import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import {
+  withSqliteReclamationWorker,
+  type ClaimedReclamationWorkerUse,
+} from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
@@ -31,11 +36,13 @@ const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
 const CONTENTION_BACKOFF_MS = [0, 25, 100, 250] as const;
 const log = createSubsystemLogger("sessions/canonical-validation");
+// Share only active runtime drains; native close/reopen creates a different owner.
+const runtimeDrains = new WeakMap<DatabaseSync, Promise<void>>();
 
 /** Certify dirty persisted rows before startup maintenance reads their full entries. */
 export async function certifySessionCanonicalValidationPending(
   options: OpenClawAgentDatabaseOptions,
-  withWorker = withSqliteReclamationWorker,
+  withWorker: ClaimedReclamationWorkerUse = withSqliteReclamationWorker,
   assertCurrentOwner?: () => void,
 ): Promise<void> {
   assertCurrentOwner?.();
@@ -51,10 +58,21 @@ export async function certifySessionCanonicalValidationPending(
   const { database, claim } = retained;
   let oversizedRows = 0;
   try {
-    let initializeCanonicalValidation = !hasOpenClawAgentCanonicalValidation(database);
-    if (!initializeCanonicalValidation && !hasPendingCanonicalSessionValidation(database)) {
+    const readiness = runSqliteReadOperationSync(
+      database.db,
+      () => {
+        const initialize = !hasOpenClawAgentCanonicalValidation(database);
+        return {
+          initialize,
+          hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+        };
+      },
+      "fresh",
+    );
+    if (!readiness.hasWork) {
       return;
     }
+    let initializeCanonicalValidation = readiness.initialize;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,
@@ -70,7 +88,9 @@ export async function certifySessionCanonicalValidationPending(
     return await withSqliteMutationWorkerLifetime(
       databaseOptions,
       async ({ assertCurrent: assertReadinessCurrent }) => {
-        try {
+        const shareRuntimeDrain =
+          withWorker === withSqliteReclamationWorker && assertCurrentOwner === undefined;
+        const drain = async () => {
           let contendedBatches = 0;
           let validation = getOpenClawAgentDatabaseValidation(database);
           while (true) {
@@ -79,7 +99,7 @@ export async function certifySessionCanonicalValidationPending(
             claim.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate }) =>
+              async ({ assertCurrent, commitGate, signal }) =>
                 await withWorker(
                   databaseOptions,
                   claim,
@@ -120,6 +140,7 @@ export async function certifySessionCanonicalValidationPending(
                               "session.canonical-validation.certify",
                               { reclamationAdmission },
                               "worker",
+                              signal,
                             ),
                         }),
                     );
@@ -130,6 +151,7 @@ export async function certifySessionCanonicalValidationPending(
                     assertCurrent();
                     claim.assertCurrent();
                   },
+                  signal,
                 ),
             );
             assertCurrentOwner?.();
@@ -163,7 +185,35 @@ export async function certifySessionCanonicalValidationPending(
             }
             // The next batch rejoins both existing FIFOs behind already queued work.
           }
+        };
+        let completion: Promise<void> | undefined;
+        let ownsDrain = false;
+        try {
+          assertCurrentOwner?.();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          completion = shareRuntimeDrain ? runtimeDrains.get(database.db) : undefined;
+          ownsDrain = completion === undefined;
+          if (!completion) {
+            completion = drain();
+            if (shareRuntimeDrain) {
+              runtimeDrains.set(database.db, completion);
+            }
+          }
+          await completion;
+          assertCurrentOwner?.();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          if (
+            !isOpenClawAgentDatabasePathCurrent(database) ||
+            !hasOpenClawAgentCanonicalValidation(database)
+          ) {
+            throw new Error("SQLite session reclamation database owner is no longer current");
+          }
         } finally {
+          if (ownsDrain && runtimeDrains.get(database.db) === completion) {
+            runtimeDrains.delete(database.db);
+          }
           claim.release();
         }
       },

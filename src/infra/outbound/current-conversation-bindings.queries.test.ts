@@ -49,14 +49,11 @@ it("reads current bindings without recompiling fixed queries after warmup", asyn
       }
       compile.mockClear();
       executions.counts.read = 0;
-      let matched = 0;
       for (let index = 0; index < 1_000; index += 1) {
         const record = records[index % records.length]!;
         const current = resolveCurrentConversationBindingRecord(record.conversation);
         expect(current).toEqual(record);
-        matched += 1;
       }
-      expect(matched).toBe(1_000);
       expect(executions.counts.read).toBe(1_000);
       expect(
         compile.mock.results.filter(
@@ -145,23 +142,34 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
           .selectAll()
           .where("binding_id", "=", bindingId),
       ).rows[0];
-    expect(readColumns(a.bindingId)).toEqual({
-      binding_key: "demo\u241fa\u241f\u241fz-generic",
-      binding_id: a.bindingId,
+    const commonColumns = {
       target_session_key: "agent:main:bound",
       channel: "demo",
       account_id: "a",
       conversation_kind: "current",
-      parent_conversation_id: null,
-      conversation_id: "z-generic",
       target_kind: "session",
       status: "active",
       bound_at: 1,
       expires_at: null,
       metadata_json: null,
-      record_json: JSON.stringify(a),
       updated_at: now,
+    };
+    expect(readColumns(a.bindingId)).toEqual({
+      ...commonColumns,
+      binding_key: "demo\u241fa\u241f\u241fz-generic",
+      binding_id: a.bindingId,
+      parent_conversation_id: null,
+      conversation_id: "z-generic",
+      record_json: JSON.stringify(a),
     });
+    const adapterColumns = {
+      ...commonColumns,
+      binding_key: "demo\u241fa\u241fparent\u241fa-adapter",
+      binding_id: "fixture:a-adapter",
+      parent_conversation_id: "parent",
+      conversation_id: "a-adapter",
+      record_json: JSON.stringify(b),
+    };
     const changed: SessionBindingRecord = {
       ...b,
       targetSessionKey: "agent:other:retargeted",
@@ -173,21 +181,14 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
     };
     writeBinding(changed);
     expect(readColumns()).toEqual({
-      binding_key: "demo\u241fa\u241fparent\u241fa-adapter",
-      binding_id: "fixture:a-adapter",
+      ...adapterColumns,
       target_session_key: "agent:other:retargeted",
-      channel: "demo",
-      account_id: "a",
-      conversation_kind: "current",
-      parent_conversation_id: "parent",
-      conversation_id: "a-adapter",
       target_kind: "subagent",
       status: "ending",
       bound_at: 2,
       expires_at: changed.expiresAt,
       metadata_json: '{"version":"fresh"}',
       record_json: JSON.stringify(changed),
-      updated_at: now,
     });
     expect(listCurrentConversationBindingRecordsBySession(b.targetSessionKey, scoped)).toEqual([a]);
     expect(
@@ -195,23 +196,7 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
     ).toEqual([changed]);
     expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(changed);
     writeBinding(b);
-    expect(readColumns()).toEqual({
-      binding_key: "demo\u241fa\u241fparent\u241fa-adapter",
-      binding_id: "fixture:a-adapter",
-      target_session_key: "agent:main:bound",
-      channel: "demo",
-      account_id: "a",
-      conversation_kind: "current",
-      parent_conversation_id: "parent",
-      conversation_id: "a-adapter",
-      target_kind: "session",
-      status: "active",
-      bound_at: 1,
-      expires_at: null,
-      metadata_json: null,
-      record_json: JSON.stringify(b),
-      updated_at: now,
-    });
+    expect(readColumns()).toEqual(adapterColumns);
     expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(b);
 
     expect(

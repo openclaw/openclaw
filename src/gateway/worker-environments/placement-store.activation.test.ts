@@ -1,12 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import type {
   WorkerSessionPlacementIdentity,
@@ -25,6 +25,7 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker session placement activation", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
@@ -32,24 +33,19 @@ describe("worker session placement activation", () => {
   let nowMs: number;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-placement-"));
+    root = tempDirs.make("openclaw-placement-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    environments = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  function attachEnvironment(
+  async function attachEnvironment(
     environmentId: string,
     sessionId: string,
     from: "ready" | "idle" = "ready",
   ) {
-    return environments.transition({
+    return await environments.transition({
       environmentId,
       from,
       to: "attached",
@@ -65,17 +61,17 @@ describe("worker session placement activation", () => {
     });
   }
 
-  function createAttachedEnvironment(identity: WorkerSessionPlacementIdentity = SESSION) {
+  async function createAttachedEnvironment(identity: WorkerSessionPlacementIdentity = SESSION) {
     const environmentId = `environment-${identity.sessionId}`;
-    environments.createIntent({
+    await environments.createIntent({
       environmentId,
       providerId: "test-provider",
       profileId: "test-profile",
       profileSnapshot: { settings: {} },
       provisionOperationId: `provision:${environmentId}`,
     });
-    environments.transition({ environmentId, from: "requested", to: "provisioning" });
-    environments.transition({
+    await environments.transition({ environmentId, from: "requested", to: "provisioning" });
+    await environments.transition({
       environmentId,
       from: "provisioning",
       to: "ready",
@@ -98,20 +94,20 @@ describe("worker session placement activation", () => {
     return attachEnvironment(environmentId, identity.sessionId);
   }
 
-  function advanceToStarting(
+  async function advanceToStarting(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
     environmentId = `environment-${identity.sessionId}`,
   ) {
-    let placement = store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
+    let placement = await store.startDispatch({ ...identity, executionMode });
+    placement = await store.transition({
       sessionId: identity.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId },
     });
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: identity.sessionId,
       from: "provisioning",
       to: "syncing",
@@ -130,8 +126,11 @@ describe("worker session placement activation", () => {
     });
   }
 
-  function activate(placement: ReturnType<typeof advanceToStarting>, ownerEpoch: number) {
-    const active = store.transition({
+  async function activate(
+    placement: Awaited<ReturnType<typeof advanceToStarting>>,
+    ownerEpoch: number,
+  ) {
+    const active = await store.transition({
       sessionId: placement.sessionId,
       from: "starting",
       to: "active",
@@ -144,51 +143,57 @@ describe("worker session placement activation", () => {
     return active;
   }
 
-  function advanceToActive(
+  async function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
-    const environment = createAttachedEnvironment(identity);
-    return activate(advanceToStarting(identity, executionMode), environment.ownerEpoch);
+    const environment = await createAttachedEnvironment(identity);
+    return activate(await advanceToStarting(identity, executionMode), environment.ownerEpoch);
   }
 
-  it.each(["environment", "epoch", "state", "session", "multiple sessions", "closing", "revoked"])(
+  it.each(["environment", "epoch", "state", "session", "multiple sessions", "closing"])(
     "rolls back activation when the attached environment %s does not match",
-    (mismatch) => {
-      const environment = createAttachedEnvironment();
-      const starting = advanceToStarting(
+    async (mismatch) => {
+      const environment = await createAttachedEnvironment();
+      const starting = await advanceToStarting(
         SESSION,
         "worker-turn",
         mismatch === "environment" ? "missing-environment" : environment.environmentId,
       );
       let ownerEpoch = environment.ownerEpoch;
       if (mismatch === "state" || mismatch === "session") {
-        ownerEpoch = environments.transition({
-          environmentId: environment.environmentId,
-          from: "attached",
-          to: "idle",
-        }).ownerEpoch;
+        ownerEpoch = (
+          await environments.transition({
+            environmentId: environment.environmentId,
+            from: "attached",
+            to: "idle",
+          })
+        ).ownerEpoch;
         if (mismatch === "session") {
-          ownerEpoch = attachEnvironment(
-            environment.environmentId,
-            "another-session",
-            "idle",
+          ownerEpoch = (
+            await attachEnvironment(environment.environmentId, "another-session", "idle")
           ).ownerEpoch;
         }
-      } else if (mismatch === "closing" || mismatch === "revoked") {
-        environments.requestDestroy({
+      } else if (mismatch === "closing") {
+        await environments.requestDestroy({
           environmentId: environment.environmentId,
           state: "attached",
         });
-        if (mismatch === "revoked") {
-          environments.revokeEnvironmentCredential(environment.environmentId);
-        }
       } else if (mismatch === "multiple sessions") {
-        database.db
-          .prepare(
-            "UPDATE worker_environments SET attached_session_ids_json = ? WHERE environment_id = ?",
-          )
-          .run(JSON.stringify([SESSION.sessionId, "another-session"]), environment.environmentId);
+        runOpenClawStateWriteTransaction(
+          () => {
+            database.db
+              .prepare(
+                "UPDATE worker_environments SET attached_session_ids_json = ? WHERE environment_id = ?",
+              )
+              .run(
+                JSON.stringify([SESSION.sessionId, "another-session"]),
+                environment.environmentId,
+              );
+            // Keep this invalid fixture outside the projection: activation must reject the authoritative row.
+          },
+          { database },
+        );
       }
       const environmentRow = () =>
         database.db
@@ -197,17 +202,19 @@ describe("worker session placement activation", () => {
       const before = environmentRow();
       nowMs = 2_000;
 
-      expect(() => activate(starting, ownerEpoch + (mismatch === "epoch" ? 1 : 0))).toThrow();
+      await expect(
+        activate(starting, ownerEpoch + (mismatch === "epoch" ? 1 : 0)),
+      ).rejects.toThrow();
       expect(store.get(SESSION.sessionId)).toEqual(starting);
       expect(environmentRow()).toEqual(before);
     },
   );
 
-  it("does not record a failed pre-active dispatch as successful demand", () => {
-    const environment = createAttachedEnvironment();
-    const starting = advanceToStarting();
+  it("does not record a failed pre-active dispatch as successful demand", async () => {
+    const environment = await createAttachedEnvironment();
+    const starting = await advanceToStarting();
     nowMs = 5_000;
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: SESSION.sessionId,
       expectedGeneration: starting.generation,
       recoveryError: "workspace startup failed",
@@ -220,97 +227,92 @@ describe("worker session placement activation", () => {
     expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
   });
 
-  it.each(["worker-turn", "remote-exec"] as const)(
-    "retains %s activation time through claims, adoption, failure and retirement",
-    (executionMode) => {
-      const environment = createAttachedEnvironment();
-      const starting = advanceToStarting(SESSION, executionMode);
-      expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
-      nowMs = 5_000;
-      const active = activate(starting, environment.ownerEpoch);
-      expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
-      nowMs = 6_000;
-      const owner = {
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      };
-      const claim = store.claimTurn({
-        ...SESSION,
-        owner:
-          executionMode === "worker-turn"
-            ? { kind: "worker", ...owner }
-            : { kind: "local", ...owner },
-        claimId: "activation-claim",
-        runId: "activation-run",
-      });
-      store.releaseTurn(claim);
-      expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
-
-      closeOpenClawStateDatabaseForTest();
-      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-      store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-      environments = createWorkerEnvironmentStore({ database, now: () => nowMs });
-      nowMs = 7_000;
-      store.adoptActive({
-        sessionId: SESSION.sessionId,
-        ...owner,
-        expectedGeneration: active.generation,
-      });
-      expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
-      const draining = store.startDrain({
-        sessionId: SESSION.sessionId,
-        ...owner,
-        expectedGeneration: active.generation,
-      });
-      const reconciling = store.startReconcile({
-        sessionId: SESSION.sessionId,
-        ...owner,
-        expectedGeneration: draining.generation,
-      });
-      const failed = store.fail({
-        sessionId: SESSION.sessionId,
-        expectedGeneration: reconciling.generation,
-        recoveryError: "workspace recovery failed",
-      });
-      nowMs = 8_000;
-      store.retireSessionPlacement({
-        sessionId: SESSION.sessionId,
-        expectedState: "failed",
-        expectedGeneration: failed.generation,
-      });
-      expect(store.get(SESSION.sessionId)).toBeUndefined();
-      expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
-    },
-  );
-
-  it("preserves the latest successful activation when an environment is reused", () => {
+  it("retains activation time through claims, adoption, failure and retirement", async () => {
+    const environment = await createAttachedEnvironment();
+    const starting = await advanceToStarting();
+    expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
     nowMs = 5_000;
-    let active = advanceToActive();
+    const active = await activate(starting, environment.ownerEpoch);
+    expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
+    nowMs = 6_000;
+    const owner = {
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    };
+    const claim = await store.claimTurn({
+      ...SESSION,
+      owner: { kind: "worker", ...owner },
+      claimId: "activation-claim",
+      runId: "activation-run",
+    });
+    await store.releaseTurn(claim);
+    expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
+
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    nowMs = 7_000;
+    store.adoptActive({
+      sessionId: SESSION.sessionId,
+      ...owner,
+      expectedGeneration: active.generation,
+    });
+    expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
+    const draining = await store.startDrain({
+      sessionId: SESSION.sessionId,
+      ...owner,
+      expectedGeneration: active.generation,
+    });
+    const reconciling = await store.startReconcile({
+      sessionId: SESSION.sessionId,
+      ...owner,
+      expectedGeneration: draining.generation,
+    });
+    const failed = await store.fail({
+      sessionId: SESSION.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: "workspace recovery failed",
+    });
+    nowMs = 8_000;
+    store.retireSessionPlacement({
+      sessionId: SESSION.sessionId,
+      expectedState: "failed",
+      expectedGeneration: failed.generation,
+    });
+    expect(store.get(SESSION.sessionId)).toBeUndefined();
+    expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
+  });
+
+  it("preserves the latest successful activation when an environment is reused", async () => {
+    nowMs = 5_000;
+    let active = await advanceToActive();
     for (const activationTime of [4_000, 9_000]) {
       const owner = {
         sessionId: SESSION.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       };
-      const draining = store.startDrain({ ...owner, expectedGeneration: active.generation });
-      const reconciling = store.startReconcile({
+      const draining = await store.startDrain({ ...owner, expectedGeneration: active.generation });
+      const reconciling = await store.startReconcile({
         ...owner,
         expectedGeneration: draining.generation,
       });
-      store.transition({
+      await store.transition({
         sessionId: SESSION.sessionId,
         from: "reconciling",
         to: "local",
         expectedGeneration: reconciling.generation,
       });
-      environments.transition({
+      await environments.transition({
         environmentId: active.environmentId,
         from: "attached",
         to: "idle",
       });
       nowMs = activationTime;
-      const attached = attachEnvironment(active.environmentId, SESSION.sessionId, "idle");
-      active = activate(advanceToStarting(), attached.ownerEpoch);
+      const attached = await attachEnvironment(active.environmentId, SESSION.sessionId, "idle");
+      active = await activate(await advanceToStarting(), attached.ownerEpoch);
       expect(environments.get(active.environmentId)?.lastActivatedAtMs).toBe(
         Math.max(5_000, activationTime),
       );

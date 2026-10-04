@@ -90,6 +90,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     nextOffset: null,
   });
   const gateway = await installMockGateway(page, {
+    presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     methodResponses: {
       "agents.list": {
         defaultId: "main",

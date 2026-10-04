@@ -13,6 +13,8 @@ import {
   shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
+import { prepareRemoteSkillConnections } from "./remote-skills.js";
+import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
 // Full snapshots let fresh sessions and runtime-only hydration share one versioned rebuild.
@@ -31,6 +33,7 @@ type ReusableSkillSnapshotParams = {
   librarySelections?: SkillSnapshot["librarySelections"];
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
@@ -51,32 +54,43 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-function cacheSkillSnapshot(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
-  skillSnapshotCache.set(cacheKey, snapshot);
-  pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
-  return snapshot;
-}
-
 export async function resolveReusableWorkspaceSkillSnapshot(
   params: ReusableSkillSnapshotParams,
 ): Promise<ReusableSkillSnapshotResult> {
   params.assertCurrent?.();
-  const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
     executionWorkspaceDir: params.executionWorkspaceDir,
+    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
   });
   const skillRoots = normalizedRoots.executionWorkspaceDir
-    ? {
-        agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
-        executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-      }
+    ? recordSkillRootsExecutionFileHost(
+        {
+          agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
+          executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+        },
+        normalizedRoots.executionWorkspaceFileHost,
+      )
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
+  const versionBeforePreparation = getSkillsSnapshotVersion(watcherWorkspaceDir);
+  await prepareRemoteSkillConnections();
+  params.assertCurrent?.();
+  // A caller's explicit version predates any source changes while authority was preparing.
+  const requestedSnapshotVersion =
+    getSkillsSnapshotVersion(watcherWorkspaceDir) === versionBeforePreparation
+      ? params.snapshotVersion
+      : undefined;
+  const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   if (params.watch !== false) {
     ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
-      ...(skillRoots ? { executionWorkspaceDir: skillRoots.executionWorkspaceDir } : {}),
+      ...(skillRoots
+        ? {
+            executionWorkspaceDir: skillRoots.executionWorkspaceDir,
+            executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
+          }
+        : {}),
       config: params.config,
       agentId: params.agentId,
       ...(params.pluginMetadataSnapshot
@@ -84,7 +98,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         : {}),
     });
   }
-  const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
+  const snapshotVersion = requestedSnapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
   const promptFormatChanged =
     params.existingSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION;
   const skillVersionChanged = shouldRefreshSnapshotForVersion(
@@ -116,11 +130,15 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     !shouldRefresh &&
     (params.hydrateExisting === false || params.existingSnapshot.resolvedSkills !== undefined)
   ) {
-    return { snapshot: params.existingSnapshot, shouldRefresh, snapshotVersion };
+    return {
+      snapshot: params.existingSnapshot,
+      shouldRefresh,
+      snapshotVersion,
+    };
   }
   const sourceScope = {
     executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-    agentId: params.agentId,
+    executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
   };
   const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
   const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
@@ -132,6 +150,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   const buildSnapshot = async (assertCurrent: () => void) => {
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
       librarySelections,
       config: params.config,
       preserveEntryOrder: Boolean(skillRoots),
@@ -150,8 +169,8 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     };
   };
 
-  const buildSnapshotCacheKey = () =>
-    JSON.stringify([
+  const cachedRebuild = async () => {
+    const snapshotCacheKey = JSON.stringify([
       params.workspaceDir,
       librarySelections,
       skillRoots,
@@ -162,8 +181,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       eligibility,
       fingerprintSkillSnapshotConfig(params.config),
     ]);
-
-  const cachedRebuild = async (snapshotCacheKey = buildSnapshotCacheKey()) => {
     const cachedSnapshot = skillSnapshotCache.get(snapshotCacheKey);
     if (cachedSnapshot) {
       return cachedSnapshot;
@@ -191,7 +208,9 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         if (!projectionIsCurrent()) {
           return undefined;
         }
-        return cacheSkillSnapshot(snapshotCacheKey, snapshot);
+        skillSnapshotCache.set(snapshotCacheKey, snapshot);
+        pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
+        return snapshot;
       });
       pending = { promise, waiters };
       pendingSkillSnapshots.set(snapshotCacheKey, pending);
@@ -217,16 +236,15 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     }
   };
 
+  const rebuilt = await cachedRebuild();
   const snapshot =
-    !params.existingSnapshot || shouldRefresh
-      ? await cachedRebuild()
-      : await cachedRebuild().then(
-          (rebuilt) =>
-            rebuilt && {
-              ...params.existingSnapshot!,
-              resolvedSkills: rebuilt.resolvedSkills,
-            },
-        );
+    rebuilt && params.existingSnapshot && !shouldRefresh
+      ? {
+          ...params.existingSnapshot,
+          resolvedSkills: rebuilt.resolvedSkills,
+          discoverySkills: rebuilt.discoverySkills,
+        }
+      : rebuilt;
   if (!snapshot || !projectionIsCurrent()) {
     const currentVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
     return resolveReusableWorkspaceSkillSnapshot({
@@ -238,5 +256,9 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     });
   }
   params.assertCurrent?.();
-  return { snapshot, shouldRefresh, snapshotVersion };
+  return {
+    snapshot,
+    shouldRefresh,
+    snapshotVersion,
+  };
 }

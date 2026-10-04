@@ -11,7 +11,7 @@ import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
-export type ChannelsLogsOptions = {
+type ChannelsLogsOptions = {
   channel?: string;
   lines?: string | number;
   json?: boolean;
@@ -60,7 +60,7 @@ function parseChannelFilter(raw?: string): ChannelLogFilter {
 }
 
 function matchesChannelContext(value: string | undefined, channel: string) {
-  return [channel, `gateway/channels/${channel}`].some(
+  return [channel, `channels/${channel}`, `gateway/channels/${channel}`].some(
     (root) => value === root || value?.startsWith(`${root}/`) === true,
   );
 }

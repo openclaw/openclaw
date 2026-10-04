@@ -4,24 +4,24 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+  type PreparedModelThinkingCapability,
+} from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import {
+  needsThinkHydration,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
-
-/** Callback used to detect providers that require final-answer tags. */
-type ReasoningTagProviderResolver = (
-  provider: string,
-  options: {
-    config: FollowupRun["run"]["config"];
-    workspaceDir: string;
-    modelId: string;
-  },
-) => boolean;
 
 /** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
@@ -50,25 +50,6 @@ export function resolveModelFallbackOptions(
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
   };
-}
-
-/** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-function resolveEnforceFinalTagWithResolver(
-  run: FollowupRun["run"],
-  provider: string,
-  model: string,
-  isReasoningTagProvider?: ReasoningTagProviderResolver,
-): boolean {
-  return (
-    (run.skipProviderRuntimeHints ? false : undefined) ??
-    (run.enforceFinalTag ||
-      isReasoningTagProvider?.(provider, {
-        config: run.config,
-        workspaceDir: run.workspaceDir,
-        modelId: model,
-      }) ||
-      false)
-  );
 }
 
 /** Prepare the selected candidate's input before placement can bypass local model resolution. */
@@ -115,32 +96,49 @@ export async function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
-  isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-    modelSelectionLocked: params.run.modelSelectionLocked,
-    subagentSpawnLineage: params.run.subagentSpawnLineage,
-  });
-  const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
-  const enforceFinalTag = resolveEnforceFinalTagWithResolver(
-    params.run,
-    params.provider,
-    params.model,
-    params.isReasoningTagProvider,
-  );
+  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
+    resolveModelFallbackOptions(params.run);
+  let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
+  if (params.agentRuntime) {
+    let thinkingCatalog = params.run.thinkingCatalog;
+    if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
+      const { loadProviderScopedThinkingCatalog } =
+        await import("../../agents/model-catalog.runtime.js");
+      thinkingCatalog = normalizeThinkingCatalogProviders(
+        await loadProviderScopedThinkingCatalog({
+          config,
+          provider: params.provider,
+          model: params.model,
+          agentRuntime: params.agentRuntime,
+          agentId: params.run.agentId,
+          agentDir: params.run.agentDir,
+          workspaceDir: params.run.workspaceDir,
+        }),
+      );
+    }
+    modelThinkingCapability = prepareModelRunCapabilities(
+      [thinkingCatalog, []],
+      [params.provider, params.model, params.agentRuntime],
+    ).modelThinkingCapability;
+  }
+  const enforceFinalTag =
+    !params.run.skipProviderRuntimeHints &&
+    (params.run.enforceFinalTag ||
+      isReasoningTagProvider(params.provider, {
+        config,
+        workspaceDir: params.run.workspaceDir,
+        modelId: params.model,
+      }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  const runParams = {
+  return {
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
@@ -165,6 +163,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
+    bootstrapUserProfileId: params.run.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
@@ -173,6 +172,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     provider: params.provider,
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),
+    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
@@ -191,5 +191,4 @@ export async function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
-  return runParams;
 }

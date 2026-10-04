@@ -1,5 +1,9 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type {
+  SessionCatalogHost,
+  SessionCatalogSession,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,6 +15,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -31,6 +36,24 @@ const original = {
   createdActor: { type: "system" as const, id: "original-owner" },
 };
 
+function session(overrides: Partial<SessionCatalogSession> = {}): SessionCatalogSession {
+  return {
+    threadId: "native-thread",
+    sessionKey: key,
+    status: "stored",
+    archived: false,
+    canContinue: true,
+    canArchive: false,
+    ...overrides,
+  };
+}
+
+function hosts(sessions: SessionCatalogSession[]): SessionCatalogHost[] {
+  return [
+    { hostId: "gateway:fixture", label: "Fixture", kind: "gateway", connected: true, sessions },
+  ];
+}
+
 async function withCatalog(
   run: (fixture: {
     list: () => Promise<ReturnType<typeof vi.fn>>;
@@ -42,7 +65,7 @@ async function withCatalog(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: options.agents ?? {
-        list: [{ id: "main", default: true, agentDir: state.agentDir("main") }],
+        entries: { main: { agentDir: state.agentDir("main") } },
       },
     };
     await state.writeConfig(cfg);
@@ -55,7 +78,12 @@ async function withCatalog(
       );
     }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, context });
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      context,
+      modelCatalog: [],
+    });
     bindSessionRowProjection(context, () => projection);
     const previous = captureActivePluginRegistrySnapshot();
     const provider: SessionCatalogProvider = {
@@ -65,26 +93,7 @@ async function withCatalog(
         const adopted = sessionEntries
           ?.entriesForCatalog?.()
           .find((entry) => entry.sessionKey === key);
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: adopted
-              ? [
-                  {
-                    threadId: "native-thread",
-                    sessionKey: key,
-                    status: "stored",
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ]
-              : [],
-          },
-        ];
+        return hosts(adopted ? [session()] : []);
       },
       read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
     };
@@ -137,6 +146,132 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
   });
 });
 
+it.each(["planning", "delivery"])(
+  "serves catalog %s without draining unrelated display invalidations",
+  async (phase) => {
+    await withCatalog(
+      async ({ list, setList, projection }) => {
+        const warm = await list();
+        const before = projection.materializedCount;
+        const invalidate = () => {
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          expect(projection.needsMaterialization).toBe(true);
+        };
+        setList(async ({ sessionEntries }) => {
+          expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(41);
+          if (phase === "delivery") {
+            invalidate();
+          }
+          return hosts([session()]);
+        });
+        if (phase === "planning") {
+          invalidate();
+        }
+        const response = await list();
+        expect(response.mock.calls[0]?.[1]).toEqual(warm.mock.calls[0]?.[1]);
+        expect(projection.materializedCount).toBe(before);
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      },
+      { otherEntryCount: 40 },
+    );
+  },
+);
+
+it("reuses unchanged agent selections across catalog polls and refreshes published rows", async () => {
+  await withCatalog(
+    async ({ list, setList, projection }) => {
+      const workKey = "agent:work:adopted";
+      const workEntry = {
+        ...original,
+        sessionId: "work-instance",
+        label: "Work",
+        createdActor: { type: "system" as const, id: "work-owner" },
+      };
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, label: "Main" });
+      replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
+      const planningRevisions: Array<object | undefined> = [];
+      setList(async ({ sessionEntries }) => {
+        planningRevisions.push(sessionEntries?.revision);
+        return [
+          {
+            hostId: "gateway:fixture",
+            label: "Fixture",
+            kind: "gateway",
+            connected: true,
+            sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
+              ({ agentId, sessionKey, entry }) => ({
+                threadId: `${agentId}:${entry.sessionId}`,
+                sessionKey,
+                title: entry.label,
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              }),
+            ),
+          },
+        ];
+      });
+      const mainSession = {
+        threadId: `main:${original.sessionId}`,
+        sessionKey: key,
+        title: "Main",
+        createdActor: original.createdActor,
+      };
+      const workSession = {
+        threadId: `work:${workEntry.sessionId}`,
+        sessionKey: workKey,
+        title: "Work",
+        createdActor: workEntry.createdActor,
+      };
+      const first = await list();
+      expect(first.mock.calls[0]?.[1]).toMatchObject({
+        catalogs: [{ hosts: [{ sessions: [mainSession, workSession] }] }],
+      });
+      const selectEntries = projection.selectEntries.bind(projection);
+      let broadRowsRead = 0;
+      vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+        const rows = selectEntries(query, metadataPrepared);
+        if (!query?.key && !query?.sessionIdOrKey) {
+          broadRowsRead += rows.length;
+        }
+        return rows;
+      });
+      const second = await list();
+      expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[0]).toBeDefined();
+      expect(planningRevisions[1]).toBe(planningRevisions[0]);
+
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      const catalogRefresh = await list();
+      expect(catalogRefresh.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[2]).toBe(planningRevisions[0]);
+
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { ...original, updatedAt: 2, label: "Updated main" },
+      );
+      const updated = await list();
+      expect(updated.mock.calls[0]?.[1]).toMatchObject({
+        catalogs: [
+          { hosts: [{ sessions: [{ ...mainSession, title: "Updated main" }, workSession] }] },
+        ],
+      });
+      expect(broadRowsRead).toBeGreaterThan(0);
+      expect(planningRevisions[3]).not.toBe(planningRevisions[2]);
+      broadRowsRead = 0;
+
+      const repeated = await list();
+      expect(repeated.mock.calls[0]?.[1]).toEqual(updated.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[4]).toBe(planningRevisions[3]);
+    },
+    { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
+  );
+});
+
 it("bounds catalog result delivery to returned adoption keys", async () => {
   await withCatalog(
     async ({ list, setList, projection }) => {
@@ -144,37 +279,12 @@ it("bounds catalog result delivery to returned adoption keys", async () => {
       let deliveryRowsRead = 0;
       setList(async ({ sessionEntries }) => {
         expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(257);
-        vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
-          const rows = selectEntries(query);
+        vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+          const rows = selectEntries(query, metadataPrepared);
           deliveryRowsRead += rows.length;
           return rows;
         });
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "native-thread",
-                sessionKey: key,
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              },
-              {
-                threadId: "blank-key-thread",
-                sessionKey: " ",
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              },
-            ],
-          },
-        ];
+        return hosts([session(), session({ threadId: "blank-key-thread", sessionKey: " " })]);
       });
       const respond = await list();
       const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
@@ -222,22 +332,7 @@ it("bounds roster projections while delivering adopted sessions without an impli
       setList(async ({ sessionEntries }) => {
         expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(sessionCount + 1);
         rosterEntryProjections = 0;
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: keys.map((sessionKey) => ({
-              threadId: sessionKey,
-              sessionKey,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            })),
-          },
-        ];
+        return hosts(keys.map((sessionKey) => session({ threadId: sessionKey, sessionKey })));
       });
       const respond = await list();
       const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
@@ -265,24 +360,7 @@ it("does not attach a replacement session identity after provider enumeration yi
       ).toBe(original.sessionId);
       started.resolve();
       await release.promise;
-      return [
-        {
-          hostId: "gateway:fixture",
-          label: "Fixture",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            {
-              threadId: "native-thread",
-              sessionKey: key,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            },
-          ],
-        },
-      ];
+      return hosts([session()]);
     });
     const pending = list();
     await started.promise;
@@ -297,9 +375,9 @@ it("does not attach a replacement session identity after provider enumeration yi
     );
     release.resolve();
     const respond = await pending;
-    const session = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0];
-    expect(session).toMatchObject({ threadId: "native-thread" });
-    expect(session).not.toHaveProperty("sessionKey");
-    expect(session).not.toHaveProperty("createdActor");
+    const returnedSession = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0];
+    expect(returnedSession).toMatchObject({ threadId: "native-thread" });
+    expect(returnedSession).not.toHaveProperty("sessionKey");
+    expect(returnedSession).not.toHaveProperty("createdActor");
   });
 });

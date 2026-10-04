@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
@@ -16,7 +16,7 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
     agents: {
       defaults: { model: "openai/gpt-5.5" },
       entries: {
-        dev: { default: true, workspace: "/tmp/x" },
+        dev: { workspace: "/tmp/x" },
       },
     },
     models: {
@@ -79,26 +79,35 @@ afterEach(() => {
 });
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
-  it("retains a literal catalog @ suffix on a legacy implicit primary route", async () => {
-    const config = utilityConfig();
-    delete config.meta;
-    delete config.models?.providers?.openai;
-    const provider = config.models?.providers?.["local-utility"];
-    if (!provider?.models[0]) {
-      throw new Error("Missing local utility fixture");
-    }
-    provider.models[0].id = "tiny@experimental";
+  it.each([false, true])(
+    "retains a literal catalog @ suffix on a native implicit route (ACP=%s)",
+    async (acp) => {
+      const config = utilityConfig();
+      const agent = config.agents?.entries?.dev;
+      assert(agent);
+      if (acp) {
+        agent.model = "harness-only";
+        agent.runtime = { type: "acp" };
+      }
+      delete config.meta;
+      delete config.models?.providers?.openai;
+      const provider = config.models?.providers?.["local-utility"];
+      if (!provider?.models[0]) {
+        throw new Error("Missing local utility fixture");
+      }
+      provider.models[0].id = "tiny@experimental";
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
 
-    expect(route).toMatchObject({
-      provider: "local-utility",
-      model: "tiny@experimental",
-      modelLabel: "local-utility/tiny@experimental",
-    });
-    expect(route?.authProfileId).toBeUndefined();
-    expect(route?.modelTarget).toBeUndefined();
-  });
+      expect(route).toMatchObject({
+        provider: "local-utility",
+        model: "tiny@experimental",
+        modelLabel: "local-utility/tiny@experimental",
+      });
+      expect(route?.authProfileId).toBeUndefined();
+      expect(route?.modelTarget).toBeUndefined();
+    },
+  );
 
   it("invalidates the inherited primary verification when only utility separation changes", async () => {
     const legacy = utilityConfig();
@@ -127,43 +136,38 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     ).toBe(true);
   });
 
-  it("uses the explicit utility during first-run setup without manufacturing a primary", async () => {
-    const config = utilityConfig();
-    const original = structuredClone(config);
+  it.each([undefined, "openai/gpt-5.5"])(
+    "resolves utility with primary %s without changing config or credential ownership",
+    async (primaryModel) => {
+      const config = utilityConfig(primaryModel);
+      const original = structuredClone(config);
+      const primary = primaryModel
+        ? await resolveSystemAgentConfiguredRouteFromConfig(config)
+        : undefined;
+      const utility = await resolveSystemAgentConfiguredRouteFromConfig(
+        config,
+        undefined,
+        primaryModel ? { modelTarget: "utility" } : undefined,
+      );
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
-
-    expect(route).toMatchObject({
-      runner: "embedded",
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      provider: "local-utility",
-      model: "tiny",
-      agentId: "dev",
-      agentDir: resolveAgentDir(config, "dev"),
-    });
-    expect(route?.runConfig.agents?.defaults?.model).toBeUndefined();
-    expect(config).toEqual(original);
-  });
-
-  it("verifies the utility role alongside a primary without moving the credential owner", async () => {
-    const config = utilityConfig("openai/gpt-5.5");
-
-    const primary = await resolveSystemAgentConfiguredRouteFromConfig(config);
-    const utility = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
-      modelTarget: "utility",
-    });
-
-    expect(primary).toMatchObject({ modelLabel: "openai/gpt-5.5", agentId: "dev" });
-    expect(primary).not.toHaveProperty("modelTarget");
-    expect(utility).toMatchObject({
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      agentId: "dev",
-      agentDir: primary?.agentDir,
-    });
-    expect(utility?.runConfig.agents?.defaults?.model).toBe("openai/gpt-5.5");
-  });
+      if (primaryModel) {
+        expect(primary).toMatchObject({ modelLabel: primaryModel, agentId: "dev" });
+        expect(primary).not.toHaveProperty("modelTarget");
+        expect(utility?.agentDir).toBe(primary?.agentDir);
+      }
+      expect(utility).toMatchObject({
+        runner: "embedded",
+        modelTarget: "utility",
+        modelLabel: "local-utility/tiny",
+        provider: "local-utility",
+        model: "tiny",
+        agentId: "dev",
+        agentDir: resolveAgentDir(config, "dev"),
+      });
+      expect(utility?.runConfig.agents?.defaults?.model).toBe(primaryModel);
+      expect(config).toEqual(original);
+    },
+  );
 
   it.each(["defaults", "agent"] as const)(
     "invalidates utility verification after a %s utility change while preserving the primary route",
@@ -231,7 +235,6 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
         defaults: withoutRoster.agents?.defaults,
         entries: {
           main: {
-            default: true,
             workspace: "/tmp/openclaw-main",
             agentDir: resolveAgentDir(withoutRoster, "main"),
           },

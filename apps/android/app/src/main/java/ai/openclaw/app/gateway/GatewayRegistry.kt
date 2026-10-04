@@ -1,10 +1,10 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.SecurePrefs
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -29,24 +29,30 @@ data class GatewayRegistryEntry(
   val tls: Boolean = true,
   val lastConnectedAtMs: Long = 0L,
   val contextPath: String = "",
-)
+  val localName: String? = null,
+) {
+  val displayName: String get() = localName ?: name
+
+  val address: String
+    get() {
+      val host = host ?: return stableId
+      val authority = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+      val scheme = if (kind == GatewayRegistryEntryKind.MANUAL) "${if (tls) "wss" else "ws"}://" else ""
+      return "$scheme$authority${port?.let { ":$it" }.orEmpty()}$contextPath"
+    }
+}
 
 @Serializable
 internal data class PersistedGatewayRegistry(
+  @Required
   val version: Int = 1,
   val activeStableId: String? = null,
   val connectedStableIds: List<String>? = null,
   val entries: List<GatewayRegistryEntry> = emptyList(),
 )
 
-@Serializable
-private data class PersistedGatewayRegistryVersion(
-  val version: Int,
-)
-
 class GatewayRegistryStore(
   private val prefs: SecurePrefs,
-  private val onActiveChanged: ((String?) -> Unit)? = null,
 ) {
   companion object {
     internal const val STORAGE_KEY = "gateway.registry"
@@ -83,6 +89,8 @@ class GatewayRegistryStore(
         entry.copy(
           stableId = stableId,
           name = entry.name.trim().ifEmpty { stableId },
+          // Reconnect/discovery metadata never owns the user's local name.
+          localName = existing?.localName,
           host = entry.host?.trim()?.takeIf { it.isNotEmpty() },
           contextPath = normalizeGatewayContextPath(entry.contextPath),
           lastConnectedAtMs =
@@ -94,6 +102,20 @@ class GatewayRegistryStore(
         )
       _entries.value = (_entries.value.filterNot { it.stableId == stableId } + normalized).sortedForStorage()
       persist()
+    }
+
+  fun rename(
+    stableId: String,
+    name: String,
+  ): Boolean =
+    synchronized(mutationLock) {
+      if (!mutationsAllowed) return@synchronized false
+      val existing = _entries.value.firstOrNull { it.stableId == stableId } ?: return@synchronized false
+      val renamed = existing.copy(localName = name.trim().takeIf { it.isNotEmpty() })
+      val nextEntries = _entries.value.map { if (it.stableId == stableId) renamed else it }.sortedForStorage()
+      if (!prefs.commitSecureStrings(mapOf(STORAGE_KEY to encodedRegistry(entries = nextEntries)))) return@synchronized false
+      _entries.value = nextEntries
+      true
     }
 
   fun setActive(stableId: String?): Unit =
@@ -108,7 +130,6 @@ class GatewayRegistryStore(
         _connectedStableIds.value = _connectedStableIds.value + normalized
       }
       persist()
-      onActiveChanged?.invoke(normalized)
     }
 
   fun setConnectionEnabled(
@@ -145,20 +166,14 @@ class GatewayRegistryStore(
       if (!mutationsAllowed) return@synchronized false
       val normalized = stableId.trim()
       val nextEntries = _entries.value.filterNot { it.stableId == normalized }
-      val previousActiveStableId = _activeStableId.value
-      val nextActiveStableId = previousActiveStableId?.takeUnless { it == normalized }
+      val nextActiveStableId = _activeStableId.value?.takeUnless { it == normalized }
       val nextConnectedStableIds = _connectedStableIds.value.filterNot { it == normalized }
       if (!persistSynchronously(nextEntries, nextActiveStableId, nextConnectedStableIds)) return@synchronized false
 
-      // Publish only after the durable commit. Notification is post-commit and cannot turn a
-      // successful removal into a failure that would cancel the database recovery marker.
+      // Publish only after the durable commit.
       _entries.value = nextEntries
       _activeStableId.value = nextActiveStableId
       _connectedStableIds.value = nextConnectedStableIds
-      if (previousActiveStableId != nextActiveStableId) {
-        runCatching { onActiveChanged?.invoke(nextActiveStableId) }
-          .onFailure { Log.e("GatewayRegistry", "Active-gateway observer failed after durable removal", it) }
-      }
       true
     }
 
@@ -209,19 +224,15 @@ class GatewayRegistryStore(
 
   private fun decode(rawValue: String?): DecodedRegistry {
     val raw = rawValue ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
-    val version =
-      runCatching { json.decodeFromString<PersistedGatewayRegistryVersion>(raw) }
-        .getOrNull()
-        ?.version
-        ?.takeIf { it in 1..2 }
-        ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val decoded =
-      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }.getOrNull()
+      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }
+        .getOrNull()
+        ?.takeIf { it.version in 1..2 }
         ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val entries = decoded.entries.sortedForStorage()
     val active = decoded.activeStableId?.takeIf { activeId -> entries.any { it.stableId == activeId } }
     val connected =
-      (decoded.connectedStableIds ?: if (version == 1) listOfNotNull(active) else emptyList())
+      (decoded.connectedStableIds ?: if (decoded.version == 1) listOfNotNull(active) else emptyList())
         .distinct()
         .filter { connectedId -> entries.any { it.stableId == connectedId } }
     return DecodedRegistry(
@@ -237,4 +248,4 @@ class GatewayRegistryStore(
   }
 }
 
-internal fun List<GatewayRegistryEntry>.sortedForStorage(): List<GatewayRegistryEntry> = sortedWith(compareBy<GatewayRegistryEntry>({ it.name.lowercase() }, { it.stableId }))
+internal fun List<GatewayRegistryEntry>.sortedForStorage(): List<GatewayRegistryEntry> = sortedWith(compareBy<GatewayRegistryEntry>({ it.displayName.lowercase() }, { it.stableId }))

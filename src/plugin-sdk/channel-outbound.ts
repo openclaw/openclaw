@@ -58,28 +58,48 @@ export {
   createTypingCallbacks,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/reply-pipeline.js";
+export type {
+  ChannelReplyPipeline,
+  CreateTypingCallbacksParams,
+  ReplyPrefixContext,
+  ReplyPrefixContextBundle,
+  ReplyPrefixOptions,
+  SourceReplyDeliveryMode,
+  TypingCallbacks,
+} from "../channels/message/reply-pipeline.js";
 // Bare interval/stop orchestration for channels that own their typing renewal
 // policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
 export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
 
 export {
+  clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
+  createFinalizableDraftStreamControls,
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
+  type FinalizableDraftStreamState,
 } from "../channels/draft-stream-controls.js";
 
-export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createDraftStreamLoop, type DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createRunStateMachine } from "../channels/run-state-machine.js";
+export {
+  createArmableStallWatchdog,
+  type ArmableStallWatchdog,
+  type StallWatchdogTimeoutMeta,
+} from "../channels/transport/stall-watchdog.js";
 
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-export { createChannelRunQueue } from "./channel-lifecycle.core.js";
-
 export {
   createAccountStatusSink,
+  createChannelRunQueue,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
+  type ChannelRunQueue,
+  type ChannelRunQueueParams,
+  type ChannelRunQueueTaskContext,
 } from "./channel-lifecycle.core.js";
 export {
   createOutboundPayloadPlan,
@@ -190,10 +210,12 @@ export {
   verifyDurableFinalCapabilityProofs,
 } from "../channels/message/contracts.js";
 export {
+  createLivePreviewLifecycle,
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
+export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,

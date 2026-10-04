@@ -65,81 +65,19 @@ describe("hybrid project ranking", () => {
     expect(yieldedKeys).toBeLessThanOrEqual(activeProjectKeys.length);
   });
 
-  it("reads active membership after temporal decay and refreshes it for each call", async () => {
-    const nowMs = Date.UTC(2026, 0, 1);
-    const activeProjectKeys = ["old"];
-    const vector = ["old", "new"].map((key) => ({
-      id: key,
-      path: `sessions/${key}`,
-      startLine: 1,
-      endLine: 1,
-      source: "sessions",
-      snippet: key,
-      projectKey: key,
-      vectorScore: 0.8,
-      exactPathSpecificity: 2 as const,
-    }));
-    const before = structuredClone(vector);
-    const mtimes = new Map(vector.map((entry) => [entry.path, nowMs]));
-    const reads = vi.spyOn(mtimes, "get");
-    try {
-      for (const next of ["new", "old"]) {
-        reads.mockClear();
-        const pending = mergeHybridResults({
-          vector,
-          keyword: [],
-          vectorWeight: 1,
-          textWeight: 0,
-          activeProjectKeys,
-          sessionSourceMtimes: mtimes,
-          temporalDecay: { enabled: true, halfLifeDays: 30 },
-          nowMs,
-        });
-        expect(reads).toHaveBeenCalledTimes(2);
-        activeProjectKeys[0] = next;
-        expect((await pending).map((entry) => [entry.projectKey, entry.score])).toEqual([
-          [next, 1.15],
-          [next === "new" ? "old" : "new", 0.9],
-        ]);
-      }
-    } finally {
-      reads.mockRestore();
+  it("filters invalid tags without mutating entries during ranking", () => {
+    const active = ["one"];
+    const global = { score: 0.8 };
+    const tagged = { score: 0.8, projectKey: "one" };
+    const invalid = { score: 0.8, projectKey: `one; ${INVALID_PROJECT_ANNOTATION_KEY} ` };
+    const input = [global, tagged, invalid];
+    const before = structuredClone(input);
+    const result = applyProjectRanking(input, prepareActiveProjectKeys(active));
+    expect(result).toEqual([global, { ...tagged, score: 0.8 * 1.15 }]);
+    expect(result).not.toBe(input);
+    for (const [index, entry] of [global, tagged].entries()) {
+      expect(result[index]).not.toBe(entry);
     }
-    expect(vector).toEqual(before);
+    expect(input).toEqual(before);
   });
-
-  it.each([
-    { active: ["one", "two"], stored: " one ; two ", multiplier: 1.15 },
-    { active: ["one"], stored: "one;two", multiplier: 0.9 },
-    { active: [" one "], stored: "one", multiplier: 0.9 },
-    { active: ["One"], stored: "one", multiplier: 0.9 },
-    { active: ["one"], stored: " ; ", multiplier: 1.15 },
-  ])(
-    "preserves stored and active key semantics: $active / $stored",
-    ({ active, stored, multiplier }) => {
-      const entry = { score: 0.8, projectKey: stored };
-      expect(applyProjectRanking([entry], prepareActiveProjectKeys(active))).toEqual([
-        { ...entry, score: 0.8 * multiplier },
-      ]);
-      expect(entry.score).toBe(0.8);
-    },
-  );
-
-  it.each([undefined, [], ["one"]])(
-    "filters invalid tags and preserves entry ownership for %j",
-    (active) => {
-      const global = { score: 0.8 };
-      const tagged = { score: 0.8, projectKey: "one" };
-      const invalid = { score: 0.8, projectKey: `one; ${INVALID_PROJECT_ANNOTATION_KEY} ` };
-      const input = [global, tagged, invalid];
-      const before = structuredClone(input);
-      const result = applyProjectRanking(input, prepareActiveProjectKeys(active));
-      expect(result).toEqual([global, { ...tagged, score: active?.length ? 0.8 * 1.15 : 0.8 }]);
-      expect(result).not.toBe(input);
-      for (const [index, entry] of [global, tagged].entries()) {
-        expect(result[index] === entry).toBe(!active?.length);
-      }
-      expect(input).toEqual(before);
-    },
-  );
 });

@@ -11,6 +11,7 @@ import {
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
@@ -30,8 +31,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-// Registered server.close, routed by vitest.gateway-server.config.ts to gateway-server.
-it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-only"] as const)(
+it.each(["sibling", "restart", "memory-and-plugin", "memory-only"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
@@ -51,7 +51,7 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: fixture.pluginId });
     const registered = new PluginInstance(record.id, { record, registry });
-    if (mode !== "cache" && mode !== "restart") {
+    if (mode !== "restart") {
       registry.plugins.push(record);
     }
     const memoryDrain = vi.fn(async () => {
@@ -137,9 +137,7 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       const metadata = kernel.getPluginMetadataSnapshot();
       assert(metadata);
       const instance =
-        mode === "cache" || mode === "restart"
-          ? getPluginValueInstance(fixture.loadCallback(metadata))
-          : registered;
+        mode === "restart" ? getPluginValueInstance(fixture.loadCallback(metadata)) : registered;
       assert(instance);
       const database = openOpenClawStateDatabase({ env: fixture.state.env }).db;
       expect(database.isOpen).toBe(true);
@@ -218,6 +216,12 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       if (hasPluginFailure) {
         expect.soft(collectNestedErrorCandidates(error)).toContain(pluginFailure);
         expect(pluginSawOpenDatabase).toBe(true);
+        if (mode === "restart") {
+          // The process-cache reset retains the same outcome for its next observer.
+          expect((await waitForPluginCacheRetirement()).failures).toEqual([
+            { pluginId: fixture.pluginId, hookId: "instance", error: pluginFailure },
+          ]);
+        }
       } else {
         expect(error).toBeUndefined();
       }

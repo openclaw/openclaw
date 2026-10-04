@@ -1,7 +1,7 @@
 // Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectConfiguredAgentHarnessRuntimes as collectConfiguredAgentHarnessRuntimesBase } from "./harness-runtimes.js";
 
 function countRosterReads(config: OpenClawConfig): () => number {
@@ -20,11 +20,11 @@ function countRosterReads(config: OpenClawConfig): () => number {
 }
 
 function collectConfiguredAgentHarnessRuntimes(
-  config: OpenClawConfig,
+  config: unknown,
   options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
 ) {
   return collectConfiguredAgentHarnessRuntimesBase(
-    migratePersistedImplicitMainRoster(config).config as OpenClawConfig,
+    createCanonicalAgentConfigFixture(config).config,
     options,
   );
 }
@@ -103,21 +103,20 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("requires Codex for selectable per-agent OpenAI models", () => {
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
         },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             models: {
               "openai/gpt-5.5": {},
             },
           },
-        ],
+        },
       },
-    } as OpenClawConfig;
+    };
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
   });
@@ -173,7 +172,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
             },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
         list: {
           ops: {
             id: "ops",
@@ -181,7 +180,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
   });
@@ -206,7 +205,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const migrated = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(config).config;
     const rosterReads = countRosterReads(migrated);
 
     const runtimes = collectConfiguredAgentHarnessRuntimesBase(migrated);
@@ -217,7 +216,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
 
   it("observes roster mutations made between collection batches (#135743)", () => {
     const config = { agents: { entries: { main: {} } } } as unknown as OpenClawConfig;
-    const migrated = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(config).config;
 
     expect(collectConfiguredAgentHarnessRuntimesBase(migrated)).toEqual([]);
 

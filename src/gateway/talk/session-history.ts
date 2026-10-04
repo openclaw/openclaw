@@ -1,5 +1,5 @@
 import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session.js";
-import { readSessionPreviewItemsFromTranscript } from "../session-transcript-preview.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkHistoryItem = { role: "user" | "assistant"; text: string };
@@ -24,27 +24,35 @@ export async function readTalkRealtimeInitialItems(
   }
   const { readRestoredSessionTranscript } =
     await import("../../config/sessions/session-cold-storage-read.js");
-  return await readRestoredSessionTranscript({ ...sessionTarget, sessionId }, () => {
-    assertCurrent();
-    const items = readSessionPreviewItemsFromTranscript(
-      { ...sessionTarget, sessionId },
-      REALTIME_VOICE_CONTEXT_MAX_ITEMS,
-      REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
-      "model-context",
-    ).filter((item): item is TalkHistoryItem => item.role === "user" || item.role === "assistant");
-    // Retain the newest complete entries within the provider's context budget.
-    let remainingBytes = REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES;
-    const newestFirst: TalkHistoryItem[] = [];
-    for (const item of items.toReversed()) {
-      const itemBytes = Buffer.byteLength(item.text, "utf8");
-      if (itemBytes > remainingBytes) {
-        break;
+  return await readRestoredSessionTranscript(
+    { ...sessionTarget, sessionId },
+    async () => {
+      assertCurrent();
+      const preview = await readSessionPreviewItemsFromTranscriptAsync(
+        { ...sessionTarget, sessionId },
+        REALTIME_VOICE_CONTEXT_MAX_ITEMS,
+        REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
+        "model-context",
+      );
+      assertCurrent();
+      const items = preview.filter(
+        (item): item is TalkHistoryItem => item.role === "user" || item.role === "assistant",
+      );
+      // Retain the newest complete entries within the provider's context budget.
+      let remainingBytes = REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES;
+      const newestFirst: TalkHistoryItem[] = [];
+      for (const item of items.toReversed()) {
+        const itemBytes = Buffer.byteLength(item.text, "utf8");
+        if (itemBytes > remainingBytes) {
+          break;
+        }
+        newestFirst.push(item);
+        remainingBytes -= itemBytes;
       }
-      newestFirst.push(item);
-      remainingBytes -= itemBytes;
-    }
-    return newestFirst.toReversed();
-  });
+      return newestFirst.toReversed();
+    },
+    { assertCurrent },
+  );
 }
 
 export function buildTalkRealtimeHistoryInstructions(items: readonly TalkHistoryItem[]): string {

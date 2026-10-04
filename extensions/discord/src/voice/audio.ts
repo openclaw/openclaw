@@ -8,10 +8,10 @@ import {
   type OpusDecoderHandle as LibopusDecoder,
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
-import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
+import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const SAMPLE_RATE = 48_000;
@@ -312,10 +312,6 @@ class DiscordOpusEncodeStream extends Duplex {
   }
 }
 
-function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
-  return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
@@ -356,7 +352,10 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
+        yield {
+          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          packet: chunk,
+        };
       }
     }
   } catch (err) {

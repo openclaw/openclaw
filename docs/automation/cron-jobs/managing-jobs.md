@@ -144,11 +144,21 @@ Archiving a session (Control UI, or `sessions.patch { key, archived: true, expec
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
+The agent `automations` tool's `run` action waits in the Gateway instead: it returns the finished run (status, error, delivery status, and summary) when the run ends within the call's `timeoutMs` (default 60 seconds, capped at 10 minutes). A longer run returns its `runId`; read it later with the `runs` action and that `runId`. Main-session jobs, and jobs that run in the calling session, return at once because they start only after the calling turn ends.
+
 Run-now delivery measures lateness from when the manual request was accepted. An old pending scheduled slot does not make its fresh output stale; automatic and `--due` runs keep the original scheduled time for that check. A manual run still preserves the job's recurring cadence or future one-shot occurrence.
 
 Running a paused future one-shot leaves it paused and keeps its saved occurrence. Re-enable it when automatic execution is wanted. If a manual run was accepted before the scheduled time but waited past it in the command queue, that occurrence remains available after re-enabling or restarting the Gateway.
 
 Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
+
+Once a successful one-shot consumes its scheduled occurrence, its finished event and run history omit `nextRunAtMs`, including when the job auto-deletes. An early manual run that preserves a future occurrence still reports that occurrence.
+
+Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
+
+Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
+
+Choose **View transcript** on a run to read that run’s recorded conversation, including earlier pages. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page.
 
 Intentional silence (`NO_REPLY`), intentionally empty output, heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 
@@ -220,6 +230,6 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
   </Accordion>
   <Accordion title="Legacy store migration">
-    `openclaw doctor --fix` imports any `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archives the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.
+    `openclaw doctor --fix` imports supported `jobs-quarantine.json` sidecars into SQLite and archives the originals with a `.migrated` suffix. Retired `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` inputs remain unchanged: install OpenClaw `2026.9.7`, run its Doctor, then upgrade to the latest version. See the [retention policy](/gateway/doctor/config-migrations#retention-policy). Malformed SQLite job rows remain recoverable in quarantine while valid jobs keep running.
   </Accordion>
 </AccordionGroup>

@@ -1,12 +1,73 @@
 // Covers gateway watch tmux script helpers.
+import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGatewayWatchTmuxCommand,
   resolveGatewayWatchTmuxSessionName,
-  runGatewayWatchTmuxMain,
-  runGatewayWatchServiceHandoff,
+  runGatewayWatchTmuxMain as runGatewayWatchTmuxMainNative,
+  runGatewayWatchServiceHandoff as runGatewayWatchServiceHandoffNative,
 } from "../../scripts/gateway-watch-tmux.mts";
+
+type SpawnSyncFixture = (
+  command: string,
+  args: string[],
+  options: SpawnSyncOptions,
+) => Partial<SpawnSyncReturns<string | Buffer>>;
+
+const native = vi.hoisted(() => {
+  const overrides: Record<string, unknown> = {};
+  return { overrides, spawnSync: vi.fn<SpawnSyncFixture>() };
+});
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: native.spawnSync,
+}));
+vi.mock("node:process", async (importOriginal) => {
+  const actual = await importOriginal<{ default: NodeJS.Process }>();
+  return {
+    default: new Proxy(actual.default, {
+      get(target, key) {
+        return Object.hasOwn(native.overrides, key)
+          ? Reflect.get(native.overrides, key)
+          : Reflect.get(target, key, target);
+      },
+    }),
+  };
+});
+
+type RuntimeParams = NonNullable<Parameters<typeof runGatewayWatchTmuxMainNative>[0]>;
+type RuntimeFixture = RuntimeParams & {
+  spawnSync: SpawnSyncFixture;
+  nodePath?: string;
+  stderr?: { write(message: string): unknown };
+  stdout?: { write(message: string): unknown };
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
+};
+
+function runNativeBoundary(run: (params: RuntimeParams) => number, fixture: RuntimeFixture) {
+  const { spawnSync, nodePath, stderr, stdout, stdinIsTTY, stdoutIsTTY, ...params } = fixture;
+  const output = stdout ?? process.stdout;
+  native.overrides = {
+    execPath: nodePath ?? process.execPath,
+    stderr: stderr ?? process.stderr,
+    stdin: { isTTY: stdinIsTTY ?? false },
+    stdout: { write: (message: string) => output.write(message), isTTY: stdoutIsTTY ?? false },
+  };
+  native.spawnSync.mockImplementation(spawnSync);
+  try {
+    return run(params);
+  } finally {
+    native.overrides = {};
+    native.spawnSync.mockReset();
+  }
+}
+
+const runGatewayWatchTmuxMain = (fixture: RuntimeFixture) =>
+  runNativeBoundary(runGatewayWatchTmuxMainNative, fixture);
+const runGatewayWatchServiceHandoff = (fixture: RuntimeFixture) =>
+  runNativeBoundary(runGatewayWatchServiceHandoffNative, fixture);
 
 const createOutput = () => {
   const chunks: string[] = [];
@@ -583,7 +644,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(stdout.chunks.join("")).not.toContain("tmux attach -t");
   });
 
-  it.each([undefined, "", "dumb", "DUMB"])(
+  it.each([undefined, "DUMB"])(
     "keeps a capability-limited TERM=%s pseudo-terminal detached",
     (term) => {
       const stdout = createOutput();

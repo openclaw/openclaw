@@ -1,4 +1,3 @@
-/** Browser tool lifecycle and host-local profile discovery/import actions. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";
@@ -114,23 +113,16 @@ export async function executeBrowserLifecycleAction({
           timeoutMs: toolTimeoutMs,
           signal,
         });
-      if (proxyRequest) {
-        const result = await proxyRequest({
-          method: "GET",
-          path: "/profiles",
-          timeoutMs: toolTimeoutMs,
-        });
-        return jsonResult({
-          ...(result && typeof result === "object" ? result : { profiles: result }),
-          systemProfiles,
-          ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
-        });
-      }
+      const result = proxyRequest
+        ? await proxyRequest({ method: "GET", path: "/profiles", timeoutMs: toolTimeoutMs })
+        : {
+            profiles: await browserProfiles(baseUrl, {
+              timeoutMs: toolTimeoutMs,
+              signal,
+            }),
+          };
       return jsonResult({
-        profiles: await browserProfiles(baseUrl, {
-          timeoutMs: toolTimeoutMs,
-          signal,
-        }),
+        ...(result && typeof result === "object" ? result : { profiles: result }),
         systemProfiles,
         ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
       });

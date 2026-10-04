@@ -43,9 +43,15 @@ export class GitHubConnections extends OpenClawLightDomElement {
   private subscriptions: Array<() => void> = [];
   private readonly personal = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
+    authorizationSucceeded: () => {
+      this.setupOpen = false;
+    },
   });
   private readonly system = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
+    authorizationSucceeded: () => {
+      this.setupOpen = false;
+    },
     runExternalMutation: (task, options) =>
       this.context.runtimeConfig.runExternalMutation(task, options),
   });

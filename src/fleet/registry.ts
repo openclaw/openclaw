@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import path from "node:path";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -11,9 +11,9 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type {
   FleetCellOperationName,
   FleetCellRecord,
-  FleetRegistryWriteOperations,
   ReserveFleetCellParams,
 } from "./registry.types.js";
+import type { FleetRegistryWriteOperations } from "./registry.worker-contract.js";
 
 export type { FleetCellOperationName, FleetCellRecord } from "./registry.types.js";
 
@@ -48,13 +48,7 @@ async function writeFleetCell<
       input: { ...command.input, operationOwner: scope.owner },
     });
   }
-  return await writeFleetRegistry(captureOpenClawStateWorkerContext({ env }), command);
-}
-
-async function writeFleetRegistry<Key extends keyof FleetRegistryWriteOperations>(
-  context: OpenClawStateWorkerContext,
-  command: { type: Key; input: FleetRegistryWriteOperations[Key]["input"] },
-): Promise<FleetRegistryWriteOperations[Key]["output"]> {
+  const context = captureOpenClawStateWorkerContext({ env });
   const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, command);
 }
@@ -62,7 +56,6 @@ async function writeFleetRegistry<Key extends keyof FleetRegistryWriteOperations
 type FleetCellOperationLease = {
   heartbeat: (nowMs?: number) => Promise<void>;
   release: () => Promise<void>;
-  owner: string;
 };
 
 /** CLI reads remain noncreating and never join Gateway writable lifecycle admission (#101290). */
@@ -148,7 +141,6 @@ export async function withFleetCellOperationLease<T>(
       phase = "operation";
       let release: Promise<void> | undefined;
       const lease: FleetCellOperationLease = {
-        owner,
         heartbeat: async (nowMs) => {
           if (phase !== "operation") {
             throw new Error(`Fleet operation lease was lost for ${tenantId}.`);
@@ -169,18 +161,15 @@ export async function withFleetCellOperationLease<T>(
           }));
         },
       };
-      let outcome: { value: T } | { error: unknown };
+      let result: T | undefined;
       const errors: unknown[] = [];
       try {
-        outcome = {
-          value: await fleetOperationScopes.run(
-            { ...scope, context, tenantId, owner, assertCurrent },
-            () => operation(lease),
-          ),
-        };
+        result = await fleetOperationScopes.run(
+          { ...scope, context, tenantId, owner, assertCurrent },
+          () => operation(lease),
+        );
         context.admission.assertCurrent();
       } catch (error) {
-        outcome = { error };
         errors.push(error);
       }
       try {
@@ -191,20 +180,8 @@ export async function withFleetCellOperationLease<T>(
         // The existing client joins dispatched work after closing further command admission.
         phase = "closed";
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Fleet operation and lease release failed",
-          errors[0],
-        );
-      }
-      if ("error" in outcome) {
-        throw outcome.error;
-      }
-      return outcome.value;
+      throwSqliteLifecycleErrors(errors, "Fleet operation and lease release failed");
+      return result!;
     },
     { assertCurrent },
   );

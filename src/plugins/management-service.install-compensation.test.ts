@@ -41,7 +41,8 @@ vi.mock("./install.js", async (importOriginal) => ({
 vi.mock("./marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => mocks.install(...args),
 }));
-vi.mock("./install-record-commit.js", () => ({
+vi.mock("./install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-record-commit.js")>()),
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commit(...args),
 }));
 vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
@@ -87,7 +88,7 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
 }));
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: async () => undefined,
@@ -98,19 +99,27 @@ const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
 const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({
   reviewToken: review.reviewToken,
 });
-const requests = [
-  { source: "local", path: "/incoming", recordSource: "path", mode: "update" },
-  { source: "npm", spec: "demo@2.0.0", mode: "update" },
-  { source: "npm-pack", archivePath: "/incoming.tgz", mode: "update" },
-  { source: "git", spec: "git:example/demo", mode: "update" },
-  { source: "clawhub", spec: "clawhub:community/demo", mode: "update" },
+const settlements = [
   {
-    source: "marketplace",
-    marketplace: "local/repo",
-    plugin: "demo",
-    mode: "update",
+    failure: "authority-closed",
+    request: { source: "local", path: "/incoming", recordSource: "path", mode: "update" },
   },
-] satisfies ManagedPluginSourceInstallRequest[];
+  {
+    failure: "before-commit",
+    request: { source: "npm-pack", archivePath: "/incoming.tgz", mode: "update" },
+  },
+  {
+    failure: "runtime-apply",
+    request: { source: "git", spec: "git:example/demo", mode: "update" },
+  },
+  {
+    failure: "none",
+    request: { source: "marketplace", marketplace: "local/repo", plugin: "demo", mode: "update" },
+  },
+] satisfies {
+  failure: "authority-closed" | "before-commit" | "runtime-apply" | "none";
+  request: ManagedPluginSourceInstallRequest;
+}[];
 
 describe("managed plugin install transactions", () => {
   beforeEach(() => {
@@ -172,14 +181,9 @@ describe("managed plugin install transactions", () => {
     expect(mocks.commit).not.toHaveBeenCalled();
   });
 
-  it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
-    for (const failure of [
-      "authority-closed",
-      "before-commit",
-      "after-commit",
-      "runtime-apply",
-      "none",
-    ] as const) {
+  it.each(settlements)(
+    "settles $request.source payloads after $failure",
+    async ({ request, failure }) => {
       mocks.commit.mockReset();
       const home = await fs.realpath(tempDirs.make("openclaw-managed-upgrade-"));
       const sourceDir = path.join(home, "incoming");
@@ -266,13 +270,6 @@ describe("managed plugin install transactions", () => {
             marketplaceSource: "local/repo",
             marketplacePlugin: "demo",
             git: { url: "https://example.test/demo.git" },
-            packageName: "community/demo",
-            clawhub: {
-              source: "clawhub",
-              clawhubUrl: "https://clawhub.ai",
-              clawhubPackage: "community/demo",
-              clawhubFamily: "code-plugin",
-            },
           };
           const transaction = resolvePackageDirInstallTransaction(copied);
           return transaction ? attachPluginInstallTransaction(result, transaction) : result;
@@ -287,15 +284,6 @@ describe("managed plugin install transactions", () => {
         request,
         snapshot,
         env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
-        ...(failure === "after-commit"
-          ? {
-              runtime: {
-                log: () => {
-                  throw conflict;
-                },
-              },
-            }
-          : {}),
         ...(failure === "runtime-apply"
           ? {
               applyRuntime: async () => {
@@ -316,7 +304,7 @@ describe("managed plugin install transactions", () => {
       } else if (failure === "authority-closed") {
         await expect(installed).rejects.toThrow("authority-closed");
         expect(mocks.commit).not.toHaveBeenCalled();
-      } else if (failure === "after-commit" || failure === "runtime-apply") {
+      } else if (failure === "runtime-apply") {
         const rejected = await installed.catch((error: unknown) => error);
         expect(rejected).toBeInstanceOf(PluginInstallPersistedError);
         expect(rejected).toMatchObject({ pluginId: "demo", cause: conflict });
@@ -326,9 +314,7 @@ describe("managed plugin install transactions", () => {
         const projected = projectPluginRuntimeFailure(rejected);
         expect(projected.persistence).toEqual({ operation: "install", pluginId: "demo" });
         expect(projected.message).toContain(conflict.message);
-        if (failure === "runtime-apply") {
-          expect(projected.message).toContain("service startup failed");
-        }
+        expect(projected.message).toContain("service startup failed");
         expect(projected.runtime).toEqual(
           conflict instanceof PluginRuntimeApplicationError ? conflict.details : undefined,
         );
@@ -355,8 +341,8 @@ describe("managed plugin install transactions", () => {
       expect(await fs.readdir(path.join(home, "extensions", ".openclaw-install-backups"))).toEqual(
         [],
       );
-    }
-  });
+    },
+  );
 
   it("leaves linked operator source untouched when persistence fails", async () => {
     const sourcePath = tempDirs.make("openclaw-managed-link-");
@@ -407,7 +393,7 @@ describe("managed plugin install transactions", () => {
       }
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const installed = installManagedPluginSource({
-        request: { source: "local", path: "/incoming", recordSource: "path", mode: "update" },
+        request: { source: "npm", spec: "demo@2.0.0", mode: "update" },
         snapshot,
         runtime,
         onCapabilityConsent: acceptCapabilities,

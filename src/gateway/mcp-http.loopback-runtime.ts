@@ -22,8 +22,7 @@ type McpLoopbackToolCallResult = {
 
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
-type McpLoopbackToolCallCapture = {
-  generation: number;
+type McpLoopbackToolCallObservers = {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
@@ -35,6 +34,10 @@ type McpLoopbackToolCallCapture = {
   }) => void;
   onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
   onToolCallResult: (call: McpLoopbackToolCallResult) => void;
+};
+
+type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
+  generation: number;
   inFlight: number;
   activityVersion: number;
   activityWaiters: Set<() => void>;
@@ -65,6 +68,15 @@ const toolCallCaptures = resolveGlobalMap<string, McpLoopbackToolCallCapture>(
   },
 );
 
+function observeCapture<T>(observe: () => T): T | undefined {
+  try {
+    return observe();
+  } catch {
+    // Delivery observation is diagnostic; it must not alter request or tool execution.
+    return undefined;
+  }
+}
+
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
   const capture = toolCallCaptures.get(captureKey);
   if (!capture) {
@@ -86,35 +98,18 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 }
 
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
-export function beginMcpLoopbackToolCallCapture(params: {
-  captureKey: string;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
-  onRequestStart?: () => void;
-  onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
-  onToolCallUpdate?: (calls: {
-    previous: McpLoopbackToolCallStart;
-    current: McpLoopbackToolCallStart;
-  }) => void;
-  onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
-  onToolCallResult: (call: McpLoopbackToolCallResult) => void;
-}): void {
-  const captureKey = params.captureKey.trim();
+export function beginMcpLoopbackToolCallCapture({
+  captureKey: rawCaptureKey,
+  ...observers
+}: McpLoopbackToolCallObservers & { captureKey: string }): void {
+  const captureKey = rawCaptureKey.trim();
   if (!captureKey) {
     return;
   }
   nextToolCallCaptureGeneration += 1;
   toolCallCaptures.set(captureKey, {
+    ...observers,
     generation: nextToolCallCaptureGeneration,
-    onYield: params.onYield,
-    onRequestStart: params.onRequestStart,
-    onRequestClassified: params.onRequestClassified,
-    onRequestFinish: params.onRequestFinish,
-    onToolCallStart: params.onToolCallStart,
-    onToolCallUpdate: params.onToolCallUpdate,
-    onToolCallFinish: params.onToolCallFinish,
-    onToolCallResult: params.onToolCallResult,
     inFlight: 0,
     activityVersion: 0,
     activityWaiters: new Set(),
@@ -156,11 +151,7 @@ export function markMcpLoopbackRequestStarted(
   }
   capture.inFlight += 1;
   notifyMcpLoopbackToolCallCaptureActivity(capture);
-  try {
-    capture.onRequestStart?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => capture.onRequestStart?.());
   return { capture, classified: false, finished: false };
 }
 
@@ -172,11 +163,7 @@ export function markMcpLoopbackRequestClassified(
     return;
   }
   captureHandle.classified = true;
-  try {
-    captureHandle.capture.onRequestClassified?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => captureHandle.capture.onRequestClassified?.());
 }
 
 /** Mark an authenticated request as settled and wake capture drains. */
@@ -189,11 +176,7 @@ export function markMcpLoopbackRequestFinished(
   markMcpLoopbackRequestClassified(captureHandle);
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  try {
-    capture.onRequestFinish?.();
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter request handling.
-  }
+  observeCapture(() => capture.onRequestFinish?.());
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }
@@ -217,13 +200,9 @@ export function markMcpLoopbackToolCallStarted(params: {
   const call = { toolName, args: params.args };
   capture.inFlight += 1;
   notifyMcpLoopbackToolCallCaptureActivity(capture);
-  let correlationId: string | undefined;
-  try {
-    const observedCorrelationId = capture.onToolCallStart?.(call);
-    correlationId = typeof observedCorrelationId === "string" ? observedCorrelationId : undefined;
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
+  const observedCorrelationId = observeCapture(() => capture.onToolCallStart?.(call));
+  const correlationId =
+    typeof observedCorrelationId === "string" ? observedCorrelationId : undefined;
   return { capture, call, correlationId, prepared: false, finished: false };
 }
 
@@ -238,11 +217,9 @@ export function updateMcpLoopbackToolCallCapture(
   const previous = captureHandle.call;
   captureHandle.call = call;
   captureHandle.prepared = true;
-  try {
+  observeCapture(() => {
     captureHandle.capture.onToolCallUpdate?.({ previous, current: call });
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
+  });
 }
 
 /** Report a completed call without letting observer failures alter tool execution. */
@@ -257,7 +234,7 @@ export function recordMcpLoopbackToolCallResult(
   if (!toolName) {
     return;
   }
-  try {
+  observeCapture(() => {
     const outcome: McpLoopbackToolCallOutcome =
       params.outcome === "blocked"
         ? { outcome: "blocked", deniedReason: params.deniedReason }
@@ -270,9 +247,7 @@ export function recordMcpLoopbackToolCallResult(
         ? { correlationId: params.captureHandle.correlationId }
         : {}),
     });
-  } catch {
-    // Delivery observation is diagnostic state; it must not turn a successful tool call into error.
-  }
+  });
 }
 
 /** Mark a captured loopback tool call as settled and wake idle drains. */
@@ -284,11 +259,9 @@ export function markMcpLoopbackToolCallFinished(
   }
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  try {
+  observeCapture(() => {
     capture.onToolCallFinish?.(captureHandle.call, { prepared: captureHandle.prepared });
-  } catch {
-    // Delivery observation is diagnostic state; it must not alter tool execution.
-  }
+  });
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }

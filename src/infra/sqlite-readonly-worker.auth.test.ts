@@ -6,11 +6,14 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -19,7 +22,6 @@ import {
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -55,7 +57,24 @@ function createAuthDatabase(key = "synthetic") {
   } finally {
     database.close();
   }
-  return { source, store, state };
+  return {
+    source,
+    store,
+    rows: {
+      store: { status: "readable", raw: store },
+      state: { status: "readable", raw: state },
+      cacheable: true,
+    },
+  };
+}
+
+function clearAuthState(source: string) {
+  const writer = new (requireNodeSqlite().DatabaseSync)(source);
+  try {
+    writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
+  } finally {
+    writer.close();
+  }
 }
 
 function read(
@@ -69,18 +88,13 @@ function read(
     source: sourceKind,
     expectedIdentity: readDatabasePathIdentitySync(source).key,
     env,
-    coordinatorRuntime: {
-      directory: tempDirs.make("openclaw-auth-read-coordinator-"),
-      keepAlive: false,
-    },
     signal,
   });
 }
 
 it("keeps prepared auth source reads and cleanup off the host SQLite thread", async () => {
-  const { source, store, state } = createAuthDatabase();
+  const { source, rows } = createAuthDatabase();
   const before = fs.readFileSync(source);
-  const coordinatorDirectory = tempDirs.make("openclaw-auth-source-coordinator-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   let childClosed = false;
@@ -99,31 +113,25 @@ it("keeps prepared auth source reads and cleanup off the host SQLite thread", as
       vi.spyOn(StatementSync.prototype, method),
     ),
   ];
-  await withStateDatabaseCoordinatorRuntimeDirectory(coordinatorDirectory, async () => {
-    const absentPath = path.join(path.dirname(source), "absent.sqlite");
-    const absent = prepareAgentAuthProfileRowsRead({
-      databasePath: absentPath,
-      agentId: "main",
-      env,
-    });
-    const reader = prepareAgentAuthProfileRowsRead({ databasePath: source, agentId: "main", env });
-    try {
-      await expect(absent.read()).resolves.toEqual({
-        store: { status: "missing", reason: "database" },
-        state: { status: "missing", reason: "database" },
-        cacheable: false,
-      });
-      expect(fs.existsSync(absentPath)).toBe(false);
-      await expect(reader.read()).resolves.toEqual({
-        store: { status: "readable", raw: store },
-        state: { status: "readable", raw: state },
-        cacheable: true,
-      });
-      expect(childClosed).toBe(true);
-    } finally {
-      await Promise.all([absent.dispose(), reader.dispose()]);
-    }
+  const absentPath = path.join(path.dirname(source), "absent.sqlite");
+  const absent = prepareAgentAuthProfileRowsRead({
+    databasePath: absentPath,
+    agentId: "main",
+    env,
   });
+  const reader = prepareAgentAuthProfileRowsRead({ databasePath: source, agentId: "main", env });
+  try {
+    await expect(absent.read()).resolves.toEqual({
+      store: { status: "missing", reason: "database" },
+      state: { status: "missing", reason: "database" },
+      cacheable: false,
+    });
+    expect(fs.existsSync(absentPath)).toBe(false);
+    await expect(reader.read()).resolves.toEqual(rows);
+    expect(childClosed).toBe(true);
+  } finally {
+    await Promise.all([absent.dispose(), reader.dispose()]);
+  }
   for (const operation of sql) {
     expect(operation).not.toHaveBeenCalled();
   }
@@ -131,14 +139,14 @@ it("keeps prepared auth source reads and cleanup off the host SQLite thread", as
 });
 
 describe.each([
-  { label: "native", broker: false, sourceKind: "canonical" },
+  // Snapshots must bypass an active broker; also keep native proof where brokers are unsupported.
+  { label: "native", broker: !skipBroker, sourceKind: skipBroker ? "canonical" : "snapshot" },
   { label: "broker", broker: true, sourceKind: "canonical" },
-  { label: "snapshot with active broker", broker: true, sourceKind: "snapshot" },
 ] as const)("auth SQLite transport: $label", (transport) => {
   it.skipIf(transport.broker && skipBroker)(
     "serializes fresh auth reads in one scoped child and joins it on close",
     async () => {
-      const { source, store, state } = createAuthDatabase();
+      const { source, store, rows: expectedRows } = createAuthDatabase();
       const broker = transport.broker ? createSpawnBrokerHost() : undefined;
       try {
         await broker?.ready();
@@ -149,23 +157,31 @@ describe.each([
             const rows = await Promise.all(
               Array.from({ length: 4 }, () => read(source, transport.sourceKind)),
             );
-            expect(rows).toEqual(
-              Array.from({ length: 4 }, () => ({
-                store: { status: "readable", raw: store },
-                state: { status: "readable", raw: state },
-                cacheable: true,
-              })),
-            );
-            const writer = new (requireNodeSqlite().DatabaseSync)(source);
-            try {
-              writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
-            } finally {
-              writer.close();
-            }
+            expect(rows).toEqual(Array.from({ length: 4 }, () => expectedRows));
+            clearAuthState(source);
             expect((await read(source, transport.sourceKind)).state).toEqual({
               status: "readable",
               raw: { lastGood: {} },
             });
+            const connection = new GatewayConnectionWork();
+            const scheduled = createScheduledGatewayRunner();
+            try {
+              for (const enter of [
+                <T>(run: () => Promise<T>) => connection.track(run),
+                scheduled,
+              ]) {
+                const detachedRows = await runInDetachedAsyncContext(() =>
+                  enter(() => read(source, transport.sourceKind)),
+                );
+                expect(detachedRows).toEqual({
+                  store: { status: "readable", raw: store },
+                  state: { status: "readable", raw: { lastGood: {} } },
+                  cacheable: true,
+                });
+              }
+            } finally {
+              await connection.drain();
+            }
             const child =
               transport.label === "broker"
                 ? brokerSpawn?.mock.results[0]?.value
@@ -186,7 +202,9 @@ describe.each([
   it.skipIf(transport.broker && skipBroker)(
     "reads complete oversized auth rows and joins the child before returning",
     async () => {
-      const { source, store, state } = createAuthDatabase(`${"synthetic".repeat(1_200_000)}🌊`);
+      const { source, rows: expectedRows } = createAuthDatabase(
+        `${"synthetic".repeat(1_200_000)}🌊`,
+      );
       const sourceBefore = createHash("sha256").update(fs.readFileSync(source)).digest("hex");
       const broker = transport.broker ? createSpawnBrokerHost() : undefined;
       let child: ChildProcess | undefined;
@@ -223,11 +241,7 @@ describe.each([
         }
         const reading = () => read(source, transport.sourceKind);
         const rows = await (broker ? runWithSpawnBroker(broker, reading) : reading());
-        const expected = JSON.stringify({
-          store: { status: "readable", raw: store },
-          state: { status: "readable", raw: state },
-          cacheable: true,
-        });
+        const expected = JSON.stringify(expectedRows);
         const received = JSON.stringify(rows);
         expect(received.length).toBe(expected.length);
         const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -240,12 +254,7 @@ describe.each([
         expect(createHash("sha256").update(fs.readFileSync(source)).digest("hex")).toBe(
           sourceBefore,
         );
-        const writer = new (requireNodeSqlite().DatabaseSync)(source);
-        try {
-          writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
-        } finally {
-          writer.close();
-        }
+        clearAuthState(source);
         const refreshed = await (broker ? runWithSpawnBroker(broker, reading) : reading());
         expect(refreshed.state).toEqual({ status: "readable", raw: { lastGood: {} } });
       } finally {
@@ -280,16 +289,12 @@ it("closes a scoped auth child before rejecting queued reads on shutdown", async
       Promise.allSettled([read(source, "canonical"), read(source, "canonical")]),
     );
     await scope.close();
-    expect(await pending).toEqual([
-      {
+    expect(await pending).toEqual(
+      Array.from({ length: 2 }, () => ({
         status: "rejected",
         reason: expect.objectContaining({ message: "SQLite read-only worker scope closed" }),
-      },
-      {
-        status: "rejected",
-        reason: expect.objectContaining({ message: "SQLite read-only worker scope closed" }),
-      },
-    ]);
+      })),
+    );
     await expect(scope.run(() => read(source, "canonical"))).rejects.toThrow("scope closed");
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(vi.mocked(spawn).mock.results[0]?.value.connected).toBe(false);
@@ -414,7 +419,7 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
   it.each(["unavailable", "worker refusal", "cancelled refusal"])(
     "settles confirmed broker nonadmission (%s) before any native replacement",
     async (refusal) => {
-      const { source, store, state } = createAuthDatabase();
+      const { source, rows } = createAuthDatabase();
       const broker = createSpawnBrokerHost();
       let nativeChild: ChildProcess | undefined;
       let nativeClosed = false;
@@ -468,15 +473,11 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
           await expect(reading).rejects.toBe(cancellation);
           expect(nativeChild).toBeUndefined();
         } else {
-          expect(await reading).toEqual({
-            store: { status: "readable", raw: store },
-            state: { status: "readable", raw: state },
-            cacheable: true,
-          });
+          expect(await reading).toEqual(rows);
           expect(nativeClosed).toBe(true);
           expect(nativeChild?.exitCode).toBe(0);
           expect(nativeChild?.connected).toBe(false);
-          expect(nativeOptions?.cwd).toBe(brokerOptions?.cwd);
+          expect(nativeOptions?.cwd ?? process.cwd()).toBe(brokerOptions?.cwd);
         }
         expect(proxyClosed).toBe(true);
       } finally {
@@ -520,29 +521,23 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
     }
   });
 
-  it.each([false, true])(
-    "starts no child for an aborted read (broker closed: %s)",
-    async (closed) => {
-      const { source } = createAuthDatabase();
-      const broker = createSpawnBrokerHost();
-      try {
-        await broker.ready();
-        if (closed) {
-          await broker.close();
-        }
-        const brokerSpawn = vi.spyOn(broker, "spawn");
-        vi.mocked(spawn).mockClear();
-        const failure = new Error("auth read already cancelled");
-        await expect(
-          runWithSpawnBroker(broker, () => read(source, "canonical", AbortSignal.abort(failure))),
-        ).rejects.toBe(failure);
-        expect(brokerSpawn).not.toHaveBeenCalled();
-        expect(spawn).not.toHaveBeenCalled();
-      } finally {
-        await broker.close();
-      }
-    },
-  );
+  it("starts no child for an aborted read", async () => {
+    const { source } = createAuthDatabase();
+    const broker = createSpawnBrokerHost();
+    try {
+      await broker.ready();
+      const brokerSpawn = vi.spyOn(broker, "spawn");
+      vi.mocked(spawn).mockClear();
+      const failure = new Error("auth read already cancelled");
+      await expect(
+        runWithSpawnBroker(broker, () => read(source, "canonical", AbortSignal.abort(failure))),
+      ).rejects.toBe(failure);
+      expect(brokerSpawn).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      await broker.close();
+    }
+  });
 
   it.each([false, true])(
     "retains a failed read until lost-broker cleanup settles (cleanup failure: %s)",

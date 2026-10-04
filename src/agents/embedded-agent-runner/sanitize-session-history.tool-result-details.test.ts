@@ -12,7 +12,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   // Provider plugins are not part of this boundary test; the local sanitizer
   // contract should strip details before any plugin-specific behavior matters.
   resolveProviderRuntimePlugin: () => undefined,
-  sanitizeProviderReplayHistoryWithPlugin: () => undefined,
+  sanitizeProviderReplayHistoryWithPluginAsync: () => undefined,
   validateProviderReplayTurnsWithPlugin: () => undefined,
 }));
 

@@ -15,6 +15,7 @@ import {
 
 const key = "agent:main:dashboard";
 const sessionId = "dashboard-incarnation";
+const patchOptions = { agentId: "main", expectedSessionId: sessionId, deferListRefresh: true };
 const initial: GatewaySessionRow = {
   key,
   agentId: "main",
@@ -40,12 +41,13 @@ function acknowledgement(
     entry: {
       sessionId,
       updatedAt: 20,
+      boardFace: "dashboard",
       ...(presentation ? { boardPresentation: presentation } : {}),
     },
   };
 }
 
-function createPresentationHarness(row = initial) {
+async function createPresentationHarness(row = initial) {
   let current = row;
   let listFailure = false;
   const patchReply = createDeferred<SessionsPatchResult>();
@@ -74,6 +76,7 @@ function createPresentationHarness(row = initial) {
     sessions.dispose();
     patchReply.resolve(acknowledgement("expanded"));
   });
+  await sessions.refresh({ agentId: "main", force: true });
   return {
     ...gateway,
     sessions,
@@ -90,19 +93,14 @@ function createPresentationHarness(row = initial) {
 }
 
 describe("session capability dashboard default acknowledgements", () => {
-  it("publishes acknowledged presentation to primary and dashboard lists without changing pin/read fields", async () => {
-    const h = createPresentationHarness();
+  it("publishes the acknowledged opening face and presentation to primary and dashboard lists", async () => {
+    const h = await createPresentationHarness({ ...initial, boardFace: "chat" });
     const query = { agentId: "main", hasBoard: true, archivedFilter: "all" as const };
-    await h.sessions.refresh({ agentId: "main", force: true });
     await h.sessions.refreshList({ ...query, force: true });
     const operation = h.sessions.patch(
       key,
-      { boardPresentation: "expanded" },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
+      { boardFace: "dashboard", boardPresentation: "expanded" },
+      patchOptions,
     );
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("split");
@@ -111,6 +109,7 @@ describe("session capability dashboard default acknowledgements", () => {
       key,
       agentId: "main",
       expectedSessionId: sessionId,
+      boardFace: "dashboard",
       boardPresentation: "expanded",
     });
     h.patchReply.resolve(acknowledgement("expanded"));
@@ -118,6 +117,7 @@ describe("session capability dashboard default acknowledgements", () => {
     for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
       expect(result?.sessions[0]).toMatchObject({
         sessionId,
+        boardFace: "dashboard",
         boardPresentation: "expanded",
         pinned: true,
         pinnedAt: 5,
@@ -128,17 +128,8 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("uses the acknowledged value rather than echoing the requested default", async () => {
-    const h = createPresentationHarness({ ...initial, boardPresentation: "expanded" });
-    await h.sessions.refresh({ agentId: "main", force: true });
-    const operation = h.sessions.patch(
-      key,
-      { boardPresentation: "expanded" },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
-    );
+    const h = await createPresentationHarness({ ...initial, boardPresentation: "expanded" });
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     h.patchReply.resolve(acknowledgement("split"));
     await operation;
@@ -146,17 +137,8 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("clears the optional default on a null patch instead of retaining an expanded cache value", async () => {
-    const h = createPresentationHarness({ ...initial, boardPresentation: "expanded" });
-    await h.sessions.refresh({ agentId: "main", force: true });
-    const operation = h.sessions.patch(
-      key,
-      { boardPresentation: null },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
-    );
+    const h = await createPresentationHarness({ ...initial, boardPresentation: "expanded" });
+    const operation = h.sessions.patch(key, { boardPresentation: null }, patchOptions);
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     h.patchReply.resolve(acknowledgement(undefined));
     await operation;
@@ -165,8 +147,7 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("retains the acknowledged default when the follow-up list fails and an older read arrives", async () => {
-    const h = createPresentationHarness();
-    await h.sessions.refresh({ agentId: "main", force: true });
+    const h = await createPresentationHarness();
     const reconcileEarlierRead = h.sessions.captureReconcile();
     const operation = h.sessions.patch(
       key,
@@ -186,24 +167,19 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("keeps a newer external default ahead of an older successful patch acknowledgement", async () => {
-    const h = createPresentationHarness();
-    await h.sessions.refresh({ agentId: "main", force: true });
-    const operation = h.sessions.patch(
-      key,
-      { boardPresentation: "expanded" },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
-    );
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
-    h.sessions.reconcileChanged({
-      ...initial,
-      sessionKey: key,
-      reason: "patch",
-      updatedAt: 30,
-      boardPresentation: "split",
+    h.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        ...initial,
+        sessionKey: key,
+        reason: "patch",
+        updatedAt: 30,
+        boardPresentation: "split",
+      },
     });
     h.patchReply.resolve(acknowledgement("expanded"));
     await operation;
@@ -215,17 +191,8 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("does not attach an old incarnation's acknowledgement to a replacement row", async () => {
-    const h = createPresentationHarness();
-    await h.sessions.refresh({ agentId: "main", force: true });
-    const operation = h.sessions.patch(
-      key,
-      { boardPresentation: "expanded" },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
-    );
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     const replacement = { ...initial, sessionId: "replacement-session", updatedAt: 30 };
     h.setCurrent(replacement);
@@ -239,17 +206,8 @@ describe("session capability dashboard default acknowledgements", () => {
   });
 
   it("does not project a successful acknowledgement into a replacement Gateway", async () => {
-    const h = createPresentationHarness();
-    await h.sessions.refresh({ agentId: "main", force: true });
-    const operation = h.sessions.patch(
-      key,
-      { boardPresentation: "expanded" },
-      {
-        agentId: "main",
-        expectedSessionId: sessionId,
-        deferListRefresh: true,
-      },
-    );
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     const replacement = { ...initial, sessionId: "other-gateway-session", updatedAt: 40 };
     const replacementClient = createTestGatewayClient((method) => {

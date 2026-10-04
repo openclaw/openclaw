@@ -1,8 +1,6 @@
-/** Commands for adding, pasting, and logging into provider model auth profiles. */
 import {
   cancel,
   confirm as clackConfirm,
-  isCancel,
   password as clackPassword,
   select as clackSelect,
   text as clackText,
@@ -22,6 +20,7 @@ import {
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -33,7 +32,6 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  applyDefaultModel,
   applyProviderAuthConfigPatch,
   pickAuthMethod,
   restorePriorAgentsDefaultsModelUnlessOptIn,
@@ -47,6 +45,7 @@ import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
+import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
   resolvePluginSetupProviderCore,
@@ -67,8 +66,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
-import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
@@ -84,7 +82,15 @@ import {
   withoutProviderModelPolicy,
   type PreparedProviderModelAccess,
 } from "./auth-model-policy.js";
-import { refreshRunningGatewayAuthState, type ModelAuthRefreshOutcome } from "./auth-refresh.js";
+import {
+  refreshProviderAuthAfterLogin,
+  refreshRunningGatewayAuthState,
+  type ModelAuthRefreshOutcome,
+} from "./auth-refresh.js";
+import {
+  resolveReloginProfileIdentity,
+  snapshotReloginAuthProfiles,
+} from "./auth-relogin-identity.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
@@ -104,8 +110,8 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
   return expires;
 }
 
-function guardCancel<T>(value: T | symbol): T {
-  if (typeof value === "symbol" || isCancel(value)) {
+function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
+  if (typeof value === "symbol") {
     cancel("Cancelled.");
     process.exit(0);
   }
@@ -148,23 +154,16 @@ async function readPipedStdin(): Promise<string> {
 
 async function readPastedSecret(params: {
   message: string;
-  masked: boolean;
   validate?: (value: string | undefined) => string | undefined;
 }): Promise<string> {
   const promptParams = { message: params.message, validate: params.validate };
-  const input = process.stdin.isTTY
-    ? await (params.masked ? password(promptParams) : text(promptParams))
-    : await readPipedStdin();
+  const input = process.stdin.isTTY ? await password(promptParams) : await readPipedStdin();
   const normalized = normalizeSecretInput(input);
   const validationMessage = params.validate?.(normalized);
   if (validationMessage) {
     throw new Error(validationMessage);
   }
   return normalized;
-}
-
-function isOpenAIProvider(provider: string): boolean {
-  return normalizeManualAuthProvider(provider) === "openai";
 }
 
 type ResolvedModelsAuthContext = {
@@ -176,25 +175,14 @@ type ResolvedModelsAuthContext = {
   providers: ProviderPlugin[];
 };
 
-function listProvidersWithAuthMethods(providers: ProviderPlugin[]): ProviderPlugin[] {
-  return providers.filter((provider) => provider.auth.length > 0);
-}
-
-function listTokenAuthMethods(provider: ProviderPlugin): ProviderAuthMethod[] {
-  return provider.auth.filter((method) => method.kind === "token");
-}
-
 function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlugin[] {
-  return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
+  return providers.filter((provider) => provider.auth.some((method) => method.kind === "token"));
 }
 
 function mergeSetupProviders(
   providers: readonly ProviderPlugin[],
   setupProviders: readonly ProviderPlugin[],
 ): ProviderPlugin[] {
-  if (setupProviders.length === 0) {
-    return [...providers];
-  }
   const setupById = new Map(
     setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
   );
@@ -227,9 +215,7 @@ function preferSetupAuthProviders(params: {
       }).providers.map((entry) => entry.provider),
     );
   }
-  const requestedProvider = params.requestedProvider
-    ? normalizeManualAuthProvider(params.requestedProvider)
-    : undefined;
+  const requestedProvider = params.requestedProvider;
   if (requestedProvider) {
     const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
@@ -292,7 +278,7 @@ async function resolveModelsAuthAgent(rawAgentId?: string | null, config?: OpenC
   return resolveModelsTargetAgent(cfg, rawAgentId ?? undefined, { kind: "mutation" });
 }
 
-function resolveRequestedProviderOrThrow(
+export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
 ): ProviderPlugin | null {
@@ -314,103 +300,41 @@ function resolveRequestedProviderOrThrow(
   );
 }
 
-function resolveTokenMethodOrThrow(
-  provider: ProviderPlugin,
-  rawMethod?: string,
-): ProviderAuthMethod | null {
-  const tokenMethods = listTokenAuthMethods(provider);
-  if (rawMethod?.trim()) {
-    const matched = pickAuthMethod(provider, rawMethod);
-    if (matched && matched.kind === "token") {
-      return matched;
-    }
-    const available = tokenMethods.map((method) => method.id).join(", ") || "(none)";
-    throw new Error(
-      `Unknown token auth method "${rawMethod}" for provider "${provider.id}". Available token methods: ${available}.`,
-    );
-  }
-  return null;
-}
-
 async function pickProviderAuthMethod(params: {
   provider: ProviderPlugin;
   requestedMethod?: string;
   prompter: WizardPrompter;
+  tokenOnly?: boolean;
 }) {
   const rawRequestedMethod = params.requestedMethod?.trim();
   if (rawRequestedMethod) {
     return pickAuthMethod(params.provider, rawRequestedMethod);
   }
-  const oauthMethod = params.provider.auth.find((method) => method.kind === "oauth");
-  if (oauthMethod) {
-    return oauthMethod;
-  }
-  if (params.provider.auth.length === 1) {
-    return params.provider.auth[0] ?? null;
-  }
-  return await params.prompter
-    .select({
-      message: `Auth method for ${params.provider.label}`,
-      options: params.provider.auth.map((method) => ({
-        value: method.id,
-        label: method.label,
-        hint: method.hint,
-      })),
-    })
-    .then((id) => params.provider.auth.find((method) => method.id === id) ?? null);
-}
-
-async function pickProviderTokenMethod(params: {
-  provider: ProviderPlugin;
-  requestedMethod?: string;
-  prompter: WizardPrompter;
-}) {
-  const explicitTokenMethod = resolveTokenMethodOrThrow(params.provider, params.requestedMethod);
-  if (explicitTokenMethod) {
-    return explicitTokenMethod;
-  }
-  const tokenMethods = listTokenAuthMethods(params.provider);
-  if (tokenMethods.length === 0) {
+  const methods = params.tokenOnly
+    ? params.provider.auth.filter((method) => method.kind === "token")
+    : params.provider.auth;
+  if (params.tokenOnly && methods.length === 0) {
     return null;
   }
-  const setupTokenMethod = tokenMethods.find((method) => method.id === "setup-token");
-  if (setupTokenMethod) {
-    return setupTokenMethod;
+  const preferred = methods.find((method) =>
+    params.tokenOnly ? method.id === "setup-token" : method.kind === "oauth",
+  );
+  if (preferred) {
+    return preferred;
   }
-  if (tokenMethods.length === 1) {
-    return tokenMethods[0] ?? null;
+  if (methods.length === 1) {
+    return methods[0] ?? null;
   }
-  return await params.prompter
+  return params.prompter
     .select({
-      message: `Token method for ${params.provider.label}`,
-      options: tokenMethods.map((method) => ({
+      message: `${params.tokenOnly ? "Token" : "Auth"} method for ${params.provider.label}`,
+      options: methods.map((method) => ({
         value: method.id,
         label: method.label,
         hint: method.hint,
       })),
     })
-    .then((id) => tokenMethods.find((method) => method.id === id) ?? null);
-}
-
-async function refreshProviderAuthAfterLogin(
-  params: Pick<
-    ModelsAuthLoginFlowOptions,
-    "refreshAfterLogin" | "runtime" | "signal" | "assertCurrent"
-  > & {
-    agentId: string;
-  },
-): Promise<ModelAuthRefreshOutcome> {
-  if (!params.refreshAfterLogin) {
-    return refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
-  }
-  try {
-    await params.refreshAfterLogin(params.agentId);
-    return "refreshed";
-  } catch {
-    params.signal?.throwIfAborted();
-    params.assertCurrent?.();
-    return "gateway-rejected";
-  }
+    .then((id) => methods.find((method) => method.id === id) ?? null);
 }
 
 async function persistProviderAuthResult(params: {
@@ -425,6 +349,10 @@ async function persistProviderAuthResult(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   beforePersistentEffect?: () => void | Promise<void>;
+  validateCurrentCredential?: (
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => void;
   assertCurrent?: () => void;
   signal?: AbortSignal;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
@@ -466,6 +394,7 @@ async function persistProviderAuthResult(params: {
       const persisted = await persistProviderAuthProfilesAfterLogin({
         profiles: [candidate],
         beforeWrite: params.assertCurrent,
+        validateCurrentCredential: params.validateCurrentCredential,
         config: params.config,
         env: params.env,
         agentDir: params.agentDir,
@@ -500,21 +429,17 @@ async function persistProviderAuthResult(params: {
           if (params.setDefault && defaultModel) {
             return profiles.length > 0
               ? applyProviderLoginDefaultModel(next, defaultModel)
-              : applyDefaultModel(next, defaultModel);
+              : applyPrimaryModel(next, defaultModel);
           }
           return next;
         },
       });
       if (defaultModel) {
-        const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        const warnings = await repairModelSelectionRuntimePlugins({
           cfg: updated,
           model: defaultModel,
         });
-        const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-          cfg: updated,
-          model: defaultModel,
-        });
-        for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+        for (const warning of warnings) {
           params.runtime.error?.(warning);
         }
       }
@@ -525,7 +450,7 @@ async function persistProviderAuthResult(params: {
 
     for (const profile of persistedProfiles) {
       params.runtime.log(
-        `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
+        `Auth profile: ${profile.profileId} (${profile.credential.provider}/${profile.credential.type})`,
       );
     }
     if (defaultModel) {
@@ -620,6 +545,8 @@ async function runProviderAuthMethod(params: {
   beforePersistentEffect?: () => void | Promise<void>;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
   onModelAccessRequested?: (request: PreparedProviderModelAccess) => void;
+  existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
+  allowMissingReusedProfile?: boolean;
 }): Promise<{
   result: ProviderAuthResult;
   profiles: ProviderAuthResult["profiles"];
@@ -633,9 +560,18 @@ async function runProviderAuthMethod(params: {
     provider: params.provider.id,
     providerLabel: params.provider.label,
   });
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const existingProfiles = Object.entries(store.profiles)
+    .filter(
+      ([profileId, credential]) =>
+        credential.provider === params.provider.id &&
+        (!params.profileId || profileId === params.profileId),
+    )
+    .map(([profileId, credential]) => ({ profileId, credential }));
   const result = await runProviderPluginAuthMethodUnpersisted({
     method: params.method,
     config: params.config,
+    existingProfiles,
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
     env: params.env ?? process.env,
@@ -666,26 +602,21 @@ async function runProviderAuthMethod(params: {
           : {}),
       }
     : result;
-  const profiles = resolveLoginProfiles({
-    result: connectionResult,
+  const resolvedIdentity = resolveReloginProfileIdentity({
+    profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
+    existingProfiles: params.existingProfiles,
+    matchesPersonalAccount: params.method.matchesPersonalAccount,
+    allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
+  const profiles = resolvedIdentity.profiles;
 
   const { profiles: persistedProfiles, authRefresh } = await persistProviderAuthResult({
+    ...params,
     result: connectionResult,
     profiles,
-    assertCurrent: params.assertCurrent,
-    signal: params.signal,
-    config: params.config,
-    configSnapshot: params.configSnapshot,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    setDefault: params.setDefault,
     env: params.env ?? process.env,
-    beforePersistentEffect: params.beforePersistentEffect,
-    refreshAfterLogin: params.refreshAfterLogin,
+    validateCurrentCredential: resolvedIdentity.validateCurrentCredential,
   });
   if (persistedProfiles.length > 0) {
     await completeProviderModelAccess({
@@ -704,7 +635,6 @@ async function runProviderAuthMethod(params: {
   return { result: connectionResult, profiles: persistedProfiles, authRefresh };
 }
 
-/** Runs an interactive provider setup-token auth flow. */
 export async function modelsAuthSetupTokenCommand(
   opts: { provider?: string; yes?: boolean; agent?: string },
   runtime: RuntimeEnv,
@@ -728,12 +658,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
-  if (!provider) {
-    throw new Error(
-      `No token-capable provider is available. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed.`,
-    );
-  }
+    resolveRequestedLoginProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0]!;
 
   if (!opts.yes) {
     const proceed = await confirm({
@@ -746,7 +671,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const prompter = createClackPrompter();
-  const method = await pickProviderTokenMethod({ provider, prompter });
+  const method = await pickProviderAuthMethod({ provider, prompter, tokenOnly: true });
   if (!method) {
     throw new Error(`Provider "${provider.id}" does not expose a token auth method.`);
   }
@@ -764,7 +689,6 @@ export async function modelsAuthSetupTokenCommand(
   });
 }
 
-/** Reads a pasted bearer/setup token and stores it as an auth profile. */
 export async function modelsAuthPasteTokenCommand(
   opts: {
     provider?: string;
@@ -793,14 +717,13 @@ export async function modelsAuthPasteTokenCommand(
     if (provider === "anthropic") {
       return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
     }
-    if (isOpenAIProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+    if (provider === "openai" && looksLikeOpenAIApiKey(trimmed)) {
       return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`;
     }
     return undefined;
   };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
-    masked: true,
     validate: validateTokenInput,
   });
   const token =
@@ -834,7 +757,6 @@ export async function modelsAuthPasteTokenCommand(
   }
 }
 
-/** Reads a pasted API key and stores it as an auth profile. */
 export async function modelsAuthPasteApiKeyCommand(
   opts: {
     provider?: string;
@@ -855,13 +777,12 @@ export async function modelsAuthPasteApiKeyCommand(
 
   const key = await readPastedSecret({
     message: `Paste API key for ${provider}`,
-    masked: true,
     validate: (value) => {
       const trimmed = value?.trim();
       if (!trimmed) {
         return "Required";
       }
-      if (isOpenAIProvider(provider)) {
+      if (provider === "openai") {
         return validateOpenAICodexApiKeyInput(trimmed);
       }
       return undefined;
@@ -885,7 +806,6 @@ export async function modelsAuthPasteApiKeyCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
-/** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, configSnapshot, agentId, agentDir, workspaceDir, providers } =
     await resolveModelsAuthContext({
@@ -916,23 +836,20 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
       : provider;
 
   const providerPlugin =
-    provider === "custom" ? null : resolveRequestedProviderOrThrow(tokenProviders, providerId);
+    provider === "custom" ? null : resolveRequestedLoginProviderOrThrow(tokenProviders, providerId);
   if (providerPlugin) {
-    const tokenMethods = listTokenAuthMethods(providerPlugin);
-    const methodId =
-      tokenMethods.length > 0
-        ? await select({
-            message: "Token method",
-            options: [
-              ...tokenMethods.map((method) => ({
-                value: method.id,
-                label: method.label,
-                hint: method.hint,
-              })),
-              { value: "paste", label: "paste token" },
-            ],
-          })
-        : "paste";
+    const tokenMethods = providerPlugin.auth.filter((method) => method.kind === "token");
+    const methodId = await select({
+      message: "Token method",
+      options: [
+        ...tokenMethods.map((method) => ({
+          value: method.id,
+          label: method.label,
+          hint: method.hint,
+        })),
+        { value: "paste", label: "paste token" },
+      ],
+    });
     if (methodId !== "paste") {
       const prompter = createClackPrompter();
       const method = tokenMethods.find((candidate) => candidate.id === methodId);
@@ -999,12 +916,7 @@ type LoginOptions = {
   setDefault?: boolean;
   yes?: boolean;
   agent?: string;
-  /**
-   * When true, remove any existing auth profiles for the resolved provider
-   * before invoking the auth flow. This is the escape hatch for stuck
-   * cached OAuth profiles where the standard `auth login` short-circuits
-   * because credentials already exist on disk.
-   */
+  /** Discard cached provider profiles before starting a replacement login. */
   force?: boolean;
 };
 
@@ -1038,44 +950,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
   refreshAfterLogin?: (agentId: string) => Promise<void>;
 };
-
-/** Resolves a requested login provider or throws with available provider details. */
-export function resolveRequestedLoginProviderOrThrow(
-  providers: ProviderPlugin[],
-  rawProvider?: string,
-): ProviderPlugin | null {
-  return resolveRequestedProviderOrThrow(providers, rawProvider);
-}
-
-function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
-  if (credential.type === "api_key") {
-    return "api_key";
-  }
-  if (credential.type === "token") {
-    return "token";
-  }
-  return "oauth";
-}
-
-/** Applies an optional profile-id override to a single returned login profile. */
-function resolveLoginProfiles(params: {
-  result: ProviderAuthResult;
-  requestedProfileId?: string;
-}): ProviderAuthResult["profiles"] {
-  const requestedProfileId = params.requestedProfileId?.trim();
-  if (!requestedProfileId) {
-    return params.result.profiles;
-  }
-
-  if (params.result.profiles.length !== 1) {
-    throw new Error(
-      "--profile-id requires exactly one returned auth profile from the selected auth method.",
-    );
-  }
-
-  const [profile] = params.result.profiles;
-  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
-}
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
   if (providerId !== "openai") {
@@ -1112,7 +986,7 @@ async function runModelsAuthLoginFlow(
     ownerPluginId: opts.ownerPluginId,
   });
   const prompter = opts.prompter;
-  let authProviders = listProvidersWithAuthMethods(context.providers);
+  let authProviders = context.providers.filter((provider) => provider.auth.length > 0);
   let requestedProvider = requestedProviderId
     ? resolveProviderMatch(authProviders, requestedProviderId)
     : null;
@@ -1126,7 +1000,7 @@ async function runModelsAuthLoginFlow(
       rawAgentId: opts.agent,
       config: context.config,
     });
-    authProviders = listProvidersWithAuthMethods(context.providers);
+    authProviders = context.providers.filter((provider) => provider.auth.length > 0);
   }
   if (authProviders.length === 0) {
     throw new Error(
@@ -1195,6 +1069,12 @@ async function runModelsAuthLoginFlow(
     provider: selectedProvider.id,
     providerLabel: selectedProvider.label,
   });
+  // Snapshot before --force removes cached credentials. Provider-owned identity
+  // matching may safely keep the old profile id for the same authenticated account.
+  const existingProfiles = snapshotReloginAuthProfiles({
+    agentDir: context.agentDir,
+    matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
+  });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault
       ? await tryImportProviderCredential({
@@ -1246,16 +1126,11 @@ async function runModelsAuthLoginFlow(
     };
   }
 
+  let forcePurgedProviderProfiles = false;
   if (opts.force) {
     await opts.beforePersistentEffect?.();
-    // Purge existing profiles for this provider only after we have a valid
-    // auth method to invoke. Running the purge earlier (before method
-    // resolution) would delete the user's working credentials and then
-    // throw on an unresolvable `--method`, leaving them without a usable
-    // profile and no auth flow started. This is the documented escape
-    // hatch for stuck OAuth credentials (expired token, swapped account,
-    // etc.) where `auth login` would otherwise short-circuit on the cached
-    // profile.
+    // Resolve the method before purging profiles so an invalid --method cannot
+    // delete working credentials without starting a replacement login.
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
         cfg: context.config,
@@ -1267,6 +1142,7 @@ async function runModelsAuthLoginFlow(
           "auth store is busy; close other OpenClaw commands using this state directory and retry",
         );
       }
+      forcePurgedProviderProfiles = true;
       opts.runtime.log(
         `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
       );
@@ -1281,27 +1157,13 @@ async function runModelsAuthLoginFlow(
   }
 
   const { result, profiles, authRefresh } = await runProviderAuthMethod({
-    config: context.config,
-    configSnapshot: context.configSnapshot,
-    agentId: context.agentId,
-    agentDir: context.agentDir,
-    workspaceDir: context.workspaceDir,
+    ...opts,
+    ...context,
     provider: selectedProvider,
     method: chosenMethod,
-    runtime: opts.runtime,
     prompter,
-    profileId: opts.profileId,
-    setDefault: opts.setDefault,
-    credentialOnly: opts.credentialOnly,
-    assertCurrent: opts.assertCurrent,
-    env: opts.env,
-    isRemote: opts.isRemote,
-    signal: opts.signal,
-    openUrl: opts.openUrl,
-    browserAuthorization: opts.browserAuthorization,
-    beforePersistentEffect: opts.beforePersistentEffect,
-    refreshAfterLogin: opts.refreshAfterLogin,
-    onModelAccessRequested: opts.onModelAccessRequested,
+    existingProfiles,
+    allowMissingReusedProfile: forcePurgedProviderProfiles,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);
   return {
@@ -1312,7 +1174,7 @@ async function runModelsAuthLoginFlow(
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: credentialMode(profile.credential),
+      mode: profile.credential.type,
     })),
   };
 }

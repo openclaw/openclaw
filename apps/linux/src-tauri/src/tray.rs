@@ -3,8 +3,6 @@ use crate::gateway_operation_queue::GatewayOperationQueue;
 use crate::keep_awake::{KeepAwake, Status as KeepAwakeStatus};
 use crate::quickchat;
 use crate::DesktopState;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -18,6 +16,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const OPEN_ID: &str = "open-dashboard";
 const CONNECTION_SETTINGS_ID: &str = "connection-settings";
+const CHROME_EXTENSION_ID: &str = "setup-chrome-extension";
 const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
 const UPDATE_ACTION_ID: &str = "update-action";
@@ -25,13 +24,11 @@ const NO_UPDATE_ACTION_LABEL: &str = "No update action available";
 const START_AT_LOGIN_ID: &str = "start-at-login";
 const KEEP_AWAKE_ID: &str = "keep-computer-awake";
 const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
-const GLOBAL_SHORTCUT_ID: &str = "global-shortcut";
-pub(crate) const GLOBAL_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
-// Marker presence is the durable user opt-out across restarts; no config schema on purpose.
-const GLOBAL_SHORTCUT_DISABLED_MARKER: &str = "global-shortcut-disabled";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
+#[cfg(target_os = "linux")]
+const ADOPT_RUNTIME_ID: &str = "adopt-bundled-runtime";
 const QUIT_ID: &str = "quit";
 
 pub struct TrayHandles {
@@ -47,6 +44,8 @@ pub struct TrayHandles {
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
+    #[cfg(target_os = "linux")]
+    runtime_action: MenuItem<tauri::Wry>,
 }
 
 struct StatusLine {
@@ -119,6 +118,16 @@ impl TrayHandles {
         }
         drop(status_line);
         self.refresh_status(self._tray.app_handle());
+        #[cfg(target_os = "linux")]
+        {
+            let current = crate::bundled_runtime::expected_bun_path().ok();
+            let enabled =
+                snapshot.installed && current.is_some() && snapshot.runtime_path != current;
+            let item = self.runtime_action.clone();
+            let _ = self._tray.app_handle().run_on_main_thread(move || {
+                let _ = item.set_enabled(enabled);
+            });
+        }
     }
 
     pub fn update_pending_count(&self, count: usize) {
@@ -231,23 +240,6 @@ pub fn build(
             )
         })
         .transpose()?;
-    let global_shortcut_enabled = global_shortcuts_supported.then(|| {
-        !global_shortcut_disabled_marker(app)
-            .as_deref()
-            .is_some_and(global_shortcut_marker_exists)
-    });
-    let global_shortcut = global_shortcut_enabled
-        .map(|enabled| {
-            CheckMenuItem::with_id(
-                app,
-                GLOBAL_SHORTCUT_ID,
-                "Enable Global Shortcut",
-                true,
-                enabled,
-                None::<&str>,
-            )
-        })
-        .transpose()?;
     let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
@@ -258,6 +250,7 @@ pub fn build(
         .text(QUICKCHAT_ID, "Quick Chat")
         .text(OPEN_ID, "Open Dashboard")
         .text(CONNECTION_SETTINGS_ID, "Connection Settings")
+        .text(CHROME_EXTENSION_ID, "Set Up Chrome Extension…")
         .text(CHECK_UPDATES_ID, "Check for Updates")
         .item(&update_action)
         .item(&start_at_login)
@@ -267,14 +260,18 @@ pub fn build(
     } else {
         menu_builder
     };
-    let menu_builder = if let Some(global_shortcut) = global_shortcut.as_ref() {
-        menu_builder.item(global_shortcut)
-    } else {
-        menu_builder
-    };
+    let menu_builder = menu_builder.separator().items(&[&start, &stop, &restart]);
+    #[cfg(target_os = "linux")]
+    let runtime_action = MenuItem::with_id(
+        app,
+        ADOPT_RUNTIME_ID,
+        "Use bundled runtime…",
+        false,
+        None::<&str>,
+    )?;
+    #[cfg(target_os = "linux")]
+    let menu_builder = menu_builder.item(&runtime_action);
     let menu = menu_builder
-        .separator()
-        .items(&[&start, &stop, &restart])
         .separator()
         .text(QUIT_ID, "Quit OpenClaw")
         .build()?;
@@ -287,7 +284,6 @@ pub fn build(
     #[cfg(not(target_os = "macos"))]
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     let menu_quickchat_shortcut = quickchat_shortcut.clone();
-    let menu_global_shortcut = global_shortcut.clone();
     let tray_builder = TrayIconBuilder::with_id("openclaw-main")
         .icon(tray_icon)
         .menu(&menu)
@@ -298,7 +294,6 @@ pub fn build(
                 &state,
                 &start_at_login,
                 menu_quickchat_shortcut.as_ref(),
-                menu_global_shortcut.as_ref(),
                 event.id().as_ref(),
             );
         })
@@ -342,13 +337,6 @@ pub fn build(
             quickchat_state.set_shortcut_registered(true);
         }
     }
-    if let (Some(true), Some(global_shortcut)) = (global_shortcut_enabled, global_shortcut.as_ref())
-    {
-        if let Err(error) = app.global_shortcut().register(GLOBAL_SHORTCUT) {
-            eprintln!("Could not register global shortcut {GLOBAL_SHORTCUT}: {error}");
-            set_global_shortcut_checked(global_shortcut, false);
-        }
-    }
 
     Ok(TrayHandles {
         _tray: tray,
@@ -369,6 +357,8 @@ pub fn build(
         start,
         stop,
         restart,
+        #[cfg(target_os = "linux")]
+        runtime_action,
     })
 }
 
@@ -425,7 +415,6 @@ fn handle_menu(
     state: &DesktopState,
     start_at_login: &CheckMenuItem<tauri::Wry>,
     quickchat_shortcut: Option<&CheckMenuItem<tauri::Wry>>,
-    global_shortcut: Option<&CheckMenuItem<tauri::Wry>>,
     id: &str,
 ) {
     match id {
@@ -442,6 +431,9 @@ fn handle_menu(
         CHECK_UPDATES_ID => {
             show_window(app);
             crate::updater::spawn_check(app.clone());
+        }
+        CHROME_EXTENSION_ID => {
+            state.inner.chrome_setup.request_from_user(app.clone());
         }
         UPDATE_ACTION_ID => crate::updater::perform_action(app),
         START_AT_LOGIN_ID => toggle_autostart(app, start_at_login),
@@ -469,11 +461,6 @@ fn handle_menu(
                 toggle_quickchat_shortcut(app, quickchat_shortcut);
             }
         }
-        GLOBAL_SHORTCUT_ID => {
-            if let Some(global_shortcut) = global_shortcut {
-                toggle_global_shortcut(app, global_shortcut);
-            }
-        }
         START_ID => {
             app.state::<GatewayOperationQueue>()
                 .submit_action(GatewayAction::Start);
@@ -486,8 +473,78 @@ fn handle_menu(
             app.state::<GatewayOperationQueue>()
                 .submit_action(GatewayAction::Restart);
         }
+        #[cfg(target_os = "linux")]
+        ADOPT_RUNTIME_ID => confirm_runtime_action(app),
         _ => {}
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
+    let current_app = app.clone();
+    let error = error.to_owned();
+    let _ = app.run_on_main_thread(move || {
+        if current_app.state::<DesktopState>().is_quitting() {
+            return;
+        }
+        show_window(&current_app);
+        current_app
+            .dialog()
+            .message(error)
+            .title("Use bundled runtime")
+            .kind(MessageDialogKind::Error)
+            .show(|_| {});
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn confirm_runtime_action(app: &AppHandle) {
+    use tauri_plugin_dialog::MessageDialogButtons;
+    let current_app = app.clone();
+    std::thread::spawn(move || {
+        let state = current_app.state::<DesktopState>();
+        if state.is_quitting() {
+            return;
+        }
+        let observed = (|| {
+            if crate::remote_gateway::saved_settings()?.is_some() {
+                return Err("Select the local Gateway before changing its runtime.".to_string());
+            }
+            let cli = state.resolve_cli().map_err(|error| error.to_string())?;
+            let observation = crate::runtime_action::inspect(&cli)?;
+            Ok(crate::RuntimeAction { cli, observation })
+        })();
+        let action = match observed {
+            Ok(action) => action,
+            Err(error) => {
+                show_runtime_error(&current_app, &error);
+                return;
+            }
+        };
+        let message = format!(
+            "Current runtime: {}\n\nUse this app's bundled Bun runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
+            action.observation.current_runtime(),
+        );
+        let dialog_app = current_app.clone();
+        let _ = current_app.run_on_main_thread(move || {
+            let accepted_app = dialog_app.clone();
+            dialog_app
+                .dialog()
+                .message(message)
+                .title("Use bundled runtime")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Use bundled runtime".into(),
+                    "Cancel".into(),
+                ))
+                .show(move |accepted| {
+                    if accepted && !accepted_app.state::<DesktopState>().is_quitting() {
+                        accepted_app
+                            .state::<GatewayOperationQueue>()
+                            .submit_runtime(action);
+                    }
+                });
+        });
+    });
 }
 
 pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
@@ -557,76 +614,6 @@ fn toggle_quickchat_shortcut(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) 
     }
 }
 
-fn toggle_global_shortcut(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
-    let manager = app.global_shortcut();
-    let enabled = manager.is_registered(GLOBAL_SHORTCUT);
-    let next = !enabled;
-    let result = if next {
-        manager.register(GLOBAL_SHORTCUT)
-    } else {
-        manager.unregister(GLOBAL_SHORTCUT)
-    };
-    match result {
-        Ok(()) => {
-            let registered = manager.is_registered(GLOBAL_SHORTCUT);
-            persist_global_shortcut_state(app, registered);
-            set_global_shortcut_checked(item, registered);
-        }
-        Err(error) => {
-            eprintln!("Could not update global shortcut {GLOBAL_SHORTCUT}: {error}");
-            set_global_shortcut_checked(item, enabled);
-        }
-    }
-}
-
-fn global_shortcut_disabled_marker(app: &impl Manager<tauri::Wry>) -> Option<PathBuf> {
-    match app.path().app_config_dir() {
-        Ok(path) => Some(path.join(GLOBAL_SHORTCUT_DISABLED_MARKER)),
-        Err(error) => {
-            eprintln!("Could not resolve global shortcut preference path: {error}");
-            None
-        }
-    }
-}
-
-fn global_shortcut_marker_exists(path: &Path) -> bool {
-    match path.try_exists() {
-        Ok(exists) => exists,
-        Err(error) => {
-            eprintln!("Could not read global shortcut preference: {error}");
-            false
-        }
-    }
-}
-
-fn persist_global_shortcut_state(app: &AppHandle, registered: bool) {
-    let Some(marker) = global_shortcut_disabled_marker(app) else {
-        return;
-    };
-    let result = if registered {
-        match fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    } else {
-        marker
-            .parent()
-            .map(fs::create_dir_all)
-            .transpose()
-            .and_then(|_| fs::write(&marker, b""))
-    };
-    if let Err(error) = result {
-        eprintln!("Could not persist global shortcut preference: {error}");
-    }
-}
-
-fn set_global_shortcut_checked(item: &CheckMenuItem<tauri::Wry>, checked: bool) {
-    if let Err(error) = item.set_checked(checked) {
-        eprintln!("Could not update global shortcut menu state: {error}");
-    }
-}
-
 fn set_quickchat_shortcut_checked(item: &CheckMenuItem<tauri::Wry>, checked: bool) {
     if let Err(error) = item.set_checked(checked) {
         eprintln!("Could not update Quick Chat shortcut menu state: {error}");
@@ -662,7 +649,6 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn linux_shortcut_support_follows_x11_session_facts() {
@@ -683,25 +669,5 @@ mod tests {
             Some(":0"),
         ));
         assert!(!linux_global_shortcuts_supported(None, None, None));
-    }
-
-    #[test]
-    fn global_shortcut_marker_tracks_user_opt_out() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before Unix epoch")
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "openclaw-global-shortcut-test-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&directory).expect("create test directory");
-        let marker = directory.join(GLOBAL_SHORTCUT_DISABLED_MARKER);
-
-        assert!(!global_shortcut_marker_exists(&marker));
-        fs::write(&marker, b"").expect("write opt-out marker");
-        assert!(global_shortcut_marker_exists(&marker));
-
-        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

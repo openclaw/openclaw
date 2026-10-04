@@ -1,6 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
 
+const EXECUTION_APPROVAL_FAILURE_MESSAGES = new Set([
+  "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+  "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+  "Codex node execution requires an available approval reviewer.",
+]);
+
+/** Node launch refusals are not provider failures; only known, bounded copy is public. */
+export function resolveExecutionApprovalFailureMessage(
+  raw: string | undefined,
+): string | undefined {
+  const message = raw?.trim().replace(/\s+\|\s+INVALID_REQUEST$/, "");
+  return message && EXECUTION_APPROVAL_FAILURE_MESSAGES.has(message) ? message : undefined;
+}
+
 // Both figures must be denominated in tokens and come from one clause. A message can state an RPM
 // limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
 // against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
@@ -320,20 +334,17 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!BILLING_ERROR_HEAD_RE.test(raw)) {
     return false;
   }
-  return (
-    value.includes("upgrade") ||
-    value.includes("credits") ||
-    value.includes("payment") ||
-    value.includes("purchase") ||
-    value.includes("subscription") ||
-    value.includes("plan")
+  return ["upgrade", "credits", "payment", "purchase", "subscription", "plan"].some((hint) =>
+    value.includes(hint),
   );
 }
 export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
+  return (
+    !resolveExecutionApprovalFailureMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.auth)
+  );
 }
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
@@ -351,4 +362,26 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+}
+
+/** `All models failed (3): provider/model: text | provider/model: text` */
+const FAILOVER_AGGREGATE_PREFIX_RE = /^all(?: [\w-]+)? models failed \(\d+\):\s*/i;
+const FAILOVER_AGGREGATE_LEG_SPLIT_RE = /\s\|\s|;\s(?=\S+\/\S+:\s)/;
+/** `anthropic/claude-opus-5: You've hit your session limit` */
+const FAILOVER_LEG_ROUTE_PREFIX_RE = /^\S+\/\S+:\s+/;
+
+/**
+ * A chain summary concatenates every leg, so it outgrows the length guard that keeps
+ * provider text bounded, and a hint the provider did give is thrown away. Read the legs
+ * individually, preferring the first, which is the route the user actually chose.
+ */
+export function splitFailoverAggregateLegs(raw: string): string[] {
+  const withoutPrefix = raw.trim().replace(FAILOVER_AGGREGATE_PREFIX_RE, "");
+  if (withoutPrefix === raw.trim()) {
+    return [];
+  }
+  return withoutPrefix
+    .split(FAILOVER_AGGREGATE_LEG_SPLIT_RE)
+    .map((leg) => leg.trim().replace(FAILOVER_LEG_ROUTE_PREFIX_RE, "").trim())
+    .filter(Boolean);
 }

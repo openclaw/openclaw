@@ -46,6 +46,20 @@ legacy official Completions adapter, prefers subscription authentication when
 both kinds are eligible, and honors explicit API route intent. These are
 additive fields on the existing contract; they add no hook or user setting.
 
+## Credential lookup cancellation
+
+Credential consumers using `resolveApiKeyForProvider` from
+`openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
+`signal`. It ends the caller's wait for queued admission, a profile lock, or
+OAuth settlement, not an already-claimed refresh's credential write. Started lock
+acquisition remains owned through cleanup. Preserve non-missing authentication
+errors rather than converting every failure into an absent API key.
+
+`buildTimeoutAbortSignal` from `openclaw/plugin-sdk/extension-shared` combines a
+caller signal with an operation timeout. Start it before credential preparation
+when authentication shares the request budget, and call its `cleanup` in
+`finally` to release the timer.
+
 ## Hook examples
 
 <Tabs>
@@ -255,7 +269,8 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
 | `buildReplayPolicy`               | Custom transcript replay/compaction policy                                                  |
-| `sanitizeReplayHistory`           | Provider-specific replay rewrites after generic cleanup                                     |
+| `sanitizeReplayHistoryAsync`      | Provider-specific replay rewrites with awaited transcript metadata after generic cleanup    |
+| `sanitizeReplayHistory`           | Deprecated third-party replay compatibility hook; migrate to `sanitizeReplayHistoryAsync`   |
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
 
@@ -270,9 +285,16 @@ Runtime fallback notes:
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
 - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+
+Bundled HTTP adapters can preserve numeric response status with
+`createProviderHttpError` from the private-local `openclaw/plugin-sdk/provider-http`
+entrypoint. Adapters that already bound and redact their diagnostics can construct
+`ProviderHttpError(message, { status })`. Keep that error instance when adjusting
+its message so status and retry metadata survive; search tools use those fields
+for safe authentication and quota guidance without exposing response bodies.
 
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
@@ -295,6 +317,16 @@ result on the resolved runtime model rather than writing configuration.
 Explicit `tools.toolSearch` settings take precedence. This hook changes
 schema exposure, not tool permissions or availability.
 
+`resolveNativeWebSearch(ctx)` can be exported from the same policy artifact
+when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContext`
+(from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
+optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
+will inject hosted search; share this policy with payload construction. Keep
+the hook synchronous and free of runtime activation or credential probes.
+The host applies tool permissions independently and removes managed
+`web_search` before building Tool Search and Code Mode catalogs. Explicit
+managed-provider selection must remain authoritative.
+
 `resolveFastModeSupport(ctx)` can be exported from the same policy artifact
 and registered on the provider. Return `false` only for a confirmed no-op
 Fast choice, `true` for an applicable local request mapping, or `undefined`
@@ -304,5 +336,15 @@ credentials are not included. Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
+
+`resolveServiceTiers(ctx)` can publish known model/route tier restrictions through
+the same lightweight artifact and provider registration. It receives
+`ProviderFastModePolicyContext`; return `undefined` when the provider has no
+restriction to add. The API-key OpenAI Responses catalog intersects a returned
+list with account observations or its route defaults, preserving `"default"`
+as Standard processing. A `false` Fast capability together with `["default"]`
+keeps the Control UI on disabled Standard controls without confusing an explicit
+configured tier with a model limitation. Share this capability decision with the
+provider request builder; it does not itself alter configuration or grant access.
 
 </Accordion>

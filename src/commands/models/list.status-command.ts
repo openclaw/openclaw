@@ -1,4 +1,3 @@
-/** Implementation of `openclaw models status`. */
 import path from "node:path";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
@@ -8,7 +7,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveAgentExplicitModelPrimary,
+  resolveAgentNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
@@ -76,6 +75,7 @@ import type { ProviderSyntheticAuthResult } from "../../plugins/provider-externa
 import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import {
@@ -90,31 +90,16 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
+  formatMs,
   resolveModelsTargetAgent,
 } from "./shared.js";
-
-type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
-type ProgressRuntime = typeof import("../../cli/progress.js");
 
 function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-type TerminalTableRuntime = typeof import("../../../packages/terminal-core/src/table.js");
-type ListProbeRuntime = typeof import("./list.probe.js");
 
-const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
-  () => import("../../infra/provider-usage.js"),
-);
-const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
-  () => import("../../cli/progress.js"),
-);
-const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
-  () => import("../../../packages/terminal-core/src/table.js"),
-);
-const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
-  () => import("./list.probe.js"),
-);
+const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -257,7 +242,6 @@ function finishModelsStatusOutput(
   requestExitAfterOneShotOutput(runtime);
 }
 
-/** Prints model default, auth, provider, and optional probe status. */
 export async function modelsStatusCommand(
   opts: {
     json?: boolean;
@@ -293,7 +277,7 @@ export async function modelsStatusCommand(
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
+  const agentModelPrimary = agentId ? resolveAgentNativeModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
@@ -441,7 +425,7 @@ export async function modelsStatusCommand(
       );
       const providersFromConfig = new Set(
         Object.keys(cfg.models?.providers ?? {})
-          .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
+          .map(normalizeProviderId)
           .filter(Boolean),
       );
       const providersFromModels = new Set<string>();
@@ -812,14 +796,13 @@ export async function modelsStatusCommand(
             authEvidenceMap,
           }),
         )
-        .filter((entry) => {
-          const hasAny =
+        .filter(
+          (entry) =>
             entry.profiles.count > 0 ||
             Boolean(entry.env) ||
             Boolean(entry.modelsJson) ||
-            Boolean(entry.syntheticAuth);
-          return hasAny;
-        });
+            Boolean(entry.syntheticAuth),
+        );
       const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
       const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
         kind: "missing",
@@ -837,7 +820,6 @@ export async function modelsStatusCommand(
         cfg,
         warnAfterMs: DEFAULT_OAUTH_WARN_MS,
         runtimeCredentialsByProvider,
-        allowKeychainPrompt: false,
       });
       const authProfileHealthById = new Map(
         authHealth.profiles.map((profile) => [profile.profileId, profile]),
@@ -1026,15 +1008,9 @@ export async function modelsStatusCommand(
       // Utility (or duplicate fallback) refs can repeat a configured model;
       // identical diagnostics collapse while genuinely different evaluations
       // for the same model (e.g. codex-fallback vs plain route) stay separate.
-      const seenRouteIssues = new Set<string>();
-      const dedupedModelRouteIssues = modelRouteIssues.filter((issue) => {
-        const key = JSON.stringify(issue);
-        if (seenRouteIssues.has(key)) {
-          return false;
-        }
-        seenRouteIssues.add(key);
-        return true;
-      });
+      const dedupedModelRouteIssues = dedupeByKey(modelRouteIssues, (issue) =>
+        JSON.stringify(issue),
+      );
       const missingProvidersInUse = Array.from(
         new Set(
           providerUses
@@ -1086,24 +1062,14 @@ export async function modelsStatusCommand(
         ...configuredAllowRefs,
       ].filter(Boolean);
       const resolvedCandidates = rawCandidates
-        .map(
-          (raw) =>
-            resolveModelRefFromString({
-              cfg,
-              agentId,
-              raw: raw ?? "",
-              defaultProvider: DEFAULT_PROVIDER,
-              aliasIndex,
-              ...DISPLAY_MODEL_PARSE_OPTIONS,
-            })?.ref,
-        )
+        .map(resolveStatusModelRef)
         .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
       const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
 
       let probeSummary: AuthProbeSummary | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-          progressRuntimeLoader.load(),
+          import("../../cli/progress.js"),
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
@@ -1297,100 +1263,78 @@ export async function modelsStatusCommand(
       const rich = isRich(opts);
       type ModelConfigSource = "agent" | "defaults";
       const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
-      const labelWithSource = (value: string, source?: ModelConfigSource) =>
-        label(source ? `${value} (${source})` : value);
+      const logField = (
+        name: string,
+        value: string,
+        style: (value: string) => string,
+        source?: ModelConfigSource,
+      ) =>
+        runtime.log(
+          `${label(source ? `${name} (${source})` : name)}${colorize(rich, theme.muted, ":")} ${colorize(rich, style, value)}`,
+        );
       const displayDefault =
         rawModel && rawModel !== resolvedLabel
           ? `${resolvedLabel} (from ${rawModel})`
           : resolvedLabel;
 
-      runtime.log(
-        `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(configPath))}`,
+      logField("Config", shortenHomePath(configPath), theme.info);
+      logField("Agent dir", shortenHomePath(agentDir), theme.info);
+      logField(
+        "Default",
+        displayDefault,
+        theme.success,
+        agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined,
       );
-      runtime.log(
-        `${label("Agent dir")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          theme.info,
-          shortenHomePath(agentDir),
-        )}`,
+      logField(
+        `Fallbacks (${fallbacks.length})`,
+        fallbacks.length ? fallbacks.join(", ") : "-",
+        fallbacks.length ? theme.warn : theme.muted,
+        agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
       );
-      runtime.log(
-        `${labelWithSource("Default", agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(rich, theme.success, displayDefault)}`,
-      );
-      runtime.log(
-        `${labelWithSource(
-          `Fallbacks (${fallbacks.length || 0})`,
-          agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
-        )}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          fallbacks.length ? theme.warn : theme.muted,
-          fallbacks.length ? fallbacks.join(", ") : "-",
-        )}`,
-      );
-      runtime.log(
-        `${label("Utility model")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          utilityModelDisplayRef ? theme.success : theme.muted,
-          utilityModelDisplayRef
-            ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
-            : utilityModelSource === "disabled"
-              ? "off"
-              : "-",
-        )}`,
-      );
-      runtime.log(
-        `${labelWithSource("Image model", agentId ? "defaults" : undefined)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(rich, imageModel ? theme.accentBright : theme.muted, imageModel || "-")}`,
-      );
-      runtime.log(
-        `${labelWithSource(
-          `Image fallbacks (${imageFallbacks.length || 0})`,
-          agentId ? "defaults" : undefined,
-        )}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          imageFallbacks.length ? theme.accentBright : theme.muted,
-          imageFallbacks.length ? imageFallbacks.join(", ") : "-",
-        )}`,
-      );
-      runtime.log(
-        `${label(`Aliases (${Object.keys(aliases).length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          Object.keys(aliases).length ? theme.accent : theme.muted,
-          Object.keys(aliases).length
-            ? Object.entries(aliases)
-                .map(([alias, target]) =>
-                  rich
-                    ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
-                    : `${alias} -> ${target}`,
-                )
-                .join(", ")
+      logField(
+        "Utility model",
+        utilityModelDisplayRef
+          ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
+          : utilityModelSource === "disabled"
+            ? "off"
             : "-",
-        )}`,
+        utilityModelDisplayRef ? theme.success : theme.muted,
       );
-      runtime.log(
-        `${label(`Allowed models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          allowed.length ? theme.info : theme.muted,
-          allowed.length ? allowed.join(", ") : "all",
-        )}`,
+      logField(
+        "Image model",
+        imageModel || "-",
+        imageModel ? theme.accentBright : theme.muted,
+        agentId ? "defaults" : undefined,
+      );
+      logField(
+        `Image fallbacks (${imageFallbacks.length})`,
+        imageFallbacks.length ? imageFallbacks.join(", ") : "-",
+        imageFallbacks.length ? theme.accentBright : theme.muted,
+        agentId ? "defaults" : undefined,
+      );
+      const aliasEntries = Object.entries(aliases);
+      logField(
+        `Aliases (${aliasEntries.length})`,
+        aliasEntries.length
+          ? aliasEntries
+              .map(([alias, target]) =>
+                rich
+                  ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
+                  : `${alias} -> ${target}`,
+              )
+              .join(", ")
+          : "-",
+        aliasEntries.length ? theme.accent : theme.muted,
+      );
+      logField(
+        `Allowed models (${allowed.length})`,
+        allowed.length ? allowed.join(", ") : "all",
+        allowed.length ? theme.info : theme.muted,
       );
 
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Auth overview"));
-      runtime.log(
-        `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
-          rich,
-          theme.info,
-          shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
-        )}`,
-      );
+      logField("Auth store", shortenHomePath(resolveAuthStorePathForDisplay(agentDir)), theme.info);
       runtime.log(
         `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
           rich,
@@ -1398,16 +1342,10 @@ export async function modelsStatusCommand(
           shellFallbackEnabled ? "on" : "off",
         )}${applied.length ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`) : ""}`,
       );
-      runtime.log(
-        `${label(`Providers w/ OAuth/tokens (${providersWithOauth.length || 0})`)}${colorize(
-          rich,
-          theme.muted,
-          ":",
-        )} ${colorize(
-          rich,
-          providersWithOauth.length ? theme.info : theme.muted,
-          providersWithOauth.length ? providersWithOauth.join(", ") : "-",
-        )}`,
+      logField(
+        `Providers w/ OAuth/tokens (${providersWithOauth.length})`,
+        providersWithOauth.length ? providersWithOauth.join(", ") : "-",
+        providersWithOauth.length ? theme.info : theme.muted,
       );
 
       const formatKey = (key: string) => colorize(rich, theme.warn, key);
@@ -1434,29 +1372,19 @@ export async function modelsStatusCommand(
             bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
           }
         }
-        if (entry.env) {
-          bits.push(
-            formatKeyValue(
-              "env",
-              `${entry.env.value}${separator}${formatKeyValue("source", entry.env.source)}`,
-            ),
-          );
-        }
-        if (entry.modelsJson) {
-          bits.push(
-            formatKeyValue(
-              "models.json",
-              `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
-            ),
-          );
-        }
-        if (entry.syntheticAuth) {
-          bits.push(
-            formatKeyValue(
-              "synthetic",
-              `${entry.syntheticAuth.value}${separator}${formatKeyValue("source", entry.syntheticAuth.source)}`,
-            ),
-          );
+        for (const [key, auth] of [
+          ["env", entry.env],
+          ["models.json", entry.modelsJson],
+          ["synthetic", entry.syntheticAuth],
+        ] as const) {
+          if (auth) {
+            bits.push(
+              formatKeyValue(
+                key,
+                `${auth.value}${separator}${formatKeyValue("source", auth.source)}`,
+              ),
+            );
+          }
         }
         runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
       }
@@ -1552,7 +1480,7 @@ export async function modelsStatusCommand(
         runtime.log(colorize(rich, theme.muted, "- none"));
       } else {
         const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
-          await providerUsageRuntimeLoader.load();
+          await import("../../infra/provider-usage.js");
         const usageByProvider = new Map<string, string>();
         const usageProviders = Array.from(
           new Set(
@@ -1612,11 +1540,8 @@ export async function modelsStatusCommand(
         }
 
         for (const [provider, profiles] of profilesByProvider) {
-          const usageProfile = profiles.find(
-            (profile) => profile.type === "oauth" || profile.type === "token",
-          );
           const usageKey = resolveUsageProviderId(provider, {
-            credentialType: usageProfile?.type,
+            credentialType: profiles[0]?.type,
           });
           const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
           const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
@@ -1637,10 +1562,11 @@ export async function modelsStatusCommand(
       }
 
       if (probeSummary) {
-        const [
-          { getTerminalTableWidth, renderTable },
-          { describeProbeSummary, formatProbeLatency, sortProbeResults },
-        ] = await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
+        const [{ getTerminalTableWidth, renderTable }, { describeProbeSummary, sortProbeResults }] =
+          await Promise.all([
+            import("../../../packages/terminal-core/src/table.js"),
+            listProbeRuntimeLoader.load(),
+          ]);
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, "Auth probes"));
         if (probeSummary.results.length === 0) {
@@ -1652,23 +1578,17 @@ export async function modelsStatusCommand(
             if (status === "ok") {
               return theme.success;
             }
-            if (status === "rate_limit") {
-              return theme.warn;
-            }
-            if (status === "timeout" || status === "billing") {
+            if (status === "rate_limit" || status === "timeout" || status === "billing") {
               return theme.warn;
             }
             if (status === "auth" || status === "format") {
               return theme.error;
             }
-            if (status === "no_model") {
-              return theme.muted;
-            }
             return theme.muted;
           };
           const rows = sorted.map((result) => {
             const status = colorize(rich, statusColor(result.status), result.status);
-            const latency = formatProbeLatency(result.latencyMs);
+            const latency = formatMs(result.latencyMs);
             const modelLabel = result.model ?? `${result.provider}/-`;
             const modeLabel = result.mode
               ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`

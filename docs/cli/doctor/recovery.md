@@ -18,6 +18,67 @@ loaded, or `openclaw gateway install --force` from the intended installation to
 replace its service definition. Externally managed services still belong to
 their supervisor.
 
+Doctor also compares the service's package path and version with the active CLI,
+without requiring a Gateway connection. Update finalization and standalone
+`openclaw doctor --fix` reconcile eligible, previously running managed services
+through the native installer; update-time Doctor reports drift and defers publication
+to finalization. Doctor can automatically refresh installation-only drift in a
+verified, writable packaged service. It also repairs recognized stale native
+policy, such as a missing systemd `KillMode=mixed` or zero Scheduled Task restart
+retries, through the update installer's backup transaction before restoring a
+Gateway stopped for maintenance. Doctor reports changed keys and backup paths;
+supported custom settings survive the rewrite. Automatic native-policy repair
+preserves unknown operator edits and uncertain definitions for operator review.
+Other command or credential changes still require interactive confirmation.
+After successful standalone `openclaw doctor --fix`, an already stopped managed
+Gateway starts and verifies readiness when its service targets the current
+installation and final inspection positively verifies its ownership and offline
+state. If that inspection fails, times out, or leaves ownership uncertain, Doctor
+records the reason and leaves the service stopped. Inspect it with
+`openclaw gateway status --deep` before starting it manually.
+Update-time Doctor leaves activation with the updater. A stopped
+service targeting another installation keeps its definition and stop state; run
+the reported profile-aware `openclaw gateway install --force` command from the
+intended installation to reconcile it (installation may start the service).
+It preserves the service's profile and an explicit service port when no port is
+configured. Source checkouts, deployment-owned overrides, and unavailable native
+inspection do not grant automatic installation repair authority; Doctor reports
+the mismatch and the next repair action.
+
+If Doctor loses maintenance ownership during installation, it stops further
+installation or activation and restores its captured service definition when it
+can verify ownership of the replacement. The warning reports whether the
+definition was unchanged, restored, or needs inspection; follow the reported
+status and installer commands after the active maintenance or update finishes.
+Unverified restoration keeps recovery pending instead of claiming a safe restart.
+
+When explicit repair stops a managed Gateway, Doctor waits for that process to
+release shared-state lifecycle ownership within the service stop deadline before
+repairing state. If ownership remains held, Doctor warns, restores the service,
+and refuses the unsafe repair. On macOS, failed activation attempts restore the
+LaunchAgent registration so its KeepAlive policy can recover; the error reports
+whether the job is loaded and gives a recovery command if bootstrap also fails.
+An ambiguous `kickstart` error followed by a probe that confirms the job is absent
+uses bootstrap recovery; successful activation then completes normally. A failure
+for a job that remains loaded stays visible.
+
+Doctor rechecks update admission after acquiring both maintenance coordinators.
+If it must cancel before repair starts, it reverses its own stop while its native
+service custody remains valid. Normal post-repair restoration still requires
+current update admission.
+
+When maintenance cannot acquire state ownership, Doctor includes the underlying
+schema or filesystem error. A shared-state database from a newer OpenClaw build
+stays unchanged; rerun Doctor with a build that supports that database version.
+
+If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
+or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
+admitted repair work and service restoration before exiting. An ordinary repair
+error also restores the managed service Doctor stopped, using the current saved
+configuration. Pending approval prompts cancel without interrupting admitted
+writes. Concrete data risks, lost service authority, and unverified child
+cleanup still prevent unsafe activation and report the recovery action.
+
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service
@@ -70,6 +131,12 @@ maintenance inspection and service mutations; it retains Gateway/state
 coordinators and agent-database lease checks. Shutdown and restart remain with
 the deployment owner. A failed native probe is never treated as proof that the
 Gateway is stopped.
+
+Health diagnostics also leave native service inspection to that external owner.
+They still check the selected port, live Gateway ownership, and startup migration
+activity. With none present, Doctor reports the unavailable Gateway promptly
+instead of waiting for an unrelated native service manager. A live or starting
+Gateway retains the shared readiness budget.
 
 For a system template such as `openclaw@.service` with `User=%i`, inspection
 follows the current account's instance (`openclaw@<user>.service`) while

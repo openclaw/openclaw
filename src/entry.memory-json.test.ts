@@ -25,7 +25,7 @@ import { runMainOrRootHelp } from "./entry.js";
 import { openNodeSqliteDatabase } from "./infra/node-sqlite.js";
 import { resetLogger, setLoggerOverride } from "./logging/logger.js";
 import { createPluginCliLoadSession } from "./plugins/cli-registry-loader.js";
-import { registerPluginCliCommands } from "./plugins/cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./plugins/cli.js";
 import { createPluginCache, retirePluginCache } from "./plugins/plugin-cache.js";
 import { createDeferredCore } from "./shared/deferred.js";
 
@@ -98,9 +98,8 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
               const session = createPluginCliLoadSession(cache, { resources });
               try {
                 await session.withCache(async () => {
-                  await registerPluginCliCommands(
+                  await registerPluginCliCommandsFromValidatedConfig(
                     program,
-                    config,
                     fixtureEnv,
                     { pluginSdkResolution: "src" },
                     { primary: "memory", session },
@@ -245,7 +244,8 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain(cleanupError.message);
+          expect(stderr()).toContain("[openclaw] The CLI command failed.");
+          expect(stderr()).not.toContain(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {
@@ -394,6 +394,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             const loaded = await loadSqliteVecExtension({ db });
             expect(loaded.ok, loaded.error).toBe(true);
             const insert = db.prepare(`INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
           SELECT ?, path, source, start_line, end_line, hash, model, text, embedding, updated_at
           FROM memory_index_chunks WHERE path = 'memory/background.md' LIMIT 1`);
             const insertVector = db.prepare(

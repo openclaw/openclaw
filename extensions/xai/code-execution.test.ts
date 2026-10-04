@@ -3,6 +3,25 @@ import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 
+function codeExecutionConfig(codeExecution?: {
+  model?: string;
+  maxTurns?: number;
+  timeoutSeconds?: number;
+}) {
+  return {
+    plugins: {
+      entries: {
+        xai: {
+          config: {
+            webSearch: { apiKey: "xai-plugin-key" }, // pragma: allowlist secret
+            ...(codeExecution ? { codeExecution } : {}),
+          },
+        },
+      },
+    },
+  };
+}
+
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -41,7 +60,7 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -83,26 +102,6 @@ afterEach(() => {
 });
 
 describe("xai code_execution tool", () => {
-  it("enables code_execution when the xAI plugin web search key is configured", () => {
-    const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(tool?.name).toBe("code_execution");
-  });
-
   it("enables code_execution from an xAI auth profile and uses it for requests", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
@@ -125,23 +124,7 @@ describe("xai code_execution tool", () => {
   it("uses the xAI Responses code_interpreter tool", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-config-test", // pragma: allowlist secret
-                },
-                codeExecution: {
-                  maxTurns: 2,
-                  timeoutSeconds: 45,
-                },
-              },
-            },
-          },
-        },
-      },
+      config: codeExecutionConfig({ maxTurns: 2, timeoutSeconds: 45 }),
     });
 
     const result = await tool?.execute?.("code-execution:1", {
@@ -151,7 +134,7 @@ describe("xai code_execution tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.6");
+    expect(body.model).toBe("grok-4.7");
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
@@ -190,17 +173,7 @@ describe("xai code_execution tool", () => {
       ],
     });
     const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: { apiKey: "xai-plugin-key" }, // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      },
+      config: codeExecutionConfig(),
     });
 
     const result = await tool?.execute?.("code-execution:multi-block", {
@@ -218,20 +191,7 @@ describe("xai code_execution tool", () => {
   it("reuses the xAI plugin web search key without overriding custom model reasoning", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-                codeExecution: { model: "grok-build-0.1" },
-              },
-            },
-          },
-        },
-      },
+      config: codeExecutionConfig({ model: "grok-build-0.1" }),
     });
 
     await tool?.execute?.("code-execution:plugin-key", {
@@ -253,21 +213,9 @@ describe("xai code_execution tool", () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(malformedJsonResponse()),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
+      config: codeExecutionConfig(),
     });
 
     await expect(
@@ -283,21 +231,9 @@ describe("xai code_execution tool", () => {
         jsonResponse({ status: "incomplete", output: [{ type: "code_interpreter_call" }] }),
       ),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
+      config: codeExecutionConfig(),
     });
 
     await expect(

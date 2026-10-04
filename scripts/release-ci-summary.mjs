@@ -9,6 +9,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
@@ -25,7 +26,6 @@ import {
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
-  isReleaseCheckJobAdvisory,
   isReleaseGhArtifactMissingError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
@@ -34,16 +34,21 @@ import {
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
+  releaseChildSpec,
   terminalPolicyPass,
+  validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
+  validateRetiredReleaseRetryFields,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
   validateReleaseTelegramWaiverBinding,
 } from "./full-release-validation-policy.mjs";
 import { inspectActionsArtifactZip } from "./lib/actions-artifact-archive.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
+import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
   execGhRead,
   execGhReadAsync,
@@ -51,6 +56,7 @@ import {
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -75,86 +81,34 @@ const ARTIFACT_DOWNLOAD_MAX_TIMEOUT_MS = 30 * 60_000;
 const ARTIFACT_DOWNLOAD_ATTEMPTS = 2;
 const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 
-const LEGACY_CHILD_DISPATCHES = [
-  {
-    manifestKey: "normalCi",
-    name: "CI",
-    parentJobName: "Run normal full CI",
-    suffix: "-ci",
+function childDispatch(key) {
+  const { displayName, parentJobName, suffix, workflow } = releaseChildSpec(key);
+  return {
+    manifestKey: key,
+    name: displayName,
+    parentJobName,
+    suffix,
     trustedRef: "parent",
-    workflow: "ci.yml",
-  },
-  {
-    manifestKey: "releaseChecks",
-    name: "OpenClaw Release Checks",
-    parentJobName: "Run release/live/Docker/QA validation",
-    suffix: "-release-checks",
-    trustedRef: "parent",
-    workflow: "openclaw-release-checks.yml",
-  },
-  {
-    manifestKey: "pluginPrerelease",
-    name: "Plugin Prerelease",
-    parentJobName: "Run plugin prerelease validation",
-    suffix: "-plugin-prerelease",
-    trustedRef: "parent",
-    workflow: "plugin-prerelease.yml",
-  },
-  {
-    manifestKey: "npmTelegram",
-    name: "NPM Telegram Beta E2E",
-    parentJobName: "Run package Telegram E2E",
-    suffix: "-npm-telegram",
-    trustedRef: "parent",
-    workflow: "npm-telegram-beta-e2e.yml",
-  },
-  {
-    manifestKey: "productPerformance",
-    name: "OpenClaw Performance",
-    parentJobName: "Run product performance evidence",
-    suffix: "",
-    trustedRef: "parent",
-    workflow: "openclaw-performance.yml",
-  },
-];
+    workflow,
+  };
+}
 
+const LEGACY_CHILD_DISPATCHES = [
+  "normalCi",
+  "releaseChecks",
+  "pluginPrerelease",
+  "npmTelegram",
+  "productPerformance",
+].map(childDispatch);
 const PHASED_CHILD_DISPATCHES = [
-  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "normalCi"),
-  {
-    manifestKey: "pluginPrereleaseIndependent",
-    name: "Plugin Prerelease",
-    parentJobName: "Run plugin prerelease independent validation",
-    suffix: "-plugin-prerelease-independent",
-    trustedRef: "parent",
-    workflow: "plugin-prerelease.yml",
-  },
-  {
-    manifestKey: "pluginPrereleaseCandidate",
-    name: "Plugin Prerelease",
-    parentJobName: "Run plugin prerelease candidate validation",
-    suffix: "-plugin-prerelease-candidate",
-    trustedRef: "parent",
-    workflow: "plugin-prerelease.yml",
-  },
-  {
-    manifestKey: "releaseChecksIndependent",
-    name: "OpenClaw Release Checks",
-    parentJobName: "Run release checks independent validation",
-    suffix: "-release-checks-independent",
-    trustedRef: "parent",
-    workflow: "openclaw-release-checks.yml",
-  },
-  {
-    manifestKey: "releaseChecksCandidate",
-    name: "OpenClaw Release Checks",
-    parentJobName: "Run release checks candidate validation",
-    suffix: "-release-checks-candidate",
-    trustedRef: "parent",
-    workflow: "openclaw-release-checks.yml",
-  },
-  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "npmTelegram"),
-  LEGACY_CHILD_DISPATCHES.find((child) => child.manifestKey === "productPerformance"),
-];
+  "normalCi",
+  "pluginPrereleaseIndependent",
+  "pluginPrereleaseCandidate",
+  "releaseChecksIndependent",
+  "releaseChecksCandidate",
+  "npmTelegram",
+  "productPerformance",
+].map(childDispatch);
 // One phased child set plus current and reused parents.
 const MAX_EXPECTED_RUN_ATTEMPTS = PHASED_CHILD_DISPATCHES.length + 2;
 const MAX_EXPECTED_RUN_ATTEMPTS_JSON_BYTES = 4 * 1024;
@@ -175,83 +129,77 @@ const EVIDENCE_REUSE_POLICIES = new Set([
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
 ]);
 
-const RERUN_GROUP_CHILD_KEYS = new Map([
-  ["all", ["normalCi", "releaseChecks", "pluginPrerelease", "productPerformance"]],
-  ["ci", ["normalCi"]],
-  ["plugin-prerelease", ["pluginPrerelease"]],
-  ["install-smoke", ["releaseChecks"]],
-  ["cross-os", ["releaseChecks"]],
-  ["live-e2e", ["releaseChecks"]],
-  ["package", ["releaseChecks"]],
-  ["qa-parity", ["releaseChecks"]],
-  ["qa-live", ["releaseChecks"]],
-  ["npm-telegram", ["npmTelegram"]],
-  ["performance", ["productPerformance"]],
-]);
-
-const PHASED_RERUN_GROUP_CHILD_KEYS = new Map([
-  [
-    "all",
-    [
-      "normalCi",
-      "pluginPrereleaseIndependent",
-      "pluginPrereleaseCandidate",
-      "releaseChecksIndependent",
-      "releaseChecksCandidate",
-      "productPerformance",
-    ],
-  ],
-  ["ci", ["normalCi"]],
-  ["plugin-prerelease", ["pluginPrereleaseIndependent", "pluginPrereleaseCandidate"]],
-  ["install-smoke", ["releaseChecksIndependent"]],
-  ["cross-os", ["releaseChecksCandidate"]],
-  ["live-e2e", ["releaseChecksIndependent", "releaseChecksCandidate"]],
-  ["package", ["releaseChecksCandidate"]],
-  ["qa-parity", ["releaseChecksIndependent"]],
-  ["qa-live", ["releaseChecksIndependent"]],
-  ["npm-telegram", ["npmTelegram"]],
-  ["performance", ["productPerformance"]],
-]);
-
 const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
   ["release-checks", ["releaseChecks"]],
   ["qa", ["releaseChecks"]],
 ]);
 
+function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
-  return execGhRead(
-    args,
-    {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio,
-      timeout: timeoutMs,
-    },
-    { execFileSyncImpl },
-  );
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return execGhRead(
+        args,
+        {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 64 * 1024 * 1024,
+          stdio,
+          timeout: timeoutMs,
+        },
+        { execFileSyncImpl },
+      );
+    } catch (error) {
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        evidenceReadRetryDelay(args, error, attempt),
+      );
+    }
+  }
 }
 
-function gh(args) {
-  return runReleaseCiGh(args);
-}
-
-function ghAsync(args) {
-  return execGhReadAsync(args, {
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: GH_COMMAND_TIMEOUT_MS,
-  });
+async function ghAsync(args) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await execGhReadAsync(args, {
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: GH_COMMAND_TIMEOUT_MS,
+      });
+    } catch (error) {
+      await sleep(evidenceReadRetryDelay(args, error, attempt));
+    }
+  }
 }
 
 function jsonGh(args) {
-  return JSON.parse(gh(args));
+  return JSON.parse(runReleaseCiGh(args));
 }
 
-export function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
+function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/${pathSuffix}`];
 }
 
@@ -263,7 +211,7 @@ async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
   return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
 }
 
-export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
+function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
@@ -308,12 +256,16 @@ function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = 
   }
 }
 
-function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
-  const artifactName = `full-release-execution-plan-${runId}`;
-  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-execution-plan-"));
+function downloadReleaseJsonArtifact(
+  runId,
+  repository,
+  { artifactName, entryName, directoryPrefix, label, retryTransient = false },
+  runGh = runReleaseCiGh,
+) {
+  const downloadDir = mkdtempSync(join(tmpdir(), directoryPrefix));
   try {
     try {
-      runReleaseCiGh(
+      runGh(
         [
           "run",
           "download",
@@ -332,21 +284,32 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
       if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
       }
-      throw new Error(`release execution plan artifact read failed: ${message}`, {
-        cause: error,
-      });
+      if (retryTransient && classifyReleaseGhTransportError(error) === "transient") {
+        console.warn(`${label} artifact unavailable this poll; retrying: ${message}`);
+        return undefined;
+      }
+      throw new Error(`${label} artifact read failed: ${message}`, { cause: error });
     }
-    const path = join(downloadDir, "full-release-execution-plan.json");
+    const path = join(downloadDir, entryName);
     if (!statSync(path, { throwIfNoEntry: false })) {
-      throw new Error(`release execution plan artifact ${artifactName} omitted its manifest`);
+      throw new Error(`${label} artifact ${artifactName} omitted its manifest`);
     }
     if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
-      throw new Error(`release execution plan artifact ${artifactName} exceeds the size limit`);
+      throw new Error(`${label} artifact ${artifactName} exceeds the size limit`);
     }
     return JSON.parse(readFileSync(path, "utf8"));
   } finally {
     rmSync(downloadDir, { force: true, recursive: true });
   }
+}
+
+function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
+  return downloadReleaseJsonArtifact(runId, repository, {
+    artifactName: `full-release-execution-plan-${runId}`,
+    entryName: "full-release-execution-plan.json",
+    directoryPrefix: "openclaw-release-execution-plan-",
+    label: "release execution plan",
+  });
 }
 
 function readExecutionPlanEvidence(runId, repository) {
@@ -699,10 +662,10 @@ export function requiredChildKeysForRerunGroup(
   validationInputs = {},
   childPhaseVersion = 2,
 ) {
-  const childKeys = (
-    childPhaseVersion === 3 ? PHASED_RERUN_GROUP_CHILD_KEYS : RERUN_GROUP_CHILD_KEYS
-  ).get(rerunGroup);
-  if (!childKeys) {
+  const childKeys = childDispatchesForPhaseVersion(childPhaseVersion)
+    .filter((child) => releaseChildSpec(child.manifestKey).rerunGroups.includes(rerunGroup))
+    .map((child) => child.manifestKey);
+  if (childKeys.length === 0) {
     throw new Error(`release validation manifest rerun group is invalid: ${rerunGroup}`);
   }
   const selectedKeys = new Set(childKeys);
@@ -727,6 +690,7 @@ export function requiredChildKeysForRerunGroup(
   return selectedKeys;
 }
 
+/** @returns {Set<string>} */
 function requiredChildKeysForManifest(manifest) {
   if (
     [2, 3].includes(manifest.version) &&
@@ -1117,27 +1081,6 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-export function releaseAdvisoryJobEvidence(childEvidence, releaseProfile, workflowRef) {
-  return Object.entries(childEvidence ?? {})
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .flatMap(([child, evidence]) =>
-      /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
-        ? evidence.jobs
-            .filter((job) =>
-              isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
-            )
-            .toSorted(compareReleaseJobsByName)
-            .map((job) => ({
-              child,
-              job: job.name,
-              status: job.status,
-              conclusion: job.conclusion,
-              policy: "advisory",
-            }))
-        : [],
-    );
-}
-
 function manifestEvidenceIdentity(manifest) {
   return sortReleaseJsonValueKeys({
     sourceAdmission: publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null,
@@ -1154,6 +1097,7 @@ export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
   }
+  validateRetiredReleaseRetryFields(value);
   if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
     throw new Error("release validation manifest schema is unsupported");
   }
@@ -1241,8 +1185,23 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  if (
+    Object.hasOwn(validationInputs ?? {}, "knownFlakyJobsJson") &&
+    validationInputs.knownFlakyJobsJson !== "[]"
+  ) {
+    throw new Error("release validation manifest knownFlakyJobsJson must be empty");
+  }
   const sourceAdmission = validatePublicationSourceBinding(value, expected);
   const publicationAdmission = validatePublicationAdmissionBinding(value, expected);
+  const publicationArtifacts =
+    value.publicationArtifacts === undefined
+      ? undefined
+      : normalizeJsonObject(
+          value.publicationArtifacts,
+          "release validation manifest publication artifacts",
+        );
+  const publishInputs =
+    value.publishInputs === undefined ? undefined : resolveReleasePublishInputs(value);
   normalizeReleaseTelegramWaiver({
     ...validationInputs,
     candidateVersion: candidateBinding?.package.version,
@@ -1273,57 +1232,41 @@ export function validateParentManifest(value, expected) {
     );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, releaseProfile, value.workflowRef);
-  if (
-    value.advisoryJobs !== undefined &&
-    JSON.stringify(sortReleaseJsonValueKeys(value.advisoryJobs)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(advisoryJobs))
-  ) {
-    throw new Error("release validation advisory jobs differ from canonical policy evidence");
+  if (validationInputs?.laneWaiver || value.publishInputs?.stableSoakWaiver) {
+    throw new Error(
+      "Waived release evidence is no longer accepted; rerun Full Release Validation without waivers.",
+    );
   }
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
   }
-  const childRunIds =
-    value.version === 4
-      ? {
-          normalCi: normalizeOptionalRunId(childRuns.normalCi, "normal CI run ID"),
-          npmTelegram: normalizeOptionalRunId(childRuns.npmTelegram, "npm Telegram run ID"),
-          pluginPrereleaseIndependent: normalizeOptionalRunId(
-            childRuns.pluginPrereleaseIndependent,
-            "plugin prerelease independent run ID",
-          ),
-          pluginPrereleaseCandidate: normalizeOptionalRunId(
-            childRuns.pluginPrereleaseCandidate,
-            "plugin prerelease candidate run ID",
-          ),
-          productPerformance: normalizeOptionalRunId(
-            childRuns.productPerformance?.runId ?? "",
-            "performance run ID",
-          ),
-          releaseChecksIndependent: normalizeOptionalRunId(
-            childRuns.releaseChecksIndependent,
-            "release checks independent run ID",
-          ),
-          releaseChecksCandidate: normalizeOptionalRunId(
-            childRuns.releaseChecksCandidate,
-            "release checks candidate run ID",
-          ),
-        }
-      : {
-          normalCi: normalizeOptionalRunId(childRuns.normalCi, "normal CI run ID"),
-          npmTelegram: normalizeOptionalRunId(childRuns.npmTelegram, "npm Telegram run ID"),
-          pluginPrerelease: normalizeOptionalRunId(
-            childRuns.pluginPrerelease,
-            "plugin prerelease run ID",
-          ),
-          productPerformance: normalizeOptionalRunId(
-            childRuns.productPerformance?.runId ?? "",
-            "performance run ID",
-          ),
-          releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
-        };
+  const childRunIds = Object.fromEntries(
+    [
+      ["normalCi", "normal CI"],
+      ["npmTelegram", "npm Telegram"],
+      ...(value.version === 4
+        ? [
+            ["pluginPrereleaseIndependent", "plugin prerelease independent"],
+            ["pluginPrereleaseCandidate", "plugin prerelease candidate"],
+          ]
+        : [["pluginPrerelease", "plugin prerelease"]]),
+      ["productPerformance", "performance"],
+      ...(value.version === 4
+        ? [
+            ["releaseChecksIndependent", "release checks independent"],
+            ["releaseChecksCandidate", "release checks candidate"],
+          ]
+        : [["releaseChecks", "release checks"]]),
+    ].map(([key, label]) => [
+      key,
+      normalizeOptionalRunId(
+        key === "productPerformance" ? (childRuns[key]?.runId ?? "") : childRuns[key],
+        `${label} run ID`,
+      ),
+    ]),
+  );
   if (
     coveragePolicy === "npm-beta-v1" &&
     (childRunIds.productPerformance ||
@@ -1381,9 +1324,15 @@ export function validateParentManifest(value, expected) {
   }
   return {
     advisoryJobs,
+    ...(publishInputs ? { publishInputs } : {}),
+    ...(Object.hasOwn(value, "knownFlakyJobs") ? { knownFlakyJobs: value.knownFlakyJobs } : {}),
+    ...(Object.hasOwn(value, "automaticRetries")
+      ? { automaticRetries: value.automaticRetries }
+      : {}),
     ...(value.publicationAdmissionContract !== undefined
       ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
       : {}),
+    ...(publicationArtifacts ? { publicationArtifacts } : {}),
     ...(sourceAdmission
       ? {
           sourceAdmissionContract: value.sourceAdmissionContract,
@@ -1818,10 +1767,8 @@ export function validateManifestChildRun(
   return run;
 }
 
-export function validatePerformanceArtifactOnlyJobs(jobs, runAttempt) {
-  const normalizedRunAttempt = normalizePositiveInteger(runAttempt, "performance run attempt");
-  const currentJobs = jobs.filter((job) => Number(job.run_attempt) === normalizedRunAttempt);
-  const guards = currentJobs.filter((job) => job.name === "Verify artifact-only report mode");
+export function validatePerformanceArtifactOnlyJobs(jobs) {
+  const guards = jobs.filter((job) => job.name === "Verify artifact-only report mode");
   if (
     guards.length !== 1 ||
     guards[0].status !== "completed" ||
@@ -1829,7 +1776,7 @@ export function validatePerformanceArtifactOnlyJobs(jobs, runAttempt) {
   ) {
     throw new Error("performance artifact-only guard is missing or unsuccessful");
   }
-  const unsafePublisher = currentJobs.find(
+  const unsafePublisher = jobs.find(
     (job) =>
       String(job.name ?? "").startsWith("Publish ") &&
       String(job.name ?? "").endsWith(" report") &&
@@ -2081,6 +2028,9 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    validateChildReuse(selection, request) {
+      return validateReusableReleaseChild(selection, request);
+    },
     getWorkflowSource(sha) {
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
       const payload = githubRestJson(
@@ -2416,16 +2366,26 @@ export function resolveVerifierIdentity(
 async function validateStrictChildRun({
   child,
   childEvidence,
+  childReuse,
   client,
+  executionPlan,
   parentEvidence,
   parentJobs,
   plannedChild,
-  releaseProfile,
   repository,
   runId,
   expectedRunAttempts,
 }) {
-  const run = await client.getRun(runId);
+  const reused = childReuse
+    ? await client.validateChildReuse(childReuse, {
+        inputs: childReuse.inputs,
+        repository,
+        role: child.manifestKey,
+        targetSha: parentEvidence.manifest.targetSha,
+        workflowSha: parentEvidence.manifest.workflowSha,
+      })
+    : undefined;
+  const run = reused?.run ?? (await client.getRun(runId));
   const effectiveRunAttempt = normalizePositiveInteger(
     run.run_attempt,
     `${child.name} run attempt`,
@@ -2442,12 +2402,9 @@ async function validateStrictChildRun({
       throw new Error(`execution plan child dispatch tuple mismatch: ${child.name}`);
     }
   }
-  const originAttempt = resolveManifestChildOriginAttempt(
-    run,
-    child,
-    parentEvidence.manifest,
-    parentJobs,
-  );
+  const originAttempt = reused
+    ? childReuse.sourceParentAttempt
+    : resolveManifestChildOriginAttempt(run, child, parentEvidence.manifest, parentJobs);
   if (originAttempt === undefined) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
@@ -2455,23 +2412,41 @@ async function validateStrictChildRun({
     parentJobs,
     child,
     parentEvidence.manifest,
-    originAttempt,
+    reused ? executionPlan.parentRunAttempt : originAttempt,
     { requireSkippedCarryForward: plannedChild !== undefined },
   );
-  validateManifestChildRun(
-    run,
-    child,
-    runId,
-    parentEvidence.manifest,
-    parentJobs,
-    await client.getJobLog(parentJob.id),
-    repository,
-    plannedChild?.runAttempt,
-    plannedChild !== undefined,
-  );
+  const parentLog = await client.getJobLog(parentJob.id);
+  if (reused) {
+    const selectionSha256 = releaseChildReuseSha256(childReuse);
+    const witnesses = [
+      ...String(parentLog).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu),
+    ];
+    if (witnesses.length !== 1 || witnesses[0][1] !== selectionSha256) {
+      throw new Error(`release child reuse adoption witness mismatch: ${child.name}`);
+    }
+    validateReleaseChildDispatchBinding({
+      child: plannedChild,
+      coveragePolicy: parentEvidence.manifest.validationInputs?.coveragePolicy,
+      log: parentLog,
+      plannedRunAttempt: plannedChild.runAttempt,
+      repository,
+      targetSha: parentEvidence.manifest.targetSha,
+    });
+  } else {
+    validateManifestChildRun(
+      run,
+      child,
+      runId,
+      parentEvidence.manifest,
+      parentJobs,
+      parentLog,
+      repository,
+      plannedChild?.runAttempt,
+      plannedChild !== undefined,
+    );
+  }
   let jobs;
   let composite;
-  let currentAttemptJobs;
   if (plannedChild && childEvidence) {
     if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
@@ -2482,7 +2457,7 @@ async function validateStrictChildRun({
       runAttempt <= childEvidence.effectiveRunAttempt;
       runAttempt += 1
     ) {
-      currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
+      const currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
       attempts.push({ jobs: currentAttemptJobs, runAttempt });
     }
     const evidence = composeReleaseChildAttemptEvidence({
@@ -2501,12 +2476,9 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    const expectedEvidence = {
-      ...evidence,
-    };
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(expectedEvidence))
+      JSON.stringify(sortReleaseJsonValueKeys(evidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
@@ -2528,43 +2500,32 @@ async function validateStrictChildRun({
         ? []
         : await client.getParentJobs(runId);
   }
+  const policyChild = {
+    conclusion: run.conclusion,
+    jobs,
+    key: child.manifestKey,
+    runId,
+    status: run.status,
+  };
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(
-      {
-        conclusion: run.conclusion,
-        jobs,
-        key: child.manifestKey,
-        status: run.status,
-      },
-      releaseProfile,
-      parentEvidence.manifest.workflowRef,
-    )
+    !terminalPolicyPass(policyChild)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
   if (child.manifestKey === "productPerformance") {
-    // A composite may carry earlier successes; the publication guard must pass
-    // in the current raw attempt, already fetched while composing the evidence.
+    // The authenticated composite selects the newest executed attempt per job,
+    // including a carried guard or a newer failure that supersedes its success.
     validatePerformanceArtifactOnlyJobs(
-      composite
-        ? currentAttemptJobs.map((job) =>
-            Object.assign({}, job, { run_attempt: effectiveRunAttempt }),
-          )
-        : jobs,
-      effectiveRunAttempt,
+      composite ? jobs : jobs.filter((job) => Number(job.run_attempt) === effectiveRunAttempt),
     );
   }
 
   return {
-    advisoryJobs: releaseAdvisoryJobEvidence(
-      { [child.manifestKey]: { jobs } },
-      releaseProfile,
-      parentEvidence.manifest.workflowRef,
-    ),
+    advisoryJobs: [],
     conclusion: run.conclusion,
-    dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
+    dispatchNonce: `full-release-validation-${reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,
     event: run.event,
     headBranch: run.head_branch,
@@ -2583,7 +2544,7 @@ async function validateStrictChildRun({
     runAttempt: effectiveRunAttempt,
     runId: String(run.id),
     sourceParentAttempt: originAttempt,
-    sourceParentRunId: parentEvidence.manifest.runId,
+    sourceParentRunId: reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId,
     status: run.status,
     url: run.html_url,
     workflowSha: run.head_sha,
@@ -2933,7 +2894,9 @@ export async function validateReleaseRunEvidence(
       validateStrictChildRun({
         child,
         childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
+        childReuse: executionPlan?.childReuse?.[child.manifestKey],
         client: evidenceClient,
+        executionPlan,
         parentEvidence: dispatchEvidence,
         parentJobs,
         plannedChild: child.plannedChild,
@@ -3171,54 +3134,30 @@ export function tryReadReleaseDecisionArtifact(
   repository,
   runReleaseCiGhImpl = runReleaseCiGh,
 ) {
-  const artifactName = `full-release-decision-${runId}-${parent.attempt}`;
-  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-watch-"));
-  try {
-    try {
-      runReleaseCiGhImpl(
-        [
-          "run",
-          "download",
-          String(runId),
-          "--repo",
-          repository,
-          "--name",
-          artifactName,
-          "--dir",
-          downloadDir,
-        ],
-        { stdio: ["ignore", "ignore", "pipe"] },
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isReleaseGhArtifactMissingError(error)) {
-        return undefined;
-      }
-      if (classifyReleaseGhTransportError(error) === "transient") {
-        console.warn(`release decision artifact unavailable this poll; retrying: ${message}`);
-        return undefined;
-      }
-      throw new Error(`release decision artifact read failed: ${message}`, { cause: error });
-    }
-    const path = join(downloadDir, "full-release-decision.json");
-    if (!statSync(path, { throwIfNoEntry: false })) {
-      throw new Error(`release decision artifact ${artifactName} omitted its manifest`);
-    }
-    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
-      throw new Error(`release decision artifact ${artifactName} exceeds the size limit`);
-    }
-    return validateReleaseStateArtifact(
-      JSON.parse(readFileSync(path, "utf8")),
-      {
-        parentRunAttempt: parent.attempt,
-        parentRunId: String(runId),
-        workflowSha: parent.headSha,
-      },
-      "decision",
-    );
-  } finally {
-    rmSync(downloadDir, { force: true, recursive: true });
+  const decision = downloadReleaseJsonArtifact(
+    runId,
+    repository,
+    {
+      artifactName: `full-release-decision-${runId}-${parent.attempt}`,
+      entryName: "full-release-decision.json",
+      directoryPrefix: "openclaw-release-decision-watch-",
+      label: "release decision",
+      retryTransient: true,
+    },
+    runReleaseCiGhImpl,
+  );
+  if (decision === undefined) {
+    return undefined;
   }
+  return validateReleaseStateArtifact(
+    decision,
+    {
+      parentRunAttempt: parent.attempt,
+      parentRunId: String(runId),
+      workflowSha: parent.headSha,
+    },
+    "decision",
+  );
 }
 
 function releaseDecisionBlockedDuringDrain(parent, runId, repository) {
@@ -3292,10 +3231,42 @@ async function watchReleaseCiRun(options) {
       }
       return;
     }
-    await new Promise((complete) => {
-      setTimeout(complete, options.intervalMs);
-    });
+    await sleep(options.intervalMs);
   }
+}
+
+function readSummaryParentRun(runId, repository) {
+  const parent = jsonGh([
+    "run",
+    "view",
+    runId,
+    "--repo",
+    repository,
+    "--json",
+    "status,conclusion,attempt,headBranch,headSha,url,jobs",
+  ]);
+  validateParentRunBinding(parent, githubRestJson(`actions/runs/${runId}`, repository), runId);
+  return parent;
+}
+
+function readSummaryEvidence(runId, repository, label) {
+  const parent = readSummaryParentRun(runId, repository);
+  if (parent.status !== "completed" || parent.conclusion !== "success") {
+    throw new Error(`${label} run is not completed/success: ${runId}`);
+  }
+  const rawManifest = tryDownloadParentManifest(runId, parent.attempt, repository);
+  if (!rawManifest) {
+    throw new Error(`${label} manifest is unavailable: ${runId}`);
+  }
+  return {
+    parent,
+    manifest: validateParentManifest(rawManifest, {
+      runAttempt: parent.attempt,
+      runId,
+      workflowRef: parent.headBranch,
+      workflowSha: parent.headSha,
+    }),
+  };
 }
 
 async function main() {
@@ -3312,24 +3283,10 @@ async function main() {
   if (options.validate) {
     try {
       const evidence = await validateReleaseRunEvidence({
-        expectedChangedPaths: options.expectedChangedPaths,
-        expectedEvidencePolicy: options.expectedEvidencePolicy,
-        expectedEvidenceSha: options.expectedEvidenceSha,
-        expectedRootRunId: options.expectedRootRunId,
-        expectedRunAttempts: options.expectedRunAttempts,
-        expectedSelectedRunId: options.expectedSelectedRunId,
-        expectedTargetSha: options.expectedTargetSha,
-        manifestPath: options.manifestPath,
-        repository,
-        reuseRequest: options.reuseRequest,
-        runId,
-        trustedWorkflowFullRef: options.trustedWorkflowFullRef,
-        trustedWorkflowRef: options.trustedWorkflowRef,
-        trustedWorkflowSha: options.trustedWorkflowSha,
+        ...options,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)
           : undefined,
-        verifierSourceSha: options.verifierSourceSha,
       });
       console.log(JSON.stringify(evidence, null, options.json ? 2 : 0));
     } catch (error) {
@@ -3363,16 +3320,7 @@ async function main() {
     }
   }
 
-  const parent = jsonGh([
-    "run",
-    "view",
-    runId,
-    "--repo",
-    repository,
-    "--json",
-    "status,conclusion,attempt,headBranch,headSha,url,jobs",
-  ]);
-  validateParentRunBinding(parent, githubRestJson(`actions/runs/${runId}`, repository), runId);
+  const parent = readSummaryParentRun(runId, repository);
 
   console.log(`parent: ${runId} ${parent.status}/${parent.conclusion || "none"}`);
   console.log(`workflow-ref: ${parent.headBranch}`);
@@ -3400,69 +3348,16 @@ async function main() {
     let sourceParent = parent;
     if (currentManifest.evidenceReuse) {
       const rootRunId = currentManifest.evidenceReuse.runId;
-      const rootParent = jsonGh([
-        "run",
-        "view",
+      const { parent: rootParent, manifest: rootManifest } = readSummaryEvidence(
         rootRunId,
-        "--repo",
         repository,
-        "--json",
-        "status,conclusion,attempt,headBranch,headSha,url,jobs",
-      ]);
-      validateParentRunBinding(
-        rootParent,
-        githubRestJson(`actions/runs/${rootRunId}`, repository),
-        rootRunId,
+        "evidence root",
       );
-      if (rootParent.status !== "completed" || rootParent.conclusion !== "success") {
-        throw new Error(`evidence root run is not completed/success: ${rootRunId}`);
-      }
-      const rootManifestRaw = tryDownloadParentManifest(rootRunId, rootParent.attempt, repository);
-      if (!rootManifestRaw) {
-        throw new Error(`evidence root manifest is unavailable: ${rootRunId}`);
-      }
-      const rootManifest = validateParentManifest(rootManifestRaw, {
-        runAttempt: rootParent.attempt,
-        runId: rootRunId,
-        workflowRef: rootParent.headBranch,
-        workflowSha: rootParent.headSha,
-      });
-
       const selectedRunId = currentManifest.evidenceReuse.selectedRunId;
-      let selectedManifest = rootManifest;
-      if (selectedRunId !== rootRunId) {
-        const selectedParent = jsonGh([
-          "run",
-          "view",
-          selectedRunId,
-          "--repo",
-          repository,
-          "--json",
-          "status,conclusion,attempt,headBranch,headSha,url,jobs",
-        ]);
-        validateParentRunBinding(
-          selectedParent,
-          githubRestJson(`actions/runs/${selectedRunId}`, repository),
-          selectedRunId,
-        );
-        if (selectedParent.status !== "completed" || selectedParent.conclusion !== "success") {
-          throw new Error(`selected evidence run is not completed/success: ${selectedRunId}`);
-        }
-        const selectedManifestRaw = tryDownloadParentManifest(
-          selectedRunId,
-          selectedParent.attempt,
-          repository,
-        );
-        if (!selectedManifestRaw) {
-          throw new Error(`selected evidence manifest is unavailable: ${selectedRunId}`);
-        }
-        selectedManifest = validateParentManifest(selectedManifestRaw, {
-          runAttempt: selectedParent.attempt,
-          runId: selectedRunId,
-          workflowRef: selectedParent.headBranch,
-          workflowSha: selectedParent.headSha,
-        });
-      }
+      const selectedManifest =
+        selectedRunId === rootRunId
+          ? rootManifest
+          : readSummaryEvidence(selectedRunId, repository, "selected evidence").manifest;
 
       const evidenceSha = validateEvidenceReuseChain(
         currentManifest,
@@ -3482,9 +3377,7 @@ async function main() {
     }
 
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
-    for (const job of sourceManifest.advisoryJobs) {
-      console.log(`advisory: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`);
-    }
+
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,
@@ -3526,8 +3419,9 @@ async function main() {
       );
       if (child.manifestKey === "productPerformance") {
         validatePerformanceArtifactOnlyJobs(
-          await findParentJobsAll(childRunId, repository),
-          run.run_attempt,
+          (await findParentJobsAll(childRunId, repository)).filter(
+            (job) => Number(job.run_attempt) === Number(run.run_attempt),
+          ),
         );
       }
       children.push({ child, run: validatedRun });

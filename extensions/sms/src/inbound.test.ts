@@ -1,10 +1,12 @@
 // Sms tests cover inbound plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { unlinkIfExists as unlinkIfExistsType } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async () => ({ sid: "SM-pair", to: "+15551234567" })),
@@ -26,22 +28,7 @@ type SmsTurnAdoptionLifecycle = NonNullable<
 >;
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId: "default", ...overrides });
 }
 
 function createRuntime() {
@@ -88,6 +75,7 @@ function createRuntime() {
       resolveAgentRoute,
     },
     inbound: {
+      ingress: createPluginRuntimeMock().channel.inbound.ingress,
       run,
       buildContext,
     },
@@ -119,6 +107,32 @@ function createRuntime() {
 const SMS_FROM = "+15551234567";
 const SMS_TO = "+15557654321";
 const SMS_SESSION_KEY = `agent:main:sms:direct:${SMS_FROM}`;
+
+function createAuthorizedRuntime() {
+  const mocks = createRuntime();
+  mocks.resolveAgentRoute.mockReturnValue({
+    agentId: "main",
+    accountId: "default",
+    sessionKey: SMS_SESSION_KEY,
+  });
+  return mocks;
+}
+
+function createMmsMessage(messageSid: string) {
+  return {
+    from: SMS_FROM,
+    to: SMS_TO,
+    body: "",
+    messageSid,
+    accountSid: "AC123",
+    media: [
+      {
+        url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/${messageSid}/Media/ME${"1".repeat(32)}`,
+        contentType: "image/jpeg",
+      },
+    ],
+  };
+}
 
 async function resolveAuthorizedSmsTurn(params: {
   body: string;
@@ -248,26 +262,9 @@ describe("dispatchSmsInboundEvent", () => {
   });
 
   it("downloads authorized MMS media with Twilio auth and exposes media facts", async () => {
-    const mocks = createRuntime();
-    mocks.resolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      accountId: "default",
-      sessionKey: SMS_SESSION_KEY,
-    });
+    const mocks = createAuthorizedRuntime();
     mocks.buildContext.mockReturnValue({ SessionKey: SMS_SESSION_KEY });
-    const msg = {
-      from: SMS_FROM,
-      to: SMS_TO,
-      body: "",
-      messageSid: "MM-inbound",
-      accountSid: "AC123",
-      media: [
-        {
-          url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-inbound/Media/ME${"1".repeat(32)}`,
-          contentType: "image/jpeg",
-        },
-      ],
-    };
+    const msg = createMmsMessage("MM-inbound");
 
     await dispatchSmsInboundEvent({
       cfg: {},
@@ -315,14 +312,42 @@ describe("dispatchSmsInboundEvent", () => {
     );
   });
 
-  it("cleans materialized MMS files when inbound.run fails before adoption", async () => {
+  it("cleans downloaded MMS files when sender access is revoked before dispatch", async () => {
     const mocks = createRuntime();
-    const runError = new Error("inbound dispatch failed");
-    mocks.resolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      accountId: "default",
-      sessionKey: SMS_SESSION_KEY,
+    const account = createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] });
+    mocks.resolveAgentRoute.mockImplementation(() => {
+      account.allowFrom = [];
+      return { agentId: "main", accountId: "default", sessionKey: SMS_SESSION_KEY };
     });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account,
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      msg: {
+        from: SMS_FROM,
+        to: SMS_TO,
+        body: "photo",
+        messageSid: "MM-revoked",
+        accountSid: "AC123",
+        media: [
+          {
+            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-revoked/Media/ME${"1".repeat(32)}`,
+            contentType: "image/jpeg",
+          },
+        ],
+      },
+    });
+
+    expect(mocks.saveRemoteMedia).toHaveBeenCalledOnce();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+  });
+
+  it("cleans materialized MMS files when inbound.run fails before adoption", async () => {
+    const mocks = createAuthorizedRuntime();
+    const runError = new Error("inbound dispatch failed");
     mocks.run.mockRejectedValueOnce(runError);
 
     await expect(
@@ -336,19 +361,7 @@ describe("dispatchSmsInboundEvent", () => {
           onDeferred: vi.fn(),
           onAbandoned: vi.fn(),
         },
-        msg: {
-          from: SMS_FROM,
-          to: SMS_TO,
-          body: "",
-          messageSid: "MM-run-failure",
-          accountSid: "AC123",
-          media: [
-            {
-              url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-run-failure/Media/ME${"1".repeat(32)}`,
-              contentType: "image/jpeg",
-            },
-          ],
-        },
+        msg: createMmsMessage("MM-run-failure"),
       }),
     ).rejects.toBe(runError);
 
@@ -357,7 +370,7 @@ describe("dispatchSmsInboundEvent", () => {
   });
 
   it("retains deferred MMS files until the turn is abandoned", async () => {
-    const mocks = createRuntime();
+    const mocks = createAuthorizedRuntime();
     const events: string[] = [];
     unlinkIfExistsMock.mockImplementationOnce(async () => {
       events.push("cleanup");
@@ -370,11 +383,6 @@ describe("dispatchSmsInboundEvent", () => {
       }),
     };
     let wrappedLifecycle: SmsTurnAdoptionLifecycle | undefined;
-    mocks.resolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      accountId: "default",
-      sessionKey: SMS_SESSION_KEY,
-    });
     mocks.run.mockImplementationOnce(async (runParams) => {
       wrappedLifecycle = runParams.turnAdoptionLifecycle;
       wrappedLifecycle?.onDeferred?.();
@@ -386,19 +394,7 @@ describe("dispatchSmsInboundEvent", () => {
       channelRuntime: mocks.runtime,
       receivedAt: 1_700_000_000_123,
       turnAdoptionLifecycle: originalLifecycle,
-      msg: {
-        from: SMS_FROM,
-        to: SMS_TO,
-        body: "",
-        messageSid: "MM-deferred",
-        accountSid: "AC123",
-        media: [
-          {
-            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-deferred/Media/ME${"1".repeat(32)}`,
-            contentType: "image/jpeg",
-          },
-        ],
-      },
+      msg: createMmsMessage("MM-deferred"),
     });
 
     expect(originalLifecycle.onDeferred).toHaveBeenCalledOnce();
@@ -411,17 +407,12 @@ describe("dispatchSmsInboundEvent", () => {
   });
 
   it("retains MMS files after successful turn adoption", async () => {
-    const mocks = createRuntime();
+    const mocks = createAuthorizedRuntime();
     const originalLifecycle: SmsTurnAdoptionLifecycle = {
       onAdopted: vi.fn(async () => undefined),
       onDeferred: vi.fn(),
       onAbandoned: vi.fn(),
     };
-    mocks.resolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      accountId: "default",
-      sessionKey: SMS_SESSION_KEY,
-    });
     mocks.run.mockImplementationOnce(async (runParams) => {
       await runParams.turnAdoptionLifecycle?.onAdopted();
     });
@@ -432,19 +423,7 @@ describe("dispatchSmsInboundEvent", () => {
       channelRuntime: mocks.runtime,
       receivedAt: 1_700_000_000_123,
       turnAdoptionLifecycle: originalLifecycle,
-      msg: {
-        from: SMS_FROM,
-        to: SMS_TO,
-        body: "",
-        messageSid: "MM-adopted",
-        accountSid: "AC123",
-        media: [
-          {
-            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-adopted/Media/ME${"1".repeat(32)}`,
-            contentType: "image/jpeg",
-          },
-        ],
-      },
+      msg: createMmsMessage("MM-adopted"),
     });
 
     expect(originalLifecycle.onAdopted).toHaveBeenCalledOnce();
@@ -452,7 +431,7 @@ describe("dispatchSmsInboundEvent", () => {
   });
 
   it("cleans deferred MMS files when turn adoption fails", async () => {
-    const mocks = createRuntime();
+    const mocks = createAuthorizedRuntime();
     const adoptionError = new Error("durable adoption failed");
     const originalLifecycle: SmsTurnAdoptionLifecycle = {
       onAdopted: vi.fn(async () => {
@@ -461,11 +440,6 @@ describe("dispatchSmsInboundEvent", () => {
       onDeferred: vi.fn(),
       onAbandoned: vi.fn(),
     };
-    mocks.resolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      accountId: "default",
-      sessionKey: SMS_SESSION_KEY,
-    });
     mocks.run.mockImplementationOnce(async (runParams) => {
       runParams.turnAdoptionLifecycle?.onDeferred?.();
       await runParams.turnAdoptionLifecycle?.onAdopted();
@@ -478,19 +452,7 @@ describe("dispatchSmsInboundEvent", () => {
         channelRuntime: mocks.runtime,
         receivedAt: 1_700_000_000_123,
         turnAdoptionLifecycle: originalLifecycle,
-        msg: {
-          from: SMS_FROM,
-          to: SMS_TO,
-          body: "",
-          messageSid: "MM-adoption-failed",
-          accountSid: "AC123",
-          media: [
-            {
-              url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-adoption-failed/Media/ME${"1".repeat(32)}`,
-              contentType: "image/jpeg",
-            },
-          ],
-        },
+        msg: createMmsMessage("MM-adoption-failed"),
       }),
     ).rejects.toBe(adoptionError);
 

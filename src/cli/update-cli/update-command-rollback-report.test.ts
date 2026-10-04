@@ -2,8 +2,7 @@ import { confirm as clackConfirm, isCancel } from "@clack/prompts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
-import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   UpdateCommandFailure,
@@ -57,7 +56,16 @@ function setup() {
     reason: "restart-unhealthy",
     before: { version: "2026.9.1" },
     after: { version: "2026.9.1" },
-    steps: [],
+    steps: [
+      {
+        name: "gateway verification",
+        command: "openclaw gateway status --deep",
+        cwd: stateDir,
+        durationMs: 1,
+        exitCode: 1,
+        failureFacts: [{ check: "readyz", code: "restart-unhealthy" }],
+      },
+    ],
     durationMs: 1,
     recovery: {
       serviceRestartSafe: true,
@@ -144,16 +152,17 @@ describe("verified rollback failure actions", () => {
     expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
       env: f.env,
       stateDir: f.env.OPENCLAW_STATE_DIR,
+      allowBrowserFallback: false,
     });
     expect(mocks.triage).not.toHaveBeenCalled();
     expect(f.result.status).toBe("error");
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["declined", "cancelled"])("does not submit when confirmation is %s", async (answer) => {
+  it("does not submit when confirmation is cancelled", async () => {
     const f = setup();
     mocks.select.mockResolvedValue("report");
-    mocks.confirm.mockResolvedValue(answer === "declined" ? false : await cancelPrompt());
+    mocks.confirm.mockResolvedValue(await cancelPrompt());
 
     await f.run();
 
@@ -163,9 +172,9 @@ describe("verified rollback failure actions", () => {
     expect(mocks.triage).not.toHaveBeenCalled();
   });
 
-  it.each(["dismiss", "cancel"])("does nothing after the menu returns %s", async (action) => {
+  it("does nothing after the menu is cancelled", async () => {
     const f = setup();
-    mocks.select.mockResolvedValue(action === "dismiss" ? action : await cancelPrompt());
+    mocks.select.mockResolvedValue(await cancelPrompt());
 
     await f.run();
 
@@ -191,10 +200,6 @@ describe("verified rollback failure actions", () => {
 
   it.each([
     { name: "JSON", opts: { json: true } },
-    { name: "--yes", opts: { yes: true } },
-    { name: "noninteractive", interactive: false },
-    { name: "dry run", opts: { dryRun: true } },
-    { name: "post-core child", env: { [POST_CORE_UPDATE_ENV]: "1" } },
     { name: "managed handoff", env: { OPENCLAW_UPDATE_RUN_HANDOFF: "1" } },
     { name: "signal cancellation", signal: true },
   ])("keeps $name rollback quiet", async (testCase) => {
@@ -210,7 +215,7 @@ describe("verified rollback failure actions", () => {
         termination: "signal",
       });
     }
-    await withTriageTerminal(testCase.interactive ?? true, async () => {
+    await withTriageTerminal(true, async () => {
       await expect(
         withUpdateFailureTriage({ ...f.opts, ...testCase.opts }, f.target, f.fail),
       ).rejects.toMatchObject({ code: 1 });

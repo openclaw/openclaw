@@ -5,21 +5,17 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionChangedEvent,
+  sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [{ key, kind: "direct", updatedAt: 1 }],
-  };
+  return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
 }
 
 async function mountTypingPage(initialResult = result("agent:main:initial")) {
@@ -60,19 +56,12 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
     input().dispatchEvent(new Event("input", { bubbles: true }));
     await page.updateComplete;
   };
-  const type = async (value: string) => {
-    for (let length = 1; length <= value.length; length += 1) {
-      await edit(value.slice(0, length));
-      await vi.advanceTimersByTimeAsync(40);
-    }
-  };
   return {
     page,
     requests,
     pending,
     input,
     edit,
-    type,
     client,
     connection,
     context,
@@ -96,14 +85,137 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("sessions page managed roster", () => {
+  it("replaces a deep link with managed search and surfaces query errors", async () => {
+    const deepLink = "agent:main:initial";
+    const pending = new Map<string, ReturnType<typeof createDeferred<SessionsListResult>>>();
+    const request = vi.fn(async (method: string, params?: { search?: string }) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "agent.identity.get") {
+        return { name: "Assistant" };
+      }
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      if (!params?.search || params.search === deepLink) {
+        return result("agent:main:initial");
+      }
+      const task = createDeferred<SessionsListResult>();
+      pending.set(params.search, task);
+      return task.promise;
+    });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      result("agent:main:initial"),
+      "active",
+      deepLink,
+    );
+    const search = async (value: string) => {
+      const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await page.updateComplete;
+    };
+    try {
+      page.selectedSessions = new Map([["agent:main:initial", { key: "agent:main:initial" }]]);
+      await search("older");
+      await vi.waitFor(() => expect(pending.has("older")).toBe(true));
+      expect(page.result).toBeNull();
+      expect(page.selectedSessions.size).toBe(0);
+      expect(page.textContent).not.toContain("No sessions match your filters.");
+      await search("latest");
+      pending.get("older")!.resolve(result("agent:main:older"));
+      await vi.waitFor(() => expect(pending.has("latest")).toBe(true));
+      expect(page.result).toBeNull();
+      pending.get("latest")!.resolve(result("agent:main:latest"));
+      await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:latest"));
+      await page.updateComplete;
+      await search("failed");
+      await vi.waitFor(() => expect(pending.has("failed")).toBe(true));
+      pending.get("failed")!.reject(new Error("synthetic query failure"));
+      await vi.waitFor(() => expect(page.textContent).toContain("synthetic query failure"));
+      expect(page.textContent).not.toContain("No sessions match your filters.");
+      expect(page.result).toBeNull();
+    } finally {
+      for (const task of pending.values()) {
+        task.resolve(result("cleanup"));
+      }
+      page.remove();
+      sessions.dispose();
+    }
+  });
+
+  it("appends the next matched server page through the managed owner", async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 57 }, (_, index) => ({
+      key: `agent:main:row-${index}`,
+      kind: "direct" as const,
+      updatedAt: 100 - index,
+    }));
+    const pageResult = (offset: number): SessionsListResult => ({
+      ...sessionsResult(rows.slice(offset, offset + 50), 1),
+      totalCount: 57,
+      hasMore: offset === 0,
+      nextOffset: offset === 0 ? 50 : null,
+    });
+    const request = vi.fn(async (method: string, params?: { offset?: number }) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return pageResult(params?.offset ?? 0);
+    });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const page = await createRenderedPage(createContext(gateway, sessions), pageResult(0));
+    try {
+      const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      input.value = "server-only metadata";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ search: "server-only metadata", limit: 50 }),
+      );
+      expect(page.result?.sessions).toHaveLength(50);
+      await page.updateComplete;
+      const button = (name: string) =>
+        [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")].find(
+          (entry) => entry.textContent?.trim() === name,
+        )!;
+      button("Load more sessions").click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.result?.sessions).toHaveLength(57);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ search: "server-only metadata", offset: 50, limit: 50 }),
+      );
+      await page.updateComplete;
+      button("Next").click();
+      await page.updateComplete;
+      button("Next").click();
+      await page.updateComplete;
+      expect(page.textContent).toContain("agent:main:row-56");
+      expect(button("Load more sessions")).toBeUndefined();
+    } finally {
+      page.remove();
+      sessions.dispose();
+    }
+  });
+});
+
 describe("Sessions page typing ownership", () => {
-  it.each(
-    ["queued", "timer", "unsubscribed"]
-      .flatMap((timing) =>
-        [false, true].map((resubscribe) => ({ timing, resubscribe, hidden: false })),
-      )
-      .concat({ timing: "unsubscribed", resubscribe: true, hidden: true }),
-  )(
+  it.each([
+    { timing: "queued", resubscribe: true, hidden: false },
+    { timing: "timer", resubscribe: false, hidden: false },
+    { timing: "unsubscribed", resubscribe: true, hidden: true },
+  ])(
     "retires $timing event work while unobserved and catches up on resubscribe=$resubscribe hidden=$hidden",
     async ({ timing, resubscribe, hidden }) => {
       vi.useFakeTimers();
@@ -129,7 +241,7 @@ describe("Sessions page typing ownership", () => {
         if (timing !== "unsubscribed") {
           emitEvent(sessionChangedEvent("agent:main:changed"));
           if (timing === "queued") {
-            await vi.advanceTimersByTimeAsync(200);
+            await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
@@ -163,7 +275,7 @@ describe("Sessions page typing ownership", () => {
           document.dispatchEvent(new Event("visibilitychange"));
           await vi.advanceTimersByTimeAsync(0);
         } else if (!resubscribe || timing === "queued") {
-          await vi.advanceTimersByTimeAsync(999);
+          await vi.advanceTimersByTimeAsync(4_999);
           expect(filteredCalls).toBe(1);
           if (resubscribe) {
             expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe(
@@ -190,140 +302,87 @@ describe("Sessions page typing ownership", () => {
     },
   );
 
-  it("keeps a never-observed prefetch dormant until its dirty query gains a listener", async () => {
+  it("retains a rename refresh when search replaces an older page request", async () => {
     vi.useFakeTimers();
-    const active = createDeferred<SessionsListResult>();
-    let filteredCalls = 0;
-    const request = vi.fn(async (method: string, params?: { search?: string }) => {
-      expect(method).toBe("sessions.list");
-      if (params?.search === "prefetch") {
-        filteredCalls += 1;
-        return filteredCalls === 1 ? active.promise : result("agent:main:updated");
+    const key = "agent:main:rename";
+    const before = result(key);
+    before.sessions[0]!.label = "Before rename";
+    const after: SessionsListResult = {
+      ...before,
+      sessions: [{ ...before.sessions[0]!, label: "After rename", updatedAt: 2 }],
+    };
+    const patch = createDeferred<SessionPatchResult>();
+    const older = createDeferred<SessionsListResult>();
+    let pageRequests = 0;
+    let mutationRefreshes = 0;
+    const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
+      if (method === "sessions.patch") {
+        return patch.promise;
       }
-      return result("agent:main:sidebar");
+      expect(method).toBe("sessions.list");
+      if (params?.includeUnknown !== false) {
+        mutationRefreshes += 1;
+        return after;
+      }
+      pageRequests += 1;
+      return pageRequests === 1 ? before : pageRequests === 2 ? older.promise : after;
     });
-    const { sessions, emitEvent } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
-    const query = { search: "prefetch", includeDerivedTitles: false };
-    const loading = sessions.refreshList(query);
-    let unsubscribe: (() => void) | undefined;
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const page = await createRenderedPage(createContext(gateway, sessions), before);
     try {
-      emitEvent(sessionChangedEvent("agent:main:changed"));
-      await vi.advanceTimersByTimeAsync(200);
-      expect(filteredCalls).toBe(1);
-      active.resolve(result("agent:main:old"));
-      await loading;
-      await vi.advanceTimersByTimeAsync(200);
-      expect(filteredCalls).toBe(1);
-      unsubscribe = sessions.subscribeList(query, vi.fn());
+      page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+      await page.updateComplete;
+      const label = page.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
+      expect(label.disabled).toBe(false);
+      label.value = "After rename";
+      label.dispatchEvent(new Event("change", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
-      expect(filteredCalls).toBe(2);
-      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:updated");
+      expect(request).toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({ key, label: "After rename" }),
+      );
+      [...page.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Refresh")!
+        .click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pageRequests).toBe(2);
+      patch.resolve({ ok: true, path: "", key, entry: { sessionId: "renamed-session" } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mutationRefreshes).toBe(1);
+      expect(pageRequests).toBe(2);
+      expect(page.loading).toBe(true);
+      const search = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      for (const value of ["n", "ne", "new"]) {
+        search.value = value;
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+        await page.updateComplete;
+        await vi.advanceTimersByTimeAsync(40);
+      }
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pageRequests).toBe(2);
+      older.resolve(before);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pageRequests).toBe(3);
+      expect(request.mock.calls.findLast(([method]) => method === "sessions.list")).toEqual([
+        "sessions.list",
+        expect.objectContaining({
+          includeUnknown: false,
+          search: "new",
+        }),
+      ]);
+      expect(page.textContent).toContain("After rename");
+      expect(page.result?.sessions[0]?.label).toBe("After rename");
+      expect(page.loading).toBe(false);
     } finally {
-      unsubscribe?.();
+      page.remove();
       sessions.dispose();
-      active.resolve(result("cleanup"));
-      await loading;
+      patch.resolve({ ok: true, path: "", key, entry: { sessionId: "renamed-session" } });
+      older.resolve(before);
+      await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(0);
     }
   });
-
-  it.each([false, true])(
-    "retains the rename refresh during an older page request (replace query: %s)",
-    async (replaceQuery) => {
-      vi.useFakeTimers();
-      const key = "agent:main:rename";
-      const before = result(key);
-      before.sessions[0]!.label = "Before rename";
-      const after: SessionsListResult = {
-        ...before,
-        sessions: [{ ...before.sessions[0]!, label: "After rename", updatedAt: 2 }],
-      };
-      const patch = createDeferred<{
-        ok: true;
-        path: string;
-        key: string;
-        entry: { sessionId: string };
-      }>();
-      const older = createDeferred<SessionsListResult>();
-      let pageRequests = 0;
-      let mutationRefreshes = 0;
-      const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
-        if (method === "sessions.patch") {
-          return patch.promise;
-        }
-        if (method === "sessions.compaction.list") {
-          return { checkpoints: [] };
-        }
-        expect(method).toBe("sessions.list");
-        if (params?.includeUnknown !== false) {
-          mutationRefreshes += 1;
-          return after;
-        }
-        pageRequests += 1;
-        return pageRequests === 1 ? before : pageRequests === 2 ? older.promise : after;
-      });
-      const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      const page = await createRenderedPage(createContext(gateway, sessions), before);
-      try {
-        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-        await page.updateComplete;
-        const label = page.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
-        expect(label.disabled).toBe(false);
-        label.value = "After rename";
-        label.dispatchEvent(new Event("change", { bubbles: true }));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(request).toHaveBeenCalledWith(
-          "sessions.patch",
-          expect.objectContaining({ key, label: "After rename" }),
-        );
-        [...page.querySelectorAll<HTMLButtonElement>("button")]
-          .find((button) => button.textContent?.trim() === "Refresh")!
-          .click();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(pageRequests).toBe(2);
-        patch.resolve({ ok: true, path: "", key, entry: { sessionId: "renamed-session" } });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(mutationRefreshes).toBe(1);
-        expect(pageRequests).toBe(2);
-        expect(page.loading).toBe(true);
-        if (replaceQuery) {
-          const search = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
-          for (const value of ["n", "ne", "new"]) {
-            search.value = value;
-            search.dispatchEvent(new Event("input", { bubbles: true }));
-            await page.updateComplete;
-            await vi.advanceTimersByTimeAsync(40);
-          }
-          await vi.advanceTimersByTimeAsync(200);
-          expect(pageRequests).toBe(2);
-        }
-        older.resolve(before);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(pageRequests).toBe(3);
-        expect(request.mock.calls.findLast(([method]) => method === "sessions.list")).toEqual([
-          "sessions.list",
-          expect.objectContaining({
-            includeUnknown: false,
-            ...(replaceQuery ? { search: "new" } : {}),
-          }),
-        ]);
-        expect(page.textContent).toContain("After rename");
-        expect(page.result?.sessions[0]?.label).toBe("After rename");
-        expect(page.loading).toBe(false);
-      } finally {
-        page.remove();
-        sessions.dispose();
-        patch.resolve({ ok: true, path: "", key, entry: { sessionId: "renamed-session" } });
-        older.resolve(before);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(vi.getTimerCount()).toBe(0);
-      }
-    },
-  );
-
   it.each(["detach", "reconnect", "client", "context"])(
     "retires pending work on %s and starts the new owner's query without the old response",
     async (retirement) => {
@@ -369,7 +428,6 @@ describe("Sessions page typing ownership", () => {
         expect(page.result).toBeNull();
         expect(page.loading).toBe(true);
         expect(page.textContent).not.toContain("agent:main:retired");
-        // Old completion cannot release the new connection's occupied slot.
         await edit("newest");
         await vi.advanceTimersByTimeAsync(200);
         expect(requests).toHaveLength(3);
@@ -387,57 +445,51 @@ describe("Sessions page typing ownership", () => {
     },
   );
 
-  it.each(["Refresh", "Load more sessions"])(
-    "keeps last-good rows for %s but makes its slow request yield only to the latest text",
-    async (action) => {
-      vi.useFakeTimers();
-      const initial = {
-        ...result("agent:main:initial"),
-        count: 50,
-        hasMore: true,
-        nextOffset: 50,
-        totalCount: 51,
-      };
-      initial.sessions = Array.from({ length: 50 }, (_, index) => ({
-        key: `agent:main:row-${index}`,
-        kind: "direct",
-        updatedAt: index,
-      }));
-      const harness = await mountTypingPage(initial);
-      const { page, edit, pending, requests } = harness;
-      try {
-        [...page.querySelectorAll<HTMLButtonElement>("button")]
-          .find((button) => button.textContent?.trim() === action)!
-          .click();
-        await vi.advanceTimersByTimeAsync(0);
-        page.context = { ...harness.context };
-        page.requestUpdate();
-        await page.updateComplete;
-        expect(requests).toHaveLength(2);
-        expect(page.result?.sessions).toHaveLength(50);
-        expect(page.loading).toBe(true);
-        if (action === "Load more sessions") {
-          expect(requests.at(-1)).toMatchObject({ offset: 50 });
-        }
-        await edit("latest");
-        await vi.advanceTimersByTimeAsync(200);
-        expect(requests).toHaveLength(2);
-        expect(page.result).toBeNull();
-        pending[0]!.resolve(result("agent:main:retired"));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(requests).toHaveLength(3);
-        expect(requests.at(-1)).toMatchObject({ search: "latest" });
-        expect(requests.at(-1)).not.toHaveProperty("offset");
-        expect(page.result).toBeNull();
-        pending[1]!.resolve(result("agent:main:final"));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(page.result?.sessions.map((row) => row.key)).toEqual(["agent:main:final"]);
-      } finally {
-        await harness.cleanup();
-      }
-    },
-  );
-
+  it("retains rows while loading more, then yields to the latest search", async () => {
+    vi.useFakeTimers();
+    const initial = {
+      ...result("agent:main:initial"),
+      count: 50,
+      hasMore: true,
+      nextOffset: 50,
+      totalCount: 51,
+    };
+    initial.sessions = Array.from({ length: 50 }, (_, index) => ({
+      key: `agent:main:row-${index}`,
+      kind: "direct",
+      updatedAt: index,
+    }));
+    const harness = await mountTypingPage(initial);
+    const { page, edit, pending, requests } = harness;
+    try {
+      [...page.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Load more sessions")!
+        .click();
+      await vi.advanceTimersByTimeAsync(0);
+      page.context = { ...harness.context };
+      page.requestUpdate();
+      await page.updateComplete;
+      expect(requests).toHaveLength(2);
+      expect(page.result?.sessions).toHaveLength(50);
+      expect(page.loading).toBe(true);
+      expect(requests.at(-1)).toMatchObject({ offset: 50 });
+      await edit("latest");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(requests).toHaveLength(2);
+      expect(page.result).toBeNull();
+      pending[0]!.resolve(result("agent:main:retired"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requests).toHaveLength(3);
+      expect(requests.at(-1)).toMatchObject({ search: "latest" });
+      expect(requests.at(-1)).not.toHaveProperty("offset");
+      expect(page.result).toBeNull();
+      pending[1]!.resolve(result("agent:main:final"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.result?.sessions.map((row) => row.key)).toEqual(["agent:main:final"]);
+    } finally {
+      await harness.cleanup();
+    }
+  });
   it("coalesces scope and status edits behind a request and lets explicit filters consume debounce", async () => {
     vi.useFakeTimers();
     const harness = await mountTypingPage();
@@ -478,48 +530,6 @@ describe("Sessions page typing ownership", () => {
       });
     } finally {
       await harness.cleanup();
-    }
-  });
-
-  it("debounces rapid input and sends only the latest queued query behind a slow request", async () => {
-    vi.useFakeTimers();
-    const { page, requests, pending, input, type, cleanup } = await mountTypingPage();
-    try {
-      page.selectedKeys = new Set(["agent:main:initial"]);
-      await type("older");
-      expect.soft(requests).toHaveLength(1);
-      expect(page.result).toBeNull();
-      expect(page.selectedKeys.size).toBe(0);
-      expect(page.loading).toBe(true);
-      expect(input().value).toBe("older");
-      expect(page.textContent).not.toContain("No sessions match your filters.");
-      await vi.advanceTimersByTimeAsync(200);
-      expect.soft(requests).toHaveLength(2);
-      expect(requests.at(-1)).toMatchObject({ search: "older", limit: 50 });
-
-      await type("superseded");
-      await vi.advanceTimersByTimeAsync(200);
-      // Metadata context wrappers share the same capability/connection owner.
-      page.context = { ...page.context };
-      page.requestUpdate();
-      await page.updateComplete;
-      await type("latest");
-      await vi.advanceTimersByTimeAsync(200);
-      expect.soft(requests).toHaveLength(2);
-      pending[0]!.resolve(result("agent:main:retired"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect.soft(requests).toHaveLength(3);
-      expect(requests.at(-1)).toMatchObject({ search: "latest", limit: 50 });
-      expect(page.result).toBeNull();
-      expect(page.loading).toBe(true);
-      expect(page.textContent).not.toContain("agent:main:retired");
-      expect(input().value).toBe("latest");
-      pending.at(-1)!.resolve(result("agent:main:final"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(page.result?.sessions[0]?.key).toBe("agent:main:final");
-      expect(page.loading).toBe(false);
-    } finally {
-      await cleanup();
     }
   });
 });

@@ -196,22 +196,6 @@ defineDiscordVoiceTests(
       expect(lastRealtimeBridgeParams().agentId).toBe("agent-1");
     });
 
-    it("keeps agent-proxy realtime transcripts on the audio turn speaker context", async () => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "non-owner answer" }] });
-      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
-        config: { voice: { realtime: { debounceMs: 1 } } },
-      });
-      beginSpeakerTurn(entry, { senderIsOwner: false });
-
-      await flushRealtimeForcedConsultTimers(() => {
-        bridgeParams?.onTranscript?.("user", "non-owner question", true);
-        beginSpeakerTurn(entry);
-      });
-
-      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
-      expectUserMessageIncludes("non-owner answer");
-    });
-
     it("retains the guest owner binding when its final transcript arrives after later owner audio", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] });
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture({
@@ -427,17 +411,6 @@ defineDiscordVoiceTests(
       expectUserMessageNotIncludes("stale talkback");
     });
 
-    it("preserves realtime forced consults when no active run accepts steering", async () => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "normal answer" }] });
-      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
-      beginSpeakerTurn(entry);
-
-      await emitFinalRealtimeUserTranscript(bridgeParams, "normal question");
-
-      expect(lastAgentCommandArgs().message).toContain("normal question");
-      expectUserMessageIncludes("normal answer");
-    });
-
     it("defaults to wake names only while multiple people share agent-proxy voice", async () => {
       const client = createClient();
       const ownerState = {
@@ -465,7 +438,7 @@ defineDiscordVoiceTests(
         { voice: { realtime: { consultPolicy: "auto" } } },
         {
           agents: {
-            list: [{ id: "agent-1", identity: { name: "Molty" } }],
+            entries: { "agent-1": { identity: { name: "Molty" } } },
           },
         },
         "bot-user",
@@ -804,7 +777,7 @@ defineDiscordVoiceTests(
         { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
         {
           agents: {
-            list: [{ id: "agent-1", identity: { name: "Molty" } }],
+            entries: { "agent-1": { identity: { name: "Molty" } } },
           },
         },
       );

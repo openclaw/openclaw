@@ -1,7 +1,6 @@
 // Discord-private ask_user component envelope.
 import type { ComponentData } from "./internal/discord.js";
 
-const DISCORD_QUESTION_CUSTOM_ID_MAX_CHARS = 100;
 const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 
 type DiscordQuestionCallback = {
@@ -20,8 +19,7 @@ export function buildDiscordQuestionCustomId(
   ) {
     return undefined;
   }
-  const customId = `ocq:id=${callback.questionId};i=${callback.optionIndex}`;
-  return customId.length <= DISCORD_QUESTION_CUSTOM_ID_MAX_CHARS ? customId : undefined;
+  return `ocq:id=${callback.questionId};i=${callback.optionIndex}`;
 }
 
 export function parseDiscordQuestionData(data: ComponentData): DiscordQuestionCallback | null {

@@ -2,7 +2,6 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -233,21 +232,17 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
-  return (
-    left.text === right.text &&
-    left.ts === right.ts &&
-    (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
-  );
-}
-
 function matchesConsumedSystemEvent(queued: SystemEvent, consumed: SystemEvent): boolean {
   if (consumed.id !== undefined) {
     // Queue-owned IDs govern modern consumption; only legacy ID-less snapshots use structure.
     return queued.id === consumed.id;
   }
-  return areLegacySystemEventsEqual(queued, consumed);
+  return (
+    queued.text === consumed.text &&
+    queued.ts === consumed.ts &&
+    (queued.contextKey ?? null) === (consumed.contextKey ?? null) &&
+    areDeliveryContextsEqual(queued.deliveryContext, consumed.deliveryContext)
+  );
 }
 
 function resetQueueState(key: string, entry: SessionQueue) {
@@ -256,38 +251,39 @@ function resetQueueState(key: string, entry: SessionQueue) {
     queues.delete(key);
     return;
   }
-  for (let index = entry.queue.length - 1; index >= 0; index -= 1) {
-    const contextKey = expectDefined(entry.queue[index], "queue entry at index").contextKey ?? null;
-    if (contextKey !== null) {
-      entry.lastContextKey = contextKey;
-      return;
-    }
-  }
-  entry.lastContextKey = null;
+  entry.lastContextKey =
+    entry.queue.findLast((event) => event.contextKey != null)?.contextKey ?? null;
 }
 
 export function consumeSelectedSystemEventEntries(
   sessionKey: string,
   consumedEntries: readonly SystemEvent[],
+  options?: { deferredEventIds?: readonly string[] },
 ): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
   if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
     return [];
   }
-  const removed: SystemEvent[] = [];
+  // Prompt admission can defer captured occurrences to a delivery owner. Selection
+  // still resolves against the live queue, in captured order, never late arrivals.
+  const deferredIds = new Set(options?.deferredEventIds);
+  const selected: SystemEvent[] = [];
   for (const consumed of consumedEntries) {
     const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
     if (index === -1) {
       continue;
     }
-    const [event] = entry.queue.splice(index, 1);
+    const event = entry.queue[index];
     if (event) {
-      removed.push(cloneSystemEvent(event));
+      if (!event.id || !deferredIds.has(event.id)) {
+        entry.queue.splice(index, 1);
+      }
+      selected.push(cloneSystemEvent(event));
     }
   }
   resetQueueState(key, entry);
-  return removed;
+  return selected;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {

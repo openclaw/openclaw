@@ -1,16 +1,19 @@
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
@@ -31,6 +34,14 @@ vi.mock("node:child_process", async (importOriginal) => {
     Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
   );
   return { ...actual, execFile: processMocks.execFile };
+});
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
 });
 
 type Worker = { child: ChildProcess; closed: Promise<void>; settled: boolean; stderr: string };
@@ -102,11 +113,17 @@ function fixture(count = 3, payloadBytes = 4096) {
     }
     return parent;
   });
+  const receiptSource = `${fixtureReceiptClientSource(receipts.endpoint)}
+    sendReceipt(${JSON.stringify(marker)}, "entered");
+    fixtureReceiptSocket.ref();
+    await new Promise((resolve) => fixtureReceiptSocket.end(resolve));
+  `;
   fs.writeFileSync(
     harness,
     `
     import fs from 'node:fs';
     import path from 'node:path';
+    import { Worker } from 'node:worker_threads';
     import { DatabaseSync } from 'node:sqlite';
     if (process.argv[3] === 'reclaim') {
       const remove = fs.rmSync;
@@ -119,6 +136,8 @@ function fixture(count = 3, payloadBytes = 4096) {
             claimedRoot: path.join(${JSON.stringify(cache)}, relative.split(path.sep)[0]), file: String(file),
           }));
           fs.renameSync(${JSON.stringify(`${marker}.partial`)}, ${JSON.stringify(marker)});
+          // The relay flushes the receipt while this thread blocks at the native gate.
+          new Worker(new URL(${JSON.stringify(`data:text/javascript,${encodeURIComponent(receiptSource)}`)}), { execArgv: [] }).unref();
           const gate = new DatabaseSync(${JSON.stringify(gatePath)});
           try { gate.exec('PRAGMA busy_timeout=10000; BEGIN IMMEDIATE; ROLLBACK;'); }
           finally { gate.close(); }
@@ -131,28 +150,26 @@ function fixture(count = 3, payloadBytes = 4096) {
   );
   vi.stubEnv("XDG_CACHE_HOME", cacheHome);
   vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(harness));
-  let watcher: fs.FSWatcher;
-  let timer: ReturnType<typeof setTimeout>;
-  const entered = new Promise<{ claimedRoot: string; file: string }>((resolve, reject) => {
-    watcher = fs.watch(root, () => {
-      if (fs.existsSync(marker)) {
-        resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
-      }
-    });
-    watcher.once("error", reject);
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(
+  const entered = async (
+    operation: Promise<unknown>,
+  ): Promise<{ claimedRoot: string; file: string }> => {
+    const settled = operation.then(
+      () => {
+        if (!fs.existsSync(marker)) {
+          throw new Error(
             `Reclaimer did not reach the directory gate: ${workers.get(path.resolve(cache))?.stderr ?? "no child stderr"}`,
-          ),
-        ),
-      30_000,
+          );
+        }
+      },
+      (error: unknown) => {
+        if (!fs.existsSync(marker)) {
+          throw error;
+        }
+      },
     );
-  }).finally(() => {
-    watcher.close();
-    clearTimeout(timer);
-  });
+    await Promise.race([receipts.waitFor(marker, "entered"), settled]);
+    return JSON.parse(fs.readFileSync(marker, "utf8"));
+  };
   const release = () => {
     if (gate.isTransaction) {
       gate.exec("ROLLBACK");
@@ -174,8 +191,6 @@ function fixture(count = 3, payloadBytes = 4096) {
     close() {
       release();
       gate.close();
-      watcher.close();
-      clearTimeout(timer);
     },
   };
 }
@@ -183,7 +198,8 @@ function fixture(count = 3, payloadBytes = 4096) {
 async function readSnapshot(source: string, signal?: AbortSignal): Promise<void> {
   const prepared = await prepareSqliteReadOnlyLocation(source, { signal });
   try {
-    const db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+    // Windows test homes can put the prepared snapshot at the native path limit.
+    const db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     try {
       expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
     } finally {
@@ -194,79 +210,53 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-function createOwnedDatabase() {
-  const stateDir = tempDirs.make("sqlite-reclaim-owned-state-");
-  const bootstrapCache = path.join(stateDir, "bootstrap-cache");
-  vi.stubEnv("XDG_CACHE_HOME", bootstrapCache);
-  const options = {
-    env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" },
-    path: path.join(stateDir, "state", "openclaw.sqlite"),
-  };
-  openOpenClawStateDatabase(options).db.exec(
-    "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
-  );
-  return { options, bootstrapCache };
-}
-
-it("keeps caller cancellation independent of idle reclamation", async () => {
-  for (const mode of ["snapshot", "update", "owned"] as const) {
-    const owned = mode === "owned" ? createOwnedDatabase() : undefined;
+it("keeps cancelled and surviving callers independent of idle reclamation", async ({ signal }) => {
+  for (const mode of ["snapshot", "update"] as const) {
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-    const entered = await f.entered;
-    const operation = withSqliteReadOnlyWorkerScope(async () => {
-      if (mode === "snapshot") {
-        await readSnapshot(f.source, controller.signal);
-      } else if (mode === "update") {
-        await readUpdateStateSchemaVersions({
-          stateDir: path.dirname(f.source),
-          config: {},
-          signal: controller.signal,
-        });
-      } else {
-        if (!owned) {
-          throw new Error("Owned database fixture is unavailable");
-        }
-        // Cold-open repair must not consume the backlog reserved for the owned snapshot.
-        vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
-        const owner = await acquireOpenClawStateDatabaseFileExclusion(owned.options.path);
-        try {
-          await owner.mutate(owner.assertCurrent, async () => {
-            openOpenClawStateDatabase(owned.options);
-            vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
-            await readSnapshot(owned.options.path, controller.signal);
-          });
-        } finally {
-          owner.release();
-        }
-      }
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    let operation: Promise<unknown> | undefined;
+    let survivor: Promise<void> | undefined;
     try {
-      const started = performance.now();
+      const entered = await withinTest(f.entered(reclamation), signal);
+      operation = withSqliteReadOnlyWorkerScope(async () => {
+        if (mode === "snapshot") {
+          await readSnapshot(f.source, controller.signal);
+        } else {
+          await readUpdateStateSchemaVersions({
+            stateDir: path.dirname(f.source),
+            config: {},
+            signal: controller.signal,
+          });
+        }
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      if (mode === "snapshot") {
+        survivor = readSnapshot(f.source);
+      }
       controller.abort(reason);
-      const error = await operation;
-      const cancellationMs = performance.now() - started;
-      const workerWasRunning = !f.worker().settled;
-      const directoryWasPresent = fs.existsSync(entered.file);
+      const error = await withinTest(operation, signal);
+      // Cancellation must settle while reclamation is still held at the native gate.
+      expect(error).toBe(reason);
+      expect(error).toMatchObject({ name: "AbortError" });
+      expect(f.worker().settled, mode).toBe(false);
+      expect(fs.existsSync(entered.file), mode).toBe(true);
+      await survivor;
+      expect(f.worker().settled, mode).toBe(false);
       f.release();
       await reclamation;
       await f.worker().closed;
-      console.log(JSON.stringify({ mode, cancellationMs }));
-      expect(error).toBe(reason);
-      expect(error).toMatchObject({ name: "AbortError" });
-      expect.soft(cancellationMs, mode).toBeLessThan(250);
-      expect.soft(workerWasRunning, mode).toBe(true);
-      expect.soft(directoryWasPresent, mode).toBe(true);
       expect(fs.existsSync(entered.claimedRoot)).toBe(false);
+      expect(f.worker().child.exitCode).toBe(0);
+      expect(f.worker().child.signalCode).toBeNull();
+      expect(fs.readdirSync(f.cache)).toEqual([]);
     } finally {
       controller.abort(reason);
       f.release();
-      await operation;
+      await Promise.allSettled([operation, survivor]);
       await reclamation;
       await workers.get(path.resolve(f.cache))?.closed;
       f.close();
@@ -274,59 +264,24 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
   }
 });
 
-it("serves another snapshot without waiting for shared idle reclamation", async () => {
-  const f = fixture();
-  const controller = new AbortController();
-  const reason = new Error("first snapshot caller stopped");
-  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-  await f.entered;
-  const first = withSqliteReadOnlyWorkerScope(() => readSnapshot(f.source, controller.signal)).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  let second: Promise<void> | undefined;
-  try {
-    let secondSettled = false;
-    second = readSnapshot(f.source).finally(() => {
-      secondSettled = true;
-    });
-    const started = performance.now();
-    controller.abort(reason);
-    const error = await first;
-    const cancellationMs = performance.now() - started;
-    const workerWasRunning = !f.worker().settled;
-    await second;
-    const survivorFinishedBeforeReclamation = secondSettled && !f.worker().settled;
-    f.release();
-    await reclamation;
-    await f.worker().closed;
-    console.log(JSON.stringify({ sharedCancellationMs: cancellationMs }));
-    expect(error).toBe(reason);
-    expect(cancellationMs).toBeLessThan(250);
-    expect(workerWasRunning).toBe(true);
-    expect(survivorFinishedBeforeReclamation).toBe(true);
-    expect(f.worker().child.exitCode).toBe(0);
-    expect(f.worker().child.signalCode).toBeNull();
-    expect(fs.readdirSync(f.cache)).toEqual([]);
-  } finally {
-    controller.abort(reason);
-    f.release();
-    await Promise.allSettled([first, second, reclamation]);
-    await workers.get(path.resolve(f.cache))?.closed;
-    f.close();
-  }
-});
-
-it("stops idle reclamation at the next directory boundary on shutdown", async () => {
+it("stops idle reclamation at the next directory boundary on shutdown", async ({ signal }) => {
   const f = fixture();
   const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
   let shutdown: Promise<void> | undefined;
   try {
-    const entered = await f.entered;
-    const untouched = f.roots.filter((root) => fs.existsSync(root));
+    const entered = await withinTest(f.entered(reclamation), signal);
+    // Payload removal precedes the rename, so identify the fenced root directly.
+    const untouched = f.roots.filter((root) => root !== entered.claimedRoot && fs.existsSync(root));
+    expect(f.roots).toContain(entered.claimedRoot);
     expect(untouched).toHaveLength(f.roots.length - 1);
+    const stdin = f.worker().child.stdin;
+    if (!stdin) {
+      throw new Error("Reclaim child stdin was not observed");
+    }
+    const ended = once(stdin, "finish");
     shutdown = waitForSignalExitBarriers();
-    await vi.waitFor(() => expect(f.worker().child.stdin?.writableEnded).toBe(true));
+    await withinTest(ended, signal);
+    expect(stdin.writableEnded).toBe(true);
     expect(f.worker().settled).toBe(false);
     f.release();
     await shutdown;

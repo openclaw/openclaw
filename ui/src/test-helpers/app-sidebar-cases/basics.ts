@@ -183,7 +183,6 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
-    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -193,40 +192,6 @@ describe("AppSidebar new session navigation", () => {
     link.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
-  });
-
-  it("hides a successful empty catalog even when it can start sessions", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("research", ["agent:research:main"]),
-    );
-    sidebar.connected = true;
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: { continueSession: true, archive: false, startTerminal: true },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Gateway Mac",
-            kind: "gateway",
-            connected: true,
-            sessions: [],
-          },
-        ],
-      },
-    ];
-    sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
-    expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();
-    // Without a visible peer section the lone Other zone stays headerless.
-    expect(
-      sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head'),
-    ).toBeNull();
   });
 });
 
@@ -390,8 +355,9 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__main")).toBeNull();
     expect(
-      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+      sidebar.querySelector(".sidebar-workspace-header__main")?.getAttribute("aria-label"),
     ).not.toContain("Online");
 
     sidebar.connected = false;

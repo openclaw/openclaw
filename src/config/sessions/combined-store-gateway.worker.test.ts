@@ -30,24 +30,30 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
-      override run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-        const result = super.run(...args);
-        const observe = boundary.afterReply;
-        return observe
-          ? result.then(async (reply) => {
-              await observe(reply);
-              return reply;
-            })
-          : result;
-      }
+    createOwnedWorkerTaskPool: <Input, Output>(
+      ...poolArgs: Parameters<typeof actual.createOwnedWorkerTaskPool<Input, Output>>
+    ) => {
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(...poolArgs);
+      return {
+        ...pool,
+        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
+          const result = pool.run(...args);
+          const observe = boundary.afterReply;
+          return observe
+            ? result.then(async (reply) => {
+                await observe(reply);
+                return reply;
+              })
+            : result;
+        },
+      };
     },
   };
 });
 
 it("revokes a prepared listing when its canonical owner closes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const scope = { agentId: "main", sessionKey: "agent:main:main" };
     replaceSessionEntrySync(scope, { sessionId: "before-close", updatedAt: 1 });
     const pending = loadCombinedSessionStoreForGatewayCoreAsync(cfg).then(
@@ -65,7 +71,7 @@ it("revokes a prepared listing when its canonical owner closes", async () => {
 
 it("retains later stores while an earlier store read settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true }, other: {} } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
     for (const agentId of ["main", "other"]) {
       replaceSessionEntrySync(
         { agentId, sessionKey: `agent:${agentId}:main` },
@@ -117,7 +123,7 @@ it("retains later stores while an earlier store read settles", async () => {
 
 it("retains physical targets selected before ambient state changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       {
@@ -150,7 +156,7 @@ it("retains physical targets selected before ambient state changes", async () =>
 
 it("retains selection and sentinel options while the worker read is queued", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "global" },
       {
@@ -168,9 +174,56 @@ it("retains selection and sentinel options while the worker read is queued", asy
   });
 });
 
+it("keeps stored addresses and foreign lineage stable after main-alias changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
+    for (const [index, parent] of [...parents, "global"].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parent },
+        { sessionId: `parent-${index}`, updatedAt: 1 },
+      );
+      if (index < parents.length) {
+        replaceSessionEntrySync(
+          { agentId: "work", sessionKey: `agent:work:child-${index}` },
+          {
+            sessionId: `child-${index}`,
+            updatedAt: 2,
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          },
+        );
+      }
+    }
+    for (const scope of ["per-sender", "global"] as const) {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {}, work: {} } },
+        session: { mainKey: "home", scope },
+      };
+      for (const options of [{}, { agentId: "work" }]) {
+        const expected = loadCombinedSessionStoreForGatewayCore(cfg, options);
+        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
+        expect(result.store).toEqual(expected.store);
+        for (const [index, parent] of parents.entries()) {
+          const key = `agent:work:child-${index}`;
+          expect(result.store[key]).toMatchObject({
+            parentSessionKey: parent,
+            spawnedBy: parent,
+          });
+          expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+            sessionId: `parent-${index}`,
+          });
+          if (!options.agentId) {
+            expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+          }
+        }
+      }
+    }
+  });
+});
+
 it("transfers a Windows-normalized environment through the real worker transport", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       {
@@ -203,7 +256,10 @@ it("federates worker rows under the same physical owners and keeps incognito pro
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, ops: {} } },
+      agents: {
+        entries: { main: {}, ops: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
       session: { store: storePath },
     };
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
@@ -246,7 +302,7 @@ it.each(["newer schema", "missing required table"])(
   "propagates a worker store with %s instead of returning an empty listing",
   async (failure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:main" },

@@ -16,7 +16,7 @@ const hookMocks = vi.hoisted(() => {
   return {
     ensureBindingsLoadedAsync: vi.fn(async () => {}),
     listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
-    unbindThreadBindingsBySessionKey: vi.fn(() => []),
+    unbindThreadBindingsBySessionKeyAsync: vi.fn(async () => []),
   };
 });
 
@@ -24,7 +24,7 @@ let registerDiscordSubagentHooks: typeof import("../subagent-hooks-api.js").regi
 
 vi.mock("./monitor/thread-bindings.js", () => ({
   listThreadBindingsBySessionKey: hookMocks.listThreadBindingsBySessionKey,
-  unbindThreadBindingsBySessionKey: hookMocks.unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync: hookMocks.unbindThreadBindingsBySessionKeyAsync,
 }));
 vi.mock("./monitor/thread-bindings.state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor/thread-bindings.state.js")>()),
@@ -66,39 +66,46 @@ describe("discord subagent hook handlers", () => {
   beforeEach(() => {
     hookMocks.ensureBindingsLoadedAsync.mockReset().mockResolvedValue(undefined);
     hookMocks.listThreadBindingsBySessionKey.mockClear();
-    hookMocks.unbindThreadBindingsBySessionKey.mockClear();
+    hookMocks.unbindThreadBindingsBySessionKeyAsync.mockClear();
   });
 
-  it("restores bindings before unbinding thread routing on subagent_ended", async () => {
-    const ready = createDeferred<void>();
-    const entered = createDeferred<void>();
-    hookMocks.ensureBindingsLoadedAsync.mockImplementationOnce(() => {
-      entered.resolve();
-      return ready.promise;
+  it("awaits thread routing removal on subagent_ended", async () => {
+    const unbinding = createDeferred<void>();
+    const unbindEntered = createDeferred<void>();
+    hookMocks.unbindThreadBindingsBySessionKeyAsync.mockImplementationOnce(async () => {
+      unbindEntered.resolve();
+      await unbinding.promise;
+      return [];
     });
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "subagent_ended");
 
-    const ending = handler(
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        targetKind: "subagent",
-        reason: "subagent-complete",
-        sendFarewell: true,
-        accountId: "work",
-      },
-      {},
-    );
+    let settled = false;
+    const ending = Promise.resolve(
+      handler(
+        {
+          targetSessionKey: "agent:main:subagent:child",
+          targetKind: "subagent",
+          reason: "subagent-complete",
+          sendFarewell: true,
+          accountId: "work",
+        },
+        {},
+      ),
+    ).then(() => {
+      settled = true;
+    });
 
     try {
-      await entered.promise;
-      expect(hookMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+      await unbindEntered.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
     } finally {
-      ready.resolve();
+      unbinding.resolve();
       await ending;
     }
-    expect(hookMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-    expect(hookMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+    expect(hookMocks.unbindThreadBindingsBySessionKeyAsync).toHaveBeenCalledTimes(1);
+    expect(hookMocks.unbindThreadBindingsBySessionKeyAsync).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:child",
       accountId: "work",
       targetKind: "subagent",

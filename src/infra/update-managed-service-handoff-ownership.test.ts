@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -43,8 +44,10 @@ function createSpawnMock() {
 
 async function waitForHandoffLine(output: Readable | null, expected: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    let buffered = "";
     const onData = (chunk: Buffer | string) => {
-      if (!chunk.toString().includes(`${expected}\n`)) {
+      buffered += chunk.toString();
+      if (!buffered.includes(`${expected}\n`)) {
         return;
       }
       output?.removeListener("data", onData);
@@ -215,9 +218,11 @@ async function runOwnershipHelper(params: {
   commandDelayMs?: number;
   commandExitCode?: number;
   runnerFault?: "closed-gate" | "unavailable-identity";
+  observeUpdateExit?: boolean;
   whileHelperRunning?: (context: {
     env: NodeJS.ProcessEnv;
     logPath: string;
+    updateExited: Promise<void>;
   }) => Promise<void> | void;
 }) {
   const { spawn } =
@@ -357,6 +362,21 @@ childProcess.spawn = function(command, args, options) {
 `,
     );
   }
+  const exitObserverPath = path.join(tmpDir, "updater-exit-observer.cjs");
+  if (params.observeUpdateExit) {
+    await fs.writeFile(
+      exitObserverPath,
+      `const fs = require("node:fs");
+const append = fs.appendFileSync;
+fs.appendFileSync = function(file, data, ...args) {
+  const result = append.call(this, file, data, ...args);
+  if (file === ${JSON.stringify(logPath)} && String(data).includes("managed update update command exited code=")) {
+    process.stdout.write("UPDATER_EXIT_RECORDED\\n");
+  }
+  return result;
+};`,
+    );
+  }
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -383,6 +403,7 @@ childProcess.spawn = function(command, args, options) {
     env: {
       ...spawnOptions.env,
       ...(params.runnerFault ? { NODE_OPTIONS: `--require ${preloadPath}` } : {}),
+      ...(params.observeUpdateExit ? { NODE_OPTIONS: `--require ${exitObserverPath}` } : {}),
     },
     stdio: ["pipe", "pipe", params.runnerFault ? "pipe" : "ignore"],
   });
@@ -399,27 +420,45 @@ childProcess.spawn = function(command, args, options) {
       helper.once("close", (code, signal) => resolve({ code, signal }));
     },
   );
-  await waitForHandoffLine(helper.stdout, "OPENCLAW_UPDATE_HANDOFF_READY");
-  const parked = waitForHandoffLine(helper.stdout, "parked");
-  helperInput.write("park\n");
-  await parked;
-  const committed = waitForHandoffLine(helper.stdout, "committed");
-  helperInput.write("commit\n");
-  await committed;
-  parent.stdin.end();
-  await params.whileHelperRunning?.({ env, logPath });
-  const result = await resultPromise;
-  await parentClosed;
-  return {
-    result,
-    env,
-    logPath,
-    stderr,
-    updaterPath,
-    runnerClosedPath,
-    leaseDatabasePath: String(helperParams.updateLeaseDatabasePath),
-    leaseKey: String(helperParams.updateLeaseKey),
-  };
+  const updateExited = params.observeUpdateExit
+    ? awaitGateBeforeSettlement(
+        waitForHandoffLine(helper.stdout, "UPDATER_EXIT_RECORDED"),
+        resultPromise,
+        "helper exited before recording updater exit",
+      )
+    : Promise.resolve();
+  void updateExited.catch(() => undefined);
+  try {
+    await waitForHandoffLine(helper.stdout, "OPENCLAW_UPDATE_HANDOFF_READY");
+    const parked = waitForHandoffLine(helper.stdout, "parked");
+    helperInput.write("park\n");
+    await parked;
+    const committed = waitForHandoffLine(helper.stdout, "committed");
+    helperInput.write("commit\n");
+    await committed;
+    parent.stdin.end();
+    await params.whileHelperRunning?.({ env, logPath, updateExited });
+    const result = await resultPromise;
+    await parentClosed;
+    return {
+      result,
+      env,
+      logPath,
+      stderr,
+      updaterPath,
+      runnerClosedPath,
+      leaseDatabasePath: String(helperParams.updateLeaseDatabasePath),
+      leaseKey: String(helperParams.updateLeaseKey),
+    };
+  } finally {
+    if (helper.exitCode === null && helper.signalCode === null) {
+      helper.kill("SIGKILL");
+    }
+    if (parent.exitCode === null && parent.signalCode === null) {
+      parent.kill("SIGKILL");
+    }
+    await Promise.all([resultPromise, parentClosed]);
+  }
 }
 
 describe("managed service update handoff state ownership and sentinel persistence", () => {
@@ -472,7 +511,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
     );
   });
 
-  it("rechecks external ownership after waiting for the state write lock", async () => {
+  it("rechecks external ownership after waiting for the state write lock", async ({ signal }) => {
     const pendingSentinel = {
       version: 1 as const,
       revision: 100,
@@ -500,6 +539,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
       helperResult = await runOwnershipHelper({
         commandExitCode: 7,
         handoffId: "handoff-ownership-race",
+        observeUpdateExit: true,
         metaHandoffId: "handoff-ownership-race",
         prepareStateDatabase: async (stateEnv) => {
           writeRestartSentinelRow(stateEnv, pendingSentinel);
@@ -517,14 +557,10 @@ describe("managed service update handoff state ownership and sentinel persistenc
             .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
             .get("current");
         },
-        whileHelperRunning: async ({ logPath }) => {
-          await vi.waitFor(
-            async () => {
-              await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-                "managed update update command exited code=7",
-              );
-            },
-            { interval: 5, timeout: 2_000 },
+        whileHelperRunning: async ({ logPath, updateExited }) => {
+          await withinTest(updateExited, signal);
+          await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
+            "managed update update command exited code=7",
           );
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 100);
@@ -726,24 +762,106 @@ describe("managed service update handoff state ownership and sentinel persistenc
     });
   });
 
-  it("repairs legacy restart sentinel columns before writing fallback failures", async () => {
+  it.each(["continuation", "stats", "empty routing"] as const)(
+    "uses canonical sentinel rows without overwriting invalid metadata (%s)",
+    async (shape) => {
+      const { DatabaseSync } = await import("node:sqlite");
+      let before: unknown;
+      const { result, env } = await runOwnershipHelper({
+        handoffId: "handoff-typed-row",
+        metaHandoffId: "handoff-typed-row",
+        prepareStateDatabase: (stateEnv) => {
+          writeRestartSentinelRow(stateEnv, {
+            version: 1,
+            revision: 100,
+            payload: {
+              kind: "update",
+              status: "skipped",
+              ts: 100,
+              sessionKey: "",
+              threadId: "",
+              message: "",
+              ...(shape === "continuation"
+                ? { continuation: { kind: "agentTurn", message: 42 } }
+                : {}),
+              stats: {
+                handoffId: "handoff-typed-row",
+                reason: "managed-service-handoff-started",
+                ...(shape === "stats" ? { durationMs: "invalid" } : {}),
+              },
+            },
+          });
+          closeOpenClawStateDatabaseForTest();
+          const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv), { readOnly: true });
+          try {
+            before = db
+              .prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key")
+              .all();
+          } finally {
+            db.close();
+          }
+        },
+      });
+      expect(result).toEqual({ code: 1, signal: null });
+      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+      try {
+        if (shape === "empty routing") {
+          expect(
+            db
+              .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = 'current'")
+              .get(),
+          ).toMatchObject({ status: "error", session_key: "", thread_id: "", message: "" });
+        } else {
+          expect(
+            db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+          ).toEqual(before);
+        }
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("repairs legacy restart sentinel columns without changing the database schema version", async () => {
     const { result, env } = await runOwnershipHelper({
       handoffId: "handoff-123",
       metaHandoffId: "handoff-123",
-      prepareStateDatabase: createLegacyRestartSentinelTable,
+      prepareStateDatabase: async (stateEnv) => {
+        await createLegacyRestartSentinelTable(stateEnv);
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+        try {
+          db.exec("PRAGMA user_version = 7");
+        } finally {
+          db.close();
+        }
+      },
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toMatchObject({
-      version: 1,
-      payload: {
-        kind: "update",
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-failed",
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+    try {
+      expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 7 });
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+        { name: "gateway_restart_sentinel" },
+      ]);
+      expect(readRestartSentinelRowSync(db)).toMatchObject({
+        kind: "valid",
+        sentinel: {
+          version: 1,
+          payload: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "managed-service-handoff-failed",
+            },
+          },
         },
-      },
-    });
+      });
+    } finally {
+      db.close();
+    }
   });
 
   it("does not overwrite a restart sentinel owned by another startup task", async () => {

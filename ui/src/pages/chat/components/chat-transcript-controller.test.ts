@@ -55,7 +55,7 @@ function mcpRangeRows(appContent: unknown): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,
-    content: index === 17 ? appContent : html`<div>row ${index}</div>`,
+    content: index === 23 ? appContent : html`<div>row ${index}</div>`,
   }));
 }
 
@@ -63,29 +63,40 @@ describe("chat transcript controller", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("keeps every re-stamped row observed after moving containers", async () => {
-    const transcript = createTestTranscript();
+  it.each([false, true])("re-observes re-stamped rows (foreign host=%s)", async (foreignHost) => {
     const props = threadProps("pane-measure");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
     const chatFace = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), chatFace);
     transcript.hostConnected();
     transcript.hostUpdated();
     await flushDeferredRowPrune();
-
+    const chatScroller = expectDefined(chatFace.querySelector(".chat-thread"), "chat scroller");
+    expect(observedElements.has(chatScroller)).toBe(true);
     const chatRows = transcriptRows(chatFace);
     expect(chatRows.length).toBeGreaterThanOrEqual(4);
     for (const row of chatRows) {
       expect(observedElements.has(row)).toBe(true);
     }
-
-    // Re-stamp the same session transcript into a new container while the old
-    // tree is still tracked, mirroring the dashboard face-switch commit.
-    const dashboardDock = document.body.appendChild(document.createElement("div"));
-    render(renderChatThread(props, transcript), dashboardDock);
-    transcript.hostUpdated();
+    if (foreignHost) {
+      render(nothing, chatFace);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    }
+    const dock = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, transcript), dock);
+    // A foreign Lit host stamps after the pane's last update; attachment must follow the DOM ref.
+    if (!foreignHost) {
+      transcript.hostUpdated();
+    }
     await flushDeferredRowPrune();
-
-    const dockRows = transcriptRows(dashboardDock);
+    const dockScroller = expectDefined(dock.querySelector(".chat-thread"), "dock scroller");
+    expect(observedElements.has(dockScroller)).toBe(true);
+    const dockRows = transcriptRows(dock);
     expect(dockRows.length).toBe(chatRows.length);
     for (const row of dockRows) {
       expect(observedElements.has(row)).toBe(true);
@@ -93,6 +104,7 @@ describe("chat transcript controller", () => {
     for (const row of chatRows) {
       expect(observedElements.has(row)).toBe(false);
     }
+    transcript.hostDisconnected();
   });
 
   it("measures newly inserted rows after Lit connects them", async () => {
@@ -111,6 +123,11 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
     await flushDeferredRowPrune();
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 100);
+      }
+    }
     render(renderChatThread(props, transcript), container);
 
     expect(transcriptSize(container)).toBe(200);
@@ -134,6 +151,13 @@ describe("chat transcript controller", () => {
       { kind: "content" as const, key: "group:next", content: html`<div>next</div>` },
     ];
     const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 180);
+      }
+    }
+    renderRows(initialRows);
+    expect(transcriptSize(container)).toBe(540);
     stubMcpAppLifecycle(container, () => teardownPending.promise);
 
     renderRows(regroupedRows);
@@ -163,6 +187,15 @@ describe("chat transcript controller", () => {
       "group:reply",
       "group:next",
     ]);
+    // New rows receive their first sizes; the retained reply must keep its own.
+    for (const observer of resizeObservers) {
+      for (const row of committedRows) {
+        if (row.dataset.virtualRowKey !== "group:reply") {
+          observer.emitTarget(row, 800, 180);
+        }
+      }
+    }
+    renderRows(regroupedRows);
     // The old tool's 40px delivery must not resize the retained reply key.
     expect(transcriptSize(container)).toBe(540);
   });
@@ -272,55 +305,58 @@ describe("chat transcript controller", () => {
     },
   );
 
-  it("does not teardown an MCP row retained by an append", async () => {
-    const initialRows = [
-      { kind: "content" as const, key: "app", content: html`<mcp-app-view></mcp-app-view>` },
-      { kind: "content" as const, key: "reply", content: html`<div>reply</div>` },
-    ];
-    const { container, renderRows } = await mountTestTranscript("pane-mcp-append", initialRows);
-    const { app, teardown } = stubMcpAppLifecycle(container);
-
-    renderRows([...initialRows, { kind: "content", key: "next", content: html`<div>next</div>` }]);
-
-    expect(teardown).not.toHaveBeenCalled();
-    expect(container.querySelector("mcp-app-view")).toBe(app);
-  });
-
-  it("tears down a retained MCP key that leaves the next virtual range", async () => {
-    const initialRows = mcpRangeRows(html`<mcp-app-view></mcp-app-view>`);
-    const { container, renderRows } = await mountTestTranscript("pane-mcp-range", initialRows);
-    const { app, teardown } = stubMcpAppLifecycle(container);
-
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
-
-    expect(teardown).toHaveBeenCalledOnce();
-    expect(app.isConnected).toBe(true);
-  });
-
-  it("keeps a focused MCP key at its next-model index", async () => {
-    const initialRows = mcpRangeRows(
-      html`<mcp-app-view
-        ><iframe title="Retained application"></iframe><button>focus app</button></mcp-app-view
-      >`,
-    );
-    const { container, renderRows } = await mountTestTranscript(
-      "pane-mcp-focused-range",
-      initialRows,
-    );
-    const { app, teardown } = stubMcpAppLifecycle(container);
-    const frame = expectDefined(app.querySelector("iframe"), "retained application frame");
-    const rowParent = expectDefined(app.parentElement?.parentElement, "retained row parent");
-    const button = expectDefined(container.querySelector("button"), "MCP app focus target");
-    button.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
-
-    expect(teardown).not.toHaveBeenCalled();
-    expect(app.isConnected).toBe(true);
-    expect(container.querySelector("mcp-app-view")).toBe(app);
-    expect(app.querySelector("iframe")).toBe(frame);
-    expect(app.parentElement?.parentElement).toBe(rowParent);
-  });
+  it.each(["append", "reorder", "focused reorder"] as const)(
+    "retains only MCP rows in the next rendered range (%s)",
+    async (change) => {
+      const focused = change === "focused reorder";
+      const initialRows =
+        change === "append"
+          ? [
+              {
+                kind: "content" as const,
+                key: "app",
+                content: html`<mcp-app-view></mcp-app-view>`,
+              },
+              { kind: "content" as const, key: "reply", content: html`<div>reply</div>` },
+            ]
+          : mcpRangeRows(
+              focused
+                ? html`<mcp-app-view
+                    ><iframe title="Retained application"></iframe
+                    ><button>focus app</button></mcp-app-view
+                  >`
+                : html`<mcp-app-view></mcp-app-view>`,
+            );
+      const { container, renderRows } = await mountTestTranscript("pane-mcp-range", initialRows);
+      const { app, teardown } = stubMcpAppLifecycle(container);
+      const frame = app.querySelector("iframe");
+      const rowParent = app.parentElement?.parentElement;
+      if (focused) {
+        expectDefined(frame, "retained application frame");
+        expectDefined(rowParent, "retained row parent");
+        expectDefined(app.querySelector("button"), "MCP app focus target").dispatchEvent(
+          new FocusEvent("focusin", { bubbles: true }),
+        );
+      }
+      renderRows(
+        change === "append"
+          ? [...initialRows, { kind: "content", key: "next", content: html`<div>next</div>` }]
+          : [initialRows.at(-1)!, ...initialRows.slice(0, -1)],
+      );
+      if (change === "reorder") {
+        expect(teardown).toHaveBeenCalledOnce();
+        expect(app.isConnected).toBe(true);
+      } else {
+        expect(teardown).not.toHaveBeenCalled();
+        expect(container.querySelector("mcp-app-view")).toBe(app);
+        if (focused) {
+          expect(app.isConnected).toBe(true);
+          expect(app.querySelector("iframe")).toBe(frame);
+          expect(app.parentElement?.parentElement).toBe(rowParent);
+        }
+      }
+    },
+  );
 
   it("reconciles an implicit end anchor when committed content has no scroll range", () => {
     const flushFrames = stubAnimationFrames();
@@ -349,47 +385,116 @@ describe("chat transcript controller", () => {
     expect(container.textContent).toContain("message 0");
   });
 
-  it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const props = threadProps("pane-loading-scroll", "agent:main:session-a", []);
-    render(renderChatThread({ ...props, loading: true }, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    const onSettled = vi.fn();
-    transcript.scrollToOffset(420, onSettled);
-    transcript.hostUpdated();
-
-    expect(onSettled).not.toHaveBeenCalled();
-
-    render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
-    expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
-  });
-
-  it("settles a restored offset when loaded rows no longer overflow", () => {
+  it.each([true, false])("settles a non-overflowing restore (initially loading=%s)", (loading) => {
     const flushFrames = stubAnimationFrames();
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    if (!loading) {
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    }
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
-    const props = threadProps("pane-short-scroll", "agent:main:session-a");
-    render(renderChatThread(props, transcript), container);
-    Object.defineProperty(container.querySelector(".chat-thread")!, "clientHeight", {
-      configurable: true,
-      value: 600,
-    });
+    const props = loading
+      ? threadProps("pane-loading-scroll", "agent:main:session-a", [])
+      : threadProps("pane-short-scroll", "agent:main:session-a");
+    render(renderChatThread({ ...props, loading }, transcript), container);
+    if (!loading) {
+      Object.defineProperty(container.querySelector(".chat-thread")!, "clientHeight", {
+        configurable: true,
+        value: 600,
+      });
+    }
     transcript.hostConnected();
     transcript.hostUpdated();
     const onSettled = vi.fn();
     transcript.scrollToOffset(420, onSettled);
-
-    for (let index = 0; index <= 60; index += 1) {
+    for (let update = 0; update < (loading ? 1 : 100); update++) {
       transcript.hostUpdated();
-      flushFrames();
     }
-
+    expect(onSettled).not.toHaveBeenCalled();
+    if (loading) {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    } else {
+      for (let frame = 0; frame <= 60; frame++) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+    }
     expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
   });
+
+  it.each(["measurable", "growing", "short"] as const)(
+    "applies a saved offset once when the %s range settles",
+    async (range) => {
+      const flushFrames = stubAnimationFrames();
+      const { container, transcript } = await mountTestTranscript(
+        `${range}-restore`,
+        numberedContentRows(12),
+      );
+      let scrollHeight = range === "measurable" ? 2000 : 900;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
+      });
+      const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+        if (typeof options === "object") {
+          container.scrollTop = options.top ?? container.scrollTop;
+        }
+      });
+      container.scrollTo = scrollTo;
+      const onSettled = vi.fn();
+      const frames = (count: number) => {
+        for (let frame = 0; frame < count; frame++) {
+          transcript.hostUpdated();
+          flushFrames();
+        }
+      };
+      try {
+        transcript.scrollToOffset(420, range === "measurable" ? undefined : onSettled);
+        if (range === "growing") {
+          for (let update = 0; update < 20; update++) {
+            transcript.hostUpdated();
+          }
+          expect(onSettled).not.toHaveBeenCalled();
+          frames(4);
+          expect(
+            scrollTo.mock.calls.filter(
+              ([options]) =>
+                typeof options === "object" && (options?.top === 300 || options?.top === 420),
+            ),
+          ).toHaveLength(0);
+          expect(onSettled).not.toHaveBeenCalled();
+          scrollHeight = 2000;
+          frames(1);
+        } else if (range === "short") {
+          frames(10);
+          scrollHeight = 600;
+          transcript.hostUpdated();
+          scrollHeight = 900;
+          frames(4);
+          expect(onSettled).not.toHaveBeenCalled();
+          frames(14);
+        } else {
+          frames(4);
+        }
+        if (range === "short") {
+          expect(onSettled).toHaveBeenCalledOnce();
+          expect(onSettled).toHaveBeenCalledWith({ scrollTop: 300, anchorToEnd: true });
+        } else {
+          expect(container.scrollTop).toBe(420);
+          expect(
+            scrollTo.mock.calls.filter(
+              ([options]) => typeof options === "object" && options?.top === 420,
+            ),
+          ).toHaveLength(1);
+          if (range === "growing") {
+            expect(onSettled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+          }
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it.each([
     { behavior: "auto", resizeBefore: true, deltaY: -100, observerLate: false },
@@ -481,6 +586,85 @@ describe("chat transcript controller", () => {
     },
   );
 
+  it.each([0, 252])(
+    "retires an end index without losing newer native movement (%s px)",
+    async (nativeGrowth) => {
+      const flushFrames = stubAnimationFrames();
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: Promise.resolve(true),
+        },
+        () => `retired-end-index-${nativeGrowth}`,
+        { canFollowEnd: () => false },
+      );
+      const content = numberedContentRows(12);
+      const typing: TestContentRow = {
+        kind: "content",
+        key: "presence:typing",
+        content: html`<div>Typing</div>`,
+      };
+      const { container, renderRows } = await mountTestTranscript(
+        "retired-end-index",
+        [...content, typing],
+        transcript,
+      );
+      let extraExtent = 0;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, get: () => transcriptSize(container) + extraExtent },
+      });
+      container.scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
+        container.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+      });
+      const typingRow = expectDefined(
+        container.querySelector<HTMLElement>('[data-virtual-row-key="presence:typing"]'),
+        "typing row",
+      );
+      Object.defineProperty(typingRow, "offsetHeight", { configurable: true, value: 30 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+        observer.emitTarget(typingRow, 800, 30);
+      }
+      renderRows([...content, typing]);
+      flushFrames();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        transcript.scrollToEnd({ behavior: "auto" });
+        container.dispatchEvent(new Event("scroll"));
+        if (nativeGrowth > 0) {
+          extraExtent = nativeGrowth;
+          transcript.scrollToEnd({ behavior: "auto" });
+          // Its native scroll event has not arrived when the earlier idle callback fires.
+        }
+        const before = container.scrollTop;
+        // Native idle can beat the queued frame; they are separate schedulers.
+        vi.advanceTimersByTime(150);
+        expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
+        // A remote receipt cancels following after the UI considers the command settled.
+        transcript.cancelScroll();
+        transcriptDomState.measuredRowHeight = 120;
+        const next: TestContentRow[] = [
+          ...content,
+          { kind: "content", key: "peer", content: html`<div>Peer</div>` },
+          typing,
+        ];
+        renderRows(next);
+        await Promise.resolve();
+        renderRows(next);
+        flushFrames();
+        expect(container.scrollTop, "retired index must not follow the peer replacing typing").toBe(
+          before,
+        );
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps a smooth latest command through an idle observer delivery before reaching its target", async () => {
     const rows = numberedContentRows(40);
     const { container, transcript } = await mountTestTranscript("idle-latest", rows);
@@ -542,6 +726,7 @@ describe("chat transcript controller", () => {
           requestUpdate: vi.fn(),
           updateComplete: Promise.resolve(true),
         },
+        () => `height-resize-${locked}`,
         {
           onViewportResize,
           canFollowEnd: () => !policy.chatFollowLocked,
@@ -657,7 +842,7 @@ describe("chat transcript controller", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       });
-      const transcript = new ChatTranscriptController(host);
+      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`);
       const rows: TestContentRow[] = [
         {
           kind: "content",
@@ -722,14 +907,16 @@ describe("chat transcript controller", () => {
   });
 
   it.each([
-    { distance: 0, followEnabled: true },
-    { distance: 8, followEnabled: true },
-    { distance: 50, followEnabled: true },
-    { distance: 0, followEnabled: false },
-    { distance: 8, followEnabled: false },
+    { distance: 0, followEnabled: true, nativePending: false },
+    { distance: 8, followEnabled: true, nativePending: false },
+    { distance: 50, followEnabled: true, nativePending: false },
+    { distance: 0, followEnabled: false, nativePending: false },
+    { distance: 8, followEnabled: false, nativePending: false },
+    { distance: 0, followEnabled: true, nativePending: true },
   ])(
-    "follows appended typing only when permitted near the real end ($distance, $followEnabled)",
-    async ({ distance, followEnabled }) => {
+    "does not follow another person’s typing ($distance, $followEnabled, native movement pending=$nativePending)",
+    async ({ distance, followEnabled, nativePending }) => {
+      const flushFrames = nativePending ? stubAnimationFrames() : undefined;
       const rows = numberedContentRows(12);
       const { container, renderRows, transcript } = await mountTestTranscript(
         `typing-distance-${distance}`,
@@ -741,6 +928,7 @@ describe("chat transcript controller", () => {
             requestUpdate: () => undefined,
             updateComplete: Promise.resolve(true),
           },
+          () => `typing-distance-${distance}-${followEnabled}`,
           { canFollowEnd: () => followEnabled },
         ),
       );
@@ -748,13 +936,17 @@ describe("chat transcript controller", () => {
         const total = transcriptSize(container);
         Object.defineProperties(container, {
           clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: total + 84 },
+          scrollHeight: { configurable: true, value: total + (nativePending ? 88 : 84) },
         });
         for (const observer of resizeObservers) {
           observer.emitTarget(container, 800, 600);
         }
         container.scrollTop = container.scrollHeight - container.clientHeight - distance;
         container.dispatchEvent(new Event("scroll"));
+        if (nativePending) {
+          // Native movement can precede the offset observer.
+          container.scrollTop -= 100;
+        }
         const readerOffset = container.scrollTop;
         const scrollTo = vi.fn();
         container.scrollTo = scrollTo;
@@ -762,92 +954,25 @@ describe("chat transcript controller", () => {
           ...rows,
           { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
         ]);
-        if (followEnabled && distance <= 8) {
-          expect(scrollTo).toHaveBeenCalledWith({ top: total + 84 - 600, behavior: "auto" });
-        } else {
+        expect(scrollTo).not.toHaveBeenCalled();
+        expect(container.scrollTop).toBe(readerOffset);
+        if (nativePending) {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
           expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset);
+          container.scrollTop -= 100;
+          container.dispatchEvent(new Event("scroll"));
+          scrollTo.mockClear();
+          Object.defineProperty(container, "scrollHeight", {
+            configurable: true,
+            value: total + 188,
+          });
+          flushFrames?.();
+          expect(scrollTo).not.toHaveBeenCalled();
+          expect(container.scrollTop).toBe(readerOffset - 100);
         }
       } finally {
         transcript.hostDisconnected();
       }
     },
   );
-
-  it("cancels typing follow before later geometry can retarget the reader", async () => {
-    const flushFrames = stubAnimationFrames();
-    const rows = numberedContentRows(12);
-    const { container, renderRows, transcript } = await mountTestTranscript(
-      "typing-interrupt",
-      rows,
-    );
-    try {
-      const total = transcriptSize(container);
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: total + 88 },
-      });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-      }
-      container.scrollTop = total + 88 - 600;
-      container.dispatchEvent(new Event("scroll"));
-      // Reader movement can reach the DOM before the offset observer runs.
-      container.scrollTop -= 100;
-      const readerOffset = container.scrollTop;
-      const scrollTo = vi.fn();
-      container.scrollTo = scrollTo;
-      renderRows([
-        ...rows,
-        { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
-      ]);
-      expect(scrollTo).toHaveBeenCalled();
-      scrollTo.mockClear();
-      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-      expect
-        .soft(scrollTo)
-        .toHaveBeenCalledExactlyOnceWith({ top: readerOffset, behavior: "instant" });
-      container.scrollTop -= 100;
-      container.dispatchEvent(new Event("scroll"));
-      scrollTo.mockClear();
-      Object.defineProperty(container, "scrollHeight", { configurable: true, value: total + 188 });
-      flushFrames();
-      expect(scrollTo).not.toHaveBeenCalled();
-      expect(container.scrollTop).toBe(readerOffset - 100);
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
-
-  it("re-attaches the virtualizer when a foreign host re-stamps the transcript", async () => {
-    const transcript = createTestTranscript();
-    const props = threadProps("pane-foreign-stamp");
-    const chatFace = document.body.appendChild(document.createElement("div"));
-    render(renderChatThread(props, transcript), chatFace);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-    const chatScroller = chatFace.querySelector<HTMLElement>(".chat-thread");
-    expect(chatScroller).not.toBeNull();
-    expect(observedElements.has(chatScroller!)).toBe(true);
-
-    // Dashboard face: the pane unmounts the transcript and finishes its update.
-    render(nothing, chatFace);
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    // Split restore: the sidebar region — a different Lit host that receives
-    // the chat template as a property — stamps the transcript in its own
-    // update cycle. The pane does not update again, so attachment must follow
-    // the ref-recorded DOM identity rather than the pane's render cycle.
-    const dock = document.body.appendChild(document.createElement("div"));
-    render(renderChatThread(props, transcript), dock);
-    await flushDeferredRowPrune();
-
-    const dockScroller = dock.querySelector<HTMLElement>(".chat-thread");
-    expect(dockScroller).not.toBeNull();
-    expect(observedElements.has(dockScroller!)).toBe(true);
-    expect(transcriptRows(dock).length).toBeGreaterThan(0);
-    transcript.hostDisconnected();
-  });
 });

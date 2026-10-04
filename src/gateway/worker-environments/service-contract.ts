@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
+  WorkerDesktopLaunchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
@@ -11,14 +12,17 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { WorkerEnvironmentPreparation } from "./environment-record.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
 import type {
   WorkerEnvironmentAttachment,
   WorkerEnvironmentAttachmentRecord,
@@ -56,13 +60,18 @@ export type WorkerEnvironmentServiceRecord = {
   ownerEpoch: number;
   createdAtMs: number;
   idleSinceAtMs: number | null;
+  destroyRequestedAtMs: number | null;
   attachedSessionIds: readonly string[];
   desktopAvailable: boolean;
   desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
-  preparation?: { purpose: "reserve" | "build"; key: string } | null;
+  preparation?:
+    | (WorkerEnvironmentPreparation & { project?: { label?: string; baseCommit: string } })
+    | null;
   error?: string;
 };
+
+export type { WorkerDesktopLaunchResult } from "../../../packages/gateway-protocol/src/index.js";
 
 export type WorkerDesktopObserveResult = {
   transport: "rfb";
@@ -74,13 +83,26 @@ export type WorkerDesktopObserveResult = {
   vncPassword?: string;
 };
 
-export type WorkerDesktopLaunchResult = {
-  app: WorkerDesktopApp["id"];
-  status: "ready";
-};
-
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  observeProcesses?(
+    input: Omit<
+      import("../../worker/worker-process-observation.js").NodeWorkerProcessInput,
+      "gatewayNamespace" | "expectedBundleHash"
+    >,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ): Promise<
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesListResult
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesStopResult
+  >;
+  /** Current explicit provider attestation, never the persisted legacy default. */
+  getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
+  captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {
+    binding: WorkerEnvironmentAttachment;
+    assertCurrent(): void;
+    touch(): Promise<void>;
+  };
   getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
   findSessionAttachment(
     identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
@@ -92,7 +114,7 @@ export type WorkerEnvironmentServiceContract = {
       }
     | undefined;
   assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
-  touchSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  touchSessionAttachment(binding: WorkerEnvironmentAttachment): Promise<void>;
   execSessionAttachment(
     binding: WorkerEnvironmentAttachment,
     command: import("./tunnel-contract.js").WorkerWorkspaceCommand,
@@ -118,13 +140,25 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     ownerEpoch: number;
     remotePort: number;
-  }): Promise<{ connect: () => Promise<import("node:stream").Duplex>; close: () => Promise<void> }>;
+  }): Promise<{
+    connect: (
+      assertCurrent?: () => void,
+      touch?: () => Promise<void>,
+    ) => Promise<import("node:stream").Duplex>;
+    close: () => Promise<void>;
+  }>;
   list(): WorkerEnvironmentServiceRecord[];
+  readPreparedPoolSummary(): { maxTotal: number; reservedEnvironmentIds: string[] };
+  readReadyWorkerTarget(profileId: string): number;
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
-  readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
+  readMachineShape(
+    environmentId: string,
+    prepared?: WorkerEnvironmentPlacementFacts,
+  ): SessionPlacementMachine | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
+  readProviderDisplayId(profileId: string): string | undefined;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   listOperatingSystems(profileId: string): Promise<readonly WorkerOperatingSystem[] | undefined>;
   prepare(
@@ -162,6 +196,10 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
@@ -217,14 +255,13 @@ export type WorkerPlacementMoveRequest = Pick<
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
 
-export type WorkerPlacementCancellationTarget = Readonly<
-  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
->;
-
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
-export type WorkerPlacementReclaimSourceCheck = (
+export type WorkerPlacementReclaimSourceCheck = ((
   predecessor?: WorkerPlacementCancellationTarget,
-) => void;
+) => void) & {
+  /** Host-only eligibility, without placement reads; ends when drain commits. */
+  assertCurrent?: WorkerPlacementAuthorization;
+};
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).

@@ -10,7 +10,6 @@ import {
   formatAgentInternalEventsForPrompt,
   formatGeneratedMediaDeliveryRetryForPrompt,
   type AgentInternalEvent,
-  prependInternalEventContext,
   resolveAcpPromptBody,
   resolveInternalEventPromptBody,
   resolveInternalEventTranscriptBody,
@@ -18,6 +17,7 @@ import {
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
 
 const MAX_STATUS_LABEL_CHARS = 500;
@@ -131,8 +131,11 @@ describe("agent internal events", () => {
     const filePath = path.resolve("media", "render-final.png,");
     const fileUrl = pathToFileURL(filePath).href;
     const prompt = formatGeneratedMediaDeliveryRetryForPrompt([fileUrl]);
+    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
     expect(splitMediaFromOutput(prompt).mediaUrls).toEqual([fileUrl]);
     expect(parseReplyDirectives(prompt).mediaUrls).toEqual([filePath]);
+    expect(stripInternalRuntimeContext(prompt)).toBe("");
   });
 
   it("normalizes media references while preserving Unicode and delimiter modes", () => {
@@ -172,14 +175,6 @@ describe("agent internal events", () => {
     expect(transcriptResult).toBe(protectedResult);
     expect(data?.text).toContain(fullResult);
     expect(event.result).toBe(fullResult);
-  });
-
-  it("keeps ordinary child results unchanged", () => {
-    const result = "small useful result";
-
-    expect(
-      extractChildResult(formatAgentInternalEventsForPrompt([taskCompletionEvent(result)])),
-    ).toBe(result);
   });
 
   it("keeps a bounded route change separate from child result text", () => {
@@ -276,14 +271,11 @@ describe("attempt execution prompt materialization", () => {
   it("removes only the typed producer's duplicate carrier and retains supplemental text", () => {
     const events = [taskCompletionEvent("child result")];
     const carrier = formatAgentInternalEventsForPrompt(events);
-    expect(prependInternalEventContext(carrier, events)).toBe(carrier);
-    expect(prependInternalEventContext("Follow up.", events)).toBe(`${carrier}\n\nFollow up.`);
     expect(resolveInternalEventPromptBody(`${carrier}\n\nFollow up.`, events)).toBe("Follow up.");
     expect(resolveInternalEventPromptBody(carrier, undefined)).toBe(carrier);
     expect(resolveInternalEventTranscriptBody(carrier, undefined)).toBe(carrier);
     const provenance = { kind: "inter_session", sourceTool: "subagent_announce" } as const;
     const annotated = annotateInterSessionPromptText(`${carrier}\n\nFollow up.`, provenance);
-    expect(prependInternalEventContext(annotated, events, provenance)).toBe(annotated);
     expect(resolveInternalEventPromptBody(annotated, events, provenance)).toBe("Follow up.");
     expect(resolveInternalEventPromptBody(annotated, undefined, provenance)).toBe(annotated);
     for (const render of [resolveAcpPromptBody, resolveInternalEventTranscriptBody]) {

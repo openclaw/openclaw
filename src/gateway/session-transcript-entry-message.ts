@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 
 /** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
@@ -95,6 +95,16 @@ export function projectTranscriptEntryMessage(
       ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
       ...(typeof compactionIdentity?.itemId === "string"
         ? { itemId: compactionIdentity.itemId }
+        : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensBefore === "number" &&
+      Number.isFinite(record.tokensBefore)
+        ? { tokensBefore: record.tokensBefore }
+        : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensAfter === "number" &&
+      Number.isFinite(record.tokensAfter)
+        ? { tokensAfter: record.tokensAfter }
         : {}),
       transcriptPosition,
       seq,

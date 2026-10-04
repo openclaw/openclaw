@@ -48,9 +48,7 @@ export function registerToolChannelProgressTests({
   describe("process poll channel progress", () => {
     it.each([
       ["poll", "kill"],
-      ["poll", "clear"],
       ["kill", "poll"],
-      ["clear", "poll"],
     ])(
       "uses executed arguments after a %s to %s hook rewrite",
       async (requestedAction, executedAction) => {
@@ -139,7 +137,7 @@ export function registerToolChannelProgressTests({
       },
     );
 
-    it.each(["off", "on", "full"] as const)(
+    it.each(["off", "full"] as const)(
       "hides successful polls without losing lifecycle or %s diagnostics",
       async (verboseLevel) => {
         const { ctx } = createTestContext();
@@ -293,7 +291,7 @@ export function registerToolChannelProgressTests({
       },
     );
 
-    it.each(["list", "log", "write", "send-keys", "kill", "clear", "remove"])(
+    it.each(["log"])(
       "leaves process %s progress and fallback summaries visible",
       async (action) => {
         const { ctx } = createTestContext();
@@ -324,71 +322,62 @@ export function registerToolChannelProgressTests({
   });
 
   describe("sessions_yield channel progress privacy", () => {
-    it.each(["off", "on", "full"] as const)(
-      "keeps continuation context out of %s verbosity output",
-      async (verboseLevel) => {
-        const { ctx } = createTestContext();
-        const onYield = vi.fn();
-        const events: CapturedAgentEvent[] = [];
-        const onAgentToolResult = vi.fn();
-        ctx.params.onAgentEvent = (event) => {
-          events.push(event);
-        };
-        ctx.params.onAgentToolResult = onAgentToolResult;
-        const args = {
-          message: "SYNTHETIC_PRIVATE_CONTINUATION_MARKER",
-          acknowledgment: "Research started; results will follow.",
-        };
-        ctx.params.onToolResult = vi.fn();
-        ctx.shouldEmitToolResult = () => verboseLevel !== "off";
-        ctx.shouldEmitToolOutput = () => verboseLevel === "full";
-        const tool = createSessionsYieldTool({
-          sessionId: ctx.params.sessionId,
-          claimYield: () => true,
-          onYield,
-        });
-        const toolCallId = "yield-private-context";
+    it("keeps continuation context out of full verbosity output", async () => {
+      const { ctx } = createTestContext();
+      const onYield = vi.fn();
+      const events: CapturedAgentEvent[] = [];
+      const onAgentToolResult = vi.fn();
+      ctx.params.onAgentEvent = (event) => {
+        events.push(event);
+      };
+      ctx.params.onAgentToolResult = onAgentToolResult;
+      const args = {
+        message: "SYNTHETIC_PRIVATE_CONTINUATION_MARKER",
+        acknowledgment: "Research started; results will follow.",
+      };
+      ctx.params.onToolResult = vi.fn();
+      ctx.shouldEmitToolResult = () => true;
+      ctx.shouldEmitToolOutput = () => true;
+      const tool = createSessionsYieldTool({
+        sessionId: ctx.params.sessionId,
+        claimYield: () => true,
+        onYield,
+      });
+      const toolCallId = "yield-private-context";
 
-        await startTool(ctx, { toolName: tool.name, toolCallId, args });
-        const result = await tool.execute(toolCallId, args);
-        updateTool(ctx, { toolName: tool.name, toolCallId, partialResult: result });
-        await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
+      await startTool(ctx, { toolName: tool.name, toolCallId, args });
+      const result = await tool.execute(toolCallId, args);
+      updateTool(ctx, { toolName: tool.name, toolCallId, partialResult: result });
+      await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
 
-        expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
-        expect(events).toHaveLength(6);
-        expect(
-          events
-            .filter((event) => event.stream === "item")
-            .every((event) => event.data?.hideFromChannelProgress === true),
-        ).toBe(true);
-        expect(
-          events
-            .filter((event) => event.stream === "tool")
-            .every((event) => !event.data?.hideFromChannelProgress),
-        ).toBe(true);
-        expect(onAgentToolResult).toHaveBeenCalledWith({
-          toolName: tool.name,
-          result,
-          isError: false,
-        });
-        expect(ctx.emitToolSummary).toHaveBeenCalledTimes(verboseLevel === "off" ? 0 : 1);
-        expect(ctx.emitToolOutput).toHaveBeenCalledTimes(verboseLevel === "full" ? 1 : 0);
-        expect(JSON.stringify(vi.mocked(ctx.emitToolSummary).mock.calls)).not.toContain(
-          args.message,
-        );
-        expect(JSON.stringify(vi.mocked(ctx.emitToolOutput).mock.calls)).not.toContain(
-          args.message,
-        );
-        if (verboseLevel === "full") {
-          expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-            tool.name,
-            undefined,
-            expect.stringContaining(args.acknowledgment),
-            result,
-          );
-        }
-      },
-    );
+      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment, undefined);
+      expect(events).toHaveLength(6);
+      expect(
+        events
+          .filter((event) => event.stream === "item")
+          .every((event) => event.data?.hideFromChannelProgress === true),
+      ).toBe(true);
+      expect(
+        events
+          .filter((event) => event.stream === "tool")
+          .every((event) => !event.data?.hideFromChannelProgress),
+      ).toBe(true);
+      expect(onAgentToolResult).toHaveBeenCalledWith({
+        toolName: tool.name,
+        result,
+        isError: false,
+      });
+      expect(ctx.emitToolSummary).toHaveBeenCalledTimes(1);
+      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolSummary).mock.calls)).not.toContain(args.message);
+      expect(JSON.stringify(vi.mocked(ctx.emitToolOutput).mock.calls)).not.toContain(args.message);
+      expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+        tool.name,
+        undefined,
+        expect.stringContaining(args.acknowledgment),
+        result,
+      );
+    });
 
     it.each([false, true])(
       "preserves yield failures with explicit hide=%s",

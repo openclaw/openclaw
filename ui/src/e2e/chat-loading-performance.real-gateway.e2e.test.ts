@@ -6,7 +6,8 @@ import { expect, it } from "vitest";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { encodePngRgba } from "../../../src/media/png-encode.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -116,7 +117,6 @@ const suite = createControlUiE2eSuite({
           defaults: { workspace },
           entries: {
             main: {
-              default: true,
               workspace,
               identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
             },
@@ -264,8 +264,16 @@ suite.define(() => {
       async ({ page, context }) => {
         await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          // Measure short-link resolution, not cached-roster route recovery. Keep
+          // restored Home preferences; clear identity admission in each new document
+          // because the previous document can persist its boot record on pagehide.
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+              localStorage.removeItem(key);
+            }
+          }
           window.localStorage.setItem(
-            "openclaw:control-ui:community-invite",
+            "openclaw:control-ui:community-invite:v2",
             JSON.stringify({ dismissedAtMs: 1770000000000 }),
           );
           const sample: BrowserPerformanceSample = {
@@ -307,6 +315,21 @@ suite.define(() => {
           }).observe({ type: "longtask", buffered: true });
         });
         const pending = new Map<string, RpcMetric>();
+        const waitForStartupResponses = (requestStart = 0) =>
+          expect
+            .poll(() => {
+              const metrics = rpc.slice(requestStart);
+              return (
+                metrics.some(
+                  (metric) =>
+                    metric.method === "sessions.resolve" && metric.receivedMs !== undefined,
+                ) &&
+                metrics
+                  .filter((metric) => ["agents.list", "agent.identity.get"].includes(metric.method))
+                  .every((metric) => metric.receivedMs !== undefined)
+              );
+            })
+            .toBe(true);
         const waitForStartupCommit = async (
           sessionKey: string,
           pane: Locator,
@@ -471,6 +494,9 @@ suite.define(() => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
+        // Transcript and roster avatars can render before the dedicated identity reply.
+        // Freeze only completed payloads; keep the earlier visibility timings unchanged.
+        await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
         const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
@@ -674,6 +700,7 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
           }
+          await waitForStartupResponses(requestStart);
           return {
             width: 1050,
             homeOpen,

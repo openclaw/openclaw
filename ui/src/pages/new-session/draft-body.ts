@@ -8,6 +8,7 @@ import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.
 import { icons } from "../../components/icons.ts";
 import { resolveIdentityAvatarView } from "../../components/identity-avatar-view.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
@@ -20,14 +21,13 @@ import {
   renderUserAvatarSlot,
   resolveChatDefaultAvatarPlacement,
 } from "../chat/components/chat-author-avatar.ts";
-import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
+import {
+  hasUserFileAttachments,
+  renderAssistantAttachments,
+} from "../chat/components/chat-message-attachments.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
-import {
-  detectJson,
-  renderMessageJson,
-  renderMessageMarkdown,
-} from "../chat/components/chat-message-text.ts";
+import { renderMessageJson, renderMessageMarkdown } from "../chat/components/chat-message-text.ts";
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 
@@ -118,8 +118,9 @@ function renderNewSessionSubmission(
   const key = "new-session-submission";
   const senderHue = normalized.sender ? resolveIdentityHue(normalized.sender) : null;
   const { images, attachments } = projectMessageMedia(message, normalized.content);
+  const hasUserFiles = hasUserFileAttachments(attachments);
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
-  const json = detectJson(markdown);
+  const json = parseMarkdownJson(markdown);
   const imageOptions = { onOpenImage };
   // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
   // images have their own lightbox handler and remain interactive while pending.
@@ -139,7 +140,7 @@ function renderNewSessionSubmission(
       }
       <div class="chat-group-messages">
         <div
-          class="chat-bubble ${images.length ? "chat-bubble--with-images" : ""}"
+          class="chat-bubble ${images.length || hasUserFiles ? "chat-bubble--with-images" : ""} ${hasUserFiles ? "chat-bubble--with-files" : ""}"
           data-message-id=${key}
           data-message-text=${markdown || nothing}
         >
@@ -147,7 +148,12 @@ function renderNewSessionSubmission(
           ${renderAssistantAttachments(attachments, imageOptions, undefined, undefined, false)}
           ${
             json
-              ? renderMessageJson(json)
+              ? renderMessageJson(
+                  json,
+                  key,
+                  { role: "user", isStreaming: false },
+                  { codeBlockChrome: "none" },
+                )
               : markdown
                 ? renderMessageMarkdown(
                     markdown,

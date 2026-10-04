@@ -17,6 +17,8 @@ export type TelegramDraftPreview = {
   text: string;
   /** A complete progress update can send before a token stream reaches its debounce threshold. */
   complete?: true;
+  /** Suppress link cards for this frame without changing the answer policy. */
+  linkPreview?: false;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
   markdownSource?: {
@@ -48,6 +50,24 @@ export function fallbackSnapshot(plainText: string): TelegramDraftMessageSnapsho
   };
 }
 
+// Preserve the existing grammY call shape when no preview options apply.
+export function createTelegramDraftMessageEditor(
+  api: Bot["api"],
+  chatId: Parameters<Bot["api"]["editMessageText"]>[0],
+  linkPreviewParams: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
+) {
+  return async (
+    messageId: number,
+    text: string,
+    other?: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
+  ) => {
+    const merged = other ? { ...other, ...linkPreviewParams } : linkPreviewParams;
+    return Object.keys(merged).length > 0
+      ? await api.editMessageText(chatId, messageId, text, merged)
+      : await api.editMessageText(chatId, messageId, text);
+  };
+}
+
 export async function sendTelegramDraftMessage(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
@@ -57,53 +77,21 @@ export async function sendTelegramDraftMessage(params: {
   assertCurrentSend: () => void;
   warn?: (message: string) => void;
 }) {
-  const { chatId, linkPreviewParams } = params;
-  const sendPlannedMessage = async (
-    page: TelegramTextDeliveryPage,
-    sendMessageParams: Record<string, unknown>,
-    assertCurrentSend: () => void,
-  ) => {
+  const { chatId, linkPreviewParams, page, assertCurrentSend } = params;
+  const sendPlannedMessage = async (sendMessageParams: Record<string, unknown>) => {
     const request = <T>(send: () => Promise<T>): Promise<T> => {
       assertCurrentSend();
       return send();
     };
-    if (page.richMessage) {
-      const richMessage = page.richMessage;
+    const richMessage = page.richMessage;
+    if (richMessage) {
       warnTelegramRichBlocksDegradations({
         context: "stream preview",
         reasons: page.degradationReasons ?? [],
         warn: (message) => params.warn?.(message),
       });
-      return await withTelegramPlainFallback<{
-        message: Message;
-        snapshot: TelegramDraftMessageSnapshot;
-      }>({
-        kind: "rich",
-        context: "stream preview",
-        plainText: page.plainText,
-        warn: (message) => params.warn?.(message),
-        sendFormatted: async () => ({
-          message: await request(() =>
-            params.api.raw.sendRichMessage({
-              chat_id: chatId,
-              rich_message: richMessage,
-              ...sendMessageParams,
-            }),
-          ),
-          snapshot: toDraftSnapshot(page),
-        }),
-        sendPlain: async (plan) => ({
-          message: await request(() =>
-            params.api.sendMessage(chatId, plan.plainText, {
-              ...sendMessageParams,
-              ...linkPreviewParams,
-            }),
-          ),
-          snapshot: fallbackSnapshot(plan.plainText),
-        }),
-      });
     }
-    if (page.sourceTextMode !== "html") {
+    if (!richMessage && page.sourceTextMode !== "html") {
       return {
         message: await request(() =>
           params.api.sendMessage(chatId, page.plainText, {
@@ -118,18 +106,26 @@ export async function sendTelegramDraftMessage(params: {
       message: Message;
       snapshot: TelegramDraftMessageSnapshot;
     }>({
-      kind: "html",
+      kind: richMessage ? "rich" : "html",
       context: "stream preview",
       plainText: page.plainText,
       warn: (message) => params.warn?.(message),
       sendFormatted: async () => ({
-        message: await request(() =>
-          params.api.sendMessage(chatId, page.htmlText ?? page.sourceText, {
-            parse_mode: "HTML" as const,
-            ...sendMessageParams,
-            ...linkPreviewParams,
-          }),
-        ),
+        message: richMessage
+          ? await request(() =>
+              params.api.raw.sendRichMessage({
+                chat_id: chatId,
+                rich_message: richMessage,
+                ...sendMessageParams,
+              }),
+            )
+          : await request(() =>
+              params.api.sendMessage(chatId, page.htmlText ?? page.sourceText, {
+                parse_mode: "HTML" as const,
+                ...sendMessageParams,
+                ...linkPreviewParams,
+              }),
+            ),
         snapshot: toDraftSnapshot(page),
       }),
       sendPlain: async (plan) => ({
@@ -149,8 +145,7 @@ export async function sendTelegramDraftMessage(params: {
     ...(params.page.richMessage
       ? { removeNativeQuoteParam: removeTelegramRichNativeQuoteParam }
       : {}),
-    request: (effectiveParams) =>
-      sendPlannedMessage(params.page, effectiveParams, params.assertCurrentSend),
+    request: sendPlannedMessage,
   });
   return delivery.result;
 }

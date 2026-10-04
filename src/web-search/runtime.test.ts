@@ -10,10 +10,10 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import {
+  createOAuthAuthProfileStore,
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
@@ -120,26 +120,6 @@ function createGoogleSearchProvider(
     getCredentialValue: () => "configured",
     ...overrides,
   });
-}
-
-function createOAuthAuthProfileStore(params: {
-  provider: string;
-  profileId: string;
-  access: string;
-  refresh: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access,
-        refresh: params.refresh,
-        expires: Date.now() + 3_600_000,
-      },
-    },
-  };
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -455,7 +435,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", default: true, agentDir }],
+            entries: { main: { agentDir } },
           },
         },
         args: { query: "oauth-backed web search" },
@@ -495,10 +475,11 @@ describe("web search runtime", () => {
     ]);
     const config = {
       agents: {
-        list: [
-          { id: "main", default: true, agentDir: defaultAgentDir },
-          { id: "side", agentDir: activeAgentDir },
-        ],
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: defaultAgentDir },
+          side: { agentDir: activeAgentDir },
+        },
       },
     } satisfies OpenClawConfig;
 

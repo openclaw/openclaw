@@ -10,6 +10,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { catalog, pluginModule } from "./native-plugin-ui.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Control UI selected text destinations" });
 const selectedText = "Review the deployment checklist.";
 const draft = "Please explain the next step.";
@@ -30,6 +31,106 @@ async function selectText(text: Locator) {
 }
 
 suite.define(() => {
+  it.each(["oversized selection", "low media limit", "oversized edit", "empty question"])(
+    "keeps side-chat selection drafts usable with %s",
+    async (scenario) => {
+      await suite.withPage(
+        {
+          viewport: viewports[0],
+          locale: "en-US",
+          reducedMotion: "reduce",
+          recordVideo: captureUiProof
+            ? { dir: suite.artifactDir, size: { width: 1440, height: 900 } }
+            : undefined,
+        },
+        async ({ page }) => {
+          const passage = scenario === "oversized selection" ? "x".repeat(16_001) : selectedText;
+          const gateway = await installMockGateway(page, {
+            historyMessages: [{ role: "assistant", content: passage }],
+            ...(scenario === "low media limit" ? { attachmentMaxBytes: 1 } : {}),
+            methodResponses: {
+              "sessions.companion.ask": { answer: "Review the rollback steps.", ts: 1 },
+              "sessions.companion.state": { exchanges: [] },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const composer = page.locator(".agent-chat__composer-shell textarea");
+          await composer.fill(draft);
+          await selectText(page.locator(".chat-bubble .chat-text p").filter({ hasText: passage }));
+          await page.getByRole("button", { name: "Ask in side chat", exact: true }).click();
+          const editor = page.getByRole("dialog", { name: "Comment", exact: true });
+          if (scenario === "oversized edit") {
+            await editor.getByRole("textbox").fill("x".repeat(16_001));
+            await editor.getByRole("button", { name: "Save comment", exact: true }).click();
+            expect(await editor.isVisible()).toBe(true);
+          }
+          await editor.getByRole("textbox").fill("Check the rollback steps.");
+          await editor.getByRole("button", { name: "Save comment", exact: true }).click();
+          const side = page.locator("openclaw-chat-session-rail");
+          const sideComposer = side.locator(".chat-session-rail__input");
+          await sideComposer.waitFor({ state: "visible" });
+          const quotedDraft = await sideComposer.inputValue();
+          expect(quotedDraft).toContain(passage.slice(0, 300));
+          expect(quotedDraft.length).toBeLessThan(400);
+          const chip = side.locator(".chat-selection-annotations__chip");
+          expect(await chip.count()).toBe(scenario === "oversized selection" ? 0 : 1);
+          if (scenario === "oversized edit" || scenario === "low media limit") {
+            await chip.click();
+            await side.getByRole("button", { name: "Edit comment 1", exact: true }).click();
+            if (scenario === "oversized edit") {
+              await editor.getByRole("textbox").fill("x".repeat(16_001));
+              await editor.getByRole("button", { name: "Save", exact: true }).click();
+              expect(await editor.isVisible()).toBe(true);
+              expect(await editor.getByRole("textbox").inputValue()).toHaveLength(16_001);
+              expect(await sideComposer.inputValue()).toBe(quotedDraft);
+              expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+              await page.screenshot({ path: `${suite.artifactDir}/side-comment-too-long.png` });
+            }
+            await editor.getByRole("textbox").fill("Corrected comment.");
+            await editor.getByRole("button", { name: "Save", exact: true }).click();
+            await editor.waitFor({ state: "detached" });
+          }
+          const send = side.locator(".chat-session-rail__composer button[type=submit]");
+          if (scenario === "empty question") {
+            await sideComposer.fill("");
+            expect(await send.isDisabled()).toBe(true);
+            await sideComposer.press("Enter");
+            expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+            expect(await chip.count()).toBe(1);
+            await page.screenshot({ path: `${suite.artifactDir}/side-comment-empty-question.png` });
+            await sideComposer.fill("Explain the selected text.");
+          }
+          await page.screenshot({
+            path: `${suite.artifactDir}/side-comment-${scenario.replaceAll(" ", "-")}-ready.png`,
+          });
+          await send.click();
+          const request = await gateway.waitForRequest("sessions.companion.ask");
+          const params = request.params as {
+            question: string;
+            selectionContext?: string;
+            attachments?: unknown[];
+          };
+          expect(params.question).toBe(
+            scenario === "empty question" ? "Explain the selected text." : quotedDraft.trim(),
+          );
+          expect(params.attachments).toBeUndefined();
+          if (scenario === "oversized selection") {
+            expect(params.selectionContext).toBeUndefined();
+          } else {
+            expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
+            expect(params.selectionContext).toContain(
+              scenario === "oversized edit" || scenario === "low media limit"
+                ? "Corrected comment."
+                : "Check the rollback steps.",
+            );
+          }
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("reveals draft and sent comments by touch before and after reload", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" },
@@ -99,7 +200,7 @@ suite.define(() => {
           locale: "en-US",
           reducedMotion: "reduce",
           serviceWorkers: "block",
-          recordVideo: { dir: suite.artifactDir, size: viewport },
+          recordVideo: captureUiProof ? { dir: suite.artifactDir, size: viewport } : undefined,
         },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
@@ -234,10 +335,12 @@ suite.define(() => {
             `chat:v3:${storedChatOutboxScopeKey({ agentId: "main", sessionKey: "agent:main:main" })}`,
             draft,
             1,
+            ["Explain the rollback checks. 🦞"],
           );
           await page.reload();
           await chip(1).waitFor({ state: "visible" });
           expect(await composer.inputValue()).toBe(draft);
+          await capture("restored-draft");
           await chip(1).hover();
           const preview = page.getByRole("region", { name: "Comments", exact: true });
           await preview.waitFor({ state: "visible" });
@@ -588,13 +691,17 @@ suite.define(() => {
   });
 
   it.each(viewports)(
-    "preserves side chat and selection dismissal at $width px",
+    "stages selected-text comments in side chat at $width px",
     async (viewport) => {
       await suite.withPage(
         { viewport, locale: "en-US", reducedMotion: "reduce" },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             historyMessages: [{ role: "assistant", content: selectedText }],
+            methodResponses: {
+              "sessions.companion.ask": { answer: "Review the rollback steps.", ts: 1 },
+              "sessions.companion.state": { exchanges: [] },
+            },
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           const composer = page.locator(".agent-chat__composer-shell textarea");
@@ -607,11 +714,45 @@ suite.define(() => {
           expect(await toolbar.count()).toBe(0);
           await selectText(text);
           await toolbar.getByRole("button", { name: "Ask in side chat", exact: true }).click();
+          const editor = page.getByRole("dialog", { name: "Comment", exact: true });
+          await editor.waitFor({ state: "visible" });
+          expect(await page.locator(".chat-session-rail__input").count()).toBe(0);
+          await editor.getByRole("textbox").fill("Check the rollback steps.");
+          await editor.getByRole("button", { name: "Save comment", exact: true }).click();
           const sideComposer = page.locator(".chat-session-rail__input");
           await sideComposer.waitFor({ state: "visible" });
           expect(await sideComposer.inputValue()).toBe(`Regarding "${selectedText}": `);
+          const side = page.locator("openclaw-chat-session-rail");
+          const chip = side.locator(".chat-selection-annotations__chip");
+          await chip.waitFor({ state: "visible" });
+          expect(
+            await page
+              .locator(".agent-chat__composer-shell .chat-selection-annotations__chip")
+              .count(),
+          ).toBe(0);
           expect(await composer.inputValue()).toBe(draft);
+          if (viewport.width === 1440) {
+            await page.screenshot({ path: `${suite.artifactDir}/after-side-selection.png` });
+          }
+          await chip.click();
+          await side.getByRole("button", { name: "Edit comment 1", exact: true }).click();
+          await editor.getByRole("textbox").fill("Check the rollback steps and the owner.");
+          await editor.getByRole("button", { name: "Save", exact: true }).click();
+          expect(await sideComposer.inputValue()).toBe(`Regarding "${selectedText}": `);
+          await side.locator(".chat-session-rail__composer button[type=submit]").click();
+          const request = await gateway.waitForRequest("sessions.companion.ask");
+          const params = request.params as {
+            question: string;
+            selectionContext: string;
+            attachments?: unknown[];
+          };
+          expect(params.question).toBe(`Regarding "${selectedText}":`);
+          expect(params.attachments).toBeUndefined();
+          const context = params.selectionContext;
+          expect(context).toContain(`Selected text:\n${selectedText}`);
+          expect(context).toContain("User comment:\nCheck the rollback steps and the owner.");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await composer.inputValue()).toBe(draft);
         },
       );
     },

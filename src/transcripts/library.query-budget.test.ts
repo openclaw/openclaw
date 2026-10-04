@@ -14,7 +14,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { activeSessions } from "./capture.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
+import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
@@ -28,6 +29,10 @@ import {
   readTranscriptEntry,
   readTranscriptLibraryEntry,
 } from "./store-read.js";
+import {
+  readTranscriptSessionMatches,
+  readTranscriptSummarySnapshot,
+} from "./store-sqlite-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -42,6 +47,18 @@ afterEach(async () => {
 
 function fixture() {
   return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-query-budget-"));
+}
+
+function seedExportBookkeeping(db: DatabaseSync) {
+  executeSqliteQuerySync(
+    db,
+    meetingTranscriptDb(db)
+      .updateTable("meeting_transcript_sessions")
+      .set({
+        export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
+        export_pending_json: JSON.stringify(["x".repeat(16_384)]),
+      }),
+  );
 }
 
 function observeArchiveReads(
@@ -59,9 +76,13 @@ function observeArchiveReads(
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
   );
+  vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
+    readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
+  );
   clearNodeSqliteKyselyCacheForDatabase(database);
   const queries: Array<{
     sql: string;
+    executions: number;
     rows: number;
     bytes: number;
     maxRowBytes: number;
@@ -81,7 +102,7 @@ function observeArchiveReads(
     ) {
       return statement;
     }
-    const record = { sql, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
+    const record = { sql, executions: 0, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
     queries.push(record);
     const observeRow = (row: Record<string, unknown>) => {
       const bytes = Object.values(row).reduce<number>(
@@ -92,10 +113,22 @@ function observeArchiveReads(
       record.bytes += bytes;
       record.maxRowBytes = Math.max(record.maxRowBytes, bytes);
     };
+    const nativeAll = statement.all.bind(statement);
+    vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+      record.executions++;
+      try {
+        const rows = nativeAll(...parameters);
+        rows.forEach(observeRow);
+        return rows;
+      } finally {
+        record.closed = true;
+      }
+    });
     const nativeGet = statement.get.bind(statement);
     vi.spyOn(statement, "get").mockImplementation(
       new Proxy(nativeGet, {
         apply(get, _receiver, parameters) {
+          record.executions++;
           try {
             const row = get(...parameters);
             if (row) {
@@ -110,6 +143,7 @@ function observeArchiveReads(
     );
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation((...parameters) => {
+      record.executions++;
       const iterator = iterate(...parameters);
       const next = iterator.next.bind(iterator);
       vi.spyOn(iterator, "next").mockImplementation(() => {
@@ -136,6 +170,53 @@ function observeArchiveReads(
 }
 
 describe("transcript library SQLite query budgets", () => {
+  it.each(["session matches", "summary snapshot"])(
+    "omits export bookkeeping from %s",
+    async (kind) => {
+      const { store, database } = fixture();
+      const first = session("review");
+      const later = session("review", { startedAt: "2026-08-21T10:00:00.000Z" });
+      const collision = session("review?", { startedAt: "2026-08-22T10:00:00.000Z" });
+      for (const target of [first, later, collision]) {
+        await store.writeSession(target);
+      }
+      await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
+      const db = database();
+      seedExportBookkeeping(db);
+      executeSqliteQuerySync(
+        db,
+        meetingTranscriptDb(db)
+          .insertInto("meeting_transcript_summaries")
+          .values(
+            [first, collision].map((target) => ({
+              session_id: target.sessionId,
+              session_started_at: target.startedAt,
+              summary_json: "{malformed",
+              utterance_count: 0,
+            })),
+          ),
+      );
+      const reads = observeArchiveReads(store, db);
+      if (kind === "session matches") {
+        const matches = readTranscriptSessionMatches(db, "review");
+        expect(matches.qualified).toEqual([]);
+        expect(matches.unqualified).toMatchObject([
+          { session: later, hasSummary: false },
+          { session: first, hasSummary: true },
+          { session: collision, hasSummary: true },
+        ]);
+        expect(reads.reduce((count, read) => count + read.executions, 0)).toBeLessThanOrEqual(3);
+      } else {
+        expect(await store.readSummarySnapshot(later, 20)).toMatchObject({
+          nextSequence: 1,
+          summaryRevision: "",
+          utterances: [{ text: "Summarize this speech" }],
+        });
+        expect(reads.some((read) => read.rows > 0)).toBe(true);
+      }
+      expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
+    },
+  );
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {
@@ -144,9 +225,13 @@ describe("transcript library SQLite query budgets", () => {
       });
       await store.writeSession(target);
       activeSessions.set(target.sessionId, {
+        appends: createTranscriptCaptureAppends(() => {}),
         session: target,
         providerId: target.source.providerId,
-        provider: {},
+        stopProvider: async () => {
+          throw new Error("Reading transcript status must not stop capture");
+        },
+        releaseProvider: async () => {},
         phase: "active",
       });
     }
@@ -159,41 +244,67 @@ describe("transcript library SQLite query budgets", () => {
     ).toBeLessThanOrEqual(3);
   });
 
-  it.each(["text", "combined speaker fields"])(
-    "bounds %s before SQLite returns an oversized row",
-    async (kind) => {
+  it.each(["text", "combined speaker fields", "source and metadata", "last timestamp"])(
+    "bounds %s before SQLite returns an oversized row without limiting full-store reads",
+    async (field) => {
       const { store, database } = fixture();
-      const target = session("allocation");
+      const descriptor = field === "source and metadata" || field === "last timestamp";
+      const target = session(
+        "allocation",
+        field === "source and metadata"
+          ? {
+              source: { providerId: "manual-transcript", private: "x".repeat(600_000) },
+              metadata: { private: "y".repeat(600_000) },
+            }
+          : {},
+      );
       await store.writeSession(target);
-      const payload = "é\0".repeat(TRANSCRIPTS_RESULT_MAX_BYTES / 2);
       await store.appendUtteranceForSession(
         target,
-        kind === "text"
-          ? { text: payload }
-          : {
-              text: "small",
-              speaker: { id: "x".repeat(600_000), label: "y".repeat(600_000) },
-            },
+        field === "text"
+          ? { text: "é\0".repeat(TRANSCRIPTS_RESULT_MAX_BYTES / 2) }
+          : field === "combined speaker fields"
+            ? { text: "small", speaker: { id: "x".repeat(600_000), label: "y".repeat(600_000) } }
+            : {
+                text: "note",
+                ...(field === "last timestamp"
+                  ? { endedAt: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) }
+                  : {}),
+              },
       );
       const reads = observeArchiveReads(store, database());
-      await expect(
-        getTranscriptLibrary(store, {
-          selector: transcriptSessionSelector(target),
-          includeUtterances: true,
-          limit: 1,
-        }),
-      ).rejects.toThrow(
-        expect.objectContaining({
-          type: "transcript_result_too_large",
-          maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
-        }),
-      );
-      expect(reads.length).toBeGreaterThan(0);
+      const selector = transcriptSessionSelector(target);
+      if (descriptor) {
+        for (const read of [
+          () => listTranscriptLibrary(store, {}),
+          () => store.readLatestEntry(),
+          () => store.readEntry(selector),
+        ]) {
+          await expect(read()).rejects.toThrow(
+            expect.objectContaining({ type: "transcript_result_too_large" }),
+          );
+        }
+      } else {
+        await expect(
+          getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
+        ).rejects.toThrow(
+          expect.objectContaining({
+            type: "transcript_result_too_large",
+            maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+          }),
+        );
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads.every((read) => read.closed)).toBe(true);
+      }
       expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
         TRANSCRIPTS_RESULT_MAX_BYTES,
       );
-      expect(reads.every((read) => read.closed)).toBe(true);
-      expect(await store.readUtterancesForSession(target)).toHaveLength(1);
+      if (descriptor) {
+        expect(await store.readEntry(target.sessionId)).toBeUndefined();
+        expect(await store.readSession(target.sessionId)).toEqual(target);
+      } else {
+        expect(await store.readUtterancesForSession(target)).toHaveLength(1);
+      }
     },
   );
 
@@ -228,107 +339,63 @@ describe("transcript library SQLite query budgets", () => {
     expect(recovered.utterances).toMatchObject([{ text: "after rejection", sequence: 6 }]);
   });
 
-  it("uses oversized lookahead only for pagination, then rejects that requested row", async () => {
-    const { store, database } = fixture();
-    const target = session("lookahead");
-    await store.writeSession(target);
-    await store.appendUtteranceForSession(target, { text: "first" });
-    await store.appendUtteranceForSession(target, {
-      text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
-    });
-    const reads = observeArchiveReads(store, database());
-    const first = await getTranscriptLibrary(store, {
-      selector: transcriptSessionSelector(target),
-      includeUtterances: true,
-      limit: 1,
-    });
-    expect(first.utterances).toEqual([{ sequence: 0, text: "first" }]);
-    expect(first.nextCursor).not.toBeNull();
-    expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
-      TRANSCRIPTS_RESULT_MAX_BYTES,
-    );
-    await expect(
-      getTranscriptLibrary(store, {
-        selector: first.session.selector,
-        includeUtterances: true,
-        limit: 1,
-        cursor: first.nextCursor!,
-      }),
-    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
-  });
-
-  it.each(["title", "source and metadata", "last timestamp"])(
-    "bounds %s in list, selector and latest descriptors without limiting full-store reads",
-    async (field) => {
+  it.each(["list", "get"])(
+    "uses oversized %s lookahead only for pagination, then rejects that requested row",
+    async (kind) => {
       const { store, database } = fixture();
-      const target = session(
-        "descriptor",
-        field === "title"
-          ? { title: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) }
-          : field === "source and metadata"
-            ? {
-                source: { providerId: "manual-transcript", private: "x".repeat(600_000) },
-                metadata: { private: "y".repeat(600_000) },
-              }
-            : {},
-      );
+      const target = session(kind === "list" ? "a" : "lookahead");
       await store.writeSession(target);
-      await store.appendUtteranceForSession(target, {
-        text: "note",
-        ...(field === "last timestamp"
-          ? { endedAt: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) }
-          : {}),
-      });
+      const oversized = "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1);
+      if (kind === "list") {
+        await store.writeSession(session("b", { title: oversized }));
+      } else {
+        await store.appendUtteranceForSession(target, { text: "first" });
+        await store.appendUtteranceForSession(target, { text: oversized });
+      }
+      let selector = transcriptSessionSelector(target);
+      const readPage = (cursor?: string) =>
+        kind === "list"
+          ? listTranscriptLibrary(store, cursor ? { cursor } : { limit: 1 })
+          : getTranscriptLibrary(store, {
+              selector,
+              includeUtterances: true,
+              limit: 1,
+              cursor,
+            });
       const reads = observeArchiveReads(store, database());
-      await expect(listTranscriptLibrary(store, {})).rejects.toThrow(
-        expect.objectContaining({ type: "transcript_result_too_large" }),
-      );
-      await expect(store.readLatestEntry()).rejects.toThrow(
-        expect.objectContaining({ type: "transcript_result_too_large" }),
-      );
-      await expect(store.readEntry(transcriptSessionSelector(target))).rejects.toThrow(
-        expect.objectContaining({ type: "transcript_result_too_large" }),
-      );
+      const page = await readPage();
+      if ("sessions" in page) {
+        expect(page.sessions.map((entry) => entry.sessionId)).toEqual(["a"]);
+      } else {
+        expect(page.utterances).toEqual([{ sequence: 0, text: "first" }]);
+        selector = page.session.selector;
+      }
+      expect(page.nextCursor).not.toBeNull();
       expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
         TRANSCRIPTS_RESULT_MAX_BYTES,
       );
-      expect(await store.readEntry(target.sessionId)).toBeUndefined();
-      expect(await store.readSession(target.sessionId)).toEqual(target);
+      await expect(readPage(page.nextCursor!)).rejects.toThrow(
+        expect.objectContaining({ type: "transcript_result_too_large" }),
+      );
+      if (kind === "list") {
+        for (const id of ["b", "c", "d"]) {
+          await store.writeSession(session(id, { title: "x".repeat(600_000) }));
+        }
+        reads.length = 0;
+        await expect(listTranscriptLibrary(store, { query: "x" })).rejects.toThrow(
+          expect.objectContaining({ type: "transcript_result_too_large" }),
+        );
+        expect(reads[0]?.rows).toBe(2);
+        expect(reads.every((read) => read.closed)).toBe(true);
+        for (const id of ["b", "c", "d"]) {
+          await store.writeSession(session(id, { metadata: { private: "x".repeat(600_000) } }));
+        }
+        expect(
+          (await listTranscriptLibrary(store, {})).sessions.map((entry) => entry.sessionId),
+        ).toEqual(["a", "b", "c", "d"]);
+      }
     },
   );
-
-  it("streams list projections, preserves oversized lookahead and does not retain private metadata across rows", async () => {
-    const { store, database } = fixture();
-    const first = session("a");
-    const second = session("b", { title: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) });
-    await store.writeSession(first);
-    await store.writeSession(second);
-    const reads = observeArchiveReads(store, database());
-    const page = await listTranscriptLibrary(store, { limit: 1 });
-    expect(page.sessions.map((entry) => entry.sessionId)).toEqual(["a"]);
-    expect(page.nextCursor).not.toBeNull();
-    expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
-      TRANSCRIPTS_RESULT_MAX_BYTES,
-    );
-    await expect(listTranscriptLibrary(store, { cursor: page.nextCursor! })).rejects.toThrow(
-      expect.objectContaining({ type: "transcript_result_too_large" }),
-    );
-    for (const id of ["b", "c", "d"]) {
-      await store.writeSession(session(id, { title: "x".repeat(600_000) }));
-    }
-    reads.length = 0;
-    await expect(listTranscriptLibrary(store, { query: "x" })).rejects.toThrow(
-      expect.objectContaining({ type: "transcript_result_too_large" }),
-    );
-    expect(reads[0]?.rows).toBe(2);
-    expect(reads.every((read) => read.closed)).toBe(true);
-    for (const id of ["b", "c", "d"]) {
-      await store.writeSession(session(id, { metadata: { private: "x".repeat(600_000) } }));
-    }
-    expect(
-      (await listTranscriptLibrary(store, {})).sessions.map((entry) => entry.sessionId),
-    ).toEqual(["a", "b", "c", "d"]);
-  });
 
   it("bounds summary transfer after omitting duplicated history and keeps the larger export budget", async () => {
     const { store, database } = fixture();

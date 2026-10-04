@@ -1,6 +1,3 @@
-/**
- * Timing and size constants for Browser profile/tab runtime operations.
- */
 import { DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS } from "./constants.js";
 
 /** Maximum managed page tabs kept open before best-effort cleanup starts. */

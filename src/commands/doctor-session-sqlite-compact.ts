@@ -1,21 +1,23 @@
 /** Runs doctor-owned SQLite file compaction for migrated session stores. */
 import fs from "node:fs";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { resolveTargetSqliteOptions } from "../infra/session-sqlite-migration-readers.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
+  migrateOpenClawAgentDatabaseForMaintenance,
+} from "../state/openclaw-agent-db-maintenance.js";
+import {
   clearOpenClawAgentDatabaseOpenFailure,
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
-  migrateOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
-/** Reclaim free pages from one agent session SQLite database. */
 export async function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
   options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
@@ -106,15 +108,7 @@ function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {
 
 function readSqliteFileSizes(sqlitePath: string): { dbSizeBytes: number; walSizeBytes: number } {
   return {
-    dbSizeBytes: fileSize(sqlitePath),
-    walSizeBytes: fileSize(`${sqlitePath}-wal`),
+    dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
+    walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
   };
-}
-
-function fileSize(filePath: string): number {
-  try {
-    return fs.statSync(filePath).size;
-  } catch {
-    return 0;
-  }
 }

@@ -25,12 +25,15 @@ import {
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
 
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };
   }
+  // Preparation can admit isolated work; later busy skips must retain the occurrence.
+  markSessionEventWakeWorkStarted();
   const prepared = await prepareHeartbeatRunStage(wake);
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
@@ -109,6 +112,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
         {
           isHeartbeat: true,
+          useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
           // Isolated heartbeats mint a fresh session ID per run, so nothing later
           // reuses this run's bundle MCP runtime; retire it at settlement.
           ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),
@@ -159,6 +163,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         {
           sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
           events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
+          deferredEventIds: prepared.deferredGenericEvents
+            .map((event) => event.id)
+            .filter((id): id is string => typeof id === "string"),
         },
       ),
       dispatcherOptions: {

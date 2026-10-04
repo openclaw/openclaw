@@ -22,7 +22,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -103,7 +105,9 @@ import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/
 import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
-import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import type { ClientRequestArgs } from "node:http";
+import type { ClientOptions as PublishedClientOptions, WebSocket as PublishedWebSocket } from "ws";
+import { WebSocket, type ClientOptions } from "openclaw/plugin-sdk/websocket-runtime";
 import { z } from "zod";
 ${privateRuntimeConsumers}
 
@@ -138,6 +142,34 @@ type AckOptionsUnchanged = RequireTrue<Equal<NonNullable<Parameters<QueueOwner["
   expectedPlatformSendAttemptId?: string | null;
 }>>;
 
+// Compile-only consumers retain the WebSocket contract shipped in v2026.9.6.
+type WebSocketOptionsUnchanged = RequireTrue<Equal<ClientOptions, PublishedClientOptions>>;
+type WebSocketConstructorUnchanged = RequireTrue<Equal<typeof WebSocket, typeof PublishedWebSocket>>;
+const legacyWebSocketOptions: ClientOptions = {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+};
+const legacySocket = new WebSocket("wss://gateway.example", legacyWebSocketOptions);
+new WebSocket(null);
+new WebSocket(new URL("wss://gateway.example"), {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", ["fixture"], {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", "fixture", legacyWebSocketOptions);
+const httpWebSocketOptions: ClientRequestArgs = { agent: false };
+new WebSocket("wss://gateway.example", undefined, httpWebSocketOptions);
+const legacySocketArgs: ConstructorParameters<typeof WebSocket> = [
+  new URL("wss://gateway.example"), undefined, legacyWebSocketOptions,
+];
+new WebSocket(...legacySocketArgs);
+const closedSocketState: typeof PublishedWebSocket.CLOSED = WebSocket.CLOSED;
+legacySocket.on("message", (_data, isBinary) => {
+  const binary: boolean = isBinary;
+  void binary;
+});
+void closedSocketState;
+
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {
   byProvider: new Map<string, Set<string>>(),
@@ -147,9 +179,8 @@ const legacyModelsData = {
 };
 const modelsData: ModelsProviderData = legacyModelsData;
 const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
-const commandAuthModelsAdapter: typeof buildCommandAuthModelsProviderData = modelsAdapter;
 void modelsData;
-void commandAuthModelsAdapter;
+void modelsAdapter;
 declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
 const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
 void preparedCatalog;
@@ -231,11 +262,15 @@ export default defineChannelPluginEntry({
     const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
     mkdirSync(dirname(openclawPackagePath), { recursive: true });
     symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
-    symlinkSync(
-      join(repoRoot, "node_modules", "zod"),
-      join(consumerRoot, "node_modules", "zod"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    for (const dependency of ["zod", "ws", "@types/ws"]) {
+      const dependencyPath = join(consumerRoot, "node_modules", dependency);
+      mkdirSync(dirname(dependencyPath), { recursive: true });
+      symlinkSync(
+        join(repoRoot, "node_modules", dependency),
+        dependencyPath,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     const result = spawnSync(
       tsgoPath,
@@ -353,14 +388,17 @@ if (declarationBudget.shouldFail) {
     declarationBudget.budgetKind === "private-qa-public-entry"
       ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
       : "PLUGIN SDK";
-  console.error(
-    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
-  );
-  console.error(
-    `Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance.`,
-  );
-  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
-  missing += 1;
+  if (
+    reportLimitViolations([
+      {
+        file: "scripts/lib/plugin-sdk-declaration-budget.mts",
+        title: "Plugin SDK declaration size budget",
+        message: `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
+      },
+    ])
+  ) {
+    missing += 1;
+  }
 } else if (declarationBudget.budgetKind === "private-qa-public-entry") {
   console.log(
     `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
@@ -377,31 +415,41 @@ if (declarationBudget.shouldFail) {
     console.error("UNDECLARED BUNDLER HELPER DTS EXPORT: missing dist/ for helper export scan");
     missing += 1;
   } else {
-    const queue = [rootDist];
-    const visitedDirs = new Set<string>();
-    while (queue.length > 0) {
-      const dir = queue.pop()!;
-      if (visitedDirs.has(dir)) {
-        continue;
-      }
-      visitedDirs.add(dir);
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          queue.push(fullPath);
+    // tsx's synchronous lexer misparses emitted `using` helpers with this shebang.
+    const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+    try {
+      const queue = [rootDist];
+      const visitedDirs = new Set<string>();
+      while (queue.length > 0) {
+        const dir = queue.pop()!;
+        if (visitedDirs.has(dir)) {
           continue;
         }
-        if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
-          continue;
-        }
-        const sourceText = readFileSync(fullPath, "utf8");
-        for (const finding of findUndeclaredBundlerHelperDtsExports(sourceText, fullPath)) {
-          console.error(
-            `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
-          );
-          missing += 1;
+        visitedDirs.add(dir);
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            queue.push(fullPath);
+            continue;
+          }
+          if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
+            continue;
+          }
+          const sourceText = readFileSync(fullPath, "utf8");
+          for (const finding of findUndeclaredBundlerHelperDtsExports(
+            sourceText,
+            fullPath,
+            parser,
+          )) {
+            console.error(
+              `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
+            );
+            missing += 1;
+          }
         }
       }
+    } finally {
+      parser.close();
     }
   }
 }

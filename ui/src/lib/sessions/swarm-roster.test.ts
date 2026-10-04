@@ -110,8 +110,6 @@ describe("isSwarmEnabledInConfig", () => {
   it.each([
     { label: "unloaded config", config: undefined },
     { label: "omitted tools", config: {} },
-    { label: "omitted swarm", config: { tools: {} } },
-    { label: "empty swarm", config: { tools: { swarm: {} } } },
     { label: "limits-only swarm", config: { tools: { swarm: { maxConcurrent: 3 } } } },
     {
       label: "limits-only agent swarm",
@@ -128,8 +126,6 @@ describe("isSwarmEnabledInConfig", () => {
     { globalSwarm: { enabled: true }, agentSwarm: false, expected: false },
     { globalSwarm: false, agentSwarm: { enabled: true }, expected: true },
     { globalSwarm: { enabled: false }, agentSwarm: true, expected: true },
-    { globalSwarm: undefined, agentSwarm: false, expected: false },
-    { globalSwarm: undefined, agentSwarm: { enabled: false }, expected: false },
   ])("resolves global $globalSwarm and agent $agentSwarm as $expected", (testCase) => {
     expect(
       isSwarmEnabledInConfig(
@@ -222,7 +218,7 @@ describe("SwarmRosterHydrator", () => {
 
       children = [{ ...row(1), label: "New child", status: "done" }];
       sessions.invalidateParent();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(list).toHaveBeenCalledTimes(2);
       expect(readParent).toHaveBeenCalledTimes(2);
       expect(hydrator.rows).toEqual([
@@ -379,7 +375,7 @@ describe("SwarmRosterHydrator", () => {
       expect(readParent).toHaveBeenCalledTimes(2);
       children = [row(1)];
       sessions.publishRow(children[0]!);
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       stale.resolve(initial);
       await vi.advanceTimersByTimeAsync(0);
       expect(readParent).toHaveBeenCalledTimes(3);

@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { ensureGatewayReadyForOperation } from "../../commands/gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "../../commands/gateway-readiness.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -15,6 +15,17 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { probeGatewayStatus } from "./probe.js";
 import type { DaemonStatus } from "./status.gather.js";
 
+const { gatherStatus, confirm, startGateway, installGateway } = vi.hoisted(() => ({
+  gatherStatus: vi.fn(),
+  confirm: vi.fn(),
+  startGateway: vi.fn(),
+  installGateway: vi.fn(),
+}));
+vi.mock("./status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
+vi.mock("../prompt.js", () => ({ promptYesNo: confirm }));
+vi.mock("./lifecycle.js", () => ({ runDaemonStart: startGateway }));
+vi.mock("./install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -25,33 +36,23 @@ afterEach(async () => {
 async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatus["rpc"]>) {
   const port = Number(new URL(url).port);
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const confirm = vi.fn();
-  const startGateway = vi.fn();
-  const installGateway = vi.fn();
-  const result = await ensureGatewayReadyForOperation({
-    runtime,
-    operation: "open the dashboard",
-    readyWhenReachable: true,
-    interactive: true,
-    deps: {
-      confirm,
-      startGateway,
-      installGateway,
-      gatherStatus: async () => ({
-        service: {
-          label: "synthetic stopped service",
-          loaded: false,
-          loadState: { status: "not-loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          command: null,
-          runtime: { status: "stopped" },
-        },
-        port: { port, status: "busy", listeners: [], hints: [] },
-        rpc: { ...rpc, url },
-        extraServices: [],
-      }),
+  gatherStatus.mockResolvedValue({
+    service: {
+      label: "synthetic stopped service",
+      loaded: false,
+      loadState: { status: "not-loaded" },
+      loadedText: "loaded",
+      notLoadedText: "not loaded",
+      command: null,
+      runtime: { status: "stopped" },
     },
+    port: { port, status: "busy", listeners: [], hints: [] },
+    rpc: { ...rpc, url },
+    extraServices: [],
+  } satisfies DaemonStatus);
+  const result = await ensureDashboardGatewayReady({
+    runtime,
+    interactive: true,
   });
   expect(confirm).not.toHaveBeenCalled();
   expect(startGateway).not.toHaveBeenCalled();
@@ -209,9 +210,13 @@ describe("Gateway reachability over real sockets", () => {
     expect((await checkDashboardReadiness(url, rpc)).result.ready).toBe(true);
   });
 
-  it("accepts a real Gateway auth rejection as reachable without starting another service", async () => {
-    const gateway = await startMinimalRealGateway();
-    cleanups.push(() => gateway.close());
+  it("accepts a real Gateway auth rejection as reachable without starting another service", async ({
+    signal,
+  }) => {
+    const gateway = await startMinimalRealGateway({
+      signal,
+      registerCleanup: (cleanup) => cleanups.push(cleanup),
+    });
     const rejected = await probeGatewayStatus({
       url: gateway.url,
       token: "synthetic-wrong-token",

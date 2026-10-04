@@ -16,7 +16,6 @@ import {
   readChannelPairingState,
   readChannelPairingStateFromDatabase,
   resolvePairingRequestAccountId,
-  sqliteOptionsForEnv,
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
@@ -28,6 +27,7 @@ export const CHANNEL_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 export const CHANNEL_PAIRING_PENDING_MAX = 3;
 
 export type PairingRequest = PairingRequestRecord;
+export { readChannelAllowFromStore } from "./pairing-store.read.js";
 
 /** Stable opaque id for approving a request without exposing its human pairing code. */
 export function resolveChannelPairingRequestId(
@@ -48,16 +48,8 @@ function isExpired(entry: PairingRequest, nowMs: number): boolean {
 }
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
-  const kept: PairingRequest[] = [];
-  let removed = false;
-  for (const req of reqs) {
-    if (isExpired(req, nowMs)) {
-      removed = true;
-      continue;
-    }
-    kept.push(req);
-  }
-  return { requests: kept, removed };
+  const requests = reqs.filter((req) => !isExpired(req, nowMs));
+  return { requests, removed: requests.length !== reqs.length };
 }
 
 function resolveLastSeenAt(entry: PairingRequest): number {
@@ -66,38 +58,25 @@ function resolveLastSeenAt(entry: PairingRequest): number {
   );
 }
 
-function normalizePairingAccountId(accountId?: string): string {
-  return normalizeLowercaseStringOrEmpty(accountId);
-}
-
 function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: string): boolean {
   return !normalizedAccountId || resolvePairingRequestAccountId(entry) === normalizedAccountId;
 }
 
-function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
-  if (maxPending <= 0 || reqs.length <= maxPending) {
-    return { requests: reqs, removed: false };
-  }
-  const grouped = new Map<string, Array<{ index: number; request: PairingRequest }>>();
+function pruneExcessRequestsByAccount(reqs: PairingRequest[]) {
+  const grouped = new Map<string, Array<[number, PairingRequest]>>();
   for (const [index, entry] of reqs.entries()) {
     const accountId = resolvePairingRequestAccountId(entry);
-    const current = grouped.get(accountId);
-    if (current) {
-      current.push({ index, request: entry });
-    } else {
-      grouped.set(accountId, [{ index, request: entry }]);
-    }
+    const entries = grouped.get(accountId) ?? [];
+    entries.push([index, entry]);
+    grouped.set(accountId, entries);
   }
 
   const droppedIndexes = new Set<number>();
   for (const entries of grouped.values()) {
-    if (entries.length <= maxPending) {
-      continue;
-    }
     const sorted = entries.toSorted(
-      (left, right) => resolveLastSeenAt(left.request) - resolveLastSeenAt(right.request),
+      ([, left], [, right]) => resolveLastSeenAt(left) - resolveLastSeenAt(right),
     );
-    for (const { index } of sorted.slice(0, sorted.length - maxPending)) {
+    for (const [index] of sorted.slice(0, -CHANNEL_PAIRING_PENDING_MAX)) {
       droppedIndexes.add(index);
     }
   }
@@ -127,10 +106,6 @@ function generateUniqueCode(existing: Set<string>): string {
   );
 }
 
-function normalizeId(value: string | number): string {
-  return normalizeStringifiedOptionalString(value) ?? "";
-}
-
 function resolvePairingAdapter(
   channel: PairingChannel,
   pairingAdapter?: ChannelPairingAdapter,
@@ -138,12 +113,12 @@ function resolvePairingAdapter(
   return pairingAdapter ?? getPairingAdapter(channel) ?? undefined;
 }
 
-function normalizeAllowEntry(
+function normalizeAllowFromInput(
   channel: PairingChannel,
-  entry: string,
+  entry: string | number,
   pairingAdapter?: ChannelPairingAdapter,
 ): string {
-  const trimmed = entry.trim();
+  const trimmed = normalizeStringifiedOptionalString(entry) ?? "";
   if (!trimmed || trimmed === "*") {
     return "";
   }
@@ -153,61 +128,44 @@ function normalizeAllowEntry(
   return normalizedEntry === "*" ? "" : normalizedEntry;
 }
 
-function normalizeAllowFromInput(
-  channel: PairingChannel,
-  entry: string | number,
-  pairingAdapter?: ChannelPairingAdapter,
-): string {
-  return normalizeAllowEntry(channel, normalizeId(entry), pairingAdapter);
-}
-
-function readAllowFromState(channel: PairingChannel, env: NodeJS.ProcessEnv, accountId?: string) {
-  const resolvedAccountId = resolveAllowFromAccountId(accountId);
-  return (readChannelPairingState(channel, env).allowFrom?.[resolvedAccountId] ?? []).slice();
-}
-
-async function updateAllowFromStoreEntry(params: {
-  channel: PairingChannel;
-  entry: string | number;
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-  pairingAdapter?: ChannelPairingAdapter;
-  apply: (current: string[], normalized: string) => string[] | null;
-}): Promise<{ changed: boolean; allowFrom: string[] }> {
+async function updateAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams & {
+    apply: (current: string[], normalized: string) => string[] | null;
+  },
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  const assertCurrent = params.assertCurrent;
   const env = params.env ?? process.env;
   const accountId = resolveAllowFromAccountId(params.accountId);
   const normalized = normalizeAllowFromInput(params.channel, params.entry, params.pairingAdapter);
-  return runOpenClawStateWriteTransaction((database) => {
-    const state = readChannelPairingStateFromDatabase(database, params.channel);
-    const current = (state.allowFrom?.[accountId] ?? []).slice();
-    if (!normalized) {
-      return { changed: false, allowFrom: current };
-    }
-    const next = params.apply(current, normalized);
-    if (!next) {
-      return { changed: false, allowFrom: current };
-    }
-    state.allowFrom ??= {};
-    state.allowFrom[accountId] = next;
-    writeChannelPairingStateToDatabase(database, params.channel, state);
-    return { changed: true, allowFrom: next };
-  }, sqliteOptionsForEnv(env));
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const state = readChannelPairingStateFromDatabase(database, params.channel);
+      const current = (state.allowFrom?.[accountId] ?? []).slice();
+      if (!normalized) {
+        return { changed: false, allowFrom: current };
+      }
+      const next = params.apply(current, normalized);
+      if (!next) {
+        return { changed: false, allowFrom: current };
+      }
+      state.allowFrom ??= {};
+      state.allowFrom[accountId] = next;
+      assertCurrent?.();
+      writeChannelPairingStateToDatabase(database, params.channel, state);
+      return { changed: true, allowFrom: next };
+    },
+    { env },
+  );
 }
 
-export async function readChannelAllowFromStore(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): Promise<string[]> {
-  return readAllowFromState(channel, env, accountId);
-}
-
+/** @deprecated Use readChannelAllowFromStore; retained for the v2026.9.8 SDK until the next Plugin SDK major. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): string[] {
-  return readAllowFromState(channel, env, accountId);
+  const resolvedAccountId = resolveAllowFromAccountId(accountId);
+  return (readChannelPairingState(channel, env).allowFrom?.[resolvedAccountId] ?? []).slice();
 }
 
 type AllowFromStoreEntryUpdateParams = {
@@ -216,6 +174,7 @@ type AllowFromStoreEntryUpdateParams = {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  assertCurrent?: () => void;
 };
 
 export async function addChannelAllowFromStoreEntry(
@@ -244,29 +203,37 @@ export async function listChannelPairingRequests(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
+  assertCurrent?: () => void,
 ): Promise<PairingRequest[]> {
-  return runOpenClawStateWriteTransaction((database) => {
-    const state = readChannelPairingStateFromDatabase(database, channel);
-    const expired = pruneExpiredRequests(state.requests, Date.now());
-    const capped = pruneExcessRequestsByAccount(expired.requests, CHANNEL_PAIRING_PENDING_MAX);
-    if (expired.removed || capped.removed) {
-      state.requests = capped.requests;
-      writeChannelPairingStateToDatabase(database, channel, state);
-    }
-    const normalizedAccountId = normalizePairingAccountId(accountId);
-    return capped.requests
-      .filter((entry) => requestMatchesAccountId(entry, normalizedAccountId))
-      .toSorted((left, right) => {
-        const createdOrder = left.createdAt.localeCompare(right.createdAt);
-        if (createdOrder !== 0) {
-          return createdOrder;
-        }
-        const accountOrder = resolvePairingRequestAccountId(left).localeCompare(
-          resolvePairingRequestAccountId(right),
-        );
-        return accountOrder || left.id.localeCompare(right.id);
-      });
-  }, sqliteOptionsForEnv(env));
+  assertCurrent?.();
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      assertCurrent?.();
+      const state = readChannelPairingStateFromDatabase(database, channel);
+      const expired = pruneExpiredRequests(state.requests, Date.now());
+      const capped = pruneExcessRequestsByAccount(expired.requests);
+      if (expired.removed || capped.removed) {
+        state.requests = capped.requests;
+        writeChannelPairingStateToDatabase(database, channel, state);
+      }
+      const normalizedAccountId = normalizeLowercaseStringOrEmpty(accountId);
+      const requests = capped.requests
+        .filter((entry) => requestMatchesAccountId(entry, normalizedAccountId))
+        .toSorted((left, right) => {
+          const createdOrder = left.createdAt.localeCompare(right.createdAt);
+          if (createdOrder !== 0) {
+            return createdOrder;
+          }
+          const accountOrder = resolvePairingRequestAccountId(left).localeCompare(
+            resolvePairingRequestAccountId(right),
+          );
+          return accountOrder || left.id.localeCompare(right.id);
+        });
+      assertCurrent?.();
+      return requests;
+    },
+    { env },
+  );
 }
 
 export async function upsertChannelPairingRequest(params: {
@@ -279,61 +246,64 @@ export async function upsertChannelPairingRequest(params: {
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ code: string; created: boolean }> {
   const env = params.env ?? process.env;
-  return runOpenClawStateWriteTransaction((database) => {
-    const now = new Date().toISOString();
-    const id = normalizeId(params.id);
-    const accountId = normalizePairingAccountId(params.accountId) || DEFAULT_ACCOUNT_ID;
-    const baseMeta = params.meta
-      ? Object.fromEntries(
-          Object.entries(params.meta)
-            .map(([key, value]) => [key, normalizeOptionalString(value) ?? ""] as const)
-            .filter(([, value]) => Boolean(value)),
-        )
-      : undefined;
-    const meta = { ...baseMeta, accountId };
-    const state = readChannelPairingStateFromDatabase(database, params.channel);
-    const expired = pruneExpiredRequests(state.requests, Date.now());
-    let requests = expired.requests;
-    const existingIndex = requests.findIndex(
-      (request) => request.id === id && requestMatchesAccountId(request, accountId),
-    );
-    const existingCodes = new Set(
-      requests.map((request) => (normalizeOptionalString(request.code) ?? "").toUpperCase()),
-    );
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const now = new Date().toISOString();
+      const id = normalizeStringifiedOptionalString(params.id) ?? "";
+      const accountId = normalizeLowercaseStringOrEmpty(params.accountId) || DEFAULT_ACCOUNT_ID;
+      const baseMeta = params.meta
+        ? Object.fromEntries(
+            Object.entries(params.meta)
+              .map(([key, value]) => [key, normalizeOptionalString(value) ?? ""] as const)
+              .filter(([, value]) => Boolean(value)),
+          )
+        : undefined;
+      const meta = { ...baseMeta, accountId };
+      const state = readChannelPairingStateFromDatabase(database, params.channel);
+      const expired = pruneExpiredRequests(state.requests, Date.now());
+      let requests = expired.requests;
+      const existingIndex = requests.findIndex(
+        (request) => request.id === id && requestMatchesAccountId(request, accountId),
+      );
+      const existingCodes = new Set(
+        requests.map((request) => (normalizeOptionalString(request.code) ?? "").toUpperCase()),
+      );
 
-    if (existingIndex >= 0) {
-      const existing = requests[existingIndex];
-      const code = normalizeOptionalString(existing?.code) || generateUniqueCode(existingCodes);
-      requests[existingIndex] = {
-        id,
-        code,
-        createdAt: existing?.createdAt ?? now,
-        lastSeenAt: now,
-        meta,
-      };
-      state.requests = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX).requests;
-      writeChannelPairingStateToDatabase(database, params.channel, state);
-      return { code, created: false };
-    }
-
-    const capped = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX);
-    requests = capped.requests;
-    const accountRequestCount = requests.filter((request) =>
-      requestMatchesAccountId(request, accountId),
-    ).length;
-    if (CHANNEL_PAIRING_PENDING_MAX > 0 && accountRequestCount >= CHANNEL_PAIRING_PENDING_MAX) {
-      if (expired.removed || capped.removed) {
-        state.requests = requests;
+      if (existingIndex >= 0) {
+        const existing = requests[existingIndex];
+        const code = normalizeOptionalString(existing?.code) || generateUniqueCode(existingCodes);
+        requests[existingIndex] = {
+          id,
+          code,
+          createdAt: existing?.createdAt ?? now,
+          lastSeenAt: now,
+          meta,
+        };
+        state.requests = pruneExcessRequestsByAccount(requests).requests;
         writeChannelPairingStateToDatabase(database, params.channel, state);
+        return { code, created: false };
       }
-      return { code: "", created: false };
-    }
 
-    const code = generateUniqueCode(existingCodes);
-    state.requests = [...requests, { id, code, createdAt: now, lastSeenAt: now, meta }];
-    writeChannelPairingStateToDatabase(database, params.channel, state);
-    return { code, created: true };
-  }, sqliteOptionsForEnv(env));
+      const capped = pruneExcessRequestsByAccount(requests);
+      requests = capped.requests;
+      const accountRequestCount = requests.filter((request) =>
+        requestMatchesAccountId(request, accountId),
+      ).length;
+      if (accountRequestCount >= CHANNEL_PAIRING_PENDING_MAX) {
+        if (expired.removed || capped.removed) {
+          state.requests = requests;
+          writeChannelPairingStateToDatabase(database, params.channel, state);
+        }
+        return { code: "", created: false };
+      }
+
+      const code = generateUniqueCode(existingCodes);
+      state.requests = [...requests, { id, code, createdAt: now, lastSeenAt: now, meta }];
+      writeChannelPairingStateToDatabase(database, params.channel, state);
+      return { code, created: true };
+    },
+    { env },
+  );
 }
 
 type ResolvePairingRequestParams = {
@@ -343,60 +313,69 @@ type ResolvePairingRequestParams = {
   pairingAdapter?: ChannelPairingAdapter;
   matches: (request: PairingRequest) => boolean;
   approve: boolean;
+  assertCurrent?: () => void;
 };
 
 async function resolveChannelPairingRequest(
   params: ResolvePairingRequestParams,
 ): Promise<{ id: string; entry: PairingRequest } | null> {
   const env = params.env ?? process.env;
-  return runOpenClawStateWriteTransaction((database) => {
-    const state = readChannelPairingStateFromDatabase(database, params.channel);
-    const pruned = pruneExpiredRequests(state.requests, Date.now());
-    const accountId = normalizePairingAccountId(params.accountId);
-    const index = pruned.requests.findIndex(
-      (request) => requestMatchesAccountId(request, accountId) && params.matches(request),
-    );
-    if (index < 0) {
-      if (pruned.removed) {
-        state.requests = pruned.requests;
-        writeChannelPairingStateToDatabase(database, params.channel, state);
-      }
-      return null;
-    }
-    const entry = pruned.requests[index];
-    if (!entry) {
-      return null;
-    }
-    pruned.requests.splice(index, 1);
-    state.requests = pruned.requests;
-
-    if (params.approve) {
-      const allowAccountId = resolveAllowFromAccountId(
-        normalizeOptionalString(params.accountId) ?? normalizeOptionalString(entry.meta?.accountId),
+  params.assertCurrent?.();
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      params.assertCurrent?.();
+      const state = readChannelPairingStateFromDatabase(database, params.channel);
+      const pruned = pruneExpiredRequests(state.requests, Date.now());
+      const accountId = normalizeLowercaseStringOrEmpty(params.accountId);
+      const index = pruned.requests.findIndex(
+        (request) => requestMatchesAccountId(request, accountId) && params.matches(request),
       );
-      const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
-      const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
-      // Channels with key-bound handoffs can persist an opaque approval token
-      // derived from request metadata instead of a durable sender allowlist id.
-      const approvalEntry = adapter?.resolveApprovalStoreEntry
-        ? adapter.resolveApprovalStoreEntry({
-            id: entry.id,
-            ...(entry.meta ? { meta: entry.meta } : {}),
-          })
-        : entry.id;
-      const normalizedAllow =
-        approvalEntry == null
-          ? ""
-          : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
-      if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
-        state.allowFrom ??= {};
-        state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];
+      if (index < 0) {
+        if (pruned.removed) {
+          state.requests = pruned.requests;
+          writeChannelPairingStateToDatabase(database, params.channel, state);
+        }
+        params.assertCurrent?.();
+        return null;
       }
-    }
+      const entry = pruned.requests[index];
+      if (!entry) {
+        return null;
+      }
+      pruned.requests.splice(index, 1);
+      state.requests = pruned.requests;
 
-    writeChannelPairingStateToDatabase(database, params.channel, state);
-    return { id: entry.id, entry };
-  }, sqliteOptionsForEnv(env));
+      if (params.approve) {
+        const allowAccountId = resolveAllowFromAccountId(
+          normalizeOptionalString(params.accountId) ??
+            normalizeOptionalString(entry.meta?.accountId),
+        );
+        const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
+        const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
+        // Channels with key-bound handoffs can persist an opaque approval token
+        // derived from request metadata instead of a durable sender allowlist id.
+        const approvalEntry = adapter?.resolveApprovalStoreEntry
+          ? adapter.resolveApprovalStoreEntry({
+              id: entry.id,
+              ...(entry.meta ? { meta: entry.meta } : {}),
+            })
+          : entry.id;
+        const normalizedAllow =
+          approvalEntry == null
+            ? ""
+            : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
+        if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
+          state.allowFrom ??= {};
+          state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];
+        }
+      }
+
+      writeChannelPairingStateToDatabase(database, params.channel, state);
+      params.assertCurrent?.();
+      return { id: entry.id, entry };
+    },
+    { env },
+  );
 }
 
 export async function approveChannelPairingCode(params: {
@@ -405,6 +384,7 @@ export async function approveChannelPairingCode(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  assertCurrent?: () => void;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
   if (!code) {

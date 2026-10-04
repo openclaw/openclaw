@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +56,7 @@ const storeOptions = {
   overflowPolicy: "reject-new" as const,
 };
 const openStore = () =>
-  createPluginStateSyncKeyedStoreForTests<
+  createPluginStateKeyedStoreForTests<
     Omit<PendingFaceTimeDial, "callUUIDAliases"> & { callUUIDAliases?: string[] }
   >("facetime", storeOptions);
 
@@ -222,7 +222,7 @@ describe("FaceTime production authority boundary", () => {
       logger: log,
       pluginRoot: "/isolated",
       runtime: {
-        state: { openSyncKeyedStore: openStore },
+        state: { openKeyedStore: openStore },
         system: {
           runCommandWithTimeout: vi.fn(async () => {
             throw new Error("host command is forbidden in authority proof");
@@ -252,36 +252,39 @@ describe("FaceTime production authority boundary", () => {
     expect(peer.actions).toEqual([]);
   });
 
-  describe.each([4, 1])("native call status %s", (status) => {
-    it.each([
-      { name: "unlisted caller", data: { handle: { value: "unlisted@example.com" } } },
-      {
-        name: "forbidden cellular transport",
-        data: {
-          transport: {
-            ...call().data.transport,
-            kind: "cellular",
-            provider_is_facetime: false,
-            provider_is_telephony: true,
-          },
+  it.each([
+    {
+      name: "unlisted ringing caller",
+      status: 4,
+      data: { handle: { value: "unlisted@example.com" } },
+    },
+    {
+      name: "active cellular transport",
+      status: 1,
+      data: {
+        transport: {
+          ...call().data.transport,
+          kind: "cellular",
+          provider_is_facetime: false,
+          provider_is_telephony: true,
         },
       },
-    ])("rejects $name before capture or native media commands", async ({ data }) => {
-      const { runtime, peer } = await start();
-      peer.send(call(status, data));
-      await vi.waitFor(() =>
-        expect(log.info).toHaveBeenCalledWith(expect.stringContaining("ignored unauthorized")),
-      );
-      expect((await runtime.status()).calls).toEqual([]);
-      expect(peer.actions).toEqual([]);
-      expect(isolation.spawn).not.toHaveBeenCalled();
-    });
+    },
+  ])("rejects $name before capture or native media commands", async ({ status, data }) => {
+    const { runtime, peer } = await start();
+    peer.send(call(status, data));
+    await vi.waitFor(() =>
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("ignored unauthorized")),
+    );
+    expect((await runtime.status()).calls).toEqual([]);
+    expect(peer.actions).toEqual([]);
+    expect(isolation.spawn).not.toHaveBeenCalled();
   });
 
   it.each(["cancelled", "revoked"] as const)(
     "rejects a %s persisted dial after runtime recovery",
     async (reason) => {
-      new PendingFaceTimeDialStore(openStore()).save({
+      await new PendingFaceTimeDialStore(openStore()).save({
         version: 1,
         ownerEpoch: 1,
         dialID: "persisted-dial",
@@ -294,7 +297,7 @@ describe("FaceTime production authority boundary", () => {
       const { runtime, peer } = await start(
         reason === "revoked" ? ["replacement@example.com"] : undefined,
       );
-      const recovered = new PendingFaceTimeDialStore(openStore()).load();
+      const recovered = await new PendingFaceTimeDialStore(openStore()).load();
       expect(recovered?.ownerEpoch).toBe(2);
       // Recovery only reports recovered-call. A cancellation for this new alias
       // proves the injected event was processed, not just background recovery.
@@ -312,7 +315,7 @@ describe("FaceTime production authority boundary", () => {
           }),
         ),
       );
-      const cancelled = new PendingFaceTimeDialStore(openStore()).load();
+      const cancelled = await new PendingFaceTimeDialStore(openStore()).load();
       expect(cancelled?.delivery).toBe("cancelling");
       expect(cancelled?.callUUIDAliases).toContain("late-active-call");
       expect((await runtime.status()).calls).toEqual([]);
@@ -324,8 +327,8 @@ describe("FaceTime production authority boundary", () => {
       ).toBe(true);
       // A native ended event settles this synthetic carrier before fixture shutdown.
       peer.send(call(6, lateIdentity));
-      await vi.waitFor(() =>
-        expect(new PendingFaceTimeDialStore(openStore()).load()).toBeUndefined(),
+      await vi.waitFor(async () =>
+        expect(await new PendingFaceTimeDialStore(openStore()).load()).toBeUndefined(),
       );
     },
   );

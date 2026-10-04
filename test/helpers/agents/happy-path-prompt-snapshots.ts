@@ -83,6 +83,7 @@ type CodexDynamicToolFunctionSpec = {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  deferLoading?: boolean;
 };
 
 type CodexDynamicToolNamespaceSpec = {
@@ -110,7 +111,7 @@ type CodexPromptSnapshotApi = {
     config?: Record<string, unknown>;
     promptText?: string;
     developerInstructionAdditions?: string;
-    turnScopedDeveloperInstructions?: string;
+    personaInstructions?: string;
   }) => {
     developerInstructions: string;
     parentLocalInstructions: string | null;
@@ -242,7 +243,7 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
+const CODEX_WORKSPACE_PERSONA_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
@@ -274,17 +275,12 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   .join("\n")
   .trim();
 
-const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS = [
+const CODEX_WORKSPACE_PERSONA_INSTRUCTIONS = [
   "## OpenClaw Agent Soul",
   "",
   "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
   "",
-  ...CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
-    `### ${file.path}`,
-    "",
-    file.content,
-    "",
-  ]),
+  ...CODEX_WORKSPACE_PERSONA_FILES.flatMap((file) => [`### ${file.path}`, "", file.content, ""]),
 ]
   .join("\n")
   .trim();
@@ -306,12 +302,14 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
-    entries: { main: { default: true } },
+    entries: { main: {} },
   },
 };
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
+  // Exclude optional media factories before they inspect ambient provider credentials.
+  tools: { deny: ["image_generate", "video_generate", "music_generate", "pdf"] },
   plugins: {
     enabled: true,
     slots: {
@@ -489,6 +487,8 @@ function createDynamicTools(params: {
     modelProvider: "openai",
     modelId: MODEL_ID,
     modelApi: "responses",
+    // Codex owns hosted-search selection, matching its dynamic-tool builder.
+    suppressManagedWebSearch: false,
     modelContextWindowTokens: 272_000,
     forceMessageTool: true,
     enableHeartbeatTool: params.trigger === "heartbeat",
@@ -513,10 +513,8 @@ function createDynamicTools(params: {
     modelId: MODEL_ID,
     modelApi: "responses",
     model: happyPathModel,
-    // No provider runtime plugin owns tool-schema hooks for the `codex`
-    // harness provider, so a runtime plugin load can only rediscover that
-    // through the jiti source loader (minutes of core re-transpilation).
-    // Registry-only resolution keeps the same no-op outcome instantly.
+    // Codex has no provider tool-schema hooks; keep that no-op registry-only
+    // rather than rediscovering it through the cold source loader.
     allowProviderRuntimePluginLoad: false,
   });
   return params.codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
@@ -928,7 +926,7 @@ function renderScenarioSnapshot(
       appServer,
       config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
       promptText: codexTurnPromptText,
-      turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+      personaInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
     }),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
@@ -965,8 +963,9 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceParentLocalInstructionFiles:
-          CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
+        simulatedWorkspaceParentLocalInstructionFiles: CODEX_WORKSPACE_PERSONA_FILES.map(
+          (file) => file.path,
+        ),
       }),
     ),
     "",

@@ -3,13 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
 import {
@@ -17,33 +16,22 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 it.each([
   {
     databaseKey: buildAcpDatabaseSessionKey("global", "ops"),
-    targets: [
-      { agentId: "ops", sessionKey: "global" },
-      { sessionKey: buildAcpDatabaseSessionKey("global", "ops") },
-    ],
+    targets: [{ agentId: "ops", sessionKey: "global" }],
   },
-  {
-    databaseKey: "@agent:ops:global",
-    targets: [{ agentId: "ops", sessionKey: "global" }, { sessionKey: "@agent:ops:global" }],
-  },
-  {
-    databaseKey: "agent:main:acp:project",
-    targets: [{ sessionKey: "agent:main:acp:project" }],
-  },
-  {
-    databaseKey: "agent:MAIN:acp:PROJECT",
-    targets: [{ sessionKey: "agent:MAIN:acp:PROJECT" }, { sessionKey: "agent:main:acp:project" }],
-  },
-])("publishes only ACP migration candidates after commit for $databaseKey", async (fixture) => {
+  { databaseKey: "@agent:ops:global", targets: [] },
+  { databaseKey: "agent:main:acp:project", targets: [] },
+  { databaseKey: "agent:MAIN:acp:PROJECT", targets: [] },
+])("publishes only canonical ACP identities after commit for $databaseKey", async (fixture) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { db } = openOpenClawStateDatabase({ env });
     const observed: Array<{ change: SessionRowChange; transaction: boolean; row: unknown }> = [];

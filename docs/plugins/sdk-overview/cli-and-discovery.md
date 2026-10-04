@@ -40,9 +40,10 @@ own trust.
 
 ## CLI registration metadata
 
-The executable CLI also owns provider callbacks borrowed through
+The executable CLI owns uncached plugin registries acquired for help and command
+metadata, along with provider callbacks borrowed through
 `openclaw/plugin-sdk/provider-catalog-runtime` during registration, actions, or
-cleanup. It releases those SDK claims after the invocation's actual work
+cleanup. It releases those resources after the invocation's actual work
 settles, even when a cleanup warning has already reported a timeout. Forced
 process exit can still interrupt asynchronous disposal. Caller-owned programs
 and Gateway startup do not become executable CLI owners merely by calling a CLI

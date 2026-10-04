@@ -17,7 +17,8 @@ import {
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn: vi.fn() }) }),
 }));
 
@@ -180,63 +181,60 @@ if (!descendant) {
 
 // POSIX keeps the exact SDK child alive at EOF; Windows deliberately taskkills the tree first.
 describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup", () => {
-  it.each([false, true])(
-    "joins failed initialization and fences replacement (ephemeral=%s)",
-    async (ephemeral) => {
-      const fixture = await createHeldStdioPeer();
-      const { session, owner, exactChild } = fixture;
-      try {
-        let settled = 0;
-        const readiness = session.ready.finally(() => {
-          settled += 1;
-        });
-        void readiness.catch(() => {});
-        const rootControl = await fixture.waitFor("stdin-ended");
-        await fixture.waitFor("descendant");
-        expect(exactChild.exitCode).toBeNull();
-        expect(session.transport.pid).toBeNull();
-        const cleanup = Promise.all(
-          [owner.close(session), session.client.close(), session.transport.close()].map((closing) =>
-            closing.finally(() => {
-              settled += 1;
-            }),
-          ),
-        );
-        void cleanup.catch(() => {});
-        const replacementFactory = vi.fn(async () => {
-          throw new Error("replacement admitted");
-        });
-        setChromeMcpSessionFactoryForTest(replacementFactory);
-        const replacement = getChromeMcpSessionOwner("cleanup-fixture", fixture.options).lease({
-          ephemeral,
-        });
-        const replacementResult = expect(replacement).rejects.toThrow("replacement admitted");
-        await setImmediate();
-        expect(
-          settled,
-          "readiness and every close must join shutdown while the exact child is alive",
-        ).toBe(0);
-        expect(replacementFactory).not.toHaveBeenCalled();
-        expect(session.processCleanup).toMatchObject({
-          status: "tracked",
-          target: { root: { pid: exactChild.pid }, descendants: [expect.any(Object)] },
-        });
-        rootControl.end("release\n");
-        await fixture.exited;
-        await cleanup;
-        await fixture.closed;
-        await expect(readiness).rejects.toThrow("fixture initialization failed");
-        expect(settled).toBe(4);
-        await replacementResult;
-        expect(replacementFactory).toHaveBeenCalledOnce();
-        expect(session.processCleanup?.status).toBe("closed");
-        expect(exactChild.exitCode).toBe(0);
-        expect((await fixture.waitFor("descendant")).destroyed).toBe(true);
-      } finally {
-        await fixture.dispose();
-      }
-    },
-  );
+  it("joins failed initialization and fences an ephemeral replacement", async () => {
+    const fixture = await createHeldStdioPeer();
+    const { session, owner, exactChild } = fixture;
+    try {
+      let settled = 0;
+      const readiness = session.ready.finally(() => {
+        settled += 1;
+      });
+      void readiness.catch(() => {});
+      const rootControl = await fixture.waitFor("stdin-ended");
+      await fixture.waitFor("descendant");
+      expect(exactChild.exitCode).toBeNull();
+      expect(session.transport.pid).toBeNull();
+      const cleanup = Promise.all(
+        [owner.close(session), session.client.close(), session.transport.close()].map((closing) =>
+          closing.finally(() => {
+            settled += 1;
+          }),
+        ),
+      );
+      void cleanup.catch(() => {});
+      const replacementFactory = vi.fn(async () => {
+        throw new Error("replacement admitted");
+      });
+      setChromeMcpSessionFactoryForTest(replacementFactory);
+      const replacement = getChromeMcpSessionOwner("cleanup-fixture", fixture.options).lease({
+        ephemeral: true,
+      });
+      const replacementResult = expect(replacement).rejects.toThrow("replacement admitted");
+      await setImmediate();
+      expect(
+        settled,
+        "readiness and every close must join shutdown while the exact child is alive",
+      ).toBe(0);
+      expect(replacementFactory).not.toHaveBeenCalled();
+      expect(session.processCleanup).toMatchObject({
+        status: "tracked",
+        target: { root: { pid: exactChild.pid }, descendants: [expect.any(Object)] },
+      });
+      rootControl.end("release\n");
+      await fixture.exited;
+      await cleanup;
+      await fixture.closed;
+      await expect(readiness).rejects.toThrow("fixture initialization failed");
+      expect(settled).toBe(4);
+      await replacementResult;
+      expect(replacementFactory).toHaveBeenCalledOnce();
+      expect(session.processCleanup?.status).toBe("closed");
+      expect(exactChild.exitCode).toBe(0);
+      expect((await fixture.waitFor("descendant")).destroyed).toBe(true);
+    } finally {
+      await fixture.dispose();
+    }
+  });
 
   it("does not admit initialize after close interrupts the initial process snapshot", async () => {
     const scanStarted = createDeferred<void>();

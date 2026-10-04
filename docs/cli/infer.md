@@ -70,6 +70,10 @@ Reasons to prefer it over a one-off provider wrapper:
 
 `infer list` / `infer inspect --name <capability>` show this tree as data (capability id, transports, description).
 
+Parent and subcommand help expose the full inference command tree without loading
+provider execution runtimes. These command definitions also supply inference
+shell-completion metadata.
+
 ## Common tasks
 
 | Task                          | Command                                                                                       | Notes                                                 |
@@ -281,6 +285,10 @@ openclaw infer embedding create --text "friendly lobster" --json
 openclaw infer embedding create --text "customer support ticket: delayed shipment" --model openai/text-embedding-3-large --json
 openclaw infer embedding providers --agent <id> --json
 ```
+
+Without `--json`, `embedding create` shows the provider and model, followed by
+each input, its dimension count, and a preview of the first eight vector values.
+Longer vectors end with `...`; use `--json` to retrieve complete vectors.
 
 ## JSON output
 

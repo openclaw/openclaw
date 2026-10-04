@@ -107,4 +107,16 @@ describe("session tab cleanup timer", () => {
     expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("retires a timer whose service generation is no longer current", async () => {
+    let current = true;
+    const onWarn = vi.fn();
+    const stop = startTrackedBrowserTabCleanupTimer({ isCurrent: () => current, onWarn });
+    current = false;
+    await vi.advanceTimersByTimeAsync(900_000);
+    expect(registryMocks.sweepTrackedBrowserTabs).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    await stop();
+  });
 });

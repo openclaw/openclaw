@@ -6,6 +6,7 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -17,6 +18,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     "preserves the admitted request through projected prompts (authorized=%s)",
     async (authorized) => {
       const handler = vi.fn(async (_event: unknown) => undefined);
+      const history = [{ role: "user", content: "Earlier request" }];
       initializeGlobalHookRunner(
         createMockPluginRegistry([
           {
@@ -26,11 +28,15 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           },
         ]),
       );
-      await resolveAgentHarnessBeforePromptBuildResult({
-        prompt: "Prior conversation: remember my preference\nCurrent message: hello",
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
-        messages: [],
+        messages: async () => history,
         developerInstructions: "base",
         ctx: {},
         toolAuthority: {
@@ -39,12 +45,89 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           assertActive: () => undefined,
         },
       });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
       expect(handler).toHaveBeenCalledOnce();
       expect(handler.mock.calls[0]?.[0]).toMatchObject({
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
         prompt: expect.stringContaining("Prior conversation:"),
+        messages: history,
       });
+    },
+  );
+
+  it.each([false, true])(
+    "builds prompts without reading history when only heartbeat hooks can run (heartbeat=%s)",
+    async (heartbeat) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "heartbeat_prompt_contribution",
+            handler: () => ({ prependContext: "Heartbeat reminder." }),
+          },
+        ]),
+      );
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current request",
+        developerInstructions: "base",
+        messages: async () => {
+          throw new Error("History is unavailable");
+        },
+        ctx: { trigger: heartbeat ? "heartbeat" : "user" },
+      });
+      expect(result.prompt).toBe(
+        heartbeat ? "Heartbeat reminder.\n\nCurrent request" : "Current request",
+      );
+    },
+  );
+
+  it.each([
+    { content: "hello", expected: "hello" },
+    {
+      content: [
+        { type: "text", text: "What do you remember" },
+        { type: "image", mimeType: "image/png", data: "synthetic-image" },
+        { type: "text", text: "about my preferences?" },
+      ],
+      expected: "What do you remember\nabout my preferences?",
+    },
+    {
+      content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      expected: "",
+    },
+    { content: "", expected: "" },
+  ] satisfies { content: PersistedUserTurnMessage["content"]; expected: string }[])(
+    "normalizes admitted message content for prompt hooks: $expected",
+    async ({ content, expected }) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler },
+          { hookName: "before_prompt_build", requiresToolAuthority: true, handler },
+        ]),
+      );
+      await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Projected transport prompt",
+        currentUserMessage: { content, idempotencyKey: "original:user" },
+        developerInstructions: "base",
+        messages: [],
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(handler).toHaveBeenCalledTimes(2);
+      for (const [event] of handler.mock.calls) {
+        expect(event).toMatchObject({
+          currentUserMessage: expected,
+          currentUserMessageId: "original:user",
+        });
+      }
     },
   );
 
@@ -177,37 +260,47 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result.prompt).toBe("first\n\nsecond\n\nauthorized\n\nhello");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
-  it("runs a lazy builder with hook tool policy while preserving replacement order", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: () => ({
-            appendSystemContext: "after replacement",
-            prependSystemContext: "before replacement",
-            systemPrompt: "hook replacement",
-            toolsAllow: ["read"],
-          }),
-        },
-      ]),
-    );
-    const build = vi.fn(() => "policy-filtered base");
+  it.each([
+    { toolsAllow: undefined, hasToolRestrictions: false },
+    { toolsAllow: [], hasToolRestrictions: true },
+    { toolsAllow: ["read"], hasToolRestrictions: true },
+    { toolsAllow: ["read*"], hasToolRestrictions: true },
+    { toolsAllow: ["*"], hasToolRestrictions: false },
+    { toolsAllow: ["read", " * "], hasToolRestrictions: false },
+  ])(
+    "classifies $toolsAllow before building system instructions",
+    async ({ toolsAllow, hasToolRestrictions }) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({
+              appendSystemContext: "after replacement",
+              prependSystemContext: "before replacement",
+              systemPrompt: "hook replacement",
+              toolsAllow,
+            }),
+          },
+        ]),
+      );
+      const build = vi.fn(() => "policy-filtered base");
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "answer directly",
-      developerInstructions: { build },
-      messages: [],
-      ctx: {},
-    });
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "answer directly",
+        developerInstructions: { build },
+        messages: [],
+        ctx: {},
+      });
 
-    expect(build).toHaveBeenCalledWith({ toolsAllow: ["read"] });
-    expect(result).toMatchObject({
-      toolsAllow: ["read"],
-      developerInstructions:
-        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
-    });
-    expect(result.developerInstructions).not.toContain("policy-filtered base");
-  });
+      expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions });
+      expect(result).toMatchObject({
+        ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+        developerInstructions:
+          "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
+      });
+      expect(result.developerInstructions).not.toContain("policy-filtered base");
+    },
+  );
 
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({

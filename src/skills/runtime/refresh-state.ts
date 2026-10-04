@@ -1,24 +1,29 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
-// Skill refresh state types describe change notifications emitted by runtime reloads.
 type SkillsChangeEvent = {
   workspaceDir?: string;
   reason:
     | "watch"
     | "watch-targets"
     | "watch-unavailable"
+    | "watch-available"
     | "manual"
     | "remote-node"
     | "config-change"
     | "workshop";
   changedPath?: string;
+  sourceScope?: SkillsSourceScope;
 };
 
-export type SkillsSourceScope = { executionWorkspaceDir?: string };
+export type SkillsSourceScope = {
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
+};
 export type SkillsSourceRefreshInputs = {
   sourceScope: SkillsSourceScope;
   config?: OpenClawConfig;
@@ -56,13 +61,7 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      listenerErrorHandler?.(err);
-    }
-  }
+  notifyListeners(listeners, event, (err) => listenerErrorHandler?.(err));
 }
 
 function publishChange(event: SkillsChangeEvent): number {
@@ -81,19 +80,27 @@ export function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => 
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
+}
+
+/** Coverage recovery follows content reconciliation; it never creates a source revision. */
+export function notifySkillsWatchAvailable(params: {
+  workspaceDir: string;
+  sourceScope: SkillsSourceScope;
+}): void {
+  emit({ ...params, reason: "watch-available" });
 }
 
 function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): string {
   const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: workspaceDir,
     executionWorkspaceDir: scope.executionWorkspaceDir,
+    executionWorkspaceFileHost: scope.executionWorkspaceFileHost,
   });
   // Files in an execution root are shared by every agent and inventory consumer of that root.
-  return executionWorkspaceDir ?? "";
+  return executionWorkspaceDir
+    ? JSON.stringify([executionWorkspaceDir, scope.executionWorkspaceFileHost])
+    : "";
 }
 
 /** Record resolved file-backed winners at the discovery boundary, before session filtering. */
@@ -202,7 +209,12 @@ export function bumpSkillsSnapshotVersion(params?: {
     reason: params?.reason ?? "manual",
     changedPath: params?.changedPath,
   };
-  const semanticChange = event.reason === "config-change" || event.reason === "remote-node";
+  // Availability is an owner fact even when the last content fingerprint is
+  // unchanged; remote subscribers need it to reconcile later preparations.
+  const semanticChange =
+    event.reason === "config-change" ||
+    event.reason === "remote-node" ||
+    event.reason === "watch-unavailable";
   sourceClock = bumpVersion(sourceClock);
   if (!params?.workspaceDir) {
     globalSourceVersion = sourceClock;

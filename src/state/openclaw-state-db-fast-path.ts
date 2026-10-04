@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
+  assertSqliteSchemaContains,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   type SqliteTableContractReader,
@@ -25,7 +26,10 @@ import {
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
 
-export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
+export function needsOpenClawStateDatabaseSchemaRepair(
+  pathname: string,
+  scope: "automatic" | "doctor" = "automatic",
+): boolean {
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
@@ -36,6 +40,9 @@ export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolea
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
+      if (scope === "doctor") {
+        assertSqliteIntegrity(database, pathname);
+      }
     }
     return needsRepair;
   } catch {
@@ -53,6 +60,13 @@ export function assertCurrentStateRuntimeSchema(
 ): void {
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
+  assertSqliteSchemaContains(
+    database,
+    pathname,
+    getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    readTable,
+  );
 }
 
 /** Catalog presence is enough to refuse retired history without reading or rewriting its rows. */

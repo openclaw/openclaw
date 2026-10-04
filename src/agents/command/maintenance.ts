@@ -24,6 +24,8 @@ export function createCommandMaintenanceFollowup(params: {
   model: string;
   thinkLevel: FollowupRun["run"]["thinkLevel"];
   auth?: Pick<FollowupRun["run"], "authProfileId" | "authProfileIdSource">;
+  /** The command's trusted source owner status; it selects only the flush memory audience. */
+  senderIsOwner: boolean | undefined;
 }): FollowupRun {
   const { prepared, sessionEntry } = params;
   return createSessionMaintenanceFollowup({
@@ -42,6 +44,7 @@ export function createCommandMaintenanceFollowup(params: {
       thinkLevel: params.thinkLevel,
       verboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
       timeoutMs: prepared.timeoutMs,
+      senderIsOwner: params.senderIsOwner,
     },
     sessionEntry,
     cfg: prepared.cfg,
@@ -127,6 +130,8 @@ async function runCommandPreflightMaintenance(
   params: CommandPreflight,
 ): Promise<SessionEntry | undefined> {
   const { prepared, opts, sessionEntry, modelSelection } = params;
+  const operatorAuthority = opts.operatorAuthority;
+  const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
     !sessionEntry ||
@@ -137,6 +142,8 @@ async function runCommandPreflightMaintenance(
   }
   const assertActive = () => {
     opts.abortSignal?.throwIfAborted();
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   };
   assertActive();
@@ -151,6 +158,7 @@ async function runCommandPreflightMaintenance(
     provider: modelSelection.provider,
     model: modelSelection.model,
     thinkLevel: modelSelection.effectiveTurnThinkLevel,
+    senderIsOwner: opts.senderIsOwner,
     auth: {
       authProfileId: modelSelection.sessionEntryForAttempt?.authProfileOverride,
       authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -158,20 +166,25 @@ async function runCommandPreflightMaintenance(
       ),
     },
   });
+  // Required foreground preparation keeps the command's original source.
+  followupRun.operatorAuthority = operatorAuthority;
   followupRun.prompt = prepared.body;
-  return memory.runSessionCompactionIfNeeded({
-    pendingUserEntryId: preflightAdmission?.entryId,
+  const maintenanceParams = {
     cfg: prepared.cfg,
     followupRun,
     promptForEstimate: prepared.body,
     defaultModel: modelSelection.defaultModel,
-    sessionEntry,
     sessionStore: prepared.sessionStore,
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
     isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
+  };
+  return memory.runSessionCompactionIfNeeded({
+    ...maintenanceParams,
+    pendingUserEntryId: preflightAdmission?.entryId,
+    sessionEntry,
     authorize: () => {
       assertActive();
       return true;
@@ -180,19 +193,10 @@ async function runCommandPreflightMaintenance(
     onCompactionCommitted: (accepted) => params.onCommittedSessionId(accepted.sessionId),
     beforeCompaction: async (entry) => {
       const flushed = await memory.runMemoryFlushIfNeeded({
+        ...maintenanceParams,
         preflightAdmission,
-        cfg: prepared.cfg,
-        followupRun,
-        promptForEstimate: prepared.body,
-        defaultModel: modelSelection.defaultModel,
         resolvedVerboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
         sessionEntry: entry,
-        sessionStore: prepared.sessionStore,
-        sessionKey: prepared.sessionKey,
-        runtimePolicySessionKey: prepared.sessionKey,
-        storePath: prepared.storePath,
-        isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
-        abortSignal: opts.abortSignal,
       });
       assertActive();
       return flushed.sessionEntry;

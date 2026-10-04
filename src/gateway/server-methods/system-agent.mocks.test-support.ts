@@ -12,6 +12,10 @@ const setupInferenceDetectionMocks = vi.hoisted(() => ({
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendTranscriptReset: vi.fn(),
   appendTranscriptTurn: vi.fn(),
+  appendTranscriptTurnAsync: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
   readTranscriptTail: vi.fn<
     (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
   >(() => []),
@@ -38,7 +42,9 @@ vi.mock("../../system-agent/inference-fallback.js", () => ({
 vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
   appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
+  appendTranscriptTurnAsync: transcriptStoreMocks.appendTranscriptTurnAsync,
   readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
 }));
 vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();

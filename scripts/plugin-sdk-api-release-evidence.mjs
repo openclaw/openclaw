@@ -204,6 +204,13 @@ export function createPluginSdkApiReleaseEvidenceSet(selectors) {
   };
 }
 
+export class PluginSdkApiAcknowledgementError extends Error {
+  constructor(digest) {
+    super(`Plugin SDK API changes require acknowledgement digest ${digest}`);
+    this.digest = digest;
+  }
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",
@@ -274,9 +281,7 @@ export function validatePluginSdkApiReleaseEvidence({
   }
   const expectedAcknowledgement = digest.slice(0, 8);
   if (changed && acknowledgement !== expectedAcknowledgement) {
-    throw new Error(
-      `Plugin SDK API changes require acknowledgement digest ${expectedAcknowledgement}`,
-    );
+    throw new PluginSdkApiAcknowledgementError(expectedAcknowledgement);
   }
   return {
     acknowledgement: changed ? expectedAcknowledgement : null,

@@ -8,6 +8,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   isInstallerServiceDescription,
+  serviceDefinitionPreserved,
   serviceDefinitionUnknown,
 } from "./service-audit-preservation.js";
 import type {
@@ -310,7 +311,13 @@ async function auditSystemdDefinition(
       }
       if (
         preserved.has(key) ||
-        (key === "Service.EnvironmentFile" && current?.every((value) => value === environmentFile))
+        (key === "Service.EnvironmentFile" &&
+          (current?.every((value) => value === environmentFile) ||
+            (sourcePath !== unitPath &&
+              command?.managedDefinition &&
+              command.managedOverrides &&
+              command.managedOverrides.environment !== true &&
+              !command.reloadPending)))
       ) {
         continue;
       }
@@ -334,16 +341,18 @@ async function auditSystemdDefinition(
               sourcePath,
               message: `Systemd ${key} differs from the installer value ${expected}.`,
             }
-          : {
-              kind: "unknown-edit",
-              key,
-              sourcePath,
-              reason:
-                sourcePath === unitPath
-                  ? "Unrecognized directive or value in the managed unit."
-                  : "Operator drop-in overrides installer policy.",
-              message: `Systemd ${key} contains an unrecognized setting.`,
-            },
+          : sourcePath === unitPath && expected !== undefined
+            ? serviceDefinitionPreserved(key, sourcePath)
+            : {
+                kind: "unknown-edit",
+                key,
+                sourcePath,
+                reason:
+                  sourcePath === unitPath
+                    ? "Unrecognized directive or value in the managed unit."
+                    : "Operator drop-in overrides installer policy.",
+                message: `Systemd ${key} contains an unrecognized setting.`,
+              },
       );
     }
   }

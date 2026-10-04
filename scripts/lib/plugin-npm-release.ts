@@ -1,4 +1,3 @@
-// Plugin Npm Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,10 +78,6 @@ const PLUGIN_NPM_RELEASE_PLAN_CONCURRENCY = 8;
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function normalizeGitDiffPath(path: string): string {
-  return path.trim().replaceAll("\\", "/");
 }
 
 export function parsePluginReleaseSelection(value: string | undefined): string[] {
@@ -326,9 +321,8 @@ export function collectChangedPathsFromGitRange(params: {
     },
   )
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((path) => normalizeGitDiffPath(path));
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter(Boolean);
 }
 
 export function collectPluginNpmGitRangeSelection(params: {
@@ -395,24 +389,22 @@ function runNpmView(args: string[]): string {
   writeFileSync(userconfigPath, "");
 
   try {
-    try {
-      return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
-      }).trim();
-    } catch (error) {
-      if (isNpmViewTimeoutError(error)) {
-        throw Object.assign(
-          new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
-            cause: error,
-          }),
-          { code: "ETIMEDOUT" as const },
-        );
-      }
-      throw error;
+    return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
+    }).trim();
+  } catch (error) {
+    if (isNpmViewTimeoutError(error)) {
+      throw Object.assign(
+        new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+          cause: error,
+        }),
+        { code: "ETIMEDOUT" as const },
+      );
     }
+    throw error;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -474,20 +466,13 @@ export function assertPluginReleaseDependencyFreshness(
 }
 
 async function isPluginVersionPublished(packageName: string, version: string): Promise<boolean> {
-  const result = await fetchNpmRegistryPackumentWithRetry({
-    packageName,
-    packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
-  });
-  if (result.status === 404) {
-    return false;
-  }
-  if (!result.ok) {
-    throw new Error(`${packageName}: npm registry returned HTTP ${result.status}.`);
-  }
-  if (!isRecord(result.packument) || !isRecord(result.packument.versions)) {
-    throw new Error(`${packageName}: npm registry returned an invalid versions map.`);
-  }
-  return Object.hasOwn(result.packument.versions, version);
+  return (
+    await observeNpmPackage({
+      packageName,
+      version,
+      packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+    })
+  ).selectedVersionExists;
 }
 
 export type NpmPackageObservation = {
@@ -562,14 +547,7 @@ export async function collectPluginReleasePlan(params?: {
             plugins: allPublishable,
             selection: params.selection,
           })
-        : gitRangeSelection
-          ? gitRangeSelection.authorityChanged
-            ? allPublishable
-            : resolveChangedPublishablePluginPackages({
-                plugins: allPublishable,
-                changedExtensionIds: gitRangeSelection.changedExtensionIds,
-              })
-          : allPublishable;
+        : allPublishable;
 
   const explicitPublishSelection =
     params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;

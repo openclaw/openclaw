@@ -1,3 +1,5 @@
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+
 export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   cleanupAsync: () => Promise<boolean>;
@@ -8,3 +10,13 @@ export type PreparedSqliteReadOnlyLocation = {
 };
 
 export type AsyncPreparedSqliteReadOnlyLocation = Omit<PreparedSqliteReadOnlyLocation, "cleanup">;
+
+export type RetainedPreparedSqliteReadOnlyLocation = AsyncPreparedSqliteReadOnlyLocation & {
+  startCleanup(): RetainedOperation<boolean>;
+};
+
+/** Result delivery does not discharge an accepted producer's cleanup custody. */
+export type RetainedSqliteSnapshotPreparation =
+  RetainedOperation<RetainedPreparedSqliteReadOnlyLocation> & {
+    startClose(): RetainedOperation<void>;
+  };
