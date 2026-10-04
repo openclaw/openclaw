@@ -271,6 +271,42 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });
 
+  it("reloads a bundled plugin kept over a shadowed registry install record", async () => {
+    const metadata = metadataSnapshot({ enabled: true, id: "voice-call" });
+    const records = {
+      "voice-call": {
+        source: "npm",
+        spec: "@openclaw/voice-call@2026.9.5",
+        installPath: "/tmp/npm/node_modules/@openclaw/voice-call",
+      },
+    };
+    mocks.metadata.mockReturnValue({
+      ...metadata,
+      index: { ...metadata.index, installRecords: records },
+    });
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.readPersistedRecords.mockReturnValue(records);
+    const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
+      expect(request.expectedInstallHashes).toBeUndefined();
+      return { operationId: "bundled-reload", generation: 4, pluginIds: [...request.pluginIds] };
+    });
+    await expect(
+      reloadManagedPlugin({ plugins: [{ pluginId: "voice-call" }], env: {}, applyRuntime }),
+    ).resolves.toMatchObject({ pluginIds: ["voice-call"], application: { generation: 4 } });
+    expect(applyRuntime).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pluginIds: ["voice-call"] }),
+    );
+    await expect(
+      reloadManagedPlugin({
+        plugins: [{ pluginId: "voice-call", installHash: hashStableJson(records["voice-call"]) }],
+        env: {},
+        applyRuntime,
+      }),
+    ).rejects.toThrow("changed after the installation batch");
+    expect(mocks.commitRecords).not.toHaveBeenCalled();
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  });
+
   it.each([
     "install-hash-without-record",
     "ambiguous-owner",

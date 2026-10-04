@@ -256,12 +256,14 @@ export function createInstalledPluginOwnershipResolver(
   > {
     const target = targets.get(pluginId);
     // Reload can replace a discovered runtime without mutating its source files.
-    // Any recorded ID, path, or ownership claim still requires strict package validation.
+    // Any recorded ID, path, or ownership claim still requires strict package validation,
+    // except a recorded ID behind a bundled target: doctor kept the host build, so that
+    // record owns no loaded files.
     if (
       target &&
       !isInstalledPluginIndexInstallOwnerAmbiguous(target) &&
       !resolveInstalledPluginIndexInstallOwner(target) &&
-      !Object.hasOwn(index.installRecords, pluginId) &&
+      (target.origin === "bundled" || !Object.hasOwn(index.installRecords, pluginId)) &&
       !Object.values(index.installRecords).some((record) =>
         installRecordPathMatchesPluginRoot(record, target.rootDir, env, realpathCache),
       )
