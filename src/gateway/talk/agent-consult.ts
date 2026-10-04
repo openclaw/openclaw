@@ -36,7 +36,6 @@ function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
   return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
 }
 
-/** Starts the chat run that backs a realtime Talk tool call. */
 type TalkConsultStart =
   | { ok: true; runId: string; idempotencyKey: string }
   | { ok: false; error: ErrorShape };
@@ -58,9 +57,9 @@ export async function joinOrStartTalkConsult(params: {
 }): Promise<TalkConsultStart> {
   for (;;) {
     const prior = inFlightConsults.get(params.key);
-    // ponytail: 120 s matches the client's consult wait and bounds a run whose
-    // completion was never observed. A different follow-up question asked inside
-    // the window is answered by the in-flight run; forward it if that matters.
+    // 120 s matches the client's consult wait and bounds a run whose completion
+    // was never observed. A different follow-up question asked inside the window
+    // is answered by the in-flight run.
     if (!prior || Date.now() - prior.startedAt >= CONSULT_JOIN_WINDOW_MS) {
       break;
     }
@@ -82,6 +81,7 @@ export async function joinOrStartTalkConsult(params: {
   return result;
 }
 
+/** Starts the chat run that backs a realtime Talk tool call. */
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
   params: {
