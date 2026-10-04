@@ -139,63 +139,85 @@ describe("message image gallery loading", () => {
     );
   });
 
-  it.each([true, false])(
-    "opens the cached preview, waits for decoding, and reuses full bytes (decodable=%s)",
-    async (decodable) => {
-      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-      const full = createDeferred<Response>();
-      const decoded = createDeferred();
-      const decode = vi.fn(async () => {
-        await decoded.promise;
-        if (!decodable) {
-          throw new Error("Unsupported image format");
-        }
-      });
-      const blobPrefix = `blob:progressive-${crypto.randomUUID()}`;
-      stubImageDecoding(blobPrefix, decode);
-      const fetch = vi.fn((url: string) =>
-        url === source ? full.promise : Promise.resolve(imageResponse()),
+  it("opens the cached preview immediately, upgrades after decoding, and reuses the full image", async () => {
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const full = createDeferred<Response>();
+    const decoded = createDeferred();
+    const decode = vi.fn(() => decoded.promise);
+    const blobPrefix = `blob:progressive-${crypto.randomUUID()}`;
+    stubImageDecoding(blobPrefix, decode);
+    const fetch = vi.fn((url: string) =>
+      url === source ? full.promise : Promise.resolve(imageResponse()),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const { controller, onOpenImage, dispose } = createGallery();
+    try {
+      render(
+        renderMessageImages([{ url: source, alt: "Detailed screenshot" }], {
+          onOpenImage,
+          onRequestUpdate,
+        }),
+        container,
       );
-      vi.stubGlobal("fetch", fetch);
-      const { controller, onOpenImage, dispose } = createGallery();
-      try {
-        render(
-          renderMessageImages([{ url: source, alt: "Detailed screenshot" }], {
-            onOpenImage,
-            onRequestUpdate,
-          }),
-          container,
-        );
-        await vi.waitFor(() =>
-          expect(container.querySelector(".chat-message-image")).not.toBeNull(),
-        );
-        const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
-        tile.click();
-        expect(onOpenImage).toHaveBeenCalledOnce();
-        expect(controller.current?.src).toBe(`${blobPrefix}-0`);
-        full.resolve(imageResponse());
-        await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
-        expect(controller.current?.src).toBe(`${blobPrefix}-0`);
-        decoded.resolve();
-        const expected = `${blobPrefix}-${decodable ? 1 : 0}`;
-        await vi.waitFor(() => expect(controller.current?.src).toBe(expected));
+      await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+      const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
+      tile.click();
 
-        controller.dispose();
-        tile.click();
-        expect(onOpenImage).toHaveBeenCalledTimes(2);
-        expect(controller.current?.src).toBe(`${blobPrefix}-0`);
-        if (!decodable) {
-          await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
-        }
-        await vi.waitFor(() => expect(controller.current?.src).toBe(expected));
-        expect(fetch.mock.calls.filter(([url]) => url === source)).toHaveLength(1);
-      } finally {
-        full.resolve(new Response(null, { status: 503 }));
-        decoded.resolve();
-        dispose();
-      }
-    },
-  );
+      expect(onOpenImage).toHaveBeenCalledOnce();
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      full.resolve(imageResponse());
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      decoded.resolve();
+      await vi.waitFor(() => expect(controller.current?.src).toBe(`${blobPrefix}-1`));
+
+      controller.dispose();
+      tile.click();
+      expect(onOpenImage).toHaveBeenCalledTimes(2);
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      await vi.waitFor(() => expect(controller.current?.src).toBe(`${blobPrefix}-1`));
+      expect(fetch.mock.calls.filter(([url]) => url === source)).toHaveLength(1);
+    } finally {
+      full.resolve(new Response(null, { status: 503 }));
+      decoded.resolve();
+      dispose();
+    }
+  });
+
+  it("keeps the preview when reopening an original the browser cannot decode", async () => {
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const blobPrefix = `blob:unsupported-${crypto.randomUUID()}`;
+    const decode = vi.fn(async () => {
+      throw new Error("Unsupported image format");
+    });
+    stubImageDecoding(blobPrefix, decode);
+    const fetch = vi.fn(async (_url: string) => imageResponse());
+    vi.stubGlobal("fetch", fetch);
+    const { controller, onOpenImage, dispose } = createGallery();
+    try {
+      render(
+        renderMessageImages([{ url: source, alt: "Original in unsupported format" }], {
+          onOpenImage,
+          onRequestUpdate,
+        }),
+        container,
+      );
+      await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+      const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
+      tile.click();
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+
+      controller.dispose();
+      tile.click();
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
+      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(fetch.mock.calls.filter(([url]) => url === source)).toHaveLength(1);
+    } finally {
+      dispose();
+    }
+  });
 
   it.each(["navigation", "tile"] as const)(
     "retries exhausted managed neighbors on %s without polling when reopened",

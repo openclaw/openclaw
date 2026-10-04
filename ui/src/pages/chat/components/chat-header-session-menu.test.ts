@@ -579,49 +579,57 @@ describe("chat header session menu", () => {
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
 
-  it("honors action gating and bare-letter shortcuts", async () => {
-    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-    const menu = await mountMenu({
-      actionDisabledReasons: { rename: "Operator write access is required." },
-      archiveAllowed: false,
-      deleteAllowed: false,
-      navigationAllowed: false,
-      copyMarkdownAllowed: false,
-      splitAllowed: false,
-      forkFromLastCompleted: true,
-      onAction,
-    });
-    const dropdown = menu.querySelector("wa-dropdown");
+  it.each([false, true])(
+    "honors action gating and bare-letter shortcuts (allowed=%s)",
+    async (allowed) => {
+      const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+      const menu = await mountMenu({
+        actionDisabledReasons: { rename: "Operator write access is required." },
+        archiveAllowed: false,
+        deleteAllowed: false,
+        navigationAllowed: allowed,
+        copyMarkdownAllowed: allowed,
+        splitAllowed: allowed,
+        forkFromLastCompleted: true,
+        onAction,
+      });
+      const dropdown = menu.querySelector("wa-dropdown");
 
-    expect(item(menu, "Rename…").disabled).toBe(true);
-    expect(item(menu, "Archive session").disabled).toBe(true);
-    expect(item(menu, "Delete…").disabled).toBe(true);
-    expect(item(menu, "Conversation as Markdown").disabled).toBe(true);
-    expect(item(menu, "Fork conversation").getAttribute("title")).toBe(
-      "Fork from last completed message",
-    );
-    for (const kind of [
-      "copy-session-link",
-      "copy-session-preview-link",
-      "copy-markdown",
-      "open-new-tab",
-      "open-new-window",
-      "split-right",
-      "split-below",
-    ]) {
-      select(menu, kind);
-    }
-    expect(onAction).not.toHaveBeenCalled();
-    dropdown?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),
-    );
-    expect(onAction).toHaveBeenCalledWith({ kind: "fork" });
-    onAction.mockClear();
-    dropdown?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
-    );
-    expect(onAction).not.toHaveBeenCalled();
-  });
+      expect(item(menu, "Rename…").disabled).toBe(true);
+      expect(item(menu, "Archive session").disabled).toBe(true);
+      expect(item(menu, "Delete…").disabled).toBe(true);
+      expect(item(menu, "Conversation as Markdown").disabled).toBe(!allowed);
+      if (allowed) {
+        expect(item(menu, "Split right").disabled).toBe(false);
+      }
+      expect(item(menu, "Fork conversation").getAttribute("title")).toBe(
+        "Fork from last completed message",
+      );
+      const actionKinds = [
+        "copy-session-link",
+        "copy-session-preview-link",
+        "copy-markdown",
+        "open-new-tab",
+        "open-new-window",
+        "split-right",
+        "split-below",
+      ] as const;
+      for (const kind of actionKinds) {
+        select(menu, kind);
+      }
+      expect(onAction.mock.calls).toEqual(allowed ? actionKinds.map((kind) => [{ kind }]) : []);
+      onAction.mockClear();
+      dropdown?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),
+      );
+      expect(onAction).toHaveBeenCalledWith({ kind: "fork" });
+      onAction.mockClear();
+      dropdown?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
+      );
+      expect(onAction).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits terminal continuation only while the current Gateway is connected", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
