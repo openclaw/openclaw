@@ -62,7 +62,6 @@ type DoctorMemoryCoreRuntime = Pick<
   | "writeBackfillDiaryEntries"
 >;
 
-
 export type DoctorMemoryStatusPayload = {
   agentId: string;
   searchRuntimeRegistered?: boolean;
