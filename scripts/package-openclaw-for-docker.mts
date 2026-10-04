@@ -36,7 +36,7 @@ import { resolvePnpmRunner } from "./pnpm-runner.mts";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
 const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
