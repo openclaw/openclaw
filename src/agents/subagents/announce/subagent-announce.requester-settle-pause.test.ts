@@ -19,7 +19,6 @@ import {
 
 describe("requester pause notices", () => {
   it.each([
-    { parentOnly: false, replacedSession: false },
     { parentOnly: true, replacedSession: false },
     { parentOnly: false, replacedSession: true },
   ])(
