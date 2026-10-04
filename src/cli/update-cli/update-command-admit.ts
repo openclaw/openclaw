@@ -11,8 +11,10 @@ import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
 import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -27,6 +29,7 @@ import {
   parseUpdateAdmissionContext,
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
+import { channelToNpmTag } from "../../infra/update-channels.js";
 import {
   UPDATE_ADMISSION_PROTOCOL,
   type UpdateAdmissionVerdict,
@@ -42,6 +45,7 @@ import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/instal
 import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -52,6 +56,32 @@ import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+
+async function reachesShippedUpdaterTreeLimit(root: string): Promise<boolean> {
+  if (!(await fs.lstat(root)).isDirectory()) {
+    throw new Error("Candidate package root is not a directory.");
+  }
+  // Published drivers count the root and every entry, including hidden npm lockfiles.
+  let entries = 1;
+  const pending = [root];
+  for (let directoryPath = pending.pop(); directoryPath; directoryPath = pending.pop()) {
+    const directory = await fs.opendir(directoryPath);
+    try {
+      for (let entry = await directory.read(); entry; entry = await directory.read()) {
+        // Shipped readers admit exactly 50,000 entries, root included, and refuse the next one.
+        if (++entries > 50_000) {
+          return true;
+        }
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          pending.push(path.join(directoryPath, entry.name));
+        }
+      }
+    } finally {
+      await directory.close();
+    }
+  }
+  return false;
+}
 
 /** Inspect live inputs using this candidate's contracts, without admitting a mutable run. */
 async function inspectUpdateAdmission(
@@ -103,6 +133,32 @@ async function inspectUpdateAdmission(
         checks.set(name, { status: "refuse", detail: message });
         reasons.push({ code, message, ...(nextAction ? { nextAction } : {}) });
       };
+      const supervisorComparison = compareOpenClawVersions(
+        normalizeOpenClawVersionBase(context.supervisor.version),
+        "2026.9.8",
+      );
+      if (
+        supervisorComparison !== null &&
+        supervisorComparison <= 0 &&
+        (await reachesShippedUpdaterTreeLimit(candidateRoot))
+      ) {
+        const requested = context.target.spec.trim();
+        const manualSpec = parseRegistryNpmSpec(
+          !requested || requested === "openclaw"
+            ? `openclaw@${context.target.tag?.trim() || channelToNpmTag(context.target.channel)}`
+            : requested.includes("@")
+              ? requested
+              : `openclaw@${requested}`,
+        );
+        refuse(
+          "candidate-tree-size",
+          "installed-updater-tree-limit",
+          "Candidate package has more than 50,000 entries, exceeding the installed updater's supported package size.",
+          manualSpec
+            ? `Run npm i -g ${quoteCliArg(manualSpec.raw)} manually because the installed updater cannot stage packages of this size.`
+            : "Install the requested package manually because the installed updater cannot stage packages of this size.",
+        );
+      }
       let databaseContext:
         | Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>
         | undefined;

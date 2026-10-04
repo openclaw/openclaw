@@ -10,7 +10,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   observeSessionEntryMaintenanceAgeChanges,
@@ -36,13 +37,13 @@ import {
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
@@ -338,6 +339,15 @@ async function runPendingMaintenance(
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
   let finalized = false;
+  let preservation: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
+  const capturePreservation = () => {
+    try {
+      return preservation?.capture() ?? null;
+    } catch (error) {
+      planningChanged = true;
+      throw error;
+    }
+  };
   try {
     owner.execution ??= owner.captureExecution();
     const prepared = await runExclusiveSqliteSessionWrite(
@@ -351,12 +361,19 @@ async function runPendingMaintenance(
         const maintenance = owner.maintenanceConfig
           ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
           : resolveMaintenanceConfig();
-        const operation =
+        const operation: Extract<
+          SqliteSessionReclamationPlan,
+          { kind: "maintenance-plan" }
+        > | null =
           maintenance.mode === "warn"
             ? null
-            : createSessionMaintenancePlanningOperation({
-                databaseOptions: toDatabaseOptions(owner.scope),
+            : {
+                databaseOptions: resolveSessionReclamationDatabaseOptions(
+                  toDatabaseOptions(owner.scope),
+                ),
                 ageOwner: owner.ageOwner,
+                kind: "maintenance-plan",
+                materializedPlans: [],
                 input: {
                   activeSessionKeys,
                   archiveDirectory: owner.archiveDirectory,
@@ -364,7 +381,7 @@ async function runPendingMaintenance(
                   preservation: null,
                   storePath: owner.storePath,
                 },
-              });
+              };
         return { maintenance, operation };
       },
       "session.maintenance.plan",
@@ -402,10 +419,7 @@ async function runPendingMaintenance(
         ) ||
         (admitted &&
           operation.input.preservation !== null &&
-          !isDeepStrictEqual(
-            operation.input.preservation,
-            captureSessionMaintenancePreservation(operation.input.storePath),
-          ))
+          !isDeepStrictEqual(operation.input.preservation, capturePreservation()))
       ) {
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError(
@@ -426,9 +440,7 @@ async function runPendingMaintenance(
           activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
           operation.input.activeSessionKeys = activeSessionKeys;
           if (operation.input.preservation !== null) {
-            operation.input.preservation = captureSessionMaintenancePreservation(
-              operation.input.storePath,
-            );
+            operation.input.preservation = capturePreservation();
           }
           admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
@@ -443,16 +455,9 @@ async function runPendingMaintenance(
     };
     let result = await runPlanning();
     if (result.kind === "maintenance-preservation-required") {
-      await runExclusiveSqliteSessionWrite(
-        owner.scope,
-        async () => {
-          assertInputsCurrent();
-          operation.input.preservation = captureSessionMaintenancePreservation(
-            operation.input.storePath,
-          );
-        },
-        "session.maintenance.plan",
-      );
+      preservation = await prepareSessionMaintenancePreservation(operation.input.storePath);
+      assertInputsCurrent();
+      operation.input.preservation = capturePreservation();
       result = await runPlanning();
     }
     if (result.kind === "maintenance-plan-stale") {
@@ -515,6 +520,7 @@ async function runPendingMaintenance(
     }
     owner.rejections = 0;
   } catch (error) {
+    preservation?.dispose();
     if (planningChanged && isCurrent()) {
       if (finalized && owner.generation !== generation) {
         owner.rejections = 0;
@@ -548,6 +554,7 @@ async function runPendingMaintenance(
       );
     }
   } finally {
+    preservation?.dispose();
     releaseMaintenanceExecution(databasePath, owner);
   }
   // Writes during finalization also coalesce behind the next quiet window.

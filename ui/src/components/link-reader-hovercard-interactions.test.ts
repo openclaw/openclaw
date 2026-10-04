@@ -117,36 +117,13 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it("shows a pending preview rejection without moving focus and keeps its original link reachable", async () => {
-    const pending = createDeferred<unknown>();
-    const { anchor, provider } = createLink(ISSUE_HREF);
-    provider.client = {
-      request: vi.fn().mockReturnValue(pending.promise),
-    } as unknown as GatewayBrowserClient;
-    anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBeNull();
-    pending.reject(new Error("Gateway request timed out"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()?.textContent).toContain("Try again or open the original.");
-    expect(document.activeElement).toBe(anchor);
-    expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
-    expect(anchor.getAttribute("aria-expanded")).toBe("true");
-    const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
-    anchor.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(hovercard()?.querySelector("a"));
-    expect((document.activeElement as HTMLAnchorElement).href).toBe(ISSUE_HREF);
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
-    );
-    expect(hovercard()).toBeNull();
-    expect(document.activeElement).toBe(anchor);
-  });
-
-  it.each(["pointer", "focus"])(
-    "mounts only a populated successful preview for %s intent",
-    async (trigger) => {
+  it.each([
+    { trigger: "pointer", outcome: "success" },
+    { trigger: "focus", outcome: "success" },
+    { trigger: "focus", outcome: "failure" },
+  ])(
+    "mounts a settled $outcome preview for $trigger intent with reachable links",
+    async ({ trigger, outcome }) => {
       const mountedCards = observeHovercardMounts();
       const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
       const { anchor, provider } = createLink(ISSUE_HREF);
@@ -160,6 +137,26 @@ describe("generic preview portal lifecycle", () => {
       } else {
         anchor.focus();
         await vi.advanceTimersByTimeAsync(0);
+      }
+      if (outcome === "failure") {
+        expect(hovercard()).toBeNull();
+        pending.reject(new Error("Gateway request timed out"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hovercard()?.textContent).toContain("Try again or open the original.");
+        expect(document.activeElement).toBe(anchor);
+        expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
+        expect(anchor.getAttribute("aria-expanded")).toBe("true");
+        const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+        anchor.dispatchEvent(tab);
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(hovercard()?.querySelector("a"));
+        expect((document.activeElement as HTMLAnchorElement).href).toBe(ISSUE_HREF);
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        expect(hovercard()).toBeNull();
+        expect(document.activeElement).toBe(anchor);
+        return;
       }
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -489,103 +486,81 @@ describe("generic preview portal lifecycle", () => {
     expect(titleLinkInCard()).not.toBeNull();
   });
 
-  it("stays open while the pointer travels from the link onto the card", async () => {
-    const { anchor } = createIssueLink();
+  it.each([false, true])(
+    "holds pointer traversal and releases after a title click (%s)",
+    async (clicked) => {
+      const { anchor } = createIssueLink();
 
-    await hover(anchor);
-    const card = hovercard();
-    expect(card).not.toBeNull();
+      await hover(anchor);
+      const card = hovercard();
+      expect(card).not.toBeNull();
 
-    // Crossing the gap between the link and the card leaves both unhovered.
-    leave(anchor, card as EventTarget);
-    await vi.advanceTimersByTimeAsync(120 - 1);
-    expect(hovercard()).toBe(card);
+      leave(anchor, card as EventTarget);
+      if (!clicked) {
+        await vi.advanceTimersByTimeAsync(119);
+        expect(hovercard()).toBe(card);
+      }
+      card?.dispatchEvent(new MouseEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(clicked ? 0 : 1_200);
+      expect(hovercard()).toBe(card);
+      if (clicked) {
+        const titleLink = titleLinkInCard();
+        titleLink?.addEventListener("click", (event) => event.preventDefault());
+        titleLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        titleLink?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+      }
+      card?.dispatchEvent(new MouseEvent("pointerleave"));
+      expect(hovercard()).toBe(card);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(hovercard()).toBeNull();
+      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+      expect(anchor.hasAttribute("aria-controls")).toBe(false);
+      expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    },
+  );
 
-    card?.dispatchEvent(new MouseEvent("pointerenter"));
-    await vi.advanceTimersByTimeAsync(120 * 10);
-    expect(hovercard()).toBe(card);
+  it.each(["forward", "backward", "outside"])(
+    "dismisses keyboard previews on %s exit",
+    async (exit) => {
+      const { anchor } = createIssueLink();
+      const outside = exit === "outside" ? document.createElement("button") : null;
+      if (outside) {
+        document.body.append(outside);
+      }
+      anchor.focus();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hovercard()).not.toBeNull();
 
-    card?.dispatchEvent(new MouseEvent("pointerleave"));
-    expect(hovercard()).toBe(card);
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-    expect(anchor.hasAttribute("aria-controls")).toBe(false);
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
-  });
+      anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+      expect(document.activeElement).toBe(cardLinks()[0]);
+      if (outside) {
+        outside.focus();
+        await vi.advanceTimersByTimeAsync(120);
+        expect(hovercard()).toBeNull();
+        expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+        return;
+      }
+      const middle = cardLinks()[0];
+      middle?.focus();
+      const insideTab = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Tab",
+      });
+      middle?.dispatchEvent(insideTab);
+      expect(insideTab.defaultPrevented).toBe(false);
+      expect(hovercard()).not.toBeNull();
 
-  it("closes on pointer-out even after the title link inside the card was clicked", async () => {
-    const { anchor } = createIssueLink();
-
-    await hover(anchor);
-    const card = hovercard();
-    expect(card).not.toBeNull();
-
-    // Pointer travels from the link onto the card, same as the traversal test above.
-    leave(anchor, card as EventTarget);
-    card?.dispatchEvent(new MouseEvent("pointerenter"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBe(card);
-
-    // Clicking the title link focuses it (a click's real-world side effect); a
-    // pointer-initiated open must still release once the pointer leaves, with no
-    // click-outside required to dismiss the card.
-    const titleLink = titleLinkInCard();
-    titleLink?.addEventListener("click", (event) => event.preventDefault());
-    titleLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-    titleLink?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
-
-    card?.dispatchEvent(new MouseEvent("pointerleave"));
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-  });
-
-  it.each([false, true])("hands focus back at Tab edges (shiftKey=%s)", async (shiftKey) => {
-    const { anchor } = createIssueLink();
-
-    anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).not.toBeNull();
-
-    // The card is portaled to document.body, so Tab has to be forwarded for any
-    // of its links to be reachable at all.
-    anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
-    expect(document.activeElement).toBe(cardLinks()[0]);
-
-    // Inside the run of card links Tab belongs to the browser, not to the card.
-    const middle = cardLinks()[0];
-    middle?.focus();
-    const insideTab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
-    middle?.dispatchEvent(insideTab);
-    expect(insideTab.defaultPrevented).toBe(false);
-    expect(hovercard()).not.toBeNull();
-
-    // Leaving either outer edge returns focus to the trigger with the card closed,
-    // and that returned focus must not immediately reopen what was dismissed.
-    const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
-    edge?.focus();
-    edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
-    expect(hovercard()).toBeNull();
-    expect(document.activeElement).toBe(anchor);
-    await vi.advanceTimersByTimeAsync(120 * 2);
-    expect(hovercard()).toBeNull();
-  });
-
-  it("closes once focus leaves both the link and the card", async () => {
-    const { anchor } = createIssueLink();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-
-    anchor.focus();
-    await vi.advanceTimersByTimeAsync(0);
-    anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
-    expect(document.activeElement).toBe(cardLinks()[0]);
-
-    outside.focus();
-    await vi.advanceTimersByTimeAsync(120);
-    expect(hovercard()).toBeNull();
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-  });
+      const shiftKey = exit === "backward";
+      const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
+      edge?.focus();
+      edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
+      expect(hovercard()).toBeNull();
+      expect(document.activeElement).toBe(anchor);
+      await vi.advanceTimersByTimeAsync(120 * 2);
+      expect(hovercard()).toBeNull();
+    },
+  );
 
   it("uses the latest dependencies assigned before its lazy definition finishes", async () => {
     const tag = `test-github-lazy-upgrade-${crypto.randomUUID()}`;
@@ -637,42 +612,39 @@ describe("generic preview portal lifecycle", () => {
     expect(document.querySelector(".link-reader-hovercard")).toBeNull();
   });
 
-  it.each(["pending", "held"])(
-    "retires a %s GitHub preview when its pane becomes inert",
-    async (phase) => {
-      const { anchor, provider, request } = createIssueLink();
-      const pane = document.createElement("section");
+  it.each([
+    { phase: "pending", retirement: "inert" },
+    { phase: "held", retirement: "inert" },
+    { phase: "held", retirement: "route replacement" },
+  ])("retires a $phase preview after $retirement", async ({ phase, retirement }) => {
+    const { anchor, provider, request } = createIssueLink();
+    const pane = document.createElement(retirement === "inert" ? "section" : "main");
+    if (retirement === "inert") {
       provider.append(pane);
       pane.append(anchor);
-      anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-      if (phase === "held") {
-        await vi.advanceTimersByTimeAsync(250);
-        expect(hovercard()).not.toBeNull();
+    } else {
+      pane.append(anchor);
+      provider.append(pane);
+    }
+    anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    if (phase === "held") {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hovercard()).not.toBeNull();
+      if (retirement === "inert") {
         hovercard()!.dispatchEvent(new MouseEvent("pointerenter"));
       }
+    }
+    if (retirement === "inert") {
       pane.setAttribute("inert", "");
       await vi.advanceTimersByTimeAsync(250);
-      expect(hovercard()).toBeNull();
-      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-      if (phase === "pending") {
-        expect(request).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("closes when route replacement removes its active link", async () => {
-    const { provider, anchor } = createIssueLink();
-    const route = document.createElement("main");
-    route.append(anchor);
-    provider.append(route);
-
-    await hover(anchor);
-    expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
-
-    route.replaceChildren(document.createElement("p"));
-    await Promise.resolve();
-
-    expect(document.querySelector(".link-reader-hovercard")).toBeNull();
+    } else {
+      pane.replaceChildren(document.createElement("p"));
+      await Promise.resolve();
+    }
+    expect(hovercard()).toBeNull();
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    if (phase === "pending") {
+      expect(request).not.toHaveBeenCalled();
+    }
   });
 });

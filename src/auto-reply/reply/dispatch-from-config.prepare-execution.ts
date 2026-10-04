@@ -93,6 +93,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
     cfg,
+    preparedTtsPreferences: state.preparedTtsPreferences,
     ttsAuto: state.sessionTtsAuto,
     agentId: state.sessionAgentId,
     channelId: state.deliveryChannel,

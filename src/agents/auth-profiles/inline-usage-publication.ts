@@ -34,7 +34,7 @@ import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 /** Reconcile committed facts through the existing snapshot owner, without native host rereads. */
 export async function publishInlineAuthFailure(
   owner: PreparedAuthProfileStoreOwner,
-  receipt: InlineAuthFailureReceipt,
+  receipt: Pick<InlineAuthFailureReceipt, "publication">,
   readTarget: () => Promise<AuthProfileRowRead>,
   assertOwner: () => void,
 ): Promise<void> {

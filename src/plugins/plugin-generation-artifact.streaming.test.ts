@@ -86,72 +86,42 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
   expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
 });
 
-it("rehashes source code even when metadata retains its captured identity", () => {
+it.each(["unchanged metadata", "growing source"])("rejects edits with %s", (kind) => {
   const source = fixture(Buffer.from("before"), "fixture.js");
   const before = fs.statSync(source.filename, { bigint: true });
   const artifact = source.capture();
-  const statSync = fs.statSync;
-  vi.spyOn(fs, "statSync").mockImplementation((filename, options) => {
-    const stat = statSync(filename, options);
-    if (filename === source.filename && stat && "mtimeNs" in stat) {
-      stat.mtimeNs = before.mtimeNs;
-      stat.ctimeNs = before.ctimeNs;
-    }
-    return stat;
-  });
-
-  expect(artifact.assertSourceCurrent).not.toThrow();
-  fs.writeFileSync(source.filename, "edited");
-  expect(artifact.assertSourceCurrent).toThrow(
-    "Plugin source changed while preparing its reload; retry after the edit finishes.",
-  );
-  expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("before");
-});
-
-it("bounds fresh verification when a source keeps growing during reads", () => {
-  const source = fixture(Buffer.from("before"), "fixture.js");
-  const artifact = source.capture();
-  const original = fs.statSync(source.filename);
-  const readSync = fs.readSync;
   let reads = 0;
-  vi.spyOn(fs, "readSync").mockImplementation((...args) => {
-    const length = Reflect.apply(readSync, fs, args);
-    const stat = fs.fstatSync(args[0]);
-    if (stat.dev === original.dev && stat.ino === original.ino) {
-      if (++reads > 8) {
-        throw new Error("Verification did not bound a growing source");
+  if (kind === "unchanged metadata") {
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((filename, options) => {
+      const stat = statSync(filename, options);
+      if (filename === source.filename && stat && "mtimeNs" in stat) {
+        stat.mtimeNs = before.mtimeNs;
+        stat.ctimeNs = before.ctimeNs;
       }
-      fs.appendFileSync(source.filename, "growth");
-    }
-    return length;
-  });
+      return stat;
+    });
+    expect(artifact.assertSourceCurrent).not.toThrow();
+    fs.writeFileSync(source.filename, "edited");
+  } else {
+    const readSync = fs.readSync;
+    vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+      const length = Reflect.apply(readSync, fs, args);
+      const stat = fs.fstatSync(args[0], { bigint: true });
+      if (stat.dev === before.dev && stat.ino === before.ino) {
+        if (++reads > 8) {
+          throw new Error("Verification did not bound a growing source");
+        }
+        fs.appendFileSync(source.filename, "growth");
+      }
+      return length;
+    });
+  }
   expect(artifact.assertSourceCurrent).toThrow(
     "Plugin source changed while preparing its reload; retry after the edit finishes.",
   );
   expect(reads).toBeLessThanOrEqual(2);
-});
-
-it("captures from the pinned descriptor when descriptor paths are unavailable", () => {
-  const source = fixture(Buffer.from("captured"), "fixture.js");
-  const opens = vi.spyOn(fs, "openSync");
-  const copyFileSync = fs.copyFileSync;
-  vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
-    if (typeof from === "string" && /^\/(?:proc\/self|dev)\/fd\//.test(from)) {
-      throw Object.assign(new Error("Descriptor paths are unavailable"), { code: "ENOENT" });
-    }
-    return copyFileSync(from, to, mode);
-  });
-  const artifact = source.capture();
-  const captured = artifact.resolve(source.filename);
-  // Receipt admission reopens the private copy once. A separate initial hash
-  // would repeat the expensive Windows open without strengthening that admission.
-  expect(
-    opens.mock.calls.filter(
-      ([filename, flags]) => filename === captured && flags !== "w" && flags !== "w+",
-    ),
-  ).toHaveLength(1);
-  expect(fs.readFileSync(captured, "utf8")).toBe("captured");
-  expect(artifact.assertSourceCurrent).not.toThrow();
+  expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("before");
 });
 
 it.each(["cold", "warm", "lazy"] as const)(
@@ -218,6 +188,13 @@ it.each(["cold", "warm", "lazy"] as const)(
 
 const descriptorCopyCases = [
   {
+    label: "Node on Linux has no descriptor paths",
+    platform: "linux",
+    isBun: false,
+    code: "ENOENT",
+    shouldCapture: true,
+  },
+  {
     label: "Bun on macOS returns EBADF",
     platform: "darwin",
     isBun: true,
@@ -250,8 +227,9 @@ const descriptorCopyCases = [
 it.each(descriptorCopyCases)(
   "handles $label at the generation-capture boundary",
   ({ platform, isBun, code, shouldCapture }) => {
-    const bytes = Buffer.alloc(172_832, "B");
-    const source = fixture(bytes);
+    const bytes = code === "ENOENT" ? Buffer.from("captured") : Buffer.alloc(172_832, "B");
+    const source = fixture(bytes, code === "ENOENT" ? "fixture.js" : "fixture.bin");
+    const opens = vi.spyOn(fs, "openSync");
     const realProcess = process;
     vi.stubGlobal(
       "process",
@@ -282,7 +260,7 @@ it.each(descriptorCopyCases)(
         typeof from === "string" &&
         from.startsWith(descriptorPrefix) &&
         typeof to === "string" &&
-        to.endsWith(`${path.sep}fixture.bin`)
+        to.endsWith(`${path.sep}${path.basename(source.filename)}`)
       ) {
         injectedError = true;
         throw Object.assign(new Error("Simulated descriptor-copy failure"), { code });
@@ -292,7 +270,18 @@ it.each(descriptorCopyCases)(
 
     if (shouldCapture) {
       const artifact = source.capture();
-      expect(fs.readFileSync(artifact.resolve(source.filename))).toEqual(bytes);
+      const captured = artifact.resolve(source.filename);
+      if (code === "ENOENT") {
+        // Receipt admission reopens the private copy once. A separate initial hash
+        // would repeat the expensive Windows open without strengthening that admission.
+        expect(
+          opens.mock.calls.filter(
+            ([filename, flags]) => filename === captured && flags !== "w" && flags !== "w+",
+          ),
+        ).toHaveLength(1);
+        expect(fs.readFileSync(captured, "utf8")).toBe("captured");
+      }
+      expect(fs.readFileSync(captured)).toEqual(bytes);
       expect(artifact.assertSourceCurrent).not.toThrow();
     } else {
       expect(() => source.capture()).toThrow("Simulated descriptor-copy failure");

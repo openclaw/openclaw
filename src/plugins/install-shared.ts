@@ -4,7 +4,6 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
@@ -31,10 +30,8 @@ import {
   type PluginSecuritySourceFamily,
 } from "./security-events.js";
 
-const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
-
 export async function loadPluginInstallRuntime() {
-  return await pluginInstallRuntimeLoader.load();
+  return await import("./install.runtime.js");
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;

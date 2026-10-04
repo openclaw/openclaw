@@ -1,8 +1,7 @@
 // Target-aware runtime recovery; startup discovery retains its inherited-environment guards.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
+import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { applyPathPrepend } from "../../infra/path-prepend.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -180,10 +179,10 @@ export async function preparePackageUpdateRuntime(params: {
   fence.assertCurrent();
   if (result.ok) {
     if (params.packageInstallEnv && result.value.nodeRunner) {
-      // SAFETY: createGlobalInstallEnv filters undefined entries into a string-valued copy.
-      applyPathPrepend(params.packageInstallEnv as Record<string, string>, [
-        path.dirname(result.value.nodeRunner),
-      ]);
+      Object.assign(
+        params.packageInstallEnv,
+        withNodeRuntimePath(params.packageInstallEnv, result.value.nodeRunner),
+      );
     }
     reportPackageRuntimeSelection(result.value, { json: params.opts.json, tag: params.tag });
   }

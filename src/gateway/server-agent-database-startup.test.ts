@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -20,6 +21,7 @@ import {
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -62,6 +64,7 @@ function pauseIntegrityInspections(params: {
   paths: string[];
   pausePaths?: string[];
   pausePreparation?: boolean;
+  pauseSchema?: boolean;
 }) {
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPaths = params.paths.map((_, index) =>
@@ -78,20 +81,27 @@ function pauseIntegrityInspections(params: {
     `
 const fs = require('node:fs'), path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { isMainThread, threadId } = require('node:worker_threads');
 const paths = ${JSON.stringify(params.paths.map((pathname) => fs.realpathSync.native(pathname)))};
 const paused = ${JSON.stringify(params.paths.map((pathname) => pausedPaths.includes(pathname)))};
-const preparation = ${params.pausePreparation === true} && process.argv[1]?.includes('sqlite-integrity.worker');
+const preparation = ${params.pausePreparation === true} && (!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker'));
 const markers = preparation ? ${JSON.stringify(preparationEnteredPaths)} : ${JSON.stringify(enteredPaths)};
 const release = preparation ? ${JSON.stringify(preparationReleasePath)} : ${JSON.stringify(releasePath)};
 const releases = preparation ? ${JSON.stringify(preparationReleasePaths)} : ${JSON.stringify(releasePaths)};
+let startupInspection = false;
+process.on('message', (request) => {
+  startupInspection = request?.type === 'inspect' && request.input?.requireStartupMigrationReadiness === true;
+});
 const prepare = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
-  const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
+  const selected = ${params.pauseSchema === true} && !preparation ? startupInspection && /PRAGMA user_version/i.test(sql) : /integrity_check/.test(sql);
+  const index = selected && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
     // Existence is the shutdown gate; never expose a truncated PID.
     const marker = markers[index];
     const pendingMarker = marker + '.' + process.pid + '.tmp';
+    if (!isMainThread) fs.writeFileSync(marker + '.thread', String(threadId));
     fs.writeFileSync(pendingMarker, String(process.pid));
     fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -130,6 +140,7 @@ it.for([
   { outcome: "startup-failure", agentId: "worker" },
   { outcome: "superseded", agentId: "worker" },
   { outcome: "shutdown-preparation", agentId: "worker" },
+  { outcome: "handoff", agentId: "main" },
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
@@ -200,24 +211,28 @@ it.for([
         path.dirname(database.path),
       );
     }
-    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    if (outcome !== "fast") {
+      database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    }
     const agentPath = database.path;
     // Join worker reader retirement before changing journal mode or replacing files.
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
-    // These fixtures exercise full startup inspection after unclean external mutation.
-    clearOpenClawAgentIntegrityVerification(agentPath, env);
-    const raw = new DatabaseSync(agentPath);
-    try {
-      raw.exec("PRAGMA journal_mode=DELETE");
-      if (outcome === "corrupt") {
-        raw.exec(
-          "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
-        );
+    if (outcome !== "fast") {
+      // Unclean external mutation requires the writable owner's integrity gate.
+      clearOpenClawAgentIntegrityVerification(agentPath, env);
+      const raw = new DatabaseSync(agentPath);
+      try {
+        raw.exec("PRAGMA journal_mode=DELETE");
+        if (outcome === "corrupt") {
+          raw.exec(
+            "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
+          );
+        }
+      } finally {
+        raw.close();
       }
-    } finally {
-      raw.close();
     }
     if (outcome === "physical-corrupt") {
       fs.writeFileSync(agentPath, "not a SQLite database");
@@ -233,7 +248,8 @@ it.for([
       ? pauseIntegrityInspections({
           root,
           paths: [agentPath],
-          pausePreparation: outcome === "shutdown-preparation",
+          pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",
+          pauseSchema: outcome !== "handoff",
         })
       : undefined;
     const releasePath = pause?.releasePath ?? path.join(root, "release-inspection");
@@ -245,6 +261,29 @@ it.for([
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
     let inspectionAliveAtBrokerClose: boolean | undefined;
+    let preparationCancelled = false;
+    const nativeWorkers = new Map<number, Worker>();
+    const createWorker = workerCpu.createCpuTrackedWorker;
+    vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      nativeWorkers.set(worker.threadId, worker);
+      return worker;
+    });
+    const inspectionAlive = (marker: string) => {
+      if (fs.existsSync(`${marker}.thread`)) {
+        const worker = nativeWorkers.get(Number(fs.readFileSync(`${marker}.thread`, "utf8")));
+        if (!worker) {
+          throw new Error("Startup inspection Worker was not observed");
+        }
+        return worker.threadId !== -1;
+      }
+      try {
+        process.kill(Number(fs.readFileSync(marker, "utf8")), 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const startBroker = spawnBroker.startGatewaySpawnBroker;
     vi.spyOn(spawnBroker, "startGatewaySpawnBroker").mockImplementation(async (options) => {
       const broker = await startBroker(options);
@@ -257,13 +296,7 @@ it.for([
               outcome === "shutdown" ? enteredPath : pause!.preparationEnteredPaths[0]!;
             // Failed preparation may never create its marker; preserve the primary error.
             if (fs.existsSync(marker)) {
-              const pid = Number(fs.readFileSync(marker, "utf8"));
-              try {
-                process.kill(pid, 0);
-                inspectionAliveAtBrokerClose = true;
-              } catch {
-                inspectionAliveAtBrokerClose = false;
-              }
+              inspectionAliveAtBrokerClose = inspectionAlive(marker);
             }
           } finally {
             await close();
@@ -325,7 +358,17 @@ it.for([
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       unadoptedPortClaim = portClaim;
       const port = portClaim.port;
-      const startup = withAgentDatabaseStartupAdmission(async () => {
+      const startup = withAgentDatabaseStartupAdmission(async (admission) => {
+        if (outcome === "shutdown-preparation") {
+          admission.signal.addEventListener(
+            "abort",
+            () => {
+              preparationCancelled = true;
+              fs.writeFileSync(pause!.preparationReleasePath, "owner cancelled");
+            },
+            { once: true },
+          );
+        }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
@@ -348,7 +391,7 @@ it.for([
         server = started;
         return started;
       });
-      if (agentId === "main" && (outcome === "corrupt" || outcome === "physical-corrupt")) {
+      if (agentId === "main" && outcome === "physical-corrupt") {
         await expect(startup).rejects.toMatchObject({
           name: "AgentDatabaseAdmissionError",
           refusal: { agentId, code: "agent-database-inspection-failed", paths: [agentPath] },
@@ -373,6 +416,19 @@ it.for([
         expect(brokerPid).toBeTypeOf("number");
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+      if (outcome === "corrupt") {
+        await vi.waitFor(() =>
+          expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
+            code: "agent-database-inspection-failed",
+            repairHint: expect.stringContaining("doctor --fix"),
+          }),
+        );
+        expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
+        expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
+          agentId === "main" ? 503 : 200,
+        );
+        return;
+      }
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
       expect(readiness.status).toBe(200);
       if (agentId === "main" && paused) {
@@ -388,7 +444,15 @@ it.for([
           code: "agent-database-inspection-pending",
         });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
-        await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
+        if (outcome === "handoff") {
+          // Old startup blocks in full-file preflight before claiming its writable lease.
+          expect(fs.existsSync(enteredPath)).toBe(false);
+          await vi.waitFor(() =>
+            expect(fs.existsSync(pause!.preparationEnteredPaths[0]!)).toBe(true),
+          );
+        } else {
+          await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
+        }
       }
       if (outcome === "recover") {
         // Full post-attach model preparation can republish auth-store containers;
@@ -425,21 +489,31 @@ it.for([
           }
         });
       }
-      if (outcome === "shutdown-preparation") {
+      if (outcome === "handoff") {
+        expect(fs.existsSync(releasePath)).toBe(false);
+        fs.writeFileSync(pause!.preparationReleasePath, "resume");
+        await vi.waitFor(
+          () => expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined(),
+          { timeout: 10000 },
+        );
+      } else if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPaths[0]!;
         await vi.waitFor(() => expect(fs.existsSync(preparationEnteredPath)).toBe(true), {
           timeout: 10000,
         });
+        expect(preparationCancelled).toBe(false);
+        expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         await server.close();
         await suppliedBroker?.close();
         if (brokerExpected) {
           expect(inspectionAliveAtBrokerClose).toBe(false);
           expect(() => process.kill(brokerPid!, 0)).toThrow();
         }
-        expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
-        const pid = Number(fs.readFileSync(preparationEnteredPath, "utf8"));
-        expect(() => process.kill(pid, 0)).toThrow();
+        expect(preparationCancelled).toBe(true);
+        expect(fs.readFileSync(pause!.preparationReleasePath, "utf8")).toBe("owner cancelled");
+        expect(inspectionAlive(preparationEnteredPath)).toBe(false);
+        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
         await withinTest(
@@ -501,11 +575,6 @@ it.for([
           restorationRelease.resolve();
           await server.startupSettled;
         }
-      } else if (outcome === "corrupt") {
-        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
-          code: "agent-database-inspection-failed",
-          repairHint: expect.stringContaining("doctor --fix"),
-        });
       } else if (outcome === "shutdown") {
         await server.close();
         await suppliedBroker?.close();
@@ -568,6 +637,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     root: resolveStateDir(env),
     paths,
     pausePaths: paths.slice(0, 2),
+    pauseSchema: true,
   });
   Object.assign(env, pause.env);
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;

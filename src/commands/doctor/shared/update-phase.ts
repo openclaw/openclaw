@@ -112,15 +112,6 @@ export function isLegacyParentWritableUpdateDoctorPass(env: NodeJS.ProcessEnv): 
 }
 
 /**
- * True iff this newer doctor is running under an older updater that does not
- * advertise any post-core handoff marker. Those parents set only
- * `OPENCLAW_UPDATE_IN_PROGRESS`, so configured plugin repair must happen now.
- */
-export function isLegacyPackageUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
-  return isUpdatePackageSwapInProgress(env) && !shouldDeferConfiguredPluginInstallRepair(env);
-}
-
-/**
  * True iff we are running the post-core convergence pass: the core package
  * swap is done, the gateway has not been restarted yet, and configured plugin
  * repair MUST run before we hand control back for the restart.

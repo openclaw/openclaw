@@ -8,9 +8,6 @@ import type { EmbeddingInput } from "./embedding-inputs.js";
 // token_count <= utf8_byte_length.
 
 export function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
   return Buffer.byteLength(text, "utf8");
 }
 

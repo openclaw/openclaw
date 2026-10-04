@@ -53,71 +53,70 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
 }
 
 describe("server-owned model selection policy", () => {
-  it.each([false, true])("renders only permitted choices when restricted=%s", (restricted) => {
-    const { container, onModelSelect } = mountControls({
-      models,
-      ...(restricted
-        ? { modelSelectionPolicy: { restricted: true as const, defaultModel: "fixture/primary" } }
-        : {}),
-    });
-    const values = Array.from(container.querySelectorAll("[data-chat-model-option]"), (row) =>
-      row.getAttribute("data-chat-model-option"),
+  it.each([undefined, "fixture/primary", "fixture/automatic", null])(
+    "uses only catalog choices and the canonical default %s",
+    (defaultModel) => {
+      const restricted = defaultModel !== undefined;
+      const { container, onModelSelect } = mountControls({
+        models,
+        ...(restricted
+          ? { modelSelectionPolicy: { restricted: true as const, defaultModel } }
+          : {}),
+      });
+      const values = Array.from(container.querySelectorAll("[data-chat-model-option]"), (row) =>
+        row.getAttribute("data-chat-model-option"),
+      );
+      const expected = ["fixture/primary", "fixture/fallback", "fixture/custom"];
+      if (!restricted) {
+        expected.push("fixture/forbidden-default", "fixture/forbidden-current");
+      } else if (defaultModel === "fixture/automatic") {
+        expected.push(defaultModel);
+      }
+      expect(values).toHaveLength(expected.length);
+      expect(values).toEqual(expect.arrayContaining(expected));
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="fixture/custom"]')
+        ?.click();
+      expect(onModelSelect).toHaveBeenCalledWith("fixture/custom", "main", undefined);
+      if (restricted) {
+        expect(container.textContent).not.toContain("forbidden");
+        expect(container.querySelector("[data-chat-model-policy]")?.textContent).toContain(
+          "administrator",
+        );
+        const reset = container.querySelector<HTMLButtonElement>(
+          '[data-chat-model-default="true"]',
+        );
+        if (defaultModel) {
+          expect(reset?.getAttribute("data-chat-model-option")).toBe(defaultModel);
+          reset?.click();
+          expect(onModelSelect).toHaveBeenCalledWith("", "main", null);
+        } else {
+          expect(reset).toBeNull();
+          expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(
+            "Choose a model",
+          );
+        }
+      }
+    },
+  );
+
+  it.each([false, true])("hides forbidden choices in an empty catalog (retired=%s)", (retired) => {
+    const { container } = mountControls(
+      {
+        models: [],
+        ...(retired
+          ? {}
+          : { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }),
+      },
+      retired,
     );
-    const expected = restricted
-      ? ["fixture/primary", "fixture/fallback", "fixture/custom"]
-      : [
-          "fixture/forbidden-default",
-          "fixture/primary",
-          "fixture/fallback",
-          "fixture/custom",
-          "fixture/forbidden-current",
-        ];
-    expect(values).toHaveLength(expected.length);
-    expect(values).toEqual(expect.arrayContaining(expected));
-    container
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="fixture/custom"]')
-      ?.click();
-    expect(onModelSelect).toHaveBeenCalledWith("fixture/custom", "main", undefined);
-    if (restricted) {
+    expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+    if (retired) {
       expect(container.textContent).not.toContain("forbidden");
-      expect(container.querySelector("[data-chat-model-policy]")?.textContent).toContain(
-        "administrator",
-      );
-    }
-  });
-
-  it.each(["fixture/automatic", null])("uses only the canonical default %s", (defaultModel) => {
-    const { container, onModelSelect } = mountControls({
-      models,
-      modelSelectionPolicy: { restricted: true, defaultModel },
-    });
-    const reset = container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]');
-    if (defaultModel) {
-      expect(reset?.getAttribute("data-chat-model-option")).toBe(defaultModel);
-      reset?.click();
-      expect(onModelSelect).toHaveBeenCalledWith("", "main", null);
     } else {
-      expect(reset).toBeNull();
-      expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(
-        "Choose a model",
-      );
+      expect(container.textContent).toContain("No models are permitted by your administrator.");
+      expect(container.querySelector("[data-chat-model-setup]")).toBeNull();
     }
-  });
-
-  it("explains an empty restricted catalog without offering model setup", () => {
-    const { container } = mountControls({
-      models: [],
-      modelSelectionPolicy: { restricted: true, defaultModel: null },
-    });
-    expect(container.textContent).toContain("No models are permitted by your administrator.");
-    expect(container.querySelector("[data-chat-model-setup]")).toBeNull();
-    expect(container.querySelector("[data-chat-model-option]")).toBeNull();
-  });
-
-  it("retires raw session and default labels before a replacement policy arrives", () => {
-    const { container } = mountControls({ models: [] }, true);
-    expect(container.textContent).not.toContain("forbidden");
-    expect(container.querySelector("[data-chat-model-option]")).toBeNull();
   });
 
   it("retains permitted runtime alternatives without offering denied ones", () => {

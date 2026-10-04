@@ -137,8 +137,8 @@ suite.define(() => {
           expect(await pendingIcon.isVisible()).toBe(true);
         } else {
           expect(
-            await pendingIcon.evaluate((element) => getComputedStyle(element).animationName),
-          ).toBe("session-progress-refresh-spin");
+            await pendingIcon.evaluate((element) => element.getAnimations()[0]?.playState),
+          ).toBe("running");
         }
         expect(
           await card

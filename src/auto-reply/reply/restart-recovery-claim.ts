@@ -206,14 +206,52 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const sessionId = params.getSessionId();
-    const entry =
-      (await readSessionEntryInWorker(
-        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
-        assertReadCurrent,
-      )) ?? params.getEntry();
     assertReadCurrent();
-    if (!entry || entry.sessionId !== sessionId || params.getSessionId() !== sessionId) {
-      throw new Error("session changed before durable user-turn admission");
+    const hasPendingPlacementInput = () =>
+      Boolean(recorder?.getPendingInputMessage?.() && !recorder.hasPersisted());
+    const pendingPlacementInput = hasPendingPlacementInput();
+    const placementContext = pendingPlacementInput
+      ? resolveSessionWorkerPlacementContext()
+      : undefined;
+    const placementService = placementContext?.workerSessionPlacementService;
+    if (placementService && !placementService.prepareRuntimeRefresh) {
+      throw new Error("Worker placement observation service is unavailable");
+    }
+    const placementObservation = placementService?.prepareRuntimeRefresh
+      ? await placementService.prepareRuntimeRefresh(sessionId)
+      : undefined;
+    let entry: SessionEntry;
+    let stagedWorkerInput = false;
+    try {
+      const assertAdmissionCurrent = () => {
+        assertReadCurrent();
+        if (params.getSessionId() !== sessionId) {
+          throw new Error("session changed before durable user-turn admission");
+        }
+        if (hasPendingPlacementInput() !== pendingPlacementInput) {
+          throw new Error("pending user turn changed before durable user-turn admission");
+        }
+        if (placementContext?.workerSessionPlacementService !== placementService) {
+          throw new Error("Worker placement service changed before durable user-turn admission");
+        }
+        placementObservation?.assertCurrent();
+      };
+      const current =
+        (await readSessionEntryInWorker(
+          { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
+          assertAdmissionCurrent,
+        )) ?? params.getEntry();
+      assertAdmissionCurrent();
+      if (!current || current.sessionId !== sessionId) {
+        throw new Error("session changed before durable user-turn admission");
+      }
+      entry = current;
+      stagedWorkerInput = Boolean(
+        placementObservation?.placement && placementObservation.placement.state !== "local",
+      );
+    } finally {
+      // The observation selects admission; the claim writer owns its later durable guards.
+      placementObservation?.release();
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
@@ -239,15 +277,10 @@ export function createReplyRestartRecoveryClaimController(params: {
         return "duplicate-source";
       }
     }
-    if (recorder?.getPendingInputMessage?.() && !recorder.hasPersisted()) {
-      const placement = resolveSessionWorkerPlacementContext()
-        .workerSessionPlacementService?.getMany([sessionId])
-        .get(sessionId);
+    if (stagedWorkerInput) {
       // A staged worker input belongs to placement admission, not local restart
       // recovery. Its runtime writer consumes it only after setup and sync finish.
-      if (placement && placement.state !== "local") {
-        return "admitted";
-      }
+      return "admitted";
     }
     if (isExactRecoveryClaim) {
       if (entry.status !== "running" || entry.abortedLastRun === true) {

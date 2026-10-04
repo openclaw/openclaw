@@ -5,6 +5,7 @@ import type {
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
   SessionsDescribeParams,
+  SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -64,6 +65,7 @@ export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
+  source?: SessionsListParams["source"];
   rowMode?: "compact";
   agentId?: string;
   spawnedBy?: string;

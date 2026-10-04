@@ -29,7 +29,6 @@ interface ClientOptions {
   requestOptions?: RequestClientOptions;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
   eventQueue?: DiscordEventQueueOptions;
-  restCacheTtlMs?: number;
 }
 
 export class Client {
@@ -43,8 +42,6 @@ export class Client {
   private entityCache: DiscordEntityCache;
   private eventQueue?: DiscordEventQueue;
   modalHandler = new ComponentRegistry<Modal>();
-  shardId?: number;
-  totalShards?: number;
 
   constructor(
     options: ClientOptions,
@@ -72,7 +69,6 @@ export class Client {
     this.entityCache = new DiscordEntityCache({
       client: this,
       rest: () => this.rest,
-      ttlMs: this.options.restCacheTtlMs,
     });
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
@@ -82,11 +78,6 @@ export class Client {
     });
     for (const component of handlers.components ?? []) {
       this.componentHandler.register(component);
-    }
-    for (const command of this.commands) {
-      for (const component of command.components ?? []) {
-        this.componentHandler.register(component);
-      }
     }
     for (const modal of handlers.modals ?? []) {
       this.modalHandler.register(modal);
@@ -106,7 +97,6 @@ export class Client {
 
   getRuntimeMetrics() {
     return {
-      request: this.rest.getSchedulerMetrics(),
       eventQueue: this.eventQueue?.getMetrics(),
     };
   }

@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import {
+  readOpenClawDatabaseQuarantineFailure,
+  recordOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -28,6 +32,8 @@ import {
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
+import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 
@@ -285,16 +291,25 @@ describe("Gateway owner lease", () => {
     },
   );
 
-  it.each([false, true])(
-    "Doctor refuses a fresh foreign lease with quarantine=%s",
-    async (quarantined) => {
+  it.each(["current", "quarantined", "newer"] as const)(
+    "Doctor refuses a fresh foreign lease with %s state",
+    async (condition) => {
       let env: NodeJS.ProcessEnv;
       {
         await using owner = fixture();
         env = owner.env;
         seedOwner(env, { host: "previous-container" });
+        if (condition === "newer") {
+          withOpenClawStateStartupMigrationCheckpointDatabase(
+            (db) => db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`),
+            { env },
+          );
+        }
       }
-      if (quarantined) {
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const before = fs.readFileSync(databasePath);
+      if (condition === "quarantined") {
         expect(
           recordOpenClawDatabaseQuarantine({
             env,
@@ -309,11 +324,124 @@ describe("Gateway owner lease", () => {
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
       ).rejects.toThrow("wait up to 90 seconds");
       expect(run).not.toHaveBeenCalled();
-      if (quarantined) {
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      if (condition === "quarantined") {
         expect(() => readGatewayOwnerLease({ env })).toThrow("synthetic index damage");
-      } else {
+      } else if (condition === "current") {
         expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
       }
+    },
+  );
+
+  it.each(["hidden", "ambiguous"] as const)(
+    "Doctor refuses quarantined %s lease claims after lookup-index corruption",
+    async (kind) => {
+      const ambiguous = kind === "ambiguous";
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(
+          env,
+          ambiguous
+            ? { pid: 2_147_483_647, startedAt: 1, expiresAt: null }
+            : { host: "previous-container", expiresAt: null },
+        );
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      corruptSqliteIndexKey(
+        databasePath,
+        "sqlite_autoindex_state_leases_1",
+        "gateway-owner",
+        "gateway-owneX",
+      );
+      const damaged = new (requireNodeSqlite().DatabaseSync)(databasePath, {
+        readOnly: !ambiguous,
+      });
+      try {
+        if (ambiguous) {
+          const now = Date.now();
+          // The damaged unique index admits a fresh rival beside the dead table row.
+          damaged
+            .prepare(
+              `INSERT INTO state_leases
+              (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+              SELECT scope, lease_key, 'fresh-rival', expires_at, ?,
+                json_set(payload_json, '$.owner.host', 'previous-container'), ?, ?
+              FROM state_leases NOT INDEXED WHERE scope = ? AND lease_key = ?`,
+            )
+            .run(now, now, now, "gateway-owner", "global");
+        }
+        expect(ownerLeaseRead.readGatewayOwnerLeaseFromDatabase(damaged)?.owner).toBe(
+          ambiguous ? "fresh-rival" : undefined,
+        );
+        expect(
+          damaged
+            .prepare("SELECT owner FROM state_leases NOT INDEXED WHERE scope = ? AND lease_key = ?")
+            .all("gateway-owner", "global"),
+        ).toEqual(
+          expect.arrayContaining([
+            { owner: "previous-generation" },
+            ...(ambiguous ? [{ owner: "fresh-rival" }] : []),
+          ]),
+        );
+      } finally {
+        damaged.close();
+      }
+      const before = fs.readFileSync(databasePath);
+      const reason = "fixture Gateway lease index quarantine";
+      expect(
+        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
+      ).toBe(true);
+      const run = vi.fn();
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).rejects.toThrow(ambiguous ? "ambiguous during maintenance" : "wait up to 90 seconds");
+      expect(run).not.toHaveBeenCalled();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expect(
+        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
+      ).toContain(reason);
+    },
+  );
+
+  it.each(["dead", "stale foreign"] as const)(
+    "Doctor can inspect quarantined state with a %s owner without clearing its lease or quarantine",
+    async (kind) => {
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(env, {
+          pid: 2_147_483_647,
+          startedAt: 1,
+          expiresAt: null,
+          ...(kind === "stale foreign"
+            ? {
+                host: "previous-container",
+                heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
+              }
+            : {}),
+        });
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const before = fs.readFileSync(databasePath);
+      const reason = "fixture audit index quarantine";
+      expect(
+        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
+      ).toBe(true);
+      const run = vi.fn(() => "inspected");
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).resolves.toBe("inspected");
+      expect(run).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expect(
+        readOpenClawDatabaseQuarantineFailure("state", databasePath, { env })?.message,
+      ).toContain(reason);
+      expect(() => readGatewayOwnerLease({ env, current: true })).toThrow(reason);
     },
   );
 

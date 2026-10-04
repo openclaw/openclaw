@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
@@ -295,13 +296,15 @@ function scheduleActiveRunExpiry(): void {
   if (!Number.isFinite(nextExpiresAt)) {
     return;
   }
-  activeRunExpiryTimer = setTimeout(
-    () => {
-      activeRunExpiryTimer = undefined;
-      removeExpiredRuns();
-      scheduleActiveRunExpiry();
-    },
-    Math.max(1, nextExpiresAt - Date.now()),
+  activeRunExpiryTimer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        activeRunExpiryTimer = undefined;
+        removeExpiredRuns();
+        scheduleActiveRunExpiry();
+      },
+      Math.max(1, nextExpiresAt - Date.now()),
+    ),
   );
   activeRunExpiryTimer.unref?.();
 }

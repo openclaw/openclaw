@@ -591,11 +591,20 @@ describe("OpenClaw database integrity verifier", () => {
     closeOpenClawStateDatabaseForTest();
 
     const storePath = quarantineStorePath(stateDir);
-    // A read-only quarantine store cannot drop the row; the clear must say so
-    // instead of letting doctor report success while the next open still refuses.
-    fs.chmodSync(storePath, 0o444);
+    const before = readPersistedQuarantineRow(agentPath, { env });
+    expect(before).toMatchObject({ kind: "agent", reason: "corrupt index" });
+    const { DatabaseSync } = requireNodeSqlite();
+    const quarantine = new DatabaseSync(storePath);
     try {
+      // chmod cannot refuse writes from root; fail the real SQLite writes instead.
+      quarantine.exec(`
+        CREATE TRIGGER refuse_quarantine_clear BEFORE DELETE ON quarantined_databases
+        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
+        CREATE TRIGGER refuse_quarantine_record BEFORE INSERT ON quarantined_databases
+        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
+      `);
       expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(false);
+      expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
       expect(
         recordOpenClawDatabaseQuarantine({
           env,
@@ -604,10 +613,21 @@ describe("OpenClaw database integrity verifier", () => {
           reason: "new reason",
         }),
       ).toBe(false);
+      expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
+      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+        expect.objectContaining({
+          name: "SqliteIntegrityError",
+          message: expect.stringContaining("corrupt index"),
+        }),
+      );
+      quarantine.exec(
+        "DROP TRIGGER refuse_quarantine_clear; DROP TRIGGER refuse_quarantine_record;",
+      );
     } finally {
-      fs.chmodSync(storePath, 0o600);
+      quarantine.close();
     }
     expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(true);
+    expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 

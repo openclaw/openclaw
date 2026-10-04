@@ -27,6 +27,7 @@ import {
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
 import {
+  readExactSessionEntryRow,
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
@@ -299,6 +300,29 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
+  if (request.projection === "exact") {
+    // Logical accessors validate only their candidates; unrelated rows are not listing admission.
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () =>
+          request.sessionKeys.flatMap((sessionKey) => {
+            const entry = readExactSessionEntryRow(
+              database,
+              sessionKey,
+              "full",
+              "canonical",
+            )?.entry;
+            return entry ? [{ sessionKey, entry }] : [];
+          }),
+        ),
+      { ...request.database, env: request.env },
+    );
+    return {
+      kind: "session-exact-entries",
+      entries: read.found ? read.value : [],
+      lifecycleTimestamps: {},
+    };
+  }
   if (request.statusSelection) {
     const { statuses, presenceOnly } = request.statusSelection;
     const read = withOpenClawAgentDatabaseReadOnly(

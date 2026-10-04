@@ -125,10 +125,8 @@ function normalizeExistingSessionCdpUrl(
     return undefined;
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
   }
 
@@ -208,8 +206,8 @@ function resolveExtensionRelayPorts(
   // allocation so an extension relay cannot bind another profile's listener.
   const reservedPorts = new Set(
     Object.values(profiles)
-      .map((profile) => profile.cdpPort)
-      .filter((port): port is number => typeof port === "number"),
+      .flatMap((profile) => [profile.cdpPort, Number(URL.parse(profile.cdpUrl ?? "")?.port)])
+      .filter((port): port is number => typeof port === "number" && port > 0),
   );
   const ports: Record<string, number> = {};
   const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;

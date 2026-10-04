@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import {
   createRetainedOperation,
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
@@ -13,12 +13,10 @@ import {
   registerRetainedSnapshotTempDirectory,
   startRemoveTempDirectory,
   sealRetainedSnapshotTempDirectory,
-  settleSqliteSnapshotRequest,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceConnection } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
-import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import { decodeSqliteSnapshotStagingError } from "./sqlite-snapshot-staging-error.js";
 import type {
   SqliteSnapshotStagingCommand,
@@ -693,29 +691,8 @@ export function captureSqliteSnapshotStagingOwner() {
   );
   let owner = owners.get(nativeSource);
   if (!owner) {
-    owner = createStagingOwner(moduleUrl, nativeSource);
+    owner = runInDetachedAsyncContext(() => createStagingOwner(moduleUrl, nativeSource));
     owners.set(nativeSource, owner);
   }
   return owner;
-}
-
-export async function allocateWorkerOwnedSqliteSnapshotDirectory(
-  inputRoot: string,
-  allowLegacyWorker: boolean,
-  signal?: AbortSignal,
-): Promise<SqliteSnapshotStagingDirectory> {
-  const root = path.resolve(inputRoot);
-  const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
-  const owner = captureSqliteSnapshotStagingOwner();
-  const request = owner.start(
-    {
-      type: "allocate",
-      root,
-      allowLegacyWorker,
-      launch: { env, cwd, transport: { kind: "native" } },
-    },
-    signal,
-  );
-  const reply = await settleSqliteSnapshotRequest(request);
-  return owner.retainDirectory(reply.directory);
 }

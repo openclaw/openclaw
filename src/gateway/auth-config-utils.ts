@@ -96,10 +96,7 @@ async function resolveGatewayAuthSecretRefValue(
     value: readGatewaySecretInputValue(params.cfg, path),
     path,
   });
-  if (!value) {
-    return undefined;
-  }
-  return value;
+  return value || undefined;
 }
 
 /** Resolve the Gateway auth token ref only when token auth can use it. */

@@ -4,68 +4,15 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import type {
-  SessionPendingInputWorkerFacts,
-  SessionPendingInputWorkerReceipt,
-} from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptSuffixEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-write.js";
 import { replaceSessionWithBranchedTranscriptInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionMaintenanceOperations } from "../../config/sessions/session-manager-write-contract.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import type { SessionEntry, SessionLeafControl } from "./session-manager-types.js";
-
-type Target = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
-export type SessionMaintenanceOperations = {
-  "session.transcript.branch": {
-    input: {
-      scope: Target;
-      branch: { sessionId: string; events: unknown[] };
-      expectedLifecycleRevision: SessionTranscriptWriteScope["expectedLifecycleRevision"];
-    };
-    output: ReturnType<typeof replaceSessionWithBranchedTranscriptInTransaction> & {
-      projectionNeedsReconcile: boolean;
-    };
-  };
-  "session.transcript.replaceSuffix": {
-    input: {
-      scope: Target;
-      args: [
-        expectedEvents: readonly unknown[],
-        nextEvents: readonly unknown[],
-        prefixLength: number,
-        expectedMutationAt: number | null | undefined,
-        eventsStartAtPersistedPrefix: boolean,
-        retainedCustomDataIds: readonly string[],
-      ];
-    };
-    output: {
-      replaced: boolean;
-      version?: SessionTranscriptContextVersion;
-      projectionNeedsReconcile: boolean;
-    };
-  };
-  "session.transcript.rewrite": {
-    input: {
-      scope: Target;
-      appendParentId: string | null;
-      version: SessionTranscriptContextVersion;
-      entries: Array<SessionEntry | SessionLeafControl>;
-      sources: Array<[string, SessionEntry]>;
-      pendingInput?: { facts: SessionPendingInputWorkerFacts; relocation?: string };
-    };
-    output: {
-      version: SessionTranscriptContextVersion;
-      entries: Array<SessionEntry | SessionLeafControl>;
-      pendingInputReceipt?: SessionPendingInputWorkerReceipt;
-      projectionNeedsReconcile: boolean;
-    };
-  };
-};
 
 type SessionMaintenanceContext = {
   database: DatabaseSync;

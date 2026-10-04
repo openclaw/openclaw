@@ -2106,7 +2106,7 @@ openclaw-chat-video-player {
 }
 
 .chat-swarm__task-icon--running svg {
-  animation: compaction-spin 1s linear infinite;
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 .chat-swarm__task-icon--done {

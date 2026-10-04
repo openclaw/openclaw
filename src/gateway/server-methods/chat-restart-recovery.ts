@@ -34,6 +34,8 @@ import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { boundedWorkerError } from "../worker-environments/worker-error.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -234,6 +236,7 @@ export async function resolveDurableChatClaim(params: {
 
 function isRestartSafeChatSession(params: {
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
   sessionKey: string;
 }): boolean {
@@ -251,7 +254,7 @@ function isRestartSafeChatSession(params: {
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
     (entry.spawnDepth ?? 0) === 0 &&
-    entry.acp === undefined &&
+    params.acpMeta == null &&
     entry.cronRunContinuation === undefined &&
     !isSubagentSessionKey(params.sessionKey) &&
     !isCronSessionKey(params.sessionKey) &&
@@ -296,18 +299,39 @@ function hasRestartUnsafeChatWork(params: {
   return false;
 }
 
+export type PreparedRestartSafeChatPlacement = {
+  sessionId: string;
+  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
+};
+
+/** Borrow placement facts only while the chat owner revalidates and commits admission. */
+export async function withRestartSafeChatPlacement(
+  service: NonNullable<GatewayRequestContext["workerSessionPlacementService"]>,
+  sessionId: string,
+  consume: (prepared: PreparedRestartSafeChatPlacement) => Promise<void>,
+): Promise<void> {
+  if (!service.prepareRuntimeRefresh) {
+    throw new Error("Worker placement admission reader is unavailable; retry.");
+  }
+  const facts = await service.prepareRuntimeRefresh(sessionId);
+  try {
+    await consume({ sessionId, facts });
+  } finally {
+    facts.release();
+  }
+}
+
 export function resolveRestartSafeChatAdmission(params: {
   activeRunScopeKey: string;
   agentId: string;
   cfg: OpenClawConfig;
   clientRunId: string;
-  context: Pick<
-    GatewayRequestContext,
-    "chatAbortControllers" | "chatQueuedTurns" | "workerSessionPlacementService"
-  >;
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns">;
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   initialSessionEntry?: SessionEntry;
   now: number;
+  placement: WorkerSessionPlacementRecord | undefined;
   request?: RestartSafeChatRequest;
   requestedSessionId?: string;
   sessionId: string;
@@ -316,9 +340,7 @@ export function resolveRestartSafeChatAdmission(params: {
 }): RestartSafeChatAdmission | undefined {
   const request = params.request;
   const entry = params.entry ?? params.initialSessionEntry;
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
+  const placement = params.placement;
   // Only local input may be consumed before turn admission. Worker setup and
   // reconciliation retain approved input in custody until their writer is ready.
   if (placement && placement.state !== "local") {

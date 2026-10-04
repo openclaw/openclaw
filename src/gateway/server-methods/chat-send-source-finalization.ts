@@ -7,7 +7,7 @@ import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispat
 import { formatErrorMessage } from "../../infra/errors.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   extractAssistantDisplayText,
@@ -248,10 +248,15 @@ async function finalizeChatSendAgentReplyPayloads(
       }
     },
   });
-  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
-  );
+  const { storePath: latestStorePath, entry: latestEntry } =
+    await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionKey,
+      ...sessionLoadOptions,
+    });
+  if (!authorizeDelivery("session preparation")) {
+    return { kind: "dropped", reason: "no-visible-content" };
+  }
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
   const { finalInputsByIndex, sourceReplyContentStates, sourceReplyBroadcastContent } =
     await withPreparedWebchatReplyMedia(

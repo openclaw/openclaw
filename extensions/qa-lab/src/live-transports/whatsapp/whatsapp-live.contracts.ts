@@ -124,7 +124,6 @@ export type WhatsAppQaMessageScenarioRun = {
   expectReply: boolean;
   expectedJoinedSutTextIncludes?: string[];
   expectedSutMessageCount?: number;
-  expectedSutMessageCountRange?: readonly [number, number];
   input: string;
   kind?: "message";
   matchText: string | RegExp;

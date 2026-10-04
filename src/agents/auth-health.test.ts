@@ -221,7 +221,6 @@ describe("buildAuthHealthSummary", () => {
     const summary = buildAuthHealthSummary({
       store,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      allowKeychainPrompt: false,
     });
 
     expect(profileStatuses(summary)["openai:default"]).toBe("missing");

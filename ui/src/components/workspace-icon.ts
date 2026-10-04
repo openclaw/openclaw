@@ -20,7 +20,6 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
   private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
-    cacheNotFound: true,
     retryUnavailable: true,
   });
 

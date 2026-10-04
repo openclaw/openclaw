@@ -4855,35 +4855,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   gap: 8px;
 }
 
-.content--chat .content-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 44px;
-  padding: 4px 8px;
-  overflow: visible;
-  max-height: 44px;
-}
-
-.content--chat .content-header > div:first-child {
-  display: grid;
-  align-items: center;
-  position: relative;
-  text-align: left;
-  min-width: 0;
-}
-
-.content--chat .page-meta {
-  align-self: center;
-  justify-content: flex-end;
-  height: 36px;
-  align-items: center;
-  min-width: max-content;
-  overflow: visible;
-}
-
 .grid {
   display: grid;
   gap: 20px;

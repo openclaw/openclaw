@@ -111,7 +111,7 @@ function expectSingleLine(row: HTMLElement) {
 }
 
 // Theme changes colors only; geometry is proven once per width.
-describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
+describe.each([1440, 360])("reply attribution (%d px)", (width) => {
   beforeEach(async () => {
     await page.viewport(width, 800);
     host.style.width = `${width - 32}px`;

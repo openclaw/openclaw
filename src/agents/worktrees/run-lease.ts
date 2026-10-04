@@ -20,7 +20,7 @@ import {
   admitWorktreeRunLeaseRowAsync,
   releaseWorktreeRunLeaseRowAsync,
 } from "./run-lease-store.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
 
 export {
   abortWorktreeRemovalRow as abortWorktreeRemoval,
@@ -315,10 +315,11 @@ export function claimWorktreeRemoval(
     retiredExact?: true;
     retiredRemoval?: true;
     assertCurrent?: () => void;
+    workerAuthority?: WorktreeWorkerAuthority;
   },
-): void {
+): Promise<void> {
   const pid = process.pid;
-  claimWorktreeRemovalRow(env, {
+  return claimWorktreeRemovalRow(env, {
     ...params,
     pid,
     startTime: getFileLockProcessStartTime(pid),

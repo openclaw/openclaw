@@ -54,89 +54,69 @@ describe("application update status response ownership", () => {
     }
   });
 
-  it("accepts a newer terminal run from discovery after fast progress without a campaign", async () => {
-    const discovery = deferred<unknown>();
-    const first = updateRunFixture({ updatedAtMs: 1_000 });
-    const finished = updateRunFixture({
-      updatedAtMs: 6_000,
-      status: "succeeded",
-      phase: "finished",
-      finishedAtMs: 6_000,
-    });
-    const request = vi.fn<RequestFn>((method, params) =>
-      method === "update.status"
-        ? (params as { refreshCheckout?: boolean }).refreshCheckout
-          ? discovery.promise
-          : Promise.resolve({ activeRun: first })
-        : Promise.resolve({}),
-    );
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      const refreshing = overlays.refreshUpdateStatus();
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(first);
-      discovery.resolve({ lastRun: finished });
-      await expect(refreshing).resolves.toBe(true);
-      expect(overlays.snapshot.updateRun).toEqual(finished);
-      expect(overlays.snapshot.updateRunning).toBe(false);
-    } finally {
-      discovery.resolve({});
-      overlays.dispose();
-    }
-  });
-
-  it("retains a checkout failure across completion failure and successful progress", async () => {
-    vi.useFakeTimers();
-    let failCheckout = true;
-    let failProgress = false;
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      const checkout = (params as { refreshCheckout?: boolean }).refreshCheckout;
-      return (checkout ? failCheckout : failProgress)
-        ? Promise.reject(new Error(checkout ? "checkout unavailable" : "completion unavailable"))
-        : Promise.resolve({ schedule: AUTO_UPDATE_SCHEDULE });
-    });
-    const harness = createAutomaticUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
-      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
-      failProgress = true;
-      harness.emitEvent("update.available", {
-        schedule: {
-          ...AUTO_UPDATE_SCHEDULE,
-          campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying" },
-        },
+  it.each(["newer terminal run", "older legacy failure"])(
+    "reconciles a %s from checkout after fast progress",
+    async (outcome) => {
+      const discovery = deferred<unknown>();
+      const first = updateRunFixture({ updatedAtMs: 1_000 });
+      const finished = updateRunFixture({
+        updatedAtMs: 6_000,
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: 6_000,
       });
-      harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
-      failProgress = false;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
-      failCheckout = false;
-      await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
-      expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
-    } finally {
-      overlays.dispose();
-    }
-  });
+      const sentinel = { kind: "update", status: "error", ts: 2_000, stats: { reason: "current" } };
+      const legacy = outcome === "older legacy failure";
+      const request = vi.fn<RequestFn>((method, params) =>
+        method === "update.status"
+          ? (params as { refreshCheckout?: boolean }).refreshCheckout
+            ? discovery.promise
+            : Promise.resolve(legacy ? { sentinel } : { activeRun: first })
+          : Promise.resolve({}),
+      );
+      const harness = legacy
+        ? createAutomaticUpdateHarness(request)
+        : createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        const refreshing = overlays.refreshUpdateStatus();
+        await flushMicrotasks();
+        if (!legacy) {
+          expect(overlays.snapshot.updateRun).toEqual(first);
+        }
+        discovery.resolve(
+          legacy
+            ? { sentinel: { ...sentinel, ts: 1_000, stats: { reason: "obsolete" } } }
+            : { lastRun: finished },
+        );
+        await expect(refreshing).resolves.toBe(true);
+        if (legacy) {
+          expect(overlays.snapshot.recordedUpdateAttempt?.timestampMs).toBe(2_000);
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain("current");
+          expect(overlays.snapshot.reportableUpdateFailureId).toBe("recorded:2000");
+        } else {
+          expect(overlays.snapshot.updateRun).toEqual(finished);
+          expect(overlays.snapshot.updateRunning).toBe(false);
+        }
+      } finally {
+        discovery.resolve({});
+        overlays.dispose();
+      }
+    },
+  );
 
-  it.each(["access", "gateway"])(
-    "retires checkout error ownership when the same client's %s changes",
+  it.each(["unchanged", "access", "gateway"])(
+    "keeps checkout error ownership until its %s scope releases it",
     async (scope) => {
       vi.useFakeTimers();
+      let failCheckout = true;
       let failProgress = false;
       const request = vi.fn<RequestFn>((method, params) => {
         if (method !== "update.status") {
           return Promise.resolve({});
         }
         const checkout = (params as { refreshCheckout?: boolean }).refreshCheckout;
-        return checkout || failProgress
+        return (checkout ? failCheckout : failProgress)
           ? Promise.reject(new Error(checkout ? "checkout unavailable" : "completion unavailable"))
           : Promise.resolve({ schedule: AUTO_UPDATE_SCHEDULE });
       });
@@ -147,24 +127,22 @@ describe("application update status response ownership", () => {
         await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
         expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
         if (scope === "access") {
-          harness.update({
-            hello: {
-              auth: { role: "operator", scopes: ["operator.read"] },
-              snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
-            } as ApplicationGatewaySnapshot["hello"],
-          });
-          harness.update({
-            hello: {
-              auth: { role: "operator", scopes: ["operator.admin"] },
-              snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
-            } as ApplicationGatewaySnapshot["hello"],
-          });
-        } else {
+          for (const permission of ["operator.read", "operator.admin"]) {
+            harness.update({
+              hello: {
+                auth: { role: "operator", scopes: [permission] },
+                snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
+              } as ApplicationGatewaySnapshot["hello"],
+            });
+          }
+        } else if (scope === "gateway") {
           harness.gateway.connection.gatewayUrl = "ws://replacement-gateway.test";
           harness.update({});
         }
         await flushMicrotasks();
-        expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+        if (scope !== "unchanged") {
+          expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+        }
         failProgress = true;
         harness.emitEvent("update.available", {
           schedule: {
@@ -174,9 +152,16 @@ describe("application update status response ownership", () => {
         });
         harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
         await flushMicrotasks();
-        expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("completion unavailable");
+        expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
+          scope === "unchanged" ? "checkout unavailable" : "completion unavailable",
+        );
         failProgress = false;
         await vi.advanceTimersByTimeAsync(5_000);
+        if (scope === "unchanged") {
+          expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
+          failCheckout = false;
+          await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
+        }
         expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
       } finally {
         overlays.dispose();
@@ -406,31 +391,4 @@ describe("application update status response ownership", () => {
       }
     },
   );
-
-  it("does not restore a legacy failure superseded during checkout discovery", async () => {
-    const discovery = deferred<unknown>();
-    const sentinel = { kind: "update", status: "error", ts: 2_000, stats: { reason: "current" } };
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      return (params as { refreshCheckout?: boolean }).refreshCheckout
-        ? discovery.promise
-        : Promise.resolve({ sentinel });
-    });
-    const harness = createAutomaticUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      const checking = overlays.refreshUpdateStatus();
-      await flushMicrotasks();
-      discovery.resolve({ sentinel: { ...sentinel, ts: 1_000, stats: { reason: "obsolete" } } });
-      await expect(checking).resolves.toBe(true);
-      expect(overlays.snapshot.recordedUpdateAttempt?.timestampMs).toBe(2_000);
-      expect(overlays.snapshot.updateStatusBanner?.text).toContain("current");
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe("recorded:2000");
-    } finally {
-      discovery.resolve({});
-      overlays.dispose();
-    }
-  });
 });

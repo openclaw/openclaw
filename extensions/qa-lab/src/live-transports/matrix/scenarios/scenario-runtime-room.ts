@@ -301,10 +301,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
 }
 
 export async function runReactionThreadedScenario(context: MatrixQaScenarioContext) {
-  const thread = await runThreadScenario(context, {
-    createNestedReply: true,
-    tokenPrefix: "MATRIX_QA_REACTION_THREAD",
-  });
+  const thread = await runThreadScenario(context, "MATRIX_QA_REACTION_THREAD");
   assertThreadReplyArtifact(thread.reply, {
     expectedRootEventId: thread.rootEventId,
     label: "threaded reaction reply",
@@ -336,7 +333,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     details: [
       ...buildMatrixQaThreadDetailLines({
         result: thread,
-        includeNestedTrigger: true,
         extraLines: [`thread reply event: ${thread.reply.eventId}`],
         replyLabel: "thread reply",
       }),

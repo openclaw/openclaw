@@ -1,16 +1,19 @@
 import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
@@ -194,3 +197,100 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
     });
   },
 );
+
+it.each([
+  "lifecycle rotation",
+  "placement publication",
+  "service replacement",
+  "unavailable reader",
+] as const)("refuses %s while preparing placement admission", async (change) => {
+  await withOpenClawTestState({ label: "chat-placement-admission" }, async () => {
+    const cfg = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const sessionKey = "agent:main:dashboard:placement-admission";
+    const runId = "chat-placement-admission";
+    const scope = { agentId: "main", sessionKey };
+    const entry: SessionEntry = { sessionId: "placement-session", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    const request = normalizeChatSendRequest({
+      client: null,
+      params: { sessionKey, message: "Hello", idempotencyKey: runId },
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    const placements = createWorkerSessionPlacementStore();
+    const getMany = vi.fn(() => new Map());
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => cfg,
+      workerSessionPlacementService: change === "unavailable reader" ? { getMany } : placements,
+    });
+    const prepared = prepareChatSendSession({ request: request.value, client: null, context });
+    if (!prepared.ok) {
+      throw new Error("Session preparation failed");
+    }
+    const session = qualifyChatSendSession(prepared.value);
+    const initialEntry = structuredClone(sessionAccessor.loadSessionEntry(scope));
+    const observed = createDeferred();
+    const resume = createDeferred();
+    const preparePlacement = placements.prepareRuntimeRefresh.bind(placements);
+    const delayed = vi
+      .spyOn(placements, "prepareRuntimeRefresh")
+      .mockImplementationOnce(async (sessionId) => {
+        const facts = await preparePlacement(sessionId);
+        observed.resolve();
+        await resume.promise;
+        return facts;
+      });
+    const respond = vi.fn();
+    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+    const pending = admitChatSend({
+      request: request.value,
+      session,
+      client: null,
+      context,
+      respond,
+    }).then((result) => (admitted = result));
+    try {
+      if (change !== "unavailable reader") {
+        await awaitGateBeforeSettlement(observed.promise, pending, "chat skipped placement facts");
+        if (change === "lifecycle rotation") {
+          rotateAgentEventLifecycleGeneration();
+        } else if (change === "placement publication") {
+          await placements.startDispatch({ ...scope, sessionId: entry.sessionId });
+        } else {
+          context.workerSessionPlacementService = createWorkerSessionPlacementStore();
+        }
+        resume.resolve();
+      }
+      expect((await pending).ok).toBe(false);
+      expect(respond).toHaveBeenCalledOnce();
+      expect(context.chatAbortControllers.size).toBe(0);
+      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
+      expect(sessionAccessor.loadSessionEntry(scope)).toEqual(initialEntry);
+      expect(
+        sessionLifecycle.getSessionWorkAdmissionRelease({
+          scope: session.storePath,
+          identities: [sessionKey, entry.sessionId],
+        }),
+      ).toBeUndefined();
+      if (change === "unavailable reader") {
+        expect(respond.mock.calls[0]?.[2]?.message).toContain(
+          "Worker placement admission reader is unavailable",
+        );
+        expect(getMany).not.toHaveBeenCalled();
+      }
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+      delayed.mockRestore();
+      if (admitted?.ok) {
+        admitted.value.cleanupAdmittedRun();
+      }
+      session.releaseSessionTarget();
+      clearAgentRunContext(runId);
+    }
+  });
+});

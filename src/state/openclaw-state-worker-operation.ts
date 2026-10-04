@@ -64,13 +64,14 @@ export function captureOpenClawStateWorkerOpeningGuard(
   context: OpenClawStateWorkerContext,
   assertCurrent?: () => void,
 ) {
+  const databaseAdmission = context.admission;
   const admission: OpeningAdmission = {
     assertCurrent,
   };
   let captured: (() => void) | undefined = AsyncLocalStorage.bind(() => {
-    context.admission.assertCurrent();
+    databaseAdmission.assertCurrent();
     try {
-      assertCurrent?.();
+      admission.assertCurrent?.();
     } catch (error) {
       admission.refusal = { error };
       throw error;

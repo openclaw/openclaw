@@ -10,6 +10,7 @@ import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createPermitPool } from "../shared/permit-pool.js";
 import {
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
@@ -18,7 +19,14 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "./openclaw-agent-db.paths.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -35,6 +43,7 @@ type PreparationInput = {
 };
 type Activation = {
   isCurrent: () => boolean;
+  openAgent: (input: PreparationInput) => Promise<void>;
   prepareAgent: (input: PreparationInput) => Promise<void>;
 };
 type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
@@ -70,6 +79,21 @@ function matchesSchemaSourceWitness(
   );
 }
 
+function matchesInspectionPath(
+  paths: readonly string[],
+  target: string,
+  samePath = isSameOpenClawAgentDatabasePath,
+): boolean {
+  return paths.some((pathname) => {
+    try {
+      return samePath(pathname, target);
+    } catch {
+      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
+      return false;
+    }
+  });
+}
+
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
 
@@ -86,6 +110,7 @@ class AgentDatabaseStartupAdmission {
   private stopped = false;
   private stopping?: Promise<void>;
   private preparation: Promise<void> = Promise.resolve();
+  private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
@@ -141,11 +166,19 @@ class AgentDatabaseStartupAdmission {
     );
   }
 
-  scheduling(env: NodeJS.ProcessEnv) {
+  scheduling(
+    env: NodeJS.ProcessEnv,
+    runtimePaths: readonly string[],
+    runtimeAgentIds: ReadonlySet<string>,
+  ) {
+    const samePath = createOpenClawAgentDatabasePathMatcher();
     return {
       signal: this.signal,
       canDefer: (target: PendingInspection["target"]) =>
-        this.deferInspections && target.agentId !== undefined,
+        this.deferInspections &&
+        target.agentId !== undefined &&
+        runtimeAgentIds.has(target.agentId) &&
+        matchesInspectionPath(runtimePaths, target.path, samePath),
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),
@@ -186,7 +219,7 @@ class AgentDatabaseStartupAdmission {
     priorRefusals?: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>,
   ): boolean {
     const refusal = target.agentId && priorRefusals?.get(target.agentId);
-    if (!refusal) {
+    if (!refusal || !matchesInspectionPath(refusal.paths, target.path)) {
       return false;
     }
     (inspection.agentRefusals ??= []).push(refusal);
@@ -263,6 +296,7 @@ class AgentDatabaseStartupAdmission {
               throw new Error(`Agent ${agentId} was deleted during startup inspection`);
             }
           };
+          const preparationComplete = createDeferredCore();
           try {
             assertCurrent();
             for (const result of results) {
@@ -287,13 +321,25 @@ class AgentDatabaseStartupAdmission {
               async () => {
                 await assertNotDeleted();
                 await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
-                  await activation.prepareAgent({
+                  const input = {
                     agentId,
                     paths,
                     env,
                     signal: this.signal,
                     assertCurrent,
-                  });
+                  };
+                  const release = await this.opening.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    await activation.openAgent(input);
+                  } finally {
+                    release?.();
+                  }
+                  // Keep the revision until admission publishes after its final journal check.
+                  const previous = this.preparation;
+                  this.preparation = preparationComplete.promise;
+                  await previous;
+                  await activation.prepareAgent(input);
                   await assertNotDeleted();
                 });
               },
@@ -313,11 +359,10 @@ class AgentDatabaseStartupAdmission {
             if (this.pending.get(agentId) === refusal) {
               this.pending.delete(agentId);
             }
+            preparationComplete.resolve();
           }
         };
-        const prepared = this.preparation.then(prepare);
-        this.preparation = prepared.catch(() => {});
-        await prepared;
+        await prepare();
       })();
       this.track(recovery);
     }

@@ -106,6 +106,22 @@ TypeScript marks those adapters deprecated. They retain their result shapes and
 completion timing until the next Plugin SDK major and an explicitly approved
 breaking release. No schema, retained data, or update migration changes.
 
+### Channel pairing allowlists
+
+`readChannelAllowFromStoreSync` from `openclaw/plugin-sdk/channel-pairing` is
+deprecated as of October 3, 2026. Await `readChannelAllowFromStore` from the same
+subpath with the same channel, environment, and optional account ID. Both APIs
+shipped in OpenClaw 2026.9.8; the synchronous API keeps its signature and native
+behavior until the next Plugin SDK major and explicit breaking-release approval.
+
+The async API and bundled channel callers read current allowlist rows in the
+shared-state worker. Account normalization, entry ordering, and ingress policy
+gates are unchanged. A missing store returns an empty allowlist without creating
+storage; boot and Doctor own initialization and migrations. Read failures
+propagate to the caller, and ingress retains its fail-closed handling. Prepared
+entries do not replace current message or channel authority. No schema, retention,
+or update migration is required, and no runtime warning is emitted.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from
@@ -158,6 +174,23 @@ Core and bundled callers use these worker-backed methods. Legacy calls emit one
 `DEP_SESSION_PERSISTENCE` warning per plugin and method per process, with a
 once-per-method warning for unscoped calls. Schemas, retained data, and update
 behavior are unchanged.
+
+### Personal model-account control plane
+
+The October 3, 2026 `model-account-connect-sync-persistence` record retains the
+seven synchronous `modelAccountConnectService` methods shipped in 2026.9.8:
+`listLinks`, `link`, `unlink`, `list`, `select`, `status`, and `cancel`. They remain
+available through the Gateway Plugin SDK context with their existing arguments,
+return envelopes, and immediate completion until the next Plugin SDK major and
+explicit breaking-release approval. In particular, the released action shape
+`{ owner: string; assertCurrent: () => void }` remains source-compatible.
+
+Core and bundled callers use the corresponding `Async` methods; see
+[awaited personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations).
+Synchronous calls emit one `DEP_SESSION_PERSISTENCE` warning per plugin and
+method per process; unscoped callers warn once per method. The compatibility
+adapters retain native database access during this window. RPC schemas,
+credential storage, retention, and update behavior are unchanged.
 
 ### Awaited session persistence
 
@@ -544,6 +577,23 @@ displays either the date or named gate, counts local code/doc references, lists
 `removal-pending` records with their blockers and surface-token reader
 references, and summarizes the private memory-host SDK bridge. Those reader
 references are triage signals, not published-artifact proof.
+
+### TTS preference resolution
+
+Host reply dispatch now prepares the machine-owned TTS preference path through
+the shared-state reader and carries that fact through prompt and delivery work.
+The released `resolveTtsPrefsPath(config)` call in
+`openclaw/plugin-sdk/agent-runtime` and `openclaw/plugin-sdk/tts-runtime` still
+returns a `string` synchronously. `buildTtsSystemPromptHint(config, agentId,
+options)` also keeps its synchronous return value, and the existing asynchronous
+`maybeApplyTtsToPayload` call does not require prepared preferences.
+
+The `tts-preferences-sync-resolution` compatibility record retains the legacy
+synchronous resolution path. Removal requires a public preparation contract,
+migration of published plugin readers, and explicit approval for a breaking
+Plugin SDK release at the next major-version gate. No removal date or runtime
+warning is introduced. Existing plugins need no change for this host update;
+preference-file reads, stored data, and update behavior stay the same.
 
 ### Media legacy projection
 

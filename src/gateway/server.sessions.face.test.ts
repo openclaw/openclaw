@@ -8,7 +8,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { boardStore } from "./board-store.js";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { onceMessage, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   setupGatewaySessionsTestHarness,
@@ -206,26 +206,53 @@ test("sessions.list filters dashboard sessions by board existence instead of sav
     { kind: "tab_create", tabId: "main", title: "Dashboard" },
   ]);
 
-  const listed = await directSessionReq<{
-    sessions: Array<{ key: string; boardFace?: string }>;
-    totalCount: number;
-  }>("sessions.list", { hasBoard: true, limit: 50 });
+  const { ws } = await openClient({ scopes: ["operator.read", "operator.write"] });
+  try {
+    const listed = await rpcReq<{
+      sessions: Array<{ key: string; boardFace?: string; hasBoard?: boolean }>;
+      totalCount: number;
+    }>(ws, "sessions.list", { hasBoard: true, rowMode: "compact", limit: 50 });
 
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.totalCount).toBe(1);
-  expect(listed.payload?.sessions).toEqual([
-    expect.objectContaining({ key: "agent:main:board", boardFace: "chat" }),
-  ]);
+    expect(listed.ok).toBe(true);
+    expect(listed.payload?.totalCount).toBe(1);
+    expect(listed.payload?.sessions).toEqual([
+      expect.objectContaining({ key: "agent:main:board", boardFace: "chat", hasBoard: true }),
+    ]);
 
-  const withoutBoards = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-    totalCount: number;
-  }>("sessions.list", { hasBoard: false, limit: 50 });
-  expect(withoutBoards.ok).toBe(true);
-  expect(withoutBoards.payload?.totalCount).toBe(1);
-  expect(withoutBoards.payload?.sessions).toEqual([
-    expect.objectContaining({ key: "agent:main:faceonly" }),
-  ]);
+    const withoutBoards = await rpcReq<{
+      sessions: Array<{ key: string; hasBoard?: boolean }>;
+      totalCount: number;
+    }>(ws, "sessions.list", { hasBoard: false, limit: 50 });
+    expect(withoutBoards.ok).toBe(true);
+    expect(withoutBoards.payload?.totalCount).toBe(1);
+    expect(withoutBoards.payload?.sessions).toEqual([
+      expect.objectContaining({ key: "agent:main:faceonly", hasBoard: false }),
+    ]);
+
+    expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
+    const changed = onceMessage(
+      ws,
+      (event) =>
+        event.type === "event" &&
+        event.event === "sessions.changed" &&
+        event.payload?.sessionKey === "agent:main:board" &&
+        event.payload?.reason === "board",
+    );
+    expect(
+      (
+        await rpcReq(ws, "board.update", {
+          sessionKey: "agent:main:board",
+          ops: [{ kind: "tab_delete", tabId: "main" }],
+        })
+      ).ok,
+    ).toBe(true);
+    expect((await changed).payload?.session).toMatchObject({
+      key: "agent:main:board",
+      hasBoard: false,
+    });
+  } finally {
+    ws.close();
+  }
 });
 
 test("sessions.list ignores a same-owner sentinel board in an unselected store", async () => {

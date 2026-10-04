@@ -95,6 +95,32 @@ describe("node execution target resolution", () => {
     callGatewayToolMock.mockReset();
   });
 
+  it("retains the shipped marker transport for nodes without execution-context support", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "legacy-windows",
+          platform: "win32",
+          connected: true,
+          commands: ["system.run", "system.run.prepare"],
+          caps: ["system"],
+        },
+      ],
+    });
+    const target = await resolveNodeExecutionTarget({
+      ...createDirectNodeRun().request,
+      requestedEnv: { CUSTOM: "unchanged" },
+      executionContext: { senderId: "sender-1", subagent: true },
+    });
+    expect(target.executionContext).toBeUndefined();
+    expect(target.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "tool --version"]);
+    expect(target.env).toEqual({
+      CUSTOM: "unchanged",
+      OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"}}',
+      OPENCLAW_SUBAGENT_EXEC: "1",
+    });
+  });
+
   it("rejects inventory records without execution capabilities", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [{ nodeId: "node-1", platform: "linux" }],
@@ -135,7 +161,12 @@ describe("node execution target resolution", () => {
       /multiple.*mac-a.*mac-b/i,
     );
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith("node.list", {}, {}, { signal: undefined });
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.list",
+      {},
+      {},
+      expect.objectContaining({ signal: undefined }),
+    );
   });
 
   it.each([

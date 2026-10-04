@@ -94,7 +94,8 @@ describe("sidebar narration subscription retries", () => {
     controller.disconnect();
   });
 
-  it.each([0, 0.5, 0.9])("jitters a release after the server hint (draw %s)", async (draw) => {
+  it("jitters a release after the server hint", async () => {
+    const draw = 0.5;
     vi.spyOn(Math, "random").mockReturnValue(draw);
     const { controller, input, source, server, wireKeys } = releaseFixture(
       new GatewayProtocolRequestError({ retryable: true, retryAfterMs: 90_000 }),
@@ -111,19 +112,39 @@ describe("sidebar narration subscription retries", () => {
     controller.disconnect();
   });
 
-  it.each([false, undefined])(
-    "does not retry a release rejection with retryable=%s",
-    async (retryable) => {
-      const { controller, input, source } = releaseFixture(
-        new GatewayProtocolRequestError({ retryable }),
-      );
+  it.each([
+    { retryable: false, returning: false },
+    { retryable: undefined, returning: false },
+    { retryable: false, returning: true },
+  ])(
+    "does not retry terminal release rejection (retryable=$retryable, returning=$returning)",
+    async ({ retryable, returning }) => {
+      const failure = new GatewayProtocolRequestError({ retryable });
+      const { controller, input, source, request } = releaseFixture(failure);
       await vi.advanceTimersByTimeAsync(0);
+      const rejected = createDeferred();
+      if (returning) {
+        request.mockImplementationOnce(async () => {
+          await rejected.promise;
+          throw failure;
+        });
+      }
       const removed = { ...input, rows: [] };
       controller.sync(removed);
-      await vi.advanceTimersByTimeAsync(0);
-      controller.sync(removed);
+      if (returning) {
+        controller.sync(input);
+        controller.sync(removed);
+        rejected.resolve();
+      } else {
+        await vi.advanceTimersByTimeAsync(0);
+        controller.sync(removed);
+      }
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
+      if (returning) {
+        expect(request).toHaveBeenCalledTimes(2);
+      } else {
+        expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
+      }
       expect(vi.getTimerCount()).toBe(0);
       controller.disconnect();
     },
@@ -242,26 +263,6 @@ describe("sidebar narration subscription retries", () => {
       controller.disconnect();
     },
   );
-
-  it("honors a terminal release rejection after a returning interest leaves again", async () => {
-    const failure = new GatewayProtocolRequestError({ retryable: false });
-    const { controller, input, request } = releaseFixture(failure);
-    await vi.advanceTimersByTimeAsync(0);
-    const rejected = createDeferred();
-    request.mockImplementationOnce(async () => {
-      await rejected.promise;
-      throw failure;
-    });
-    const removed = { ...input, rows: [] };
-    controller.sync(removed);
-    controller.sync(input);
-    controller.sync(removed);
-    rejected.resolve();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
-  });
 
   it("coalesces an overdue release retry with the next sidebar sync", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);

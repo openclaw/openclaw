@@ -16,14 +16,12 @@ import {
 } from "./google-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-type GoogleOptions = GoogleProviderOptions;
-
 let toolCallCounter = 0;
 
-export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions> = (
+export const streamGoogle: StreamFunction<"google-generative-ai", GoogleProviderOptions> = (
   model: Model<"google-generative-ai">,
   context: Context,
-  options?: GoogleOptions,
+  options?: GoogleProviderOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-generative-ai");
@@ -54,7 +52,7 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
   return streamGoogle(model, context, {
     ...base,
     thinking: buildGoogleSimpleThinking(model, options),
-  } satisfies GoogleOptions);
+  } satisfies GoogleProviderOptions);
 };
 
 function createClient(

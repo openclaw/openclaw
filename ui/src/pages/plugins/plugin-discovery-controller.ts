@@ -15,17 +15,13 @@ const CATALOG_SECTION_SIZE = 8;
 const NO_CATALOG_CLIENT: GatewayBrowserClient | null = null;
 const NO_CATALOG_CURSOR: string | null = null;
 
-type CatalogPageLoad = {
-  items: PluginDiscoveryEntry[];
+type CatalogPageLoad = PluginDiscoveryResult & {
   overview: boolean;
   selection: {
     intent: PluginDiscoveryIntent;
     category: string | null;
     query: string;
   };
-  categories?: PluginDiscoveryCategory[];
-  nextCursor?: string;
-  remoteError?: string;
 };
 
 type PluginDiscoveryGateway = {
@@ -36,15 +32,16 @@ type PluginDiscoveryGateway = {
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
   membership: "featured" | "trending",
-  rank: "featuredRank" | "trendingRank",
 ): PluginDiscoveryEntry[] {
+  const rank = `${membership}Rank` as const;
   return items
     .filter((item) => item.catalog[membership])
     .toSorted(
       (left, right) =>
         (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
-    );
+    )
+    .slice(0, CATALOG_SECTION_SIZE);
 }
 
 function appendUniqueEntries(
@@ -180,14 +177,8 @@ export class PluginDiscoveryController {
         this.categoriesReady = true;
         this.categoriesError = null;
       }
-      this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
-        0,
-        CATALOG_SECTION_SIZE,
-      );
-      this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
-        0,
-        CATALOG_SECTION_SIZE,
-      );
+      this.featured = rankedOverviewShelf(page.items, "featured");
+      this.trending = rankedOverviewShelf(page.items, "trending");
     }
   }
 
@@ -229,14 +220,6 @@ export class PluginDiscoveryController {
     await this.categoriesTask.run([client]);
   }
 
-  get featuredLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
-  }
-
-  get trendingLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
-  }
-
   get loadingMore(): boolean {
     return this.gateway.isConnected() && this.loadMoreTask.status === TaskStatus.PENDING;
   }
@@ -248,7 +231,7 @@ export class PluginDiscoveryController {
     query: string;
     manual?: boolean;
     cursor?: string;
-    signal?: AbortSignal;
+    signal: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
     const overview =
       !params.cursor && this.isGroupedOverview(params.intent, params.category, params.query);
@@ -262,7 +245,7 @@ export class PluginDiscoveryController {
         ...(params.cursor ? { cursor: params.cursor } : {}),
         pageSize: CATALOG_PAGE_SIZE,
       },
-      params.signal ? { signal: params.signal } : undefined,
+      { signal: params.signal },
     );
     const items =
       params.intent === "all" && !params.query

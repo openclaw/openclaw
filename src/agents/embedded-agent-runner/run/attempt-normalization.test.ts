@@ -257,19 +257,20 @@ describe("fixed-store session bootstrap", () => {
     },
   );
 
-  it("carries the persisted owner into harness admission", () => {
-    assertAgentHarnessRunAdmission({
+  it("carries the persisted owner into harness admission", async () => {
+    await assertAgentHarnessRunAdmission({
       config,
       sessionId: "ops-session",
       sessionKey: "global",
     } as never);
 
-    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith(
+    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
         sessionKey: "global",
         storePath: "/tmp/shared-sessions.json",
       }),
+      expect.any(Function),
     );
   });
 

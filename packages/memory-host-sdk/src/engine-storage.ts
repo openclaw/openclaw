@@ -5,7 +5,6 @@ export {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
-  cosineSimilarity,
   encodeMemoryEmbedding,
   decodeMemoryEmbedding,
   extractProjectKeysFromCuratedEntry,
@@ -18,43 +17,32 @@ export {
   normalizeExtraMemoryPathEntries,
   normalizeProjectAnnotationKey,
   normalizeExtraMemoryPaths,
-  parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   stripMemoryAnnotationCarriers,
-  type CuratedMarkdownEntry,
-  type CuratedProjectAnnotations,
   type MemoryChunk,
   type MemoryFileEntry,
-  type NormalizedExtraMemoryPath,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
-export { isTransientMemoryReadError, retryTransientMemoryRead } from "./host/read-retry.js";
+export { retryTransientMemoryRead } from "./host/read-retry.js";
 export {
-  buildMemoryReadResult,
   buildMemoryReadResultFromSlice,
-  DEFAULT_MEMORY_READ_LINES,
-  DEFAULT_MEMORY_READ_MAX_CHARS,
   type LegacyMemoryReadResult,
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
-export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export {
   formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
-  isMemoryOriginEligibleForAutomaticInjection,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,
   resolveMemorySearchStaleness,
 } from "./host/types.js";
-export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
 export {
   createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControl,
-  type MemorySearchDeadlineControlAction,
   type MemorySearchDeadlineControlOptions,
 } from "./host/search-deadline-control.js";
 export type {
@@ -63,33 +51,26 @@ export type {
   MemoryExtraPath,
   MemoryIndexIdentityDiagnostic,
   MemoryIndexIdentityState,
-  MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
   MemorySessionSyncTarget,
-  MemorySessionKind,
   MemorySource,
   MemorySyncParams,
   MemorySyncProgressUpdate,
   MemoryVectorIndexState,
 } from "./host/types.js";
 export {
-  dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
   ensureMemoryIndexSchema,
-  ensureMemoryRecallMetadataSchema,
-  ensureMemoryPathFtsTriggers,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
-  MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
@@ -105,4 +86,4 @@ export {
   requireNodeSqlite,
   stopMemorySqliteWalMaintenance,
 } from "./host/sqlite.js";
-export { isFileMissingError, statRegularFile } from "./host/fs-utils.js";
+export { isFileMissingError } from "./host/fs-utils.js";

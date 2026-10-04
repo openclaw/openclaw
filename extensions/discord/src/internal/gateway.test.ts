@@ -157,7 +157,7 @@ describe("GatewayPlugin", () => {
   it("reconnects when the socket closes while waiting for identify concurrency", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    await sharedGatewayIdentifyLimiter.wait();
     const gateway = new TestGatewayPlugin();
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
@@ -188,7 +188,7 @@ describe("GatewayPlugin", () => {
   it("does not identify a replacement socket from a stale HELLO", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    await sharedGatewayIdentifyLimiter.wait();
     const gateway = new TestGatewayPlugin();
 
     gateway.connect(false);
@@ -229,38 +229,15 @@ describe("GatewayPlugin", () => {
     );
   });
 
-  it("uses the safe single identify bucket for non-finite max concurrency", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-
-    await sharedGatewayIdentifyLimiter.wait({
-      shardId: 0,
-      maxConcurrency: Number.POSITIVE_INFINITY,
-    });
-    let secondResolved = false;
-    const second = sharedGatewayIdentifyLimiter
-      .wait({ shardId: 1, maxConcurrency: Number.POSITIVE_INFINITY })
-      .then(() => {
-        secondResolved = true;
-      });
-
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(secondResolved).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await second;
-    expect(secondResolved).toBe(true);
-  });
-
   it("bounds identify waits after a backward clock jump", async () => {
     vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       vi.setSystemTime(1_000_000_000_000);
-      await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+      await sharedGatewayIdentifyLimiter.wait();
 
       vi.setSystemTime(0);
-      const second = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+      const second = sharedGatewayIdentifyLimiter.wait();
 
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
 
@@ -275,14 +252,14 @@ describe("GatewayPlugin", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
-    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    await sharedGatewayIdentifyLimiter.wait();
     let secondResolved = false;
     let thirdResolved = false;
 
-    const second = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 }).then(() => {
+    const second = sharedGatewayIdentifyLimiter.wait().then(() => {
       secondResolved = true;
     });
-    const third = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 }).then(() => {
+    const third = sharedGatewayIdentifyLimiter.wait().then(() => {
       thirdResolved = true;
     });
 
@@ -832,23 +809,23 @@ describe("GatewayPlugin", () => {
 
   it("includes close code details when reconnect attempts are exhausted", async () => {
     vi.useFakeTimers();
-    const gateway = new TestGatewayPlugin({
-      reconnect: { maxAttempts: 0 },
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
 
     gateway.connect(false);
     gateway.sockets[0]?.emit("open");
-    gateway.sockets[0]?.emit("close", 1006);
-    await vi.advanceTimersByTimeAsync(30_000);
+    for (let attempt = 0; attempt <= 50; attempt += 1) {
+      gateway.sockets.at(-1)?.emit("close", 1006);
+      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.sockets.at(-1)?.emit("open");
+    }
 
     expect(errorSpy).toHaveBeenCalledWith(
-      new Error("Max reconnect attempts (0) reached after close code 1006"),
+      new Error("Max reconnect attempts (50) reached after close code 1006"),
     );
-    expect(gateway.connectCalls).toEqual([false]);
-    expect(gateway.sockets).toHaveLength(1);
+    expect(gateway.connectCalls).toHaveLength(51);
+    expect(gateway.sockets).toHaveLength(51);
   });
 
   it("does not reconnect after fatal gateway closes", async () => {
@@ -958,11 +935,11 @@ describe("GatewayPlugin", () => {
     gateway.disconnect();
   });
 
-  it("spaces identify sends by gateway max concurrency bucket", async () => {
+  it("spaces identify sends across gateway connections", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const first = new GatewayPlugin(
-      { shard: [0, 2] },
+      {},
       {
         url: "wss://gateway.discord.gg/",
         shards: 2,
@@ -970,7 +947,7 @@ describe("GatewayPlugin", () => {
       },
     );
     const second = new GatewayPlugin(
-      { shard: [1, 2] },
+      {},
       {
         url: "wss://gateway.discord.gg/",
         shards: 2,

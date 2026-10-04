@@ -79,15 +79,15 @@ export function openPackageActivationJournal(anchor: string) {
   assertPackageActivationLayout(anchor);
   const journalPath = resolvePackageActivationJournalPath(anchor);
   const parent = path.dirname(anchor);
-  const parentIdentity = packageActivationIdentity(parent, true);
+  const parentIdentity = packageActivationIdentity(parent, "parent");
   const control = resolvePackageActivationControl(anchor);
-  const journalParentIdentity = assertPrivate(control, true);
-  const journalIdentity = assertPrivate(journalPath, false);
+  const journalParentIdentity = assertPrivate(control, "control");
+  const journalIdentity = assertPrivate(journalPath, "journal");
   const assertFiles = () => {
     if (
-      packageActivationIdentity(parent, true) !== parentIdentity ||
-      assertPrivate(control, true) !== journalParentIdentity ||
-      assertPrivate(journalPath, false) !== journalIdentity ||
+      packageActivationIdentity(parent, "parent") !== parentIdentity ||
+      assertPrivate(control, "control") !== journalParentIdentity ||
+      assertPrivate(journalPath, "journal") !== journalIdentity ||
       fs.realpathSync(control) !== control
     ) {
       throw new Error("Package publication journal identity changed");
@@ -134,7 +134,7 @@ export function openPackageActivationJournal(anchor: string) {
       descriptor.journalParentIdentity !== journalParentIdentity ||
       descriptor.journalIdentity !== journalIdentity ||
       resolvePackageActivationAnchor(descriptor.authority.installKey) !== anchor ||
-      descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), true) ||
+      descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), "parent") ||
       new Set(descriptor.launchers.map((entry) => entry.name)).size !== descriptor.launchers.length
     ) {
       throw new Error("Package publication journal does not match its installation");
@@ -225,8 +225,9 @@ export function openPackageActivationJournal(anchor: string) {
     intent: PackageActivationIntent,
     assertCurrent: () => void,
     publications = expected.publications,
+    descriptor = expected.descriptor,
   ): PackageActivationRecord => {
-    const descriptorJsonValue = descriptorJson(expected.descriptor);
+    const descriptorJsonValue = descriptorJson(descriptor);
     const intentJson = JSON.stringify(intentSchema.parse(intent));
     PackageActivationPhaseSchema.parse(phase);
     assertCurrent();
@@ -264,13 +265,38 @@ export function openPackageActivationJournal(anchor: string) {
   };
   return {
     read,
+    recordPreviousCopy(
+      expected: PackageActivationRecord,
+      previous: PackageActivationDescriptor["previous"],
+      assertCurrent: () => void,
+    ) {
+      if (
+        expected.phase !== "publishing" ||
+        expected.intent?.kind !== "copy-previous" ||
+        expected.intent.identity !== previous.identity
+      ) {
+        throw new Error("Package copy does not match its recorded custody.");
+      }
+      return transition(
+        expected,
+        "publishing",
+        {
+          kind: "displace-copy",
+          source: expected.descriptor.previous,
+          removing: false,
+        },
+        assertCurrent,
+        expected.publications,
+        { ...expected.descriptor, previous },
+      );
+    },
     readForRecovery() {
       return prepareSqliteRollbackRecovery({
         path: journalPath,
         scratchRoot: control,
         assertIdentity: assertFiles,
         assertFileSafe(file) {
-          assertPrivate(file, false);
+          assertPrivate(file, "rollback-journal");
         },
         read: (db) => decode(readRow(db)),
       });
@@ -296,9 +322,11 @@ export function openPackageActivationJournal(anchor: string) {
               packageActivationIdentity(preparationSource(descriptor, "helper"), false) !==
                 descriptor.helperIdentity ||
               previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
-              previous.descriptor.authority.databaseIdentity !==
-                descriptor.authority.databaseIdentity ||
-              previous.descriptor.authority.parentIdentity !== descriptor.authority.parentIdentity
+              (previous.intent?.kind !== "recovery-lease-identity-changed" &&
+                (previous.descriptor.authority.databaseIdentity !==
+                  descriptor.authority.databaseIdentity ||
+                  previous.descriptor.authority.parentIdentity !==
+                    descriptor.authority.parentIdentity))
             ) {
               throw new Error("The previous package receipt is not safely replaceable.");
             }
@@ -330,7 +358,15 @@ export function openPackageActivationJournal(anchor: string) {
     assertCurrent(expected: PackageActivationRecord) {
       assertRecord(expected, read());
     },
-    transition,
+    transition(
+      expected: PackageActivationRecord,
+      phase: PackageActivationPhase,
+      intent: PackageActivationIntent,
+      assertCurrent: () => void,
+      publications = expected.publications,
+    ) {
+      return transition(expected, phase, intent, assertCurrent, publications);
+    },
   };
 }
 export type PackageActivationJournal = ReturnType<typeof openPackageActivationJournal>;
@@ -361,16 +397,17 @@ export function createPackageActivationJournal(
     assertCurrent();
     assertPackageActivationLayout(anchor);
     if (
-      assertPrivate(preparationSource(descriptor, "anchor"), true) !== descriptor.anchorIdentity ||
-      packageActivationIdentity(path.dirname(anchor), true) !== descriptor.parentIdentity ||
+      assertPrivate(preparationSource(descriptor, "anchor"), "anchor") !==
+        descriptor.anchorIdentity ||
+      packageActivationIdentity(path.dirname(anchor), "parent") !== descriptor.parentIdentity ||
       fs.realpathSync(path.dirname(anchor)) !== path.dirname(anchor) ||
-      assertPrivate(stagedControl, true) !== descriptor.journalParentIdentity ||
+      assertPrivate(stagedControl, "control") !== descriptor.journalParentIdentity ||
       fs.realpathSync(stagedControl) !== stagedControl ||
       descriptor.journalParentIdentity.split(":")[0] !== descriptor.parentIdentity.split(":")[0] ||
       preparationSource(descriptor, "helper") !== resolvePackageActivationHelper(anchor) ||
       descriptor.preparation.find((entry) => entry.name === "helper")?.sourceParentIdentity !==
         descriptor.journalParentIdentity ||
-      assertPrivate(helperPath, false) !== descriptor.helperIdentity ||
+      assertPrivate(helperPath, "helper") !== descriptor.helperIdentity ||
       createHash("sha256").update(fs.readFileSync(helperPath)).digest("hex") !==
         descriptor.helperDigest ||
       packageActivationIdentity(descriptor.authority.installKey, true) !==
@@ -389,7 +426,7 @@ export function createPackageActivationJournal(
   let initial: ActivationRow;
   const assertCreated = () => {
     assertAnchor();
-    if (assertPrivate(journalPath, false) !== journalIdentity) {
+    if (assertPrivate(journalPath, "journal") !== journalIdentity) {
       throw new Error("Package publication journal identity changed");
     }
   };
