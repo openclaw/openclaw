@@ -54,7 +54,7 @@ import type {
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { requestOpenClawAgentDatabaseQuickCheck } from "./openclaw-database-verify.js";
+import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -186,7 +186,7 @@ export function createAgentDatabaseNativeGeneration(
   let nativeStopped: Promise<void> | undefined;
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
-  let quickCheckPending = false;
+  let integrityCheckPending: "quick" | "full" | undefined;
   let preparationPublished = false;
   let receiveValidation:
     | ReturnType<typeof captureOpenClawAgentDatabaseValidationTransfer>
@@ -334,19 +334,17 @@ export function createAgentDatabaseNativeGeneration(
         if (
           request.stage === "prepare" &&
           isRecord(facts) &&
-          facts.kind === "agent-integrity-cached"
+          (facts.kind === "agent-integrity-check" || facts.kind === "agent-open-resume")
         ) {
           assertSourceCurrent();
           if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
-            throw new Error("Agent integrity notice differs from its captured native lease");
+            throw new Error("Agent open notice differs from its captured native lease");
           }
-          quickCheckPending = true;
-          return undefined;
-        }
-        if (request.stage === "prepare" && isRecord(facts) && facts.kind === "agent-open-resume") {
-          assertSourceCurrent();
-          if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
-            throw new Error("Agent open resume differs from its captured native lease");
+          if (facts.kind === "agent-integrity-check") {
+            if (facts.check !== "quick" && facts.check !== "full") {
+              throw new Error("Agent integrity notice has an invalid check mode");
+            }
+            integrityCheckPending = facts.check;
           }
           return undefined;
         }
@@ -593,9 +591,13 @@ export function createAgentDatabaseNativeGeneration(
       });
       preparationPublished = true;
     }
-    if (quickCheckPending) {
-      quickCheckPending = false;
-      requestOpenClawAgentDatabaseQuickCheck({ path: pathname, env: input.environment });
+    if (integrityCheckPending) {
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        path: pathname,
+        env: input.environment,
+        check: integrityCheckPending,
+      });
+      integrityCheckPending = undefined;
     }
     return runSqliteWorkerStoreOperation(
       store,

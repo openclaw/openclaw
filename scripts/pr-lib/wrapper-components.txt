@@ -311,8 +311,11 @@ src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
+src/agents/worktrees/registry-run-end.ts
+src/agents/worktrees/registry-run-end.worker.ts
 src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
+src/agents/worktrees/run-end-lifecycle.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/service-preparation.ts
@@ -588,9 +591,11 @@ src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
 src/config/sessions/session-incognito-lifecycle-contract.ts
 src/config/sessions/session-incognito-lifecycle.ts
+src/config/sessions/session-incognito-manager-contract.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
+src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
@@ -1495,6 +1500,7 @@ src/shared/dedupe-by-key.ts
 src/shared/deferred.ts
 src/shared/detached-async-context.ts
 src/shared/dot-path.ts
+src/shared/effect-authority.ts
 src/shared/env-var-candidates.ts
 src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
@@ -1549,6 +1555,7 @@ src/state/openclaw-agent-db-admission.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
+src/state/openclaw-agent-db-lease-provenance.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
 src/state/openclaw-agent-db-lifecycle.ts

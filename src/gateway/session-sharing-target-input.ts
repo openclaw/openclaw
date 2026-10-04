@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
@@ -11,11 +14,47 @@ import {
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  resolveChatSendSessionKey,
+  resolveRequestedSessionAgentId,
+} from "./session-request-agent.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+export function resolveChatSendAuthorizationTarget(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+): Result<SessionMutationTarget, ErrorShape> {
+  const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+  return agent.ok
+    ? ok({
+        ...target,
+        agentId: agent.agentId,
+        sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
+      })
+    : err(agent.error);
+}
+
+/** Authorization selects the same chat target without rewriting the raw request's replay aliases. */
+export function resolveChatSendAuthorizationParams(
+  cfg: OpenClawConfig,
+  params: unknown,
+): Result<unknown, ErrorShape> {
+  const record = asOptionalRecord(params);
+  if (typeof record?.sessionKey !== "string") {
+    return ok(params);
+  }
+  const target = resolveChatSendAuthorizationTarget(cfg, {
+    sessionKey: record.sessionKey,
+    agentId: normalizeOptionalString(record.agentId),
+  });
+  return target.ok
+    ? ok({ ...record, sessionKey: target.value.sessionKey, agentId: target.value.agentId })
+    : err(target.error);
+}
 
 export function resolveDirectSessionTargets(
   method: string,
@@ -54,7 +93,7 @@ export function resolveDirectIncognitoTargets(
   );
 }
 
-function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
   return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 

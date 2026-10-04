@@ -225,14 +225,8 @@ it.each([
         });
         return;
       }
-      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const kinds: string[] = [];
       const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
-      if (rollback) {
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-        BEFORE UPDATE OF entry_json ON session_nodes
-        BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
-      }
       try {
         const reset = applySessionEntryLifecycleMutation({
           agentId: scope.agentId,
@@ -241,14 +235,21 @@ it.each([
           upserts: [
             {
               sessionKey: scope.sessionKey,
-              entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+              entry: {
+                ...entry,
+                ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+                lifecycleRevision: "after",
+                updatedAt: 2,
+              },
               resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
             },
           ],
           skipMaintenance: true,
         });
         if (rollback) {
-          await expect(reset).rejects.toThrow("injected reset failure");
+          await expect(reset).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(kinds).toEqual([]);
           expect(readGatewayAccessRevision()).toBe(revision);
         } else {
@@ -259,9 +260,6 @@ it.each([
         expect(loadSessionEntry(scope)?.lifecycleRevision).toBe(rollback ? "before" : "after");
       } finally {
         observe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
     });
   },

@@ -23,6 +23,8 @@ function writeStableRecords(): void {
 
 beforeAll(async () => {
   await logPathTracker.setup();
+  await testApi.flushFileLogQueueForTests();
+  testApi.resetFileLogTransportForTests();
 });
 
 afterEach(async () => {

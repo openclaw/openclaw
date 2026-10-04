@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -76,6 +77,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     },
   };
   const sessionId = "aggregate-work-global";
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
   const backfilled = Promise.withResolvers<void>();
   const publishTranscriptFields = sessionRows.publishTranscriptFields;
   const publication = vi
@@ -85,6 +87,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
       if (
         row.key === "global" &&
         row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
         row.entry.sessionId === sessionId &&
         row.lastMessagePreview === "Work global conversation"
       ) {

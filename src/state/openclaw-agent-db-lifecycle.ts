@@ -169,7 +169,7 @@ export function resolveAgentDatabaseIntegrityGateReason(
 ): SqliteIntegrityDiagnostics["integrityGateReason"] {
   const { verification, validation, integrityRevoked, reuseIntegrity } = proof;
   if (integrityRevoked) {
-    return "stale-lease";
+    return "stale-lease-full";
   }
   if (hasRevokedOpenClawAgentDatabaseValidation(database.path, validation)) {
     return "revoked";

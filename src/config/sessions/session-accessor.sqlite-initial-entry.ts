@@ -1,4 +1,3 @@
-/** Lazy session identity creation, including the original admission's first writer claim. */
 import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
@@ -16,24 +15,16 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+/** Lazy session identity creation, including the original admission's first writer claim. */
+import type { InitialSessionEntryCommit } from "./session-manager-write-contract.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
-  type SessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type InitialSessionEntryCommit = {
-  owned: boolean;
-  fence?: SessionTranscriptWriterFence;
-  identity?: {
-    previous: Map<string, SessionEntry>;
-    current: Map<string, SessionEntry>;
-  };
-};
 
 /** The transaction owns absence and writer-row checks; callers publish only committed facts. */
 export function ensureSessionEntryInTransaction(

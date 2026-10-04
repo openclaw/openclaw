@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -416,14 +417,21 @@ describe("SQLite session message cuts", () => {
       promptedAt: 7,
     });
 
-    const result = await forkSessionAtMessage({
-      agentId,
-      env,
-      entryId: "user-2",
-      sessionKey: canonicalSourceKey,
-      sessionStoreKey: sessionKey,
-      targetKey,
-    });
+    const sql = observeHostDataSql();
+    let result;
+    try {
+      result = await forkSessionAtMessage({
+        agentId,
+        env,
+        entryId: "user-2",
+        sessionKey: canonicalSourceKey,
+        sessionStoreKey: sessionKey,
+        targetKey,
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     expect(result).toMatchObject({
       status: "created",

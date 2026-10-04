@@ -248,12 +248,20 @@ export function loadTranscriptEventRowsAfterSeqSync(
 ): SessionTranscriptEventRow[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "incremental", () => {
+  return loadTranscriptEventRowsAfterSeqInDatabase(database, resolved.sessionId, afterSeq);
+}
+
+export function loadTranscriptEventRowsAfterSeqInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  afterSeq: number,
+): SessionTranscriptEventRow[] {
+  return readHotSessionTranscriptSnapshot(database, sessionId, "incremental", () => {
     const db = getSessionKysely(database.db);
     const query = db
       .selectFrom("transcript_events")
       .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
-      .where("session_id", "=", resolved.sessionId)
+      .where("session_id", "=", sessionId)
       .where("seq", ">", afterSeq);
     return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
       event: JSON.parse(row.event_json) as TranscriptEvent,

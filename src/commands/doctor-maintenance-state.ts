@@ -1,7 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import {
@@ -22,7 +22,7 @@ import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 /** Database custody can change paths while stopped-service custody remains with Doctor. */
-export function createDoctorMaintenanceState(options: {
+export async function createDoctorMaintenanceState(options: {
   params: DoctorMaintenanceParams;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
@@ -33,15 +33,24 @@ export function createDoctorMaintenanceState(options: {
   warn: (message: string) => void;
 }) {
   const { params, env, settle } = options;
+  const { resolveLegacyStateConfigPath, resolvePendingLegacyStateDirMigrationPaths } =
+    await import("../infra/state-migrations.state-dir.js");
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let resourcesParent: OpenClawDatabaseMaintenanceScope | undefined;
   let inspections: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
   let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
-  let selectedEnv = env;
+  const legacy = resolvePendingLegacyStateDirMigrationPaths({ env });
+  let selectedEnv = legacy
+    ? {
+        ...env,
+        OPENCLAW_STATE_DIR: legacy.source,
+        OPENCLAW_CONFIG_PATH: resolveLegacyStateConfigPath(legacy.source),
+      }
+    : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
   const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
-    env,
+    env: selectedEnv,
     root: params.root ?? undefined,
     signal: options.signal,
     assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
@@ -113,6 +122,9 @@ export function createDoctorMaintenanceState(options: {
     }
   };
   const state = {
+    get env() {
+      return selectedEnv;
+    },
     get owner() {
       return owner;
     },
@@ -126,22 +138,23 @@ export function createDoctorMaintenanceState(options: {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
       return resources!.run(() => inspections!.run(operation));
     },
-    async acquire(relocatedMaintenanceOwner?: typeof owner) {
+    async acquire() {
       if (resources) {
         return;
       }
-      const assertCurrent = relocatedMaintenanceOwner
-        ? () => relocatedMaintenanceOwner.assertCurrent(options.assertCurrent)
-        : options.assertCurrent;
-      assertCurrent?.();
+      if (legacy && selectedEnv !== env && !fs.lstatSync(legacy.source).isDirectory()) {
+        throw new Error(
+          `Legacy state path is not a directory: ${legacy.source}; move it manually before rerunning Doctor.`,
+        );
+      }
+      options.assertCurrent?.();
       const acquired = await acquireDoctorGatewayMaintenanceOwner(
         path.resolve(resolveOpenClawStateSqlitePath(selectedEnv)),
         selectedEnv,
         {
           ...params,
-          assertCurrent,
+          assertCurrent: options.assertCurrent,
           deadlineMs: options.deadline(),
-          relocatedMaintenanceOwner,
         },
       );
       await enterResources(acquired);
@@ -158,37 +171,38 @@ export function createDoctorMaintenanceState(options: {
         admitOpenClawMaintenanceLiveAuthorityReads(resolveOpenClawStateSqlitePath(selectedEnv)),
       );
       liveAuthorityReadsAdmitted = true;
-      const { resolvePendingLegacyStateDirMigrationPaths, prepareLegacyStateDirMigration } =
+      const { prepareLegacyStateDirMigration } =
         await import("../infra/state-migrations.state-dir.js");
       const pending = resolvePendingLegacyStateDirMigrationPaths({ env });
-      const sourceDir = resolveStateDir(env);
-      if (!pending || path.resolve(sourceDir) !== path.resolve(pending.source)) {
+      const sourceDir = resolveStateDir(selectedEnv);
+      if (!legacy) {
         return;
       }
+      if (!pending || path.resolve(sourceDir) !== path.resolve(pending.source)) {
+        throw new Error(
+          `State directory selection changed before moving ${legacy.source} to ${legacy.target}; leave both paths unchanged and reconcile them manually before rerunning Doctor.`,
+        );
+      }
       owner!.assertCurrent(options.assertCurrent);
-      const sourceDatabase = resolveOpenClawStateSqlitePath(env);
+      const sourceDatabase = resolveOpenClawStateSqlitePath(selectedEnv);
       // This runs before the long-lived Doctor callback. Include CLI/bootstrap
       // resources predating this scope before moving the owned state root.
       await closeResources(sourceDir);
       await owner!.run(() => closeOpenClawStateDatabaseByPathAsync(sourceDatabase));
       await settleCapture();
-      const migration = owner!.run(() => {
-        options.assertCurrent?.();
-        owner!.assertCurrent();
-        return prepareLegacyStateDirMigration({ env });
-      });
-      // Root rename, alias creation, and rollback are synchronous under the source
-      // owner. Acquire the resulting root before surrendering source exclusion.
-      selectedEnv = { ...env, OPENCLAW_STATE_DIR: migration?.stateDir ?? sourceDir };
-      const changedOwnerPath =
-        resolveGatewayStateOwnerPath(resolveOpenClawStateSqlitePath(selectedEnv)) !==
-        owner!.lockPath;
-      if (changedOwnerPath) {
-        await state.acquire(owner);
-      } else {
-        await enterResources(owner!);
+      // In-tree locks cannot survive a path rename. Service stop custody remains held.
+      await owner!.release();
+      owner = undefined;
+      options.assertCurrent?.();
+      const migration = prepareLegacyStateDirMigration({ env });
+      if (migration && !migration.result.migrated) {
+        throw new Error(migration.result.warnings.join("\n"));
       }
+      selectedEnv = env;
+      await state.acquire();
       if (migration) {
+        const { loadDotEnv } = await import("../infra/dotenv.js");
+        loadDotEnv({ quiet: true });
         const result = migration.result;
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));

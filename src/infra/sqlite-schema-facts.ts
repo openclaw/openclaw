@@ -258,10 +258,21 @@ function trackSchemaChanges(
           owner.mutationDepth += 1;
         }
         try {
-          yield* callStatement(
+          const rows = callStatement(
             iterate ?? native.StatementSync.prototype.iterate.bind(statement),
             bindings,
           );
+          try {
+            yield* rows;
+          } catch (error) {
+            // Delegation does not close the native iterator when next() throws.
+            try {
+              rows.return?.();
+            } catch {
+              // Preserve the statement failure over a failed native reset.
+            }
+            throw error;
+          }
         } finally {
           if (dataChange) {
             owner.mutationDepth -= 1;
@@ -303,6 +314,11 @@ export type SqliteReadOperationRevision = {
   dataVersion: number;
   mutationRevision: number;
 };
+
+/** Local mutation witness only; foreign writers still require their owning admission fence. */
+export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
+  return owners.get(database)?.mutationRevision;
+}
 
 /** Reuse row facts only inside admitted reads, never during a native write or snapshot. */
 export function getSqliteReadOperationRevision(

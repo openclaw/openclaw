@@ -107,7 +107,7 @@ jobs:
           pr-body: |
             ## What Problem This Solves
 
-            Refresh stale CI shard weights from successful jobs in completed main-push workflows, successful release-check runs, and exact compact selectors and tooling files from successful pull-request CI runs.
+            Refresh stale CI shard weights from successful jobs in completed scheduled main CI workflows, successful release-check runs, and exact compact selectors and tooling files from successful pull-request CI runs.
 
             ## Why This Change Was Made
 

@@ -48,7 +48,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
-import { commitProjectedSessionEntryRemovalsInDatabase } from "./session-accessor.sqlite-projection-state.js";
+import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
@@ -207,7 +207,10 @@ function reclaimSqliteRowsInTransaction(
     const value = runSqliteSessionDeletionTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result = commitProjectedSessionEntryRemovalsInDatabase(
+        if (plan.input.projected.upsertedEntries.length > 0) {
+          throw new Error("Worker lifecycle removal cannot contain upserts");
+        }
+        const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
           database,
           plan.input,
           plan.materializedPlans,

@@ -178,6 +178,9 @@ describe("Gateway catalog worker pool", () => {
       expect(custody.threadId).toBeGreaterThan(0);
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       fs.writeFileSync(`${fixture.marker}.hold`, "");
+      // This case orders pool failure before the foreground fallback. Keep its clock
+      // fixed while real worker entry and recovery run under variable host pressure.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       renewal = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
       void renewal.catch(() => undefined);
       await entered(renewal, signal);
@@ -205,6 +208,7 @@ describe("Gateway catalog worker pool", () => {
       });
       await expect(renewal).rejects.toMatchObject({ name: "WorkerTaskError", code: "unavailable" });
       await expect(queuedCatalog).rejects.toThrow("superseded");
+      vi.useRealTimers();
       const originalError = await renewal.catch((error: unknown) => error);
       expect(originalError).toBe(catalogFailures[0]!.error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
@@ -256,6 +260,7 @@ describe("Gateway catalog worker pool", () => {
         pendingTasks: 0,
       });
     } finally {
+      vi.useRealTimers();
       fs.rmSync(`${fixture.marker}.hold`, { force: true });
       await Promise.allSettled([renewal, queuedAuth, queuedCatalog]);
       taskChannel.unsubscribe(recordFailure);

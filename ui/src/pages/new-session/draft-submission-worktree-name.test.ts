@@ -49,39 +49,52 @@ async function namedWorktreeFixture(explicitBase = true, name = "first-task", re
 }
 
 describe("submitted custom worktree names", () => {
-  it("consumes an accepted name without losing checkout preferences", async () => {
-    const { context, flow, place } = await namedWorktreeFixture();
-    vi.mocked(context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-    expect(flow.submitDisabledReason()).toBeUndefined();
-    await flow.submit();
-    expect(context.sessions.createResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        worktree: true,
-        worktreeName: "first-task",
-        worktreeBaseRef: "main",
-      }),
-      { reconciliation: "background" },
-    );
-    expect(place.worktreeName).toBe("");
-    expect(place.worktree).toBe(true);
-    expect(place.baseRef).toBe("main");
-    expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
-      worktree: true,
-      baseRef: "main",
-    });
-    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-    const next = await namedWorktreeFixture(true, "", true);
-    next.flow.setMessage("next task");
-    vi.mocked(next.context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:next",
-      initialRun: { status: "started", runId: "next-run" },
-    });
-    await next.flow.submit(undefined, true);
-    expect(next.context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(vi.mocked(next.context.sessions.createResult).mock.calls[0]![0]).not.toHaveProperty(
-      "worktreeName",
-    );
-  });
+  it.each([true, false])(
+    "consumes an accepted name with explicit base=%s",
+    async (explicitBase) => {
+      const { context, flow, place } = await namedWorktreeFixture(
+        explicitBase,
+        explicitBase ? "first-task" : "  first-task  ",
+      );
+      if (!explicitBase) {
+        expect(loadNewSessionPreference("ws://gateway.example", "main")?.baseRef).toBeUndefined();
+      }
+      vi.mocked(context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+      expect(flow.submitDisabledReason()).toBeUndefined();
+      await flow.submit(undefined, !explicitBase);
+      expect(place.worktreeName).toBe("");
+      expect(
+        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
+      ).toBeUndefined();
+      if (explicitBase) {
+        expect(context.sessions.createResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            worktree: true,
+            worktreeName: "first-task",
+            worktreeBaseRef: "main",
+          }),
+          { reconciliation: "background" },
+        );
+        expect(place.worktree).toBe(true);
+        expect(place.baseRef).toBe("main");
+        expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+          worktree: true,
+          baseRef: "main",
+        });
+        const next = await namedWorktreeFixture(true, "", true);
+        next.flow.setMessage("next task");
+        vi.mocked(next.context.sessions.createResult).mockResolvedValue({
+          key: "agent:main:dashboard:next",
+          initialRun: { status: "started", runId: "next-run" },
+        });
+        await next.flow.submit(undefined, true);
+        expect(next.context.sessions.createResult).toHaveBeenCalledOnce();
+        expect(vi.mocked(next.context.sessions.createResult).mock.calls[0]![0]).not.toHaveProperty(
+          "worktreeName",
+        );
+      }
+    },
+  );
   it.each(["null", "throw", "rejected"])("retains the name after %s admission", async (outcome) => {
     const { context, flow, place } = await namedWorktreeFixture();
     const create = vi.mocked(context.sessions.createResult);
@@ -138,69 +151,55 @@ describe("submitted custom worktree names", () => {
     },
   );
 
-  it("placement custody preserves the name through a failed shell and retry", async () => {
-    const { context, flow, place, gateway } = await namedWorktreeFixture();
-    selectCloudWorktree({ gateway, place });
-    const start = vi.fn();
-    context.placementStartup.start = start;
-    vi.mocked(context.sessions.createResult).mockResolvedValue(null);
-    expect(flow.submitDisabledReason()).toBeUndefined();
-    await flow.submit(undefined, true);
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(start).not.toHaveBeenCalled();
-    expect(place.worktreeName).toBe("first-task");
-    expect(flow.pendingPlacement.createParams?.worktreeName).toBe("first-task");
-    const original = vi.mocked(context.sessions.createResult).mock.calls[0]![0];
-    vi.mocked(context.sessions.createResult).mockImplementation(async (params) => ({
-      key: params!.key!,
-      initialRun: { status: "idle" },
-    }));
-    expect(flow.submitDisabledReason()).toBeUndefined();
-    await flow.submit(undefined, true);
-    expect(vi.mocked(context.sessions.createResult).mock.calls[1]![0]).toEqual(original);
-    expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        recovery: expect.objectContaining({ sessionKey: original!.key, phase: "dispatching" }),
-        persistRecovery: true,
-      }),
-    );
-    expect(place.worktreeName).toBe("");
-    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-  });
-});
-
-it("consumes a padded name with the discovered default base and implicit workspace folder", async () => {
-  const { context, flow, place } = await namedWorktreeFixture(false, "  first-task  ");
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.baseRef).toBeUndefined();
-  vi.mocked(context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-  await flow.submit(undefined, true);
-  expect(place.worktreeName).toBe("");
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-});
-
-it("retires the frozen name after a creating placement is restored into a fresh draft", async () => {
-  const first = await namedWorktreeFixture();
-  selectCloudWorktree(first);
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
-  await first.flow.submit(undefined, true);
-  const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
-  expect(first.flow.pendingPlacement.phase).toBe("creating");
-  disposeWorktreeDraft(first);
-
-  const retry = await namedWorktreeFixture(true, "", true);
-  expect(retry.flow.pendingPlacement.sessionKey).toBe(original!.key);
-  expect(retry.place.worktreeName).toBe("");
-  const start = vi.fn();
-  retry.context.placementStartup.start = start;
-  vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
-    key: params!.key!,
-    initialRun: { status: "idle" },
-  }));
-  expect(retry.flow.submitDisabledReason()).toBeUndefined();
-  await retry.flow.submit(undefined, true);
-  expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
-    reconciliation: "background",
-  });
-  expect(start).toHaveBeenCalledOnce();
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
+  it.each([false, true])(
+    "preserves frozen placement custody through a retry, restored=%s",
+    async (restored) => {
+      const first = await namedWorktreeFixture();
+      selectCloudWorktree(first);
+      const start = vi.fn();
+      first.context.placementStartup.start = start;
+      vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
+      expect(first.flow.submitDisabledReason()).toBeUndefined();
+      await first.flow.submit(undefined, true);
+      expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(start).not.toHaveBeenCalled();
+      expect(first.place.worktreeName).toBe("first-task");
+      expect(first.flow.pendingPlacement.createParams?.worktreeName).toBe("first-task");
+      expect(first.flow.pendingPlacement.phase).toBe("creating");
+      const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
+      if (restored) {
+        disposeWorktreeDraft(first);
+      }
+      const retry = restored ? await namedWorktreeFixture(true, "", true) : first;
+      if (restored) {
+        expect(retry.flow.pendingPlacement.sessionKey).toBe(original!.key);
+        expect(retry.place.worktreeName).toBe("");
+      }
+      retry.context.placementStartup.start = start;
+      vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
+        key: params!.key!,
+        initialRun: { status: "idle" },
+      }));
+      expect(retry.flow.submitDisabledReason()).toBeUndefined();
+      await retry.flow.submit(undefined, true);
+      if (restored) {
+        expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
+          reconciliation: "background",
+        });
+      } else {
+        expect(vi.mocked(retry.context.sessions.createResult).mock.calls[1]![0]).toEqual(original);
+      }
+      expect(start).toHaveBeenCalledOnce();
+      expect(start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recovery: expect.objectContaining({ sessionKey: original!.key, phase: "dispatching" }),
+          persistRecovery: true,
+        }),
+      );
+      expect(retry.place.worktreeName).toBe("");
+      expect(
+        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
+      ).toBeUndefined();
+    },
+  );
 });

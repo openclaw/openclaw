@@ -133,19 +133,12 @@ export function createWorkerSessionPlacementStore(
       const sessionId = required(sessionIdInput, "session id");
       const observation = observePlacementAuthority(path, sessionId);
       try {
-        const result = await executeExistingOpenClawStateRead(
-          { path },
-          { type: "workers.placementProjection", sessionIds: [sessionId], conflictBindings: [] },
-          { current: true },
-        );
-        if (!result?.ok || result.type !== "workers.placementProjection") {
-          throw new Error("Worker placement projection source is unavailable");
-        }
+        const projection = await store.readProjection([sessionId], { current: true });
         observation.assertCurrent();
         return {
-          placement: result.result.projection.placements.get(sessionId),
-          move: result.result.projection.moves.get(sessionId),
-          pendingResult: result.result.projection.pendingResults.get(sessionId),
+          placement: projection.placements.get(sessionId),
+          move: projection.moves.get(sessionId),
+          pendingResult: projection.pendingResults.get(sessionId),
           ...observation,
         };
       } catch (error) {

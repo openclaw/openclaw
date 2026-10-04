@@ -309,7 +309,7 @@ import { afterAll, expect, it, vi } from "vitest";
 ${unavailableSharedStateWorkerFixture}
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync, retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
 import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
@@ -351,6 +351,8 @@ it("retains its native handle and lease when resource teardown refuses cleanup",
     throw new Error("Synthetic independent singleton cleanup refused");
   });
   probe.resets.push([failedIndependentKey, resets.get(failedIndependentKey)]);
+  // Failed resource custody retains its native borrower until cleanup succeeds.
+  const releaseBorrow = retainAgentDatabase(database.db);
   registerOpenClawAgentDatabaseAsyncResource({
     agentId: database.agentId,
     path: database.path,
@@ -360,6 +362,7 @@ it("retains its native handle and lease when resource teardown refuses cleanup",
       if (!probe.allowClose) {
         throw new Error("Synthetic retired lease cleanup refused: leaseId=" + lease.leaseId + " path=" + database.path);
       }
+      releaseBorrow();
     },
   });
   console.log("retained-lease-identity: " + JSON.stringify({ leaseId: lease.leaseId, path: database.path }));

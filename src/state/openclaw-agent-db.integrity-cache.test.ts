@@ -104,7 +104,7 @@ it("retains admission through pinned WAL eviction and certifies the final checkp
     return database;
   });
   const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-  const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck");
+  const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseIntegrityCheck");
   const write = (updatedAt: number) =>
     runOpenClawAgentWriteTransaction(
       (database) =>
@@ -164,7 +164,7 @@ it.each(["sync", "async", "admitted"] as const)(
       return database;
     });
     const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck");
+    const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseIntegrityCheck");
     const first = openOpenClawAgentDatabase(options);
     expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
     first.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"value\":42}', 1)");

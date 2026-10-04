@@ -430,6 +430,20 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
+  it("closes failed native write iterators before their statement is reused", () => {
+    const database = openDatabase("CREATE TABLE original (id INTEGER PRIMARY KEY)");
+    const insert = database.prepare("INSERT INTO original VALUES (?) RETURNING id");
+    expect([...insert.iterate(1)]).toEqual([{ id: 1 }]);
+
+    const rejected = insert.iterate(1);
+    expect(() => rejected.next()).toThrow("UNIQUE constraint failed");
+    rejected.return?.();
+
+    database.prepare("DELETE FROM original WHERE id = ?").run(1);
+    expect([...insert.iterate(2)]).toEqual([{ id: 2 }]);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 2 }]);
+  });
+
   it("retains successful DDL preceding a failed multi-statement batch", () => {
     const database = openDatabase();
     expect(() =>

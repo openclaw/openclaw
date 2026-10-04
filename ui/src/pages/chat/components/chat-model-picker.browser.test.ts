@@ -69,8 +69,8 @@ function mountPicker() {
   return { params, update, picker, trigger, search, composer, toggle };
 }
 
-it("focuses the filter after clicking the model label without changing the chat draft", async () => {
-  const { search, composer, toggle } = mountPicker();
+it("keeps typing in the filter and preserves focus and query across catalog rerenders", async () => {
+  const { search, composer, toggle, params, update, trigger } = mountPicker();
   composer.value = "Keep this draft";
   composer.focus();
   await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -84,6 +84,19 @@ it("focuses the filter after clicking the model label without changing the chat 
   expect(
     container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
   ).toBe(false);
+  const option = container.querySelector<HTMLButtonElement>(
+    '[data-chat-model-option="example/beta"]',
+  )!;
+  expect(option.checkVisibility()).toBe(true);
+  option.focus();
+  expect(document.activeElement).toBe(option);
+  update();
+  await Promise.resolve();
+  expect(document.activeElement).toBe(option);
+  expect(search.value).toBe("beta");
+  trigger.focus();
+  await userEvent.keyboard("1");
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
 });
 
 it("focuses the filter on keyboard open and reopen, and returns Escape to the trigger", async () => {
@@ -124,23 +137,3 @@ it.each(["closed", "removed", "focus moved"])(
     expect(document.activeElement).toBe(composer);
   },
 );
-
-it("does not steal focus from a picker control on catalog rerender", async () => {
-  const { params, update, trigger, search, toggle } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  await userEvent.keyboard("beta");
-  // Filtering hides provider headings; move focus to a visible result instead.
-  const option = container.querySelector<HTMLButtonElement>(
-    '[data-chat-model-option="example/beta"]',
-  )!;
-  expect(option.checkVisibility()).toBe(true);
-  option.focus();
-  expect(document.activeElement).toBe(option);
-  update();
-  await Promise.resolve();
-  expect(document.activeElement).toBe(option);
-  expect(search.value).toBe("beta");
-  trigger.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
-});

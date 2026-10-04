@@ -48,14 +48,24 @@ repair; canonical delivery fields and unrelated stored values keep their values.
 
 ## Legacy state migration
 
-When Doctor selects a legacy home such as `~/.clawdbot`, it drains open database
-work before moving that directory to `~/.openclaw`. It retains exclusive source
-ownership through the move and legacy alias creation, then acquires ownership at
-the resulting path before upgrading SQLite schemas. A retired JSON plugin install
-index blocks relocation until the intermediate release has migrated it.
-An explicit `OPENCLAW_STATE_DIR` keeps its selected location. If alias creation
-fails and the move rolls back, repair continues under ownership of the original
-location and reports the rollback.
+Runtime uses `~/.openclaw/openclaw.json` unless you select explicit paths.
+For a default-layout install with only `~/.clawdbot`, Doctor stops the managed
+Gateway and drains database work, then renames that directory to `~/.openclaw`.
+Config preflight renames `clawdbot.json` inside it to `openclaw.json` when the
+canonical filename is absent. These are same-filesystem moves, not copies;
+`.env` and other state bytes stay in the directory. A second pass has nothing
+to relocate.
+
+If both directories exist, Doctor names both and leaves them for manual
+reconciliation. It never merges them or leaves a legacy alias. Explicit
+`OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH` selectors are
+unchanged. A retired JSON plugin install index blocks relocation until the
+intermediate release has migrated it.
+
+The installed updater runs this same Doctor repair. Published `2026.9.7` retains
+its original rollback paths, so a later failed update can refuse automatic
+rollback after relocation. It preserves the moved state and retained snapshots;
+follow its candidate-Doctor recovery guidance before restarting or downgrading.
 
 `openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
 

@@ -6,7 +6,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
@@ -21,6 +21,7 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   discardCommittedSessionEntryCache,
   publishSessionSharingMemberChange,
@@ -150,23 +151,25 @@ export async function runSessionCollaborationWrite<
                 }
                 const categoryKeys =
                   capturedCommand.type === "category.apply" ? uncertainCategoryKeys?.() : undefined;
-                sessionChanges.emitBatch(
-                  categoryKeys
-                    ? categoryKeys.map((sessionKey) => ({
-                        storePath: location.storePath,
-                        sessionKey,
-                        factsInvalidated: "category" as const,
-                      }))
-                    : [
-                        capturedCommand.type === "category.apply"
-                          ? {
-                              all: true,
-                              scope: { storePath: location.storePath },
-                              factsInvalidated: true,
-                            }
-                          : { ...location, factsInvalidated: true },
-                      ],
-                );
+                const changes: SessionRowChange[] = categoryKeys
+                  ? categoryKeys.map((sessionKey) => ({
+                      storePath: location.storePath,
+                      sessionKey,
+                      factsInvalidated: "category" as const,
+                    }))
+                  : [
+                      capturedCommand.type === "category.apply"
+                        ? {
+                            all: true,
+                            scope: { storePath: location.storePath },
+                            factsInvalidated: true,
+                          }
+                        : { ...location, factsInvalidated: true },
+                    ];
+                for (const change of changes) {
+                  bindSessionEntryPublicationSource(change, database);
+                }
+                sessionChanges.emitBatch(changes);
               }
               throw error;
             } finally {
@@ -190,7 +193,9 @@ function publishSessionMembership(
   if (facts) {
     publishSessionSharingMemberChange(database, location.sessionKey, facts, location.agentId);
   } else {
-    sessionChanges.emit({ ...location, factsInvalidated: true });
+    sessionChanges.emit(
+      bindSessionEntryPublicationSource({ ...location, factsInvalidated: true }, database),
+    );
   }
 }
 
@@ -275,14 +280,19 @@ export function recordSessionParticipantInWorker(
     scope,
     { type: "participant", input: { scope, params: capturedParams } },
     (capturedScope) => recordSessionParticipant(capturedScope, capturedParams),
-    (result, location) => {
+    (result, location, database) => {
       if (result.value === "inserted" || result.value === "updated") {
         if (result.projectionChanged) {
-          sessionChanges.emit({
-            ...location,
-            scope: "session-entry",
-            facts: { kind: "participants", projection: result.participants },
-          });
+          sessionChanges.emit(
+            bindSessionEntryPublicationSource(
+              {
+                ...location,
+                scope: "session-entry",
+                facts: { kind: "participants", projection: result.participants },
+              },
+              database,
+            ),
+          );
         }
         emitSessionLifecycleEvent({
           agentId: location.agentId,

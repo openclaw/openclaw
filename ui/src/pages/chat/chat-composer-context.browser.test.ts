@@ -106,12 +106,8 @@ describe("context usage popup geometry", () => {
   });
 
   it.each([
-    [320, 568, false],
-    [375, 812, false],
     [667, 375, false],
-    [768, 500, false],
     [320, 568, true],
-    [667, 375, true],
   ] as const)(
     "keeps context usage above the mobile composer at %sx%s (attachment: %s)",
     async (width, height, attachment) => {

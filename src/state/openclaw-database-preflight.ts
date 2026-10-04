@@ -48,7 +48,7 @@ import type {
   OpenClawDatabasePreflightOptions,
   OpenClawStateSchemaPreflightResult,
 } from "./openclaw-database-preflight.types.js";
-import { requestOpenClawAgentDatabaseQuickCheck } from "./openclaw-database-verify.js";
+import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -650,7 +650,8 @@ export async function preflightOpenClawDatabaseSchemas(
           });
         }
         if (schemaInspection.integrityGateOutcome === "cached") {
-          requestOpenClawAgentDatabaseQuickCheck({
+          requestOpenClawAgentDatabaseIntegrityCheck({
+            check: "quick",
             path: agentPath,
             env: options.env ?? process.env,
           });

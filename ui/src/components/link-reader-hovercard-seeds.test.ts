@@ -156,8 +156,9 @@ describe("GitHub hovercards with authorized session details", () => {
     const tag = "test-github-seeded-lazy-upgrade";
     const provider = document.createElement(tag) as LinkReaderHovercardProvider;
     const pending = createDeferred<unknown>();
+    const request = vi.fn().mockReturnValue(pending.promise);
     provider.client = {
-      request: vi.fn().mockReturnValue(pending.promise),
+      request,
     } as unknown as GatewayBrowserClient;
     provider.agentId = "row-agent";
     provider.readers = [TEST_LINK_READER];
@@ -169,10 +170,15 @@ describe("GitHub hovercards with authorized session details", () => {
     customElements.define(tag, class extends LinkReaderHovercardProvider {});
     await provider.updateComplete;
     await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
     expect(hovercard()?.textContent).toContain(seed.title);
     pending.reject(new Error("Unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     expect(hovercard()?.textContent).toContain(seed.title);
+    provider.readers = [];
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("retains the cached card through failure and reentry without bypassing request backoff", async () => {

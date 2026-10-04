@@ -2,10 +2,12 @@ import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.j
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
+import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycle.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -67,6 +69,7 @@ export async function prepareGatewayLifecycle(params: {
 }) {
   const { runtime, port, log, logCron, shutdownRuntime } = params;
   const requestEntryLifetime = new GatewayRequestEntryLifetime();
+  const worktreeRunEnd = prepareWorktreeRunEndClose();
   const {
     minimalTestGateway,
     transportBridge,
@@ -394,6 +397,10 @@ export async function prepareGatewayLifecycle(params: {
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
     browserAuthRateLimiter.dispose();
+    worktreeRunEnd.beginClose();
+    if (prelude) {
+      beginCronReceiptAuthorityClose();
+    }
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();
@@ -441,6 +448,7 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.controlUiSessionPullRequests?.stop(),
       healthWork.drain(),
       mentionInbox.dispose(),
+      worktreeRunEnd.drain(),
     ]);
   };
   const runClosePrelude = async () => {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,16 +10,21 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout.js";
 import * as eviction from "./eviction.js";
 import { requireGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.js";
+import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import * as runLease from "./run-lease.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
@@ -27,6 +33,7 @@ import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import * as snapshotHost from "./snapshot-host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -53,58 +60,161 @@ describe("managed worktree cap eviction", () => {
     service = new ManagedWorktreeService({ env, getConfig: () => config });
   });
 
-  it("preserves unknown operation settlement when claim release also fails", async () => {
-    const record = await service.create({ repoRoot, name: "uncertain", baseRef: "HEAD" });
-    const primary = new SqliteWorkerError(
-      "synthetic unknown operation settlement",
-      "outcome-unknown",
-    );
-    const releaseFailure = new Error("synthetic claim release failure");
+  it.each(["claim", "snapshot"] as const)(
+    "retains uncertain %s custody after caller cancellation",
+    async (stage) => {
+      const record = await service.create({ repoRoot, name: "uncertain", baseRef: "HEAD" });
+      const primary = new SqliteWorkerError(
+        "synthetic unknown operation settlement",
+        "outcome-unknown",
+      );
+      const cancellation = new AbortController();
+      const claim = runLease.claimWorktreeRemoval;
+      let unsettled = false;
+      const claimSpy = vi
+        .spyOn(runLease, "claimWorktreeRemoval")
+        .mockImplementation(async (...args) => {
+          await claim(...args);
+          if (stage === "claim") {
+            unsettled = true;
+            cancellation.abort(new Error("caller canceled after the claim"));
+          }
+        });
+      const releaseSpy = vi.spyOn(runLease, "abortWorktreeRemoval");
+      const snapshotSpy =
+        stage === "snapshot"
+          ? vi
+              .spyOn(snapshotHost, "captureManagedWorktreeSnapshot")
+              .mockImplementation(async () => {
+                cancellation.abort(new Error("caller canceled during the uncertain snapshot"));
+                throw primary;
+              })
+          : undefined;
+      try {
+        const failure: unknown = await withWorktreeAllocationLease(
+          { env, signal: cancellation.signal },
+          (guard) =>
+            eviction.evictManagedWorktree({
+              env,
+              record,
+              reason: "idle-age",
+              now: Date.now,
+              getConfig: () => config,
+              guard: {
+                ...guard,
+                commitGuard: () => {
+                  if (unsettled) {
+                    throw primary;
+                  }
+                  guard.commitGuard();
+                },
+              },
+            }),
+        ).catch((error: unknown) => error);
+        expect(failure).toMatchObject({ code: "outcome-unknown" });
+        expect(collectNestedErrorCandidates(failure)).toEqual(expect.arrayContaining([primary]));
+        expect(releaseSpy).not.toHaveBeenCalled();
+        await expect(acquireWorktreeRunLease(record.id, { env })).rejects.toThrow(/remov/);
+        expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+      } finally {
+        claimSpy.mockRestore();
+        releaseSpy.mockRestore();
+        snapshotSpy?.mockRestore();
+      }
+    },
+  );
+
+  it("settles an admitted purge before releasing custody after caller cancellation", async () => {
+    const record = await service.create({
+      repoRoot,
+      name: "cancel-after-admission",
+      baseRef: "HEAD",
+    });
     const cancellation = new AbortController();
-    const claim = runLease.claimWorktreeRemoval;
-    const release = runLease.abortWorktreeRemoval;
-    let unsettled = false;
-    const claimSpy = vi.spyOn(runLease, "claimWorktreeRemoval").mockImplementation((...args) => {
-      claim(...args);
-      unsettled = true;
-      cancellation.abort(new Error("caller canceled after the claim"));
-    });
-    const releaseSpy = vi.spyOn(runLease, "abortWorktreeRemoval").mockImplementation((...args) => {
-      release(...args);
-      throw releaseFailure;
-    });
+    const execute = gitWorker.runGitWorkerOperation;
+    const dispatch = vi
+      .spyOn(gitWorker, "runGitWorkerOperation")
+      .mockImplementation((command, options) =>
+        execute(command, {
+          ...options,
+          onEffect: async (effect, context) => {
+            const result = await options?.onEffect?.(effect, context);
+            if (
+              command.type === "worktree.eviction-purge" &&
+              effect.type === "worktree.eviction-admit"
+            ) {
+              cancellation.abort(new Error("caller canceled after purge admission"));
+            }
+            return result;
+          },
+        }),
+      );
     try {
-      const failure: unknown = await withWorktreeAllocationLease(
-        { env, signal: cancellation.signal },
-        (guard) =>
+      await expect(
+        withWorktreeAllocationLease({ env, signal: cancellation.signal }, (guard) =>
           eviction.evictManagedWorktree({
             env,
             record,
             reason: "idle-age",
             now: Date.now,
             getConfig: () => config,
-            guard: {
-              ...guard,
-              commitGuard: () => {
-                if (unsettled) {
-                  throw primary;
-                }
-                guard.commitGuard();
-              },
+            guard,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(cancellation.signal.aborted).toBe(true);
+      expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
+      await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        openOpenClawStateDatabase({ env })
+          .db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?")
+          .all(worktreeRunLeaseScope(record.id)),
+      ).toEqual([]);
+    } finally {
+      dispatch.mockRestore();
+    }
+  });
+
+  it("refuses a new dependency claim when any earlier eviction claim was lost", async () => {
+    const [victim, earlier, next] = await materializeManagedWorktreeFixtures({
+      env,
+      repoRoot,
+      stateDir: env.OPENCLAW_STATE_DIR!,
+      names: ["batch-victim", "batch-earlier", "batch-next"],
+      now: 1,
+    });
+    const token = "synthetic-eviction-batch";
+    await withWorktreeAllocationLease({ env }, async (guard) => {
+      const claim = (worktreeId: string) =>
+        runLease.claimWorktreeRemoval(env, {
+          worktreeId,
+          token,
+          workerAuthority: guard.workerAuthority,
+        });
+      await claim(victim!.id);
+      await claim(earlier!.id);
+      try {
+        await runLease.abortWorktreeRemoval(env, earlier!.id, token);
+        await expect(
+          runLease.claimWorktreeRemoval(env, {
+            worktreeId: next!.id,
+            token,
+            workerAuthority: {
+              ...guard.workerAuthority,
+              predicates: [{ kind: "removal-claims", ids: [victim!.id, earlier!.id], token }],
             },
           }),
-      ).catch((error: unknown) => error);
-      expect(failure).toMatchObject({ code: "outcome-unknown" });
-      expect(collectNestedErrorCandidates(failure)).toEqual(
-        expect.arrayContaining([primary, releaseFailure]),
-      );
-      expect(releaseSpy).toHaveBeenCalledTimes(1);
-      expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
-      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-    } finally {
-      claimSpy.mockRestore();
-      releaseSpy.mockRestore();
-    }
+        ).rejects.toThrow("Worktree removal claim changed");
+        expect(
+          openOpenClawStateDatabase({ env })
+            .db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?")
+            .all(worktreeRunLeaseScope(next!.id)),
+        ).toEqual([]);
+      } finally {
+        await runLease.abortWorktreeRemoval(env, victim!.id, token);
+      }
+    });
   });
 
   it("keeps a managed source live until its ignored provisioning is safe from eviction", async () => {
@@ -376,7 +486,52 @@ describe("managed worktree cap eviction", () => {
     const dirty = await service.create({ repoRoot, name: "dirty", baseRef: "HEAD" });
     await fs.writeFile(path.join(dirty.path, "README.md"), "unsaved tracked edit\n");
     await fs.writeFile(path.join(dirty.path, "untracked.txt"), "unsaved new file\n");
-    const replacement = await service.create({ repoRoot, name: "replacement", baseRef: "HEAD" });
+    const reads = observeMainThreadReads();
+    const worktreeReads: string[] = [];
+    let grants = 0;
+    const createAdmission = admissions.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(admissions, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((handler, ...options) =>
+        createAdmission(
+          (request, grant) => {
+            grants += 1;
+            reads.clear();
+            try {
+              return handler(request, grant);
+            } finally {
+              for (const call of reads.calls) {
+                for (const [index, statement] of call.mock.contexts.entries()) {
+                  if (
+                    statement instanceof StatementSync &&
+                    (/\bworktrees\b/u.test(statement.sourceSQL) ||
+                      (/\bstate_leases\b/u.test(statement.sourceSQL) &&
+                        call.mock.calls[index]?.some(
+                          (value) =>
+                            typeof value === "string" &&
+                            value.includes(worktreeRunLeaseScope(dirty.id)),
+                        )))
+                  ) {
+                    worktreeReads.push(statement.sourceSQL);
+                  }
+                }
+              }
+            }
+          },
+          ...options,
+        ),
+      );
+    const replacement = await (async () => {
+      try {
+        const created = await service.create({ repoRoot, name: "replacement", baseRef: "HEAD" });
+        expect(grants).toBeGreaterThan(0);
+        expect(worktreeReads).toEqual([]);
+        return created;
+      } finally {
+        admission.mockRestore();
+        reads.restore();
+      }
+    })();
     const archived = getRegistryWorktree(env, dirty.id)!;
     expect(archived.removedAt).toEqual(expect.any(Number));
     expect(archived.snapshotRef).toMatch(/^refs\/openclaw\/snapshots\//);

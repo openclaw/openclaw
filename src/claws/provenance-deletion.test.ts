@@ -72,7 +72,7 @@ describe("Claw installation identity during deletion", () => {
         const removal = withAgentDeletion(
           "worker",
           async (begin) => {
-            const deletion = begin(deletionEntry(root));
+            const deletion = await begin(deletionEntry(root));
             paused.resolve(deletion);
             await resume.promise;
             const beforeHandoff = readAgentDeletionJournal("worker", options);
@@ -115,7 +115,7 @@ describe("Claw installation identity during deletion", () => {
           await withAgentDeletion(
             "other",
             async (begin) => {
-              const foreign = begin(deletionEntry(root, "other"));
+              const foreign = await begin(deletionEntry(root, "other"));
               try {
                 expect(() =>
                   updateClawInstallRecordStatus("worker", "partial", {
@@ -124,7 +124,7 @@ describe("Claw installation identity during deletion", () => {
                   }),
                 ).toThrow("does not belong to the current deletion");
               } finally {
-                foreign.rollback();
+                await foreign.rollback();
               }
             },
             options,
@@ -147,7 +147,7 @@ describe("Claw installation identity during deletion", () => {
         await withAgentDeletion(
           "worker",
           async (begin) => {
-            const recovery = begin(deletionEntry(root));
+            const recovery = await begin(deletionEntry(root));
             expect(() =>
               updateClawInstallRecordStatus("worker", "partial", {
                 ...options,
@@ -187,7 +187,7 @@ describe("Claw installation identity during deletion", () => {
         await withAgentDeletion(
           "worker",
           async (begin) => {
-            const deletion = begin(deletionEntry(root));
+            const deletion = await begin(deletionEntry(root));
             const journal = readAgentDeletionJournal("worker", options);
             const failure = new Error("abort retry publication");
             expect(() =>
@@ -208,7 +208,7 @@ describe("Claw installation identity during deletion", () => {
             expect(readAgentDeletionJournal("worker", options)).toEqual(journal);
             expect(readClawInstallRecord("worker", options)).toEqual(original);
             expect(() => deletion.assertCurrent()).not.toThrow();
-            deletion.rollback();
+            await deletion.rollback();
           },
           options,
         );
@@ -252,7 +252,7 @@ describe("Claw installation identity during deletion", () => {
           expect(readClawInstallRecord("worker", options)).toEqual(original);
           await withAgentDeletion(
             "worker",
-            async (begin) => begin(deletionEntry(root)).rollback(),
+            async (begin) => (await begin(deletionEntry(root))).rollback(),
             options,
           );
           expect(
