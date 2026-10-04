@@ -23,6 +23,7 @@ import {
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
+import { parseReleasedCommandLease } from "./update-managed-service-handoff.released-reader.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -99,8 +100,9 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
               const commands = f.rows().filter((row) => row.install_root.endsWith("-command"));
               expect(commands).toHaveLength(f.roots.length);
               for (const row of commands) {
+                expect(() => parseReleasedCommandLease(row.payload_json)).not.toThrow();
                 expect(JSON.parse(row.payload_json)).toMatchObject({
-                  action: { custody: "bound" },
+                  action: { kind: "update" },
                   executor: { pid },
                 });
               }
@@ -129,6 +131,9 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
     const reservation = retained.custody.reserve([process.execPath, "--version"]);
     expect(f.rows()).toHaveLength(f.roots.length * 2);
     for (const row of f.rows()) {
+      if (row.install_root.endsWith("-command")) {
+        expect(() => parseReleasedCommandLease(row.payload_json)).not.toThrow();
+      }
       const current = f.store.read(row.install_root);
       if (current.kind !== "current") {
         throw new Error("Missing command reservation");
@@ -231,7 +236,7 @@ process.kill(process.pid, "SIGKILL");
       expect(commands).toHaveLength(f.roots.length);
       for (const row of commands) {
         expect(JSON.parse(row.payload_json)).toMatchObject({
-          action: { custody: "bound" },
+          action: { kind: "update" },
           helper: { pid: result.pid },
           executor: { pid: holder.pid },
         });

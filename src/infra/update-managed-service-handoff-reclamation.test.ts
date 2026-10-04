@@ -237,7 +237,7 @@ function retainedCommandFixture(
   const database = createManagedHandoffLeaseDatabase(f.handoff);
   const rootIdentity = { pid: 777101, startIdentity: "1" };
   const helper = { pid: 777102, startIdentity: "2" };
-  const executor = { pid: 777103, startIdentity: "3" };
+  const executor = options.custody === "reserved" ? helper : { pid: 777103, startIdentity: "3" };
   const rootLease = {
     version: 2,
     helper: rootIdentity,
@@ -271,7 +271,8 @@ function retainedCommandFixture(
     });
   }
   const commandKeys = [f.install, ...(options.mirror ? [f.slot] : [])].map(
-    (root) => `${root}/.openclaw-update-child-previous-doctor/.openclaw-update-child-command`,
+    (root) =>
+      `${root}/.openclaw-update-child-previous-doctor/.openclaw-update-child-00000000-0000-4000-8000-000000000001-command`,
   );
   database(true, (db) => {
     executeSqliteQuerySync(
@@ -287,7 +288,7 @@ function retainedCommandFixture(
               version: 2,
               helper,
               executor,
-              action: { kind: "update", custody: options.custody ?? "bound" },
+              action: { kind: "update" },
             }),
             updated_at: 2,
           })),

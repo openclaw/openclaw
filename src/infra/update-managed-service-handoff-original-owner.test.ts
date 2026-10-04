@@ -128,8 +128,8 @@ it.skipIf(process.platform === "win32")(
     const commands = f.store.readCommandChildren([f.root, f.retained.key]);
     expect(commands).toHaveLength(2);
     expect(commands.map((command) => command.action)).toEqual([
-      { kind: "update", custody: "bound" },
-      { kind: "update", custody: "bound" },
+      { kind: "update" },
+      { kind: "update" },
     ]);
 
     const cancelled = f.store.cancelUpdate(f.original, f.retained);
@@ -202,26 +202,24 @@ it("refuses cancellation over a legacy receiver", () => {
   expect(store.read(child.lease.key)).toEqual({ kind: "current", lease: child.lease });
 });
 
-it.skipIf(process.platform === "win32")(
-  "refuses cancellation over an unrecognized bound custody child",
-  () => {
-    const { root, original, store } = fixture();
-    const child = store.acquire(`${root}/.openclaw-update-child-unknown`, "unknown", {
-      kind: "update",
-      custody: "reserved",
-    });
-    if (child.kind !== "acquired") {
-      throw new Error("Missing refused child fixture");
-    }
-    const bound = store.bindUpdateChildren([child.lease], process.ppid);
-    if (!bound) {
-      throw new Error("Missing bound child fixture");
-    }
-    expect(store.cancelUpdate(original)).toBeNull();
-    expect(store.current(original)).toBe(true);
-    expect(store.read(bound[0]!.key)).toEqual({ kind: "current", lease: bound[0] });
-  },
-);
+it.skipIf(process.platform === "win32")("refuses cancellation over a bound command child", () => {
+  const { root, original, store } = fixture();
+  const child = store.acquire(
+    `${root}/.openclaw-update-child-00000000-0000-4000-8000-000000000001-command`,
+    "unknown",
+    { kind: "update" },
+  );
+  if (child.kind !== "acquired") {
+    throw new Error("Missing refused child fixture");
+  }
+  const bound = store.bindUpdateChildren([child.lease], process.ppid);
+  if (!bound) {
+    throw new Error("Missing bound child fixture");
+  }
+  expect(store.cancelUpdate(original)).toBeNull();
+  expect(store.current(original)).toBe(true);
+  expect(store.read(bound[0]!.key)).toEqual({ kind: "current", lease: bound[0] });
+});
 
 it.skipIf(process.platform === "win32")(
   "refuses cancellation when a native command alias belongs to another owner",

@@ -115,7 +115,11 @@ function readHandoffClaims() {
 function readCommandClaims() {
   return readHandoffClaims().filter((row) => {
     const payload = parseManagedHandoffLeasePayload(row.payload_json);
-    return payload?.version === 2 && payload.action.kind === "update" && payload.action.custody;
+    return (
+      /\/\.openclaw-update-child-[a-f0-9-]{36}-command$/.test(row.install_root) &&
+      payload?.version === 2 &&
+      payload.action.kind === "update"
+    );
   });
 }
 
@@ -129,7 +133,7 @@ function expectRetainedCommandClaims(writerPid: number, roots: string[]) {
     expect(parseManagedHandoffLeasePayload(claim.payload_json)).toMatchObject({
       version: 2,
       executor: { pid: writerPid },
-      action: { kind: "update", custody: "bound" },
+      action: { kind: "update" },
     });
   }
 }
