@@ -134,7 +134,9 @@ describe("CronService one-shot lifecycle", () => {
       expect(deps.requestHeartbeat).toHaveBeenCalledTimes(20);
       const retry = reminders[20]!;
       await cron.run(retry.id, "force");
-      expect(drainSystemEventEntries(sessionKey()).map((event) => event.text)).toEqual([retry.text]);
+      expect(drainSystemEventEntries(sessionKey()).map((event) => event.text)).toEqual([
+        retry.text,
+      ]);
       expect(cron.getJob(retry.id)?.state.lastRunStatus).toBe("ok");
     } finally {
       await cleanup();

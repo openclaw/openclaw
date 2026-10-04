@@ -668,9 +668,9 @@ describe("system events (session routing)", () => {
       if (removal === "selected") {
         enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
       }
-      expect(consumeSelectedSystemEventEntries(key, selected).map((event) => event.text)).toEqual(
-        ["Build completed"],
-      );
+      expect(consumeSelectedSystemEventEntries(key, selected).map((event) => event.text)).toEqual([
+        "Build completed",
+      ]);
       expect(enqueueSystemEvent("Build completed", options)).toBe(true);
     },
   );
