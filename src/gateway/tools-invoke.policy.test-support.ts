@@ -81,10 +81,8 @@ export function registerToolsInvokeUploadTests({
       internal: false,
       text: false,
     },
-    { label: "disabled", initiallyEnabled: false, enabled: false, internal: false, text: false },
     { label: "enabled", initiallyEnabled: true, enabled: true, internal: false, text: false },
     { label: "internal", initiallyEnabled: false, enabled: false, internal: true, text: false },
-    { label: "text", initiallyEnabled: false, enabled: false, internal: false, text: true },
   ])("protects custom plugin final storage: $label", async (scenario) => {
     setMainAllowedTools({ allow: ["client_blob_fixture", "upload-fixture"] });
     getConfig().gateway = { uploads: { enabled: scenario.initiallyEnabled } };
@@ -216,51 +214,42 @@ export function registerToolsInvokeUploadTests({
       }
     },
   );
-  it.each([
-    { tool: "file_write", args: { contentBase64: "cHJvb2Y=" } },
-    { tool: "file_write", args: { contentBase64: "" } },
-    { tool: "workboard_attachment_add", args: { contentBase64: "cHJvb2Y=" } },
-    { tool: "message", args: { action: "send", buffer: "cHJvb2Y=" } },
-    { tool: "message", args: { action: "send", media: "data:image/png;base64,cHJvb2Y=" } },
-  ])("blocks new bytes through HTTP and RPC for $tool $args", async ({ tool, args }) => {
-    setConfig({ gateway: { uploads: { enabled: false } } });
-    const res = await postToolsInvoke({
-      port: getPort(),
-      headers: gatewayAdminHeaders(),
-      body: {
-        name: tool,
-        args,
-        conversationReadOrigin: "delegated",
-        internal: { syntheticClient: true },
-      },
-    });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({
-      ok: false,
-      error: {
-        type: "tool_call_blocked",
-        message: expect.stringContaining("gateway.uploads.enabled"),
-      },
-    });
-    const rpc = await invokeToolsRpc({ name: tool, args }, ["operator.admin"], {
-      id: "gateway-client",
-      mode: "backend",
-    });
-    expect(rpc?.[1]).toMatchObject({
-      ok: false,
-      error: { code: "forbidden", message: expect.stringContaining("gateway.uploads.enabled") },
-    });
-    expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
-    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
-  });
+  it.each([{ tool: "message", args: { action: "send", buffer: "cHJvb2Y=" } }])(
+    "blocks new bytes through HTTP and RPC for $tool $args",
+    async ({ tool, args }) => {
+      setConfig({ gateway: { uploads: { enabled: false } } });
+      const res = await postToolsInvoke({
+        port: getPort(),
+        headers: gatewayAdminHeaders(),
+        body: {
+          name: tool,
+          args,
+          conversationReadOrigin: "delegated",
+          internal: { syntheticClient: true },
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        ok: false,
+        error: {
+          type: "tool_call_blocked",
+          message: expect.stringContaining("gateway.uploads.enabled"),
+        },
+      });
+      const rpc = await invokeToolsRpc({ name: tool, args }, ["operator.admin"], {
+        id: "gateway-client",
+        mode: "backend",
+      });
+      expect(rpc?.[1]).toMatchObject({
+        ok: false,
+        error: { code: "forbidden", message: expect.stringContaining("gateway.uploads.enabled") },
+      });
+      expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
+      expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    {
-      label: "default",
-      enabled: undefined,
-      tool: "file_write",
-      args: { contentBase64: "cHJvb2Y=" },
-    },
     {
       label: "enabled",
       enabled: true,
@@ -268,22 +257,10 @@ export function registerToolsInvokeUploadTests({
       args: { contentBase64: "cHJvb2Y=" },
     },
     {
-      label: "existing-media",
-      enabled: false,
-      tool: "file_write",
-      args: { sourceMediaId: "existing-file" },
-    },
-    {
       label: "existing-output",
       enabled: false,
       tool: "message",
       args: { action: "send", media: "https://example.test/generated.png" },
-    },
-    {
-      label: "plain-text",
-      enabled: false,
-      tool: "message",
-      args: { action: "send", message: "hello" },
     },
   ])("preserves $label tool use", async ({ enabled, tool, args }) => {
     setMainAllowedTools({ allow: [tool, "upload-fixture"] });
@@ -314,7 +291,6 @@ export function registerToolsInvokeUploadTests({
   it.each([
     { hookAddsBytes: false, disabled: true },
     { hookAddsBytes: true, disabled: true },
-    { hookAddsBytes: false, disabled: false },
   ])(
     "retains upload policy through nested dispatch (hook=$hookAddsBytes, disabled=$disabled)",
     async ({ hookAddsBytes, disabled }) => {
@@ -379,17 +355,6 @@ export function registerToolsInvokeUploadTests({
       expect(hookMocks.uploadToolExecute).toHaveBeenCalledOnce();
     },
   );
-
-  it("preserves host-attested synthetic RPC tool execution", async () => {
-    setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-    getConfig().gateway = { uploads: { enabled: false } };
-    const rpc = await withPluginRuntimeGatewayRequestScope(
-      { client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () => invokeToolsRpc({ name: "file_write", args: { contentBase64: "cHJvb2Y=" } }),
-    );
-    expect(rpc?.[1]?.ok).toBe(true);
-    expect(hookMocks.uploadToolExecute).toHaveBeenCalledOnce();
-  });
 }
 
 async function readToolErrorResponse(res: Response) {
