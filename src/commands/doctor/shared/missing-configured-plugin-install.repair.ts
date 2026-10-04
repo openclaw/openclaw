@@ -2,6 +2,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { assertDirectoryIdentitySync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -13,8 +14,6 @@ import {
   removePathWithinRoot,
 } from "../../../infra/fs-safe-remove.js";
 import { retainMutationAuthority } from "../../../infra/mutation-authority.js";
-import { resolveOpenClawReleaseCohortVersion } from "../../../infra/npm-registry-spec.js";
-import { isPackageVersionDowngrade } from "../../../infra/package-update-utils.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -37,23 +36,17 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
-import { resolveTrustedSourceLinkedOfficialNpmInstall } from "../../../plugins/official-external-install-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
-  detectPluginVersionDrift,
-  resolveOfficialPluginCohortNpmSpecs,
-} from "../../../plugins/plugin-version-drift.js";
-import {
   isClawHubTrustSkippedOutcome,
   updateNpmInstalledPlugins,
   type PluginUpdateOutcome,
 } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
@@ -75,11 +68,11 @@ import {
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
-import { resolveConfiguredPluginCandidateRepair } from "./missing-configured-plugin-install.targets.js";
 import {
-  isLegacyPackageUpdateDoctorPass,
-  shouldDeferConfiguredPluginInstallRepair,
-} from "./update-phase.js";
+  resolveConfiguredPluginCandidateRepair,
+  resolveConfiguredPluginRepairVersions,
+} from "./missing-configured-plugin-install.targets.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 type PluginInstallRepairWarning = {
   message: string;
@@ -139,18 +132,10 @@ export async function repairMissingConfiguredPluginInstalls(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
+      ...params,
       pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
       channelIds: collectConfiguredChannelIds(params.cfg, params.env),
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
-      repairVersionDrift: params.repairVersionDrift,
-      onWarning: params.onWarning,
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
     }),
   );
 }
@@ -165,27 +150,10 @@ export async function repairMissingPluginInstallsForIds(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
-      pluginIds: new Set(
-        [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
-      ),
-      channelIds: new Set(
-        [...(params.channelIds ?? [])]
-          .map((channelId) => channelId.trim())
-          .filter((channelId) => channelId),
-      ),
-      blockedPluginIds: new Set(
-        [...(params.blockedPluginIds ?? [])]
-          .map((pluginId) => pluginId.trim())
-          .filter((pluginId) => pluginId),
-      ),
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      onWarning: params.onWarning,
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+      ...params,
+      pluginIds: new Set(normalizeTrimmedStringList([...params.pluginIds])),
+      channelIds: new Set(normalizeTrimmedStringList([...(params.channelIds ?? [])])),
+      blockedPluginIds: new Set(normalizeTrimmedStringList([...(params.blockedPluginIds ?? [])])),
     }),
   );
 }
@@ -256,6 +224,14 @@ async function repairMissingPluginInstallsWithLease(
   assertCurrent: () => void,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
+  const installContext = await resolveConfiguredPluginInstallContext({
+    cfg: params.cfg,
+    env,
+    configuredPluginIds: params.pluginIds,
+    configuredChannelIds: params.channelIds,
+    blockedPluginIds: params.blockedPluginIds,
+    baselineRecords: params.baselineRecords,
+  });
   const {
     knownIds,
     configuredChannelOwnerPluginIds,
@@ -271,14 +247,7 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
-  } = await resolveConfiguredPluginInstallContext({
-    cfg: params.cfg,
-    env,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    blockedPluginIds: params.blockedPluginIds,
-    baselineRecords: params.baselineRecords,
-  });
+  } = installContext;
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
@@ -290,60 +259,15 @@ async function repairMissingPluginInstallsWithLease(
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
-  const coreVersion = resolveCompatibilityHostVersion(env);
-  const cohortSpecs = resolveOfficialPluginCohortNpmSpecs({
-    gatewayVersion: coreVersion,
-    installRecords: records,
-    config: params.cfg,
-  });
-  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
-  const newerRecordedPluginIds = new Set(
-    updateChannel === "stable" || updateChannel === "beta"
-      ? Object.keys(cohortSpecs).filter((pluginId) => {
-          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
-          return (
-            version &&
-            isPackageVersionDowngrade(
-              resolveOpenClawReleaseCohortVersion(version),
-              resolveOpenClawReleaseCohortVersion(coreVersion),
-            )
-          );
-        })
-      : [],
-  );
-  const driftedPluginIds = new Set(
-    params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
-      ? detectPluginVersionDrift({
-          gatewayVersion: coreVersion,
-          installRecords: records,
-          config: params.cfg,
-        }).drifts.flatMap(({ pluginId }) => {
-          const record = records[pluginId];
-          if (
-            !record ||
-            !cohortSpecs[pluginId] ||
-            operatorManagedPluginIds.has(pluginId) ||
-            bundledPluginsById.has(pluginId) ||
-            officialReplacementPluginIds.has(pluginId)
-          ) {
-            return [];
-          }
-          // Package-id migrations also change authored policy; the plugin command owns that write.
-          if (
-            resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.replacementPluginId
-          ) {
-            warn(
-              `Plugin "${pluginId}" needs a package-id migration. Run ${formatCliCommand(`openclaw plugins update ${cohortSpecs[pluginId]}`, env)}.`,
-              pluginId,
-            );
-            return [];
-          }
-          return [pluginId];
-        })
-      : [],
-  );
+  const { coreVersion, cohortSpecs, newerRecordedPluginIds, driftedPluginIds } =
+    resolveConfiguredPluginRepairVersions({
+      cfg: params.cfg,
+      env,
+      context: installContext,
+      repairVersionDrift: params.repairVersionDrift,
+      onWarning: warn,
+    });
   const deferredPluginIds = new Set<string>();
-  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -612,14 +536,7 @@ async function repairMissingPluginInstallsWithLease(
       candidate,
       records: nextRecords,
       env,
-      context: {
-        bundledPluginsById,
-        officialReplacementPluginIds,
-        knownIds,
-        installedPluginIdsWithStaleVersionBoundRuntimePackages,
-        installedPluginIdsWithRepairablePackageDiagnostics,
-        configuredPluginIdsWithStaleDescriptors,
-      },
+      context: installContext,
     });
     if (!repair) {
       continue;
@@ -656,7 +573,6 @@ async function repairMissingPluginInstallsWithLease(
         env,
         updateChannel,
         mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
-        preferNpm: preferNpmInstalls,
         repairReason,
         ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
         beforePersistentEffect: params.beforePersistentEffect,

@@ -6,7 +6,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
@@ -21,6 +21,7 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   discardCommittedSessionEntryCache,
   publishSessionSharingMemberChange,
@@ -28,7 +29,10 @@ import {
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import type { SessionSharingWorkerOperations } from "./session-sharing-store.worker.js";
+import type {
+  MembershipPublication,
+  SessionSharingWorkerOperations,
+} from "./session-sharing-store.types.js";
 
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
@@ -46,7 +50,8 @@ export async function runSessionCollaborationWrite<
   prepare?: (
     operation: Pick<SqliteWorkerStore<SessionSharingWorkerOperations>, "execute">,
     scope: SessionAccessScope,
-  ) => Promise<void>,
+  ) => Promise<void | SessionSharingWorkerOperations[Key]["input"]>,
+  uncertainCategoryKeys?: () => readonly string[] | undefined,
 ): Promise<T> {
   const resolved = resolveSqliteScope(scope);
   const resolvedOptions = toDatabaseOptions(resolved);
@@ -112,7 +117,10 @@ export async function runSessionCollaborationWrite<
             try {
               return await worker.run(async (operation) => {
                 if (prepare) {
-                  await prepare(operation, commandScope);
+                  const prepared = await prepare(operation, commandScope);
+                  if (prepared) {
+                    capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
+                  }
                 }
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";
@@ -126,6 +134,7 @@ export async function runSessionCollaborationWrite<
             } catch (error) {
               if (
                 mutationDispatched &&
+                !capturedCommand.type.startsWith("suggestion.") &&
                 !published &&
                 (resultReceived ||
                   collectNestedErrorCandidates(error).some(
@@ -134,18 +143,33 @@ export async function runSessionCollaborationWrite<
               ) {
                 // The broker has joined physical settlement. Fence old authority until the
                 // projection's existing read worker reconciles the committed store, without replay.
-                if (capturedCommand.type === "category.apply") {
+                if (
+                  capturedCommand.type === "category.apply" ||
+                  capturedCommand.type === "involvement"
+                ) {
                   discardCommittedSessionEntryCache(database.db);
                 }
-                sessionChanges.emit(
-                  capturedCommand.type === "category.apply"
-                    ? {
-                        all: true,
-                        scope: { storePath: location.storePath },
-                        factsInvalidated: true,
-                      }
-                    : { ...location, factsInvalidated: true },
-                );
+                const categoryKeys =
+                  capturedCommand.type === "category.apply" ? uncertainCategoryKeys?.() : undefined;
+                const changes: SessionRowChange[] = categoryKeys
+                  ? categoryKeys.map((sessionKey) => ({
+                      storePath: location.storePath,
+                      sessionKey,
+                      factsInvalidated: "category" as const,
+                    }))
+                  : [
+                      capturedCommand.type === "category.apply"
+                        ? {
+                            all: true,
+                            scope: { storePath: location.storePath },
+                            factsInvalidated: true,
+                          }
+                        : { ...location, factsInvalidated: true },
+                    ];
+                for (const change of changes) {
+                  bindSessionEntryPublicationSource(change, database);
+                }
+                sessionChanges.emitBatch(changes);
               }
               throw error;
             } finally {
@@ -161,6 +185,20 @@ export async function runSessionCollaborationWrite<
   }
 }
 
+function publishSessionMembership(
+  { facts }: MembershipPublication,
+  location: { agentId: string; storePath: string; sessionKey: string },
+  database: OpenClawAgentDatabase,
+) {
+  if (facts) {
+    publishSessionSharingMemberChange(database, location.sessionKey, facts, location.agentId);
+  } else {
+    sessionChanges.emit(
+      bindSessionEntryPublicationSource({ ...location, factsInvalidated: true }, database),
+    );
+  }
+}
+
 export function addSessionMemberInWorker(
   scope: SessionAccessScope,
   params: Parameters<typeof addSessionMember>[1],
@@ -173,16 +211,7 @@ export function addSessionMemberInWorker(
     (capturedScope) => addSessionMember(capturedScope, capturedParams),
     (result, location, database) => {
       if (result.value.inserted) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },
@@ -225,16 +254,7 @@ export function removeSessionMemberInWorker(
       ),
     (result, location, database) => {
       if (result.value) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },
@@ -260,14 +280,19 @@ export function recordSessionParticipantInWorker(
     scope,
     { type: "participant", input: { scope, params: capturedParams } },
     (capturedScope) => recordSessionParticipant(capturedScope, capturedParams),
-    (result, location) => {
+    (result, location, database) => {
       if (result.value === "inserted" || result.value === "updated") {
         if (result.projectionChanged) {
-          sessionChanges.emit({
-            ...location,
-            scope: "session-entry",
-            facts: { kind: "participants", projection: result.participants },
-          });
+          sessionChanges.emit(
+            bindSessionEntryPublicationSource(
+              {
+                ...location,
+                scope: "session-entry",
+                facts: { kind: "participants", projection: result.participants },
+              },
+              database,
+            ),
+          );
         }
         emitSessionLifecycleEvent({
           agentId: location.agentId,

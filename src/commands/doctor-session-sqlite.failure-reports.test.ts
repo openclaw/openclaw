@@ -163,67 +163,99 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("recovers the latest failed migration run and prepares a sanitized GitHub issue", async () => {
-    const store = createLegacyStore({ agentDirName: "token=supersecret" });
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").issues = [
-      {
-        code: "startup_failure",
-        message: `token=supersecret startup migration failed for agent:main:main at ${store.storePath} and ${process.env.HOME ?? "/Users/example"}/private/openclaw.json`,
+  it.each([false, true])(
+    "recovers the latest matching failed run and reports only current issues (explicit store=%s)",
+    async (explicitStore) => {
+      const store = createLegacyStore(explicitStore ? {} : { agentDirName: "token=supersecret" });
+      const importReport = await importLegacyStore(store);
+      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
+      const manifest = readMigrationManifest(manifestPath);
+      manifest.failedAt = "2030-01-01T00:00:00.000Z";
+      expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").issues = [
+        {
+          code: "startup_failure",
+          message: explicitStore
+            ? "selected store failed after archive"
+            : `token=supersecret startup migration failed for agent:main:main at ${store.storePath} and ${process.env.HOME ?? "/Users/example"}/private/openclaw.json`,
+          ...(explicitStore ? {} : { sessionKey: "agent:main:main" }),
+        },
+      ];
+      if (explicitStore) {
+        manifest.targets.push({
+          agentId: "other",
+          completedMoves: [],
+          issues: [
+            { code: "unselected_failure", message: "unselected target should stay private" },
+          ],
+          plannedMoves: [],
+          sqlitePath: path.join(store.tempDir, "other.sqlite"),
+          storePath: path.join(store.tempDir, "other", "sessions.json"),
+          validationBeforeArchive: "failed",
+        });
+        writeFailedManifest(store, "newer-unselected.json", "2040-01-01T00:00:00.000Z", {
+          agentId: "other",
+          storePath: path.join(store.tempDir, "other", "sessions.json"),
+        });
+      } else {
+        writeFailedManifest(store, "older-failed.json", "2000-01-01T00:00:00.000Z");
+      }
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      const conflictingTranscript =
+        '{"type":"session","sessionId":"session-1"}\n' +
+        '{"type":"event","id":"evt-1","text":"conflicting legacy event"}\n';
+      if (!explicitStore) {
+        fs.writeFileSync(store.transcriptPath, conflictingTranscript, { mode: 0o600 });
+      }
+
+      const recover = await runDoctorSessionSqlite({
+        cfg: {},
+        env: store.env,
+        mode: "recover",
+        ...(explicitStore ? { store: store.storePath } : {}),
+      });
+
+      expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
+      expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
+      if (explicitStore) {
+        expect(recover.supportIssue).toBeUndefined();
+        expect(recover.totals.issues).toBe(0);
+        expect(fs.existsSync(store.transcriptPath)).toBe(false);
+        return;
+      }
+      expect(recover.mode).toBe("recover");
+      expect(recover.totals).not.toHaveProperty("archivedLegacyStoreFiles");
+      expect(recover.totals).not.toHaveProperty("reclaimedBytes");
+      expect(recover.targets[0]?.issues.map((issue) => issue.code)).toEqual([
+        "active_sqlite_transcript_verification_failed",
+        "sqlite_transcript_count_mismatch",
+        "active_sqlite_transcript_jsonl",
+        "restore_conflict",
+      ]);
+      expect(recover.targets[0]?.issues[0]).toMatchObject({
         sessionKey: "agent:main:main",
-      },
-    ];
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-    writeFailedManifest(store, "older-failed.json", "2000-01-01T00:00:00.000Z");
-    const conflictingTranscript =
-      '{"type":"session","sessionId":"session-1"}\n' +
-      '{"type":"event","id":"evt-1","text":"conflicting legacy event"}\n';
-    fs.writeFileSync(store.transcriptPath, conflictingTranscript, { mode: 0o600 });
-
-    const recover = await runDoctorSessionSqlite({
-      cfg: {},
-      env: store.env,
-      mode: "recover",
-    });
-
-    expect(recover.mode).toBe("recover");
-    expect(recover.totals).not.toHaveProperty("archivedLegacyStoreFiles");
-    expect(recover.totals).not.toHaveProperty("reclaimedBytes");
-    expect(recover.targets[0]?.issues.map((issue) => issue.code)).toEqual([
-      "active_sqlite_transcript_verification_failed",
-      "sqlite_transcript_count_mismatch",
-      "active_sqlite_transcript_jsonl",
-      "restore_conflict",
-    ]);
-    expect(recover.targets[0]?.issues[0]).toMatchObject({
-      sessionKey: "agent:main:main",
-      message: expect.stringContaining("Legacy event evt-1 conflicts with the SQLite event"),
-    });
-    expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
-    expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
-    expect(recover.targets[0]?.restore?.restoredFiles).toEqual(
-      expect.arrayContaining(canonicalTestPaths([store.trajectoryPath])),
-    );
-    expect(recover.targets[0]?.restore?.conflicts).toEqual([
-      expect.objectContaining({ sourcePath: canonicalTestPaths([store.transcriptPath])[0] }),
-    ]);
-    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(conflictingTranscript);
-    expect(recover.supportIssue?.title).toContain(manifest.runId);
-    expect(recover.supportIssue?.body).toContain("startup_failure");
-    expect(recover.supportIssue?.body).toContain("restore_conflict");
-    expect(recover.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
-    expect(recover.supportIssue?.body).not.toContain("agent:main:main");
-    expect(recover.supportIssue?.body).not.toContain("supersecret");
-    expect(recover.supportIssue?.body).not.toContain("conflicting legacy event");
-    expect(recover.supportIssue?.body).not.toContain(store.storePath);
-    if (process.env.HOME) {
-      expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
-    }
-    expect(recover.supportIssue).not.toHaveProperty("url");
-  });
+        message: expect.stringContaining("Legacy event evt-1 conflicts with the SQLite event"),
+      });
+      expect(recover.targets[0]?.restore?.restoredFiles).toEqual(
+        expect.arrayContaining(canonicalTestPaths([store.trajectoryPath])),
+      );
+      expect(recover.targets[0]?.restore?.conflicts).toEqual([
+        expect.objectContaining({ sourcePath: canonicalTestPaths([store.transcriptPath])[0] }),
+      ]);
+      expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(conflictingTranscript);
+      expect(recover.supportIssue?.title).toContain(manifest.runId);
+      expect(recover.supportIssue?.body).toContain("startup_failure");
+      expect(recover.supportIssue?.body).toContain("restore_conflict");
+      expect(recover.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
+      expect(recover.supportIssue?.body).not.toContain("agent:main:main");
+      expect(recover.supportIssue?.body).not.toContain("supersecret");
+      expect(recover.supportIssue?.body).not.toContain("conflicting legacy event");
+      expect(recover.supportIssue?.body).not.toContain(store.storePath);
+      if (process.env.HOME) {
+        expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
+      }
+      expect(recover.supportIssue).not.toHaveProperty("url");
+    },
+  );
 
   it.each(["empty-report", "recorded-failure", "restored", "completed"] as const)(
     "keeps clean recovery out of support reports despite previous evidence or work (%s)",
@@ -506,80 +538,34 @@ describe("runDoctorSessionSqlite", () => {
     expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
     expect(fieldIssue).not.toHaveProperty("url");
 
-    for (const [limit, messageCount] of [
-      [6_000, 20],
-      [20_000, 50],
-    ] as const) {
-      const marker = "BOUNDARY";
-      const messages = Array.from({ length: messageCount - 1 }, () => "");
-      writeManifest([...messages, `${marker}!!tail`]);
-      const probe = createSessionSqliteMigrationFailureIssue(manifestPath);
-      const markerOffset = probe?.body.indexOf(marker) ?? -1;
-      expect(markerOffset).toBeGreaterThanOrEqual(0);
-      let padding = limit - 1 - markerOffset - marker.length;
-      expect(padding).toBeGreaterThanOrEqual(0);
+    const limit = 20_000;
+    const messageCount = 50;
+    const marker = "BOUNDARY";
+    const messages = Array.from({ length: messageCount - 1 }, () => "");
+    writeManifest([...messages, `${marker}!!tail`]);
+    const probe = createSessionSqliteMigrationFailureIssue(manifestPath);
+    const markerOffset = probe?.body.indexOf(marker) ?? -1;
+    expect(markerOffset).toBeGreaterThanOrEqual(0);
+    let padding = limit - 1 - markerOffset - marker.length;
+    expect(padding).toBeGreaterThanOrEqual(0);
 
-      // Fill earlier fields, each within its 500-unit cap, so path length cannot
-      // move the surrogate away from the URL/body boundary being exercised.
-      for (let index = 0; index < messages.length; index += 1) {
-        const length = Math.min(padding, 500);
-        messages[index] = "x".repeat(length);
-        padding -= length;
-      }
-      expect(padding).toBe(0);
-      writeManifest([...messages, `${marker}!!tail`]);
-      const aligned = createSessionSqliteMigrationFailureIssue(manifestPath);
-      expect(aligned?.body.slice(limit - 1 - marker.length, limit)).toBe(`${marker}!`);
-
-      writeManifest([...messages, `${marker}🎉tail`]);
-      const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
-      expect(issue?.body).not.toMatch(unpairedSurrogate);
-      expect(issue).not.toHaveProperty("url");
-      if (limit === 6_000) {
-        expect(issue?.body).toContain(`${marker}🎉tail`);
-      } else {
-        expect(issue?.body).toHaveLength(limit - 1);
-        expect(issue?.body.endsWith(marker)).toBe(true);
-      }
+    // Fill earlier fields within their 500-unit caps to align the body boundary.
+    for (let index = 0; index < messages.length; index += 1) {
+      const length = Math.min(padding, 500);
+      messages[index] = "x".repeat(length);
+      padding -= length;
     }
-  });
+    expect(padding).toBe(0);
+    writeManifest([...messages, `${marker}!!tail`]);
+    const aligned = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(aligned?.body.slice(limit - 1 - marker.length, limit)).toBe(`${marker}!`);
 
-  it("recovers only manifests matching an explicit store selector", async () => {
-    const store = createLegacyStore();
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    expectDefined(manifest.targets[0], "manifest.targets[0] test invariant").issues = [
-      { code: "startup_failure", message: "selected store failed after archive" },
-    ];
-    manifest.targets.push({
-      agentId: "other",
-      completedMoves: [],
-      issues: [{ code: "unselected_failure", message: "unselected target should stay private" }],
-      plannedMoves: [],
-      sqlitePath: path.join(store.tempDir, "other.sqlite"),
-      storePath: path.join(store.tempDir, "other", "sessions.json"),
-      validationBeforeArchive: "failed",
-    });
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-    writeFailedManifest(store, "newer-unselected.json", "2040-01-01T00:00:00.000Z", {
-      agentId: "other",
-      storePath: path.join(store.tempDir, "other", "sessions.json"),
-    });
-
-    const recover = await runDoctorSessionSqlite({
-      cfg: {},
-      env: store.env,
-      mode: "recover",
-      store: store.storePath,
-    });
-
-    expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
-    expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
-    expect(recover.supportIssue).toBeUndefined();
-    expect(recover.totals.issues).toBe(0);
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    writeManifest([...messages, `${marker}🎉tail`]);
+    const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(issue?.body).not.toMatch(unpairedSurrogate);
+    expect(issue).not.toHaveProperty("url");
+    expect(issue?.body).toHaveLength(limit - 1);
+    expect(issue?.body.endsWith(marker)).toBe(true);
   });
 });
 

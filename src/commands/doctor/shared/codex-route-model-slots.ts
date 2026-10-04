@@ -4,10 +4,10 @@ import {
 } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isBlockedLegacyCodexModelRef,
-  normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -29,11 +29,33 @@ export function visitChannelModelSlots(
   }
 }
 
+export function visitNonAgentModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  visitChannelModelSlots(cfg, visit);
+  for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
+    visit({ container: mapping, key: "model", path: `hooks.mappings.${index}.model` });
+  }
+  for (const [container, key, path] of [
+    [asMutableRecord(cfg.hooks?.gmail), "model", "hooks.gmail.model"],
+    [asMutableRecord(cfg.tts), "summaryModel", "tts.summaryModel"],
+    [
+      asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice),
+      "model",
+      "channels.discord.voice.model",
+    ],
+  ] as const) {
+    if (container) {
+      visit({ container, key, path });
+    }
+  }
+}
+
 export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];
   path: string;
   model: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): string | undefined {
   if (
@@ -52,7 +74,6 @@ export function recordCodexModelHit(params: {
     path: params.path,
     model: params.model,
     canonicalModel,
-    ...(params.runtime ? { runtime: params.runtime } : {}),
   });
   return canonicalModel;
 }
@@ -61,7 +82,6 @@ export function collectStringModelSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   if (typeof params.value !== "string") {
@@ -71,7 +91,6 @@ export function collectStringModelSlot(params: {
     hits: params.hits,
     path: params.path,
     model: params.value.trim(),
-    runtime: params.runtime,
     blockedModelIdentities: params.blockedModelIdentities,
   });
 }
@@ -80,15 +99,13 @@ export function collectModelConfigSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
-  visitModelSelectorRefs(params.value, params.path, (path, value, role) => {
+  visitModelSelectorRefs(params.value, params.path, (path, value) => {
     collectStringModelSlot({
       ...params,
       path,
       value,
-      runtime: role === "primary" ? params.runtime : undefined,
     });
   });
 }
@@ -135,7 +152,7 @@ export function collectCodexRuntimeModelPolicyRefs(params: {
     if (!trimmed) {
       continue;
     }
-    const runtime = normalizeRuntimeString(
+    const runtime = normalizeOptionalAgentRuntimeId(
       asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
     );
     if (runtime === "codex") {
@@ -149,7 +166,6 @@ export function rewriteStringModelSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (typeof params.container?.[params.key] !== "string") {
@@ -212,17 +228,15 @@ export function rewriteModelConfigSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   return rewriteModelReferenceSlot({
     ...params,
-    resolve: (model, path, role) =>
+    resolve: (model, path) =>
       recordCodexModelHit({
         ...params,
         model,
         path,
-        runtime: role === "primary" ? params.runtime : undefined,
       }),
   });
 }

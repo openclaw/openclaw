@@ -5,12 +5,14 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
+import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -121,12 +123,16 @@ export function mockInvalidThenTextSummary(recoveredText: string) {
 
 export async function createTestSession(
   options: {
+    systemPrompt?: string;
     model?: Model;
     settingsManager?: SettingsManager;
     sessionManager?: SessionManager;
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
     contextOverflowRecoveryOwner?: "session" | "caller";
+    resolveCompactionThinkingLevel?: NonNullable<
+      AgentSessionConfig["resolveCompactionThinkingLevel"]
+    >;
     withSessionWriteSettlement?: NonNullable<
       Parameters<typeof createAgentSession>[0]
     >["withSessionWriteSettlement"];
@@ -147,29 +153,37 @@ export async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const sessionOptions = {
+  const result = await createAgentSession({
+    systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
-    authStorage,
-    noTools: "builtin" as const,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+    tools: options.customTools?.map((tool) => tool.name) ?? [],
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
-  };
-  const result = options.contextOverflowRecoveryOwner
-    ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
-        contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
-      })
-    : await createAgentSession(sessionOptions);
+    contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
+    resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
+    cleanupProviderSessionResourcesOnDispose: !(
+      options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
+    ),
+  });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }
 
-export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {
-  sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: Date.now() - 2 });
-  sessionManager.appendMessage({ ...assistant, timestamp: Date.now() - 1 });
+export async function appendHistory(
+  sessionManager: SessionManager,
+  assistant: AssistantMessage,
+): Promise<void> {
+  await sessionManager.appendMessageAsync({
+    role: "user",
+    content: "old prompt",
+    timestamp: Date.now() - 2,
+  });
+  await sessionManager.appendMessageAsync({ ...assistant, timestamp: Date.now() - 1 });
 }
 
 export function registerAgentSessionLoopTestLifecycle(): void {

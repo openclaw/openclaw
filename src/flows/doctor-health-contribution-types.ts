@@ -2,7 +2,6 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
-import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -17,14 +16,12 @@ import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admi
 import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext } from "./health-checks.js";
-import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
   warnings?: string[];
   /** Original authored/resolved pair; retained across every committed Doctor write. */
   referenceSource?: DoctorConfigReferenceSource;
-  pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
   /** Active planning revision, advanced on success and cleared after partial publication. */
@@ -67,6 +64,8 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
+  /** External config edits are advisory; dependent cleanup still requires persistence. */
+  externalConfigRepairsPending?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
   /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */
@@ -106,9 +105,9 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
-export type DoctorHealthContribution = FlowContribution & {
-  kind: "core";
-  surface: "health";
+export type DoctorHealthContribution = {
+  id: string;
+  label: string;
   required?: true;
   /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
   updateWork?: DoctorUpdateWork;
@@ -119,6 +118,4 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;
-  readonly kind?: "core";
-  readonly source?: string;
 };

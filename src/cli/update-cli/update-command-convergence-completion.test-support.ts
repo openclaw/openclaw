@@ -28,11 +28,11 @@ export function registerConvergenceCompletionTests({
   const record = (name: string): void => {
     mocks.events.push(name + ":" + mocks.leaseActive);
   };
-  it.each(
-    (["candidate", "current", "resumed"] as const).flatMap((runtime) =>
-      [false, true].map((coreAlreadyCurrent) => ({ runtime, coreAlreadyCurrent })),
-    ),
-  )(
+  it.each([
+    { runtime: "candidate", coreAlreadyCurrent: false },
+    { runtime: "current", coreAlreadyCurrent: true },
+    { runtime: "resumed", coreAlreadyCurrent: false },
+  ] as const)(
     "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
     async ({ runtime, coreAlreadyCurrent }) => {
       const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
@@ -105,7 +105,7 @@ export function registerConvergenceCompletionTests({
       expect(completePostCorePluginUpdate).toHaveBeenCalledOnce();
       expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
-          freshDoctorRequired: false,
+          pluginUpdate: expect.objectContaining({ changed: false }),
           nodeRunner: "/selected/node",
           opts: { json: true },
         }),

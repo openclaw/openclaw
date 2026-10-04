@@ -1,7 +1,8 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { retainCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError } from "./client.js";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { hasCodexAppServerLiveThread, retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   getCodexInferenceThread,
@@ -28,6 +29,26 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
 
+let sessionFile: string;
+let workspaceDir: string;
+let params: ReturnType<typeof createParams>;
+beforeEach(() => {
+  sessionFile = path.join(tempDir, "session.jsonl");
+  workspaceDir = path.join(tempDir, "workspace");
+  params = createParams(sessionFile, workspaceDir);
+});
+
+function lifecycleParams(client: Parameters<typeof startOrResumeThread>[0]["client"]) {
+  return {
+    client,
+    params,
+    cwd: workspaceDir,
+    dynamicTools: [],
+    appServer: createAppServerOptions(),
+    userMcpServersEnabled: false,
+  };
+}
+
 function readNativeConfig(method: string, config: JsonObject = {}) {
   if (method === "config/read") {
     return { config, origins: {}, layers: [] };
@@ -42,8 +63,6 @@ describe("Codex native configuration lifecycle", () => {
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
-      const sessionFile = path.join(tempDir, "all-provider-routes.jsonl");
-      const workspaceDir = path.join(tempDir, "all-provider-workspace");
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
@@ -61,7 +80,6 @@ describe("Codex native configuration lifecycle", () => {
         },
       });
       ownCodexInferenceClient(fixture.client);
-      const params = createParams(sessionFile, workspaceDir);
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
         profileId: "operator-parent",
         scopes: ["operator.write"],
@@ -69,12 +87,7 @@ describe("Codex native configuration lifecycle", () => {
       });
       try {
         const pending = startOrResumeThread({
-          client: fixture.client,
-          params,
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createAppServerOptions(),
-          userMcpServersEnabled: false,
+          ...lifecycleParams(fixture.client),
           buildFinalConfigPatch: async () => ({
             configPatch: overridden
               ? { "model_providers.restored.base_url": "https://bypass.example/v1" }
@@ -108,8 +121,6 @@ describe("Codex native configuration lifecycle", () => {
   it.each(["rotation", "missing resume"] as const)(
     "routes the final native provider after %s without reusing the injected URL as upstream",
     async (recovery) => {
-      const sessionFile = path.join(tempDir, "inference-selection.jsonl");
-      const workspaceDir = path.join(tempDir, "inference-selection-workspace");
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
@@ -147,16 +158,10 @@ describe("Codex native configuration lifecycle", () => {
         }),
         ...(recovery === "rotation" ? { nativeSkillIsolationFingerprint: "retired" } : {}),
       });
-      const params = createParams(sessionFile, workspaceDir);
       const config = { openai_base_url: "https://api.openai.com/v1" };
       try {
         const binding = await startOrResumeThread({
-          client: fixture.client,
-          params,
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createAppServerOptions(),
-          userMcpServersEnabled: false,
+          ...lifecycleParams(fixture.client),
           config,
         });
         const route = getCodexInferenceThread(fixture.client, binding.threadId);
@@ -181,8 +186,6 @@ describe("Codex native configuration lifecycle", () => {
   it.each(["missing issuer", "policy introduced during preparation"] as const)(
     "refuses an unowned route before native dispatch when %s",
     async (restriction) => {
-      const sessionFile = path.join(tempDir, "unowned-inference.jsonl");
-      const workspaceDir = path.join(tempDir, "unowned-inference-workspace");
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
@@ -192,7 +195,6 @@ describe("Codex native configuration lifecycle", () => {
           return readNativeConfig(method);
         },
       });
-      const params = createParams(sessionFile, workspaceDir);
       let modelPolicyRequired = false;
       const closeHost =
         restriction === "missing issuer"
@@ -213,12 +215,7 @@ describe("Codex native configuration lifecycle", () => {
       try {
         await expect(
           startOrResumeThread({
-            client: fixture.client,
-            params,
-            cwd: workspaceDir,
-            dynamicTools: [],
-            appServer: createAppServerOptions(),
-            userMcpServersEnabled: false,
+            ...lifecycleParams(fixture.client),
             buildFinalConfigPatch: async () => {
               await Promise.resolve();
               modelPolicyRequired = true;
@@ -237,92 +234,59 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
-  it.each([
-    {
-      homeScope: "user" as const,
-      provider: "openai",
-      requestProvider: undefined,
-      nativeProvider: "native-proxy",
-    },
-    {
-      homeScope: "agent" as const,
-      provider: "openai",
-      requestProvider: "openai",
-      nativeProvider: "openai",
-    },
-    {
-      homeScope: "user" as const,
-      provider: "other-provider",
-      requestProvider: "other-provider",
-      nativeProvider: "other-provider",
-    },
-  ])(
-    "keeps provider ownership through start and resume ($homeScope, $provider)",
-    async ({ homeScope, provider, requestProvider, nativeProvider }) => {
-      const sessionFile = path.join(tempDir, "native-provider-session.jsonl");
-      const workspaceDir = path.join(tempDir, "native-provider-workspace");
-      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const native = {
-        ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
-        modelProvider: nativeProvider,
-      };
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond: async (method) => {
-          if (method === "thread/start" || method === "thread/resume") {
-            return native;
-          }
-          return readNativeConfig(method, { model_provider: nativeProvider });
-        },
-      });
-      const params = createParams(sessionFile, workspaceDir);
-      params.provider = provider;
-      params.config = undefined;
-      const appServer = createAppServerOptions();
-      const common = {
-        client: fixture.client,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: {
-          ...appServer,
-          start: {
-            ...appServer.start,
-            transport: "unix" as const,
-            homeScope,
-            url: "unix:///tmp/synthetic-codex.sock",
-          },
-        },
-        userMcpServersEnabled: false,
-      };
-      await startOrResumeThread(common);
-      fixture.seed(native, { loaded: false, subscribed: false });
-      await startOrResumeThread(common);
-      for (const method of ["thread/start", "thread/resume"]) {
-        const call = fixture.request.mock.calls.find(([name]) => name === method);
-        expect(call, method).toBeDefined();
-        if (requestProvider === undefined) {
-          expect(call?.[1]).not.toHaveProperty("modelProvider");
-        } else {
-          expect(call?.[1]).toHaveProperty("modelProvider", requestProvider);
+  it("preserves the native user-home provider through start and resume", async () => {
+    const nativeProvider = "native-proxy";
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const native = {
+      ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
+      modelProvider: nativeProvider,
+    };
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "thread/start" || method === "thread/resume") {
+          return native;
         }
-        expect(call?.[1]).toHaveProperty("model", params.modelId);
-      }
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-        modelProvider: nativeProvider,
-      });
-    },
-  );
+        return readNativeConfig(method, { model_provider: nativeProvider });
+      },
+    });
+    params.provider = "openai";
+    params.config = undefined;
+    const appServer = createAppServerOptions();
+    const common = {
+      ...lifecycleParams(fixture.client),
+      appServer: {
+        ...appServer,
+        start: {
+          ...appServer.start,
+          transport: "unix" as const,
+          homeScope: "user" as const,
+          url: "unix:///tmp/synthetic-codex.sock",
+        },
+      },
+    };
+    await startOrResumeThread(common);
+    fixture.seed(native, { loaded: false, subscribed: false });
+    await startOrResumeThread(common);
+    for (const method of ["thread/start", "thread/resume"]) {
+      const call = fixture.request.mock.calls.find(([name]) => name === method);
+      expect(call, method).toBeDefined();
+      expect(call?.[1]).not.toHaveProperty("modelProvider");
+      expect(call?.[1]).toHaveProperty("model", params.modelId);
+    }
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      modelProvider: nativeProvider,
+    });
+  });
 
   it.each([
-    { nativeModel: false, changeModel: false },
-    { nativeModel: true, changeModel: true },
-    { nativeModel: true, changeModel: false },
+    { nativeModel: false, changeModel: false, rotateLineage: false },
+    { nativeModel: true, changeModel: true, rotateLineage: false },
+    { nativeModel: true, changeModel: false, rotateLineage: false },
+    { nativeModel: true, changeModel: false, rotateLineage: true },
   ])(
-    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel)",
-    async ({ nativeModel, changeModel }) => {
-      const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
-      const workspaceDir = path.join(tempDir, "replacement-client-workspace");
+    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel, rotated lineage: $rotateLineage)",
+    async ({ nativeModel, changeModel, rotateLineage }) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       await writeCodexAppServerBinding(sessionFile, {
         webSearchThreadConfigFingerprint: JSON.stringify({
@@ -353,20 +317,15 @@ describe("Codex native configuration lifecycle", () => {
         persistedThreads: ["thread-reused"],
       });
       const { client, request } = fixture;
-      const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.config = undefined;
       const common = {
-        client,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
+        ...lifecycleParams(client),
         appServer: {
           ...createAppServerOptions(),
           connectionClass: "local-loopback" as const,
           remoteAppsSubstrate: "preconfigured" as const,
         },
-        userMcpServersEnabled: false,
       };
 
       const resumed = await startOrResumeThread(common);
@@ -425,6 +384,22 @@ describe("Codex native configuration lifecycle", () => {
         const resumeCount = request.mock.calls.filter(
           ([method]) => method === "thread/resume",
         ).length;
+        const retainedBinding = await readCodexAppServerBinding(sessionFile);
+        const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
+        request.mockImplementation(async (...args) => {
+          const response = await nativeRequest(...args);
+          if (rotateLineage && args[0] === "thread/read") {
+            // The wire read still completes normally. Change the durable lineage
+            // while warm admission awaits it, without changing the native binding.
+            await patchSessionEntry({
+              agentId: "main",
+              sessionKey: "agent:main:session-1",
+              storePath: resolveStorePath(undefined, { agentId: "main" }),
+              update: () => ({ previousSessionId: "replaced-predecessor" }),
+            });
+          }
+          return response;
+        });
         await expect(startOrResumeThread(common)).rejects.toThrow("active");
         expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
           resumeCount,
@@ -434,9 +409,15 @@ describe("Codex native configuration lifecycle", () => {
             ([method]) => method === "turn/interrupt" || method === "thread/archive",
           ),
         ).toBe(false);
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(retainedBinding);
+        expect(hasCodexAppServerLiveThread(client, warm.threadId)).toBe(!rotateLineage);
+        expect(client.getCloseError()).toBeUndefined();
         expect(
           request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-        ).toHaveLength(0);
+        ).toHaveLength(rotateLineage ? 1 : 0);
+        if (rotateLineage) {
+          return;
+        }
         fixture.seed(native, { loaded: true, subscribed: true });
         await expect(startOrResumeThread(common)).resolves.toMatchObject({
           threadId: "thread-reused",

@@ -17,6 +17,7 @@ import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
@@ -50,6 +51,7 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
+  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
@@ -299,9 +301,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
   const configuredIds = listConfiguredSessionStoreAgentIds(cfg);
   const configuredAgentIds = new Set(configuredIds);
   const incognitoTargets = includeIncognito ? listOpenIncognitoAgentDatabases() : [];
-  const incognitoTargetKeys = new Set(
-    incognitoTargets.map((target) => `${target.agentId}\0${target.storePath}`),
-  );
+  const incognitoTargetKeys = new Set(incognitoTargets.map(storeTargetKey));
   const diagnostics: string[] = [];
   const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
   let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
@@ -330,7 +330,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
     },
   );
   const durableTargets = candidates.filter(
-    (target) => !incognitoTargetKeys.has(`${target.agentId}\0${target.storePath}`),
+    (target) => !incognitoTargetKeys.has(storeTargetKey(target)),
   );
   const resolved = Object.freeze({
     configuredAgentIds,
@@ -340,7 +340,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
     durableTargets: Object.freeze(durableTargets.map((target) => Object.freeze({ ...target }))),
     incognitoTargets: Object.freeze(
       candidates
-        .filter((target) => incognitoTargetKeys.has(`${target.agentId}\0${target.storePath}`))
+        .filter((target) => incognitoTargetKeys.has(storeTargetKey(target)))
         .map((target) => Object.freeze({ ...target })),
     ),
     sharedStoreRowOwner,
@@ -483,6 +483,14 @@ export function resolveGatewaySessionStoreTargets(
   const deleted = createGatewayRetainedStoreMatcher(cfg, opts.discovery);
   const admitted = (target: SessionStoreTarget, durable = false): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
+    if (
+      opts.preserveSentinelOwners === "physical" &&
+      getAgentDatabaseStartupAdmission() &&
+      physical &&
+      !isConfiguredAgentDatabaseTarget(cfg, physical.agentId, physical.storePath, env)
+    ) {
+      return false;
+    }
     if (durable && deleted(physical?.storePath ?? target.storePath, target.agentId)) {
       return false;
     }
@@ -530,7 +538,7 @@ type GatewayCombinedSessionStore = {
   targetsBySessionKey: GatewayStoredSessionTargets;
 };
 
-function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
+export function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
   const targets = resolveGatewaySessionStoreTargets(cfg, opts);
   return {
     projection: opts.projection ?? "list",
@@ -545,7 +553,7 @@ function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionSt
   };
 }
 
-function mergeCombinedSessionStore(
+export function mergeCombinedSessionStore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
   prepared: ReturnType<typeof prepareCombinedSessionStore>,

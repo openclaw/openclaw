@@ -1,11 +1,13 @@
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   listImageGenerationProviders,
   listMusicGenerationProviders,
   listVideoGenerationProviders,
 } from "../../media-generation/registry.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -21,9 +23,9 @@ import {
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
-import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
+import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
@@ -37,13 +39,25 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.hasInProcessGatewayContext();
-    },
+    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+    openPluginPanel: async (params) =>
+      (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
+    readSessionFacts: async (params) =>
+      (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
+    subscribeSessionChanges: subscribeRuntimeSessionChanges,
+    withUserProfileIdentity: async (params, run) => {
+      const captured = {
+        profileId: params.profileId,
+        emails: params.emails.slice(),
+        githubAccountIds:
+          params.githubAccountIds === undefined ? undefined : params.githubAccountIds.slice(),
+      };
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },
   };
 }
@@ -98,10 +112,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   );
   return {
     acquireLocalService: loadAcquireLocalService,
-    complete: async (params) => {
-      const llm = await loadLlm();
-      return llm.complete(params);
-    },
+    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 
@@ -228,7 +239,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         ? { dispatchReplyFromConfig: _options.dispatchReplyFromConfig }
         : undefined,
     ),
-    events: createRuntimeEvents(),
+    events: { onAgentEvent, onSessionTranscriptUpdate },
     logging: createRuntimeLogging(),
     state: base.state,
 

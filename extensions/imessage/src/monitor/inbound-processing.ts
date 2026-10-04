@@ -1,3 +1,4 @@
+import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -25,13 +26,13 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
-import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
@@ -88,13 +89,6 @@ const matchIMessageIngressEntry: NonNullable<ChannelIngressIdentityDescriptor["m
   return undefined;
 };
 
-function isIMessageConversationAllowTarget(entry: string): boolean {
-  const parsed = parseIMessageAllowTarget(entry);
-  return (
-    parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
-  );
-}
-
 // Shared by the runtime group gate below and the startup allowlist warning in
 // monitor-provider.ts so the warning only fires when the gate would actually
 // drop every group message.
@@ -106,9 +100,12 @@ export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   if (params.groupAllowFrom.length > 0 || !params.allowLegacyConversationTargets) {
     return params.groupAllowFrom;
   }
-  const legacyChatTargets = params.allowFrom.filter((entry) =>
-    isIMessageConversationAllowTarget(entry),
-  );
+  const legacyChatTargets = params.allowFrom.filter((entry) => {
+    const parsed = parseIMessageAllowTarget(entry);
+    return (
+      parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
+    );
+  });
   if (legacyChatTargets.length === 0) {
     return params.groupAllowFrom;
   }
@@ -161,43 +158,8 @@ function normalizeIMessageChatIdentifierEntry(entry: string): string | null {
   return parsed.kind === "chat_identifier" ? parsed.chatIdentifier.trim() || null : null;
 }
 
-function normalizeDmPolicy(policy: string): DmPolicy {
-  return policy === "open" || policy === "allowlist" || policy === "disabled" ? policy : "pairing";
-}
-
-function normalizeGroupPolicy(policy: string): GroupPolicy {
-  return policy === "open" || policy === "disabled" ? policy : "allowlist";
-}
-
 function normalizeReplyField(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  return undefined;
-}
-
-function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
-  const body = normalizeReplyField(message.reply_to_text);
-  if (!body) {
-    return null;
-  }
-  const id =
-    normalizeReplyField(message.thread_originator_guid) ??
-    normalizeReplyField(message.reply_to_guid);
-  const sender = normalizeReplyField(message.reply_to_sender);
-  return { body, id, sender };
-}
-
-function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
-  const values = [
-    message.id != null ? String(message.id) : undefined,
-    normalizeReplyField(message.guid),
-  ];
-  return uniqueStrings(values.filter((value): value is string => Boolean(value)));
+  return typeof value === "number" ? String(value) : normalizeOptionalString(value);
 }
 
 function classifyIMessageSelfChat(
@@ -259,7 +221,7 @@ async function hasIMessageEchoMatch(params: {
       options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean | Promise<boolean>;
   };
-  scope: string | readonly string[];
+  scope: readonly string[];
   text?: string;
   media?: MediaPlaceholderTextFact;
   messageIds: string[];
@@ -274,11 +236,7 @@ async function hasIMessageEchoMatch(params: {
   // candidate scope so a chat_guid-keyed send isn't surfaced back to the agent
   // as a fresh inbound when chat.db only annotates it with chat_id (or
   // vice-versa).
-  const scopes = typeof params.scope === "string" ? [params.scope] : params.scope;
-  for (const scope of scopes) {
-    if (!scope) {
-      continue;
-    }
+  for (const scope of params.scope) {
     for (const messageId of params.messageIds) {
       if (await params.echoCache.has(scope, { messageId })) {
         return true;
@@ -439,9 +397,31 @@ export async function resolveIMessageInboundDecision(params: {
     senderNormalized,
   );
   let skipSelfChatHasCheck = false;
-  const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
+  const inboundMessageIds = uniqueStrings(
+    [
+      params.message.id != null ? String(params.message.id) : undefined,
+      normalizeReplyField(params.message.guid),
+    ].filter((value): value is string => Boolean(value)),
+  );
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+  // Outbound sends persist one target shape; inbound rows must probe every
+  // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
+  const echoScope: string[] = [];
+  if (isGroup) {
+    const chatIdScope = formatIMessageChatTarget(chatId);
+    if (chatIdScope) {
+      echoScope.push(`${params.accountId}:${chatIdScope}`);
+    }
+  } else {
+    echoScope.push(`${params.accountId}:imessage:${sender}`);
+  }
+  if (chatGuid) {
+    echoScope.push(`${params.accountId}:chat_guid:${chatGuid}`);
+  }
+  if (chatIdentifier) {
+    echoScope.push(`${params.accountId}:chat_identifier:${chatIdentifier}`);
+  }
 
   if (params.message.is_from_me) {
     if (isAmbiguousSelfThread) {
@@ -449,14 +429,6 @@ export async function resolveIMessageInboundDecision(params: {
     }
     if (isSelfChat) {
       params.selfChatCache?.remember({ ...selfChatLookup, allowCreatedAtSkew: true });
-      const echoScope = buildIMessageEchoScope({
-        accountId: params.accountId,
-        isGroup,
-        chatId,
-        chatGuid,
-        chatIdentifier,
-        sender,
-      });
       if (
         params.echoCache &&
         (bodyText || inboundMessageId || mediaFacts.length > 0) &&
@@ -516,8 +488,11 @@ export async function resolveIMessageInboundDecision(params: {
         id: chatId != null ? String(chatId) : sender,
       },
       contextBinding,
-      dmPolicy: normalizeDmPolicy(params.dmPolicy),
-      groupPolicy: normalizeGroupPolicy(params.groupPolicy),
+      dmPolicy: normalizeChannelDmPolicy(params.dmPolicy) ?? "pairing",
+      groupPolicy:
+        params.groupPolicy === "open" || params.groupPolicy === "disabled"
+          ? params.groupPolicy
+          : "allowlist",
       policy: { groupAllowFromFallbackToAllowFrom: false },
       allowFrom: params.allowFrom,
       groupAllowFrom: groupAllowFromForAccess,
@@ -579,14 +554,7 @@ export async function resolveIMessageInboundDecision(params: {
       ((params.echoCache &&
         (await hasIMessageEchoMatch({
           echoCache: params.echoCache,
-          scope: buildIMessageEchoScope({
-            accountId: params.accountId,
-            isGroup,
-            chatId,
-            chatGuid,
-            chatIdentifier,
-            sender,
-          }),
+          scope: echoScope,
           messageIds: targetGuids,
         }))) ||
         (await isKnownFromMeIMessageTarget({
@@ -650,14 +618,6 @@ export async function resolveIMessageInboundDecision(params: {
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
-    const echoScope = buildIMessageEchoScope({
-      accountId: params.accountId,
-      isGroup,
-      chatId,
-      chatGuid,
-      chatIdentifier,
-      sender,
-    });
     if (
       await hasIMessageEchoMatch({
         echoCache: params.echoCache,
@@ -669,7 +629,7 @@ export async function resolveIMessageInboundDecision(params: {
       })
     ) {
       params.logVerbose?.(
-        describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
+        `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}: "${truncateUtf16Safe(bodyText, 50)}"`,
       );
       return { kind: "drop", reason: "echo" };
     }
@@ -686,15 +646,25 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "reflected assistant content" };
   }
 
-  const replyContext = describeReplyContext(params.message);
+  const replyBody = normalizeReplyField(params.message.reply_to_text);
+  const replyContext = replyBody
+    ? {
+        body: replyBody,
+        id:
+          normalizeReplyField(params.message.thread_originator_guid) ??
+          normalizeReplyField(params.message.reply_to_guid),
+        sender: normalizeReplyField(params.message.reply_to_sender),
+      }
+    : null;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: params.cfg,
     channel: "imessage",
     accountId: params.accountId,
   });
-  const replyContextAllowFrom = Array.from(
-    new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
-  );
+  const replyContextAllowFrom = uniqueStrings([
+    ...groupAllowFromForAccess,
+    ...effectiveGroupAllowFrom,
+  ]);
   const replySenderAllowed = resolveInboundSupplementalSenderAllowed({
     isGroup,
     groupPolicy: replyContextAllowFrom.length === 0 ? "open" : "allowlist",
@@ -1049,42 +1019,4 @@ export async function buildIMessageInboundContext(params: {
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
 }
 
-function buildIMessageEchoScope(params: {
-  accountId: string;
-  isGroup: boolean;
-  chatId?: number;
-  chatGuid?: string;
-  chatIdentifier?: string;
-  sender: string;
-}): string[] {
-  // Mirror every shape resolveOutboundEchoScope can persist (see send.ts).
-  // Inbound messages carry chat_id, chat_guid, and chat_identifier when
-  // available, but the outbound side only writes one of them — whichever
-  // shape the caller used. Returning all candidates lets hasIMessageEchoMatch
-  // cross-check, so a chat_guid-keyed send is suppressed even when chat.db
-  // annotates the inbound row with chat_id+chat_identifier (or any other
-  // permutation).
-  const scopes: string[] = [];
-  if (params.isGroup) {
-    const chatIdScope = formatIMessageChatTarget(params.chatId);
-    if (chatIdScope) {
-      scopes.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
-    scopes.push(`${params.accountId}:imessage:${params.sender}`);
-  }
-  if (params.chatGuid) {
-    scopes.push(`${params.accountId}:chat_guid:${params.chatGuid}`);
-  }
-  if (params.chatIdentifier) {
-    scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
-  }
-  return scopes;
-}
-
-function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {
-  const preview = truncateUtf16Safe(params.messageText, 50);
-  const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
-  return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

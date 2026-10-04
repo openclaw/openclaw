@@ -18,13 +18,7 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
 } from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import {
-  replaceConfigFile,
-  resolveStateDir,
-  type ConfigFileSnapshot,
-  type OpenClawConfig,
-} from "../config/config.js";
-import type { ConfigWriteOptions } from "../config/io.js";
+import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { resolveUserPath } from "../utils.js";
@@ -52,46 +46,15 @@ type FileSnapshot = {
   mode: number;
 };
 
-type ApplyWrite = {
-  path: string;
-  content: string;
-  mode: number;
-};
-
 type AuthStoreSnapshot = {
   target: AuthProfileStoreTarget;
   persistence: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
   owned?: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
 };
 
-type ProjectedState = {
-  authStoreEnv: NodeJS.ProcessEnv;
-  nextConfig: OpenClawConfig;
-  configSnapshot: ConfigFileSnapshot;
-  configPath: string;
-  configWriteOptions: ConfigWriteOptions;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
-  envRawByPath: Map<string, string>;
-  changedFiles: Set<string>;
-  warnings: string[];
-  refsChecked: number;
-  skippedExecRefs: number;
-  resolvabilityComplete: boolean;
-};
-
 type ResolvedPlanTargetEntry = {
   target: SecretsPlanTarget;
   resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
-};
-
-type ConfigTargetMutationResult = {
-  resolvedTargets: ResolvedPlanTargetEntry[];
-  scrubbedValues: Set<string>;
-  providerTargets: Set<string>;
-  configChanged: boolean;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
 };
 
 type MutableAuthProfileStore = Record<string, unknown> & {
@@ -195,9 +158,7 @@ function applyProviderPlanMutations(params: {
   upserts: Record<string, SecretProviderConfig> | undefined;
   deletes: string[] | undefined;
 }): boolean {
-  const currentProviders = isRecord(params.config.secrets?.providers)
-    ? structuredClone(params.config.secrets?.providers)
-    : {};
+  const currentProviders = params.config.secrets?.providers ?? {};
   let changed = false;
 
   for (const providerAlias of params.deletes ?? []) {
@@ -281,7 +242,7 @@ async function projectPlanState(params: {
   env: NodeJS.ProcessEnv;
   write: boolean;
   allowExecInDryRun: boolean;
-}): Promise<ProjectedState> {
+}) {
   const io = createSecretsConfigIO({ env: params.env });
   const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
@@ -378,7 +339,7 @@ function applyConfigTargetMutations(params: {
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
   changedFiles: Set<string>;
-}): ConfigTargetMutationResult {
+}) {
   const resolvedTargets = params.planTargets.map((target) => ({
     target,
     resolved: resolveTarget(target),
@@ -461,13 +422,8 @@ function scrubAuthStoresForProviderTargets(params: {
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
-    const nextStore = structuredClone(parsed);
-    const profiles = nextStore.profiles;
-    if (!isRecord(profiles)) {
-      continue;
-    }
     let mutated = false;
-    for (const profile of iterateAuthProfileCredentials(profiles)) {
+    for (const profile of iterateAuthProfileCredentials(parsed.profiles)) {
       const provider = normalizeProviderId(profile.provider);
       if (!params.providerTargets.has(provider)) {
         continue;
@@ -496,24 +452,13 @@ function scrubAuthStoresForProviderTargets(params: {
       }
     }
     if (mutated) {
-      params.authStoreByPath.set(authStorePath, nextStore);
+      params.authStoreByPath.set(authStorePath, parsed);
       params.authStoreTargetByPath.set(authStorePath, target);
       params.changedFiles.add(authStorePath);
     }
   }
 
   return params.authStoreByPath;
-}
-
-function ensureMutableAuthStore(
-  store: Record<string, unknown> | undefined,
-): MutableAuthProfileStore {
-  const next: Record<string, unknown> = store ? structuredClone(store) : {};
-  const profiles = isRecord(next.profiles) ? next.profiles : {};
-  if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
-    next.version = AUTH_STORE_VERSION;
-  }
-  return { ...next, profiles };
 }
 
 function resolveAuthStoreForTarget(params: {
@@ -528,34 +473,29 @@ function resolveAuthStoreForTarget(params: {
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
-  const authStoreTarget = resolveAuthStoreTargetForAgent({
-    nextConfig: params.nextConfig,
-    stateDir: params.stateDir,
-    env: params.env,
-    agentId,
-  });
-  const authStorePath = authStoreTarget.path;
-  const existing = params.authStoreByPath.get(authStorePath);
-  const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
-  const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
-  params.authStoreByPath.set(authStorePath, store);
-  params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
-  return { path: authStorePath, store };
-}
-
-function resolveAuthStoreTargetForAgent(params: {
-  nextConfig: OpenClawConfig;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  agentId: string;
-}): Extract<AuthProfileStoreTarget, { kind: "agent" }> {
   const scopedEnv = {
     ...params.env,
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_AGENT_DIR: undefined,
   };
-  const agentDir = resolveAgentDir(params.nextConfig, params.agentId, scopedEnv);
-  return { kind: "agent", agentDir, path: resolveAuthProfileDatabasePath(agentDir) };
+  const agentDir = resolveAgentDir(params.nextConfig, agentId, scopedEnv);
+  const authStoreTarget: Extract<AuthProfileStoreTarget, { kind: "agent" }> = {
+    kind: "agent",
+    agentDir,
+    path: resolveAuthProfileDatabasePath(agentDir),
+  };
+  const authStorePath = authStoreTarget.path;
+  const existing = params.authStoreByPath.get(authStorePath);
+  const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
+  const next: Record<string, unknown> = isRecord(loaded) ? loaded : {};
+  const profiles = isRecord(next.profiles) ? next.profiles : {};
+  if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
+    next.version = AUTH_STORE_VERSION;
+  }
+  const store = { ...next, profiles };
+  params.authStoreByPath.set(authStorePath, store);
+  params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
+  return { path: authStorePath, store };
 }
 
 function ensureAuthProfileContainer(params: {
@@ -722,7 +662,7 @@ async function validateProjectedSecretsState(params: {
         const override = authStoreLookup.get(storePath);
         if (override) {
           return (
-            coercePersistedAuthProfileStore(structuredClone(override)) ?? {
+            coercePersistedAuthProfileStore(override) ?? {
               version: AUTH_STORE_VERSION,
               profiles: {},
             }
@@ -823,14 +763,8 @@ export async function runSecretsApply(params: {
   };
 
   capture(projected.configPath);
-  const writes: ApplyWrite[] = [];
-  for (const [pathname, raw] of projected.envRawByPath.entries()) {
+  for (const pathname of projected.envRawByPath.keys()) {
     capture(pathname);
-    writes.push({
-      path: pathname,
-      content: raw,
-      mode: 0o600,
-    });
   }
   for (const [pathname, target] of projected.authStoreTargetByPath.entries()) {
     captureAuthStore(pathname, target);
@@ -844,8 +778,8 @@ export async function runSecretsApply(params: {
       io,
       afterWrite: { mode: "auto" },
     });
-    for (const writeLocal of writes) {
-      writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
+    for (const [pathname, raw] of projected.envRawByPath.entries()) {
+      writeTextFileAtomic(pathname, raw, 0o600);
     }
     for (const [pathname, value] of projected.authStoreByPath.entries()) {
       const target = projected.authStoreTargetByPath.get(pathname);

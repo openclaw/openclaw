@@ -22,6 +22,28 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+List views can pass `rowMode: "compact"` to omit repeated detail-only metadata:
+`contextWindows`, `contextWindowDefault`, `thinkingLevels`, `thinkingOptions`,
+`thinkingDefault`, `toolOverrides`, `providerReview`, `nativeRuntimeConsent`,
+`contextBudgetStatus`, `agentRuntime`, and `pluginExtensions`. Each returned row
+carries `rowMode: "compact"`; those omissions mean the detail was not requested,
+and must not clear previously admitted detail fields. Use `sessions.describe`
+or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
+the full row contract. Title, preview, and Activity recap enrichment remain
+controlled by their existing include flags.
+
+Control UI list requests use compact rows and a bounded diagnostic `source`:
+`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
+`command-palette`, or `skill-workshop`.
+The source does not change selection or access. List and event rows include
+`hasBoard`, the prepared dashboard-membership fact, so a dashboard gallery can
+apply row updates without enumerating its pages again. Expanding a compact row
+on the Sessions page reads its full details with `sessions.describe`.
+Rows also carry `childOwnerSessionKeys`, the current retained owners used by the
+Gateway's `spawnedBy` filter. These receipts include runtime-controller and
+navigation ownership, expire through that same owner, and let child windows
+apply events without reimplementing retention rules in the browser.
+
 The Gateway registers the subscription before projecting the list. Clients must
 listen for `sessions.changed` before making the request: events can arrive while
 the snapshot is being built. Reconcile those events with the response and issue
@@ -36,7 +58,10 @@ completed-page cache or one-second staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
 rows disappear when their store leaves the current topology. Each response
-applies the current viewer's visibility and current activity time.
+applies the current viewer's visibility and current activity time. Equivalent
+viewers share immutable row presentations and encoded row bytes until their
+projection facts change; `snapshotAt` retains the row's sampling time. Runtime
+authority, permission changes, and clock-expiring facts are checked before reuse.
 
 Resident rows use stored titles and usage. Optional message previews and terminal
 fallback-model metadata fill in through bounded read-only background transcript
@@ -173,6 +198,10 @@ or protocol-version change.
 - `session.observer`: safe live session headline and status digest. A model-authored
   preamble can update the headline immediately; utility-model assessments replace
   it later when available. Web, iOS, and Android use the same run-scoped digest.
+  Utility-model replies may wrap the JSON digest in one plain or `json` Markdown
+  fence; surrounding prose and invalid digest fields are rejected. If repeated
+  invalid replies disable the observer for a run, the warning includes a redacted,
+  whitespace-collapsed prefix of the last rejected reply, capped at 160 characters.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.
@@ -248,18 +277,31 @@ or protocol-version change.
   thinking-metadata preservation rules still apply.
   The Control UI coalesces an authoritative
   refresh for missing rows or snapshots, broad/keyless changes, `catalogChanged`,
-  membership filters, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
+  filters whose membership cannot be established from row facts, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
   promoted into the shared page). Events overlapping a roster read retain a
   trailing refresh so its response cannot lose an update. A retained list with a
   read error also refreshes on the next relevant event. Profile identity, runner
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Held row updates preserve unfiltered and dashboard-filtered windows without
+  refetching; title and preview enrichment flags do not change membership.
+  Healthy row traffic retains one fallback read after at least 60 seconds.
+  Dashboard pagination belongs to the shared roster window, which keeps loaded
+  pages across row updates and coalesces simultaneous reads for the same query.
+  Child windows use the Gateway's ownership receipts and complete parent child
+  lists. Certified excluded ancestor rows can be skipped; references require an
+  admitted current row from the connection's shared provenance owner.
+  The sidebar owner-count facet also retains its aggregate when admitted old and
+  new row facts prove unchanged contributions. Running state, ownership, sharing,
+  archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
-  distinct. Publication rechecks row readiness after each yield, and shutdown joins
-  admitted publications before disposing their projection.
+  distinct. Publication rechecks row readiness after each yield. Accepted recap
+  notifications outlive the compaction or scheduler work that triggered them.
+  Shutdown stops new notifications and joins admitted publications before closing
+  clients and disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from
   transient process-local state. Incognito rows remain excluded from the session
   roster, and queued events cannot cross a reset or database replacement.

@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { CronHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -42,7 +41,7 @@ import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 async function withHistoryState(run: () => Promise<void>) {
   let registry: ReturnType<typeof captureActivePluginRegistrySnapshot> | undefined;
@@ -365,12 +364,11 @@ it("refuses ambiguous timestamps and cursors moved to another recorded run", asy
   });
 });
 
-it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner"] as const)(
+it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
   "rechecks %s before publishing a retained Cron transcript",
   async (change) => {
     await withCronTranscript(
       async ({ cron, storePath, baseKey, oldScope, latest, job, record, query }) => {
-        let current = true;
         let storageChanged = false;
         const unrelatedKey = "agent:main:unrelated";
         if (change === "transcript owner") {
@@ -379,28 +377,7 @@ it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner
             { sessionId: "unrelated-current", updatedAt: 3, visibility: "shared" },
           );
         }
-        const instance = createOperationalRunInstanceRef("cron-history-run");
-        const client: GatewayClient =
-          change === "grant"
-            ? {
-                connect: {} as GatewayClient["connect"],
-                internal: {
-                  agentRuntimeIdentity: {
-                    kind: "agentRuntime",
-                    agentId: "main",
-                    sessionKey: "agent:main:cron:reader:run:one",
-                    operationalRunInstance: instance,
-                    delegatedAuthority: {
-                      kind: "local",
-                      operationalRunInstance: instance,
-                      lifecycleGeneration: "fixture",
-                      claimId: "fixture",
-                    },
-                    cronSelfManagementContext: { jobId: job.id, expiresAtMs: Date.now() + 60_000 },
-                  },
-                },
-              }
-            : sharingPolicyClient({ scopes: ["operator.read"], user: "retained-viewer" });
+        const client = sharingPolicyClient({ scopes: ["operator.read"], user: "retained-viewer" });
         const onRead = vi.fn(async () => {
           if (change === "sharing") {
             await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
@@ -412,8 +389,6 @@ it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner
               throw new Error("Expected detail object");
             }
             persistHistory([{ ...record, detail: { ...detail, sessionId: latest.sessionId } }]);
-          } else if (change === "client") {
-            current = false;
           } else if (change === "retention") {
             storageChanged =
               runOpenClawStateWriteTransaction(({ db }) =>
@@ -432,9 +407,6 @@ it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner
                     .run(unrelatedKey, oldScope.sessionId).changes,
                 { agentId: oldScope.agentId },
               ) === 1;
-          } else {
-            client.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
-              Date.now() - 1;
           }
           return undefined;
         });
@@ -443,14 +415,7 @@ it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner
           cronStorePath: storePath,
           readChatStartupProjection: onRead,
         });
-        const result = await query(
-          { id: job.id, runId: "public-old-run" },
-          {
-            client,
-            hasCurrentClientAuthority: () => current,
-          },
-          context,
-        );
+        const result = await query({ id: job.id, runId: "public-old-run" }, { client }, context);
         expect(onRead).toHaveBeenCalled();
         if (change === "retention" || change === "transcript owner") {
           expect(storageChanged).toBe(true);

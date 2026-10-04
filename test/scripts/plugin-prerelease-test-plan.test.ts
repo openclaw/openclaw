@@ -1,7 +1,7 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, matchesGlob, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -328,12 +328,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
-      successScenario.indexOf("configure_kitchen_sink_runtime"),
-    );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
-    );
+    const installIndex = successScenario.indexOf('plugins install "${install_args[@]}" --force');
+    const configureIndex = successScenario.indexOf("assertions.mjs configure-runtime");
+    const enableIndex = successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"');
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(configureIndex).toBeGreaterThan(installIndex);
+    expect(enableIndex).toBeGreaterThan(configureIndex);
     expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
     expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
@@ -355,7 +355,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+    expect(sweepScript).toContain("assertions.mjs scan-logs");
   });
 
   it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
@@ -439,178 +439,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 
-  it("keeps the trusted security scanner outside the candidate test process", () => {
-    const workflow = readPluginPrereleaseWorkflow();
-    const admission = workflow.jobs.resolve_target;
-    const securityPlan = workflow.jobs["plugin-npm-security-plan"];
-    const securityScan = workflow.jobs["plugin-npm-security-scan"];
-    const source = readFileSync(".github/workflows/plugin-prerelease.yml", "utf8");
-
-    expect(admission.steps).toEqual([
-      expect.objectContaining({
-        uses: CHECKOUT_V6,
-        with: expect.objectContaining({ ref: "${{ github.sha }}", path: "workflow" }),
-      }),
-      expect.objectContaining({
-        env: {
-          EXPECTED_SHA:
-            "${{ github.event_name == 'schedule' && github.sha || inputs.expected_sha }}",
-          OPENCLAW_REF_REMOTE: "${{ github.server_url }}/${{ github.repository }}.git",
-          TARGET_REF: "${{ github.event_name == 'schedule' && github.sha || inputs.target_ref }}",
-        },
-        run: expect.stringContaining("bash workflow/scripts/github/resolve-openclaw-ref.sh"),
-      }),
-    ]);
-    expect(securityPlan.needs).toEqual(["resolve_target"]);
-    expect(securityPlan.if).toBe("github.event_name != 'schedule' && inputs.phase != 'candidate'");
-    expect(workflow.jobs["plugin-npm-security-package"]).toBeUndefined();
-    const securityPlanStepNames = securityPlan.steps.map((step: WorkflowStep) => step.name);
-    expect(securityPlanStepNames.indexOf("Install trusted scanner dependencies")).toBeLessThan(
-      securityPlanStepNames.indexOf("Checkout candidate as inert data"),
-    );
-    expect(evaluateWorkflowRunner(securityScan["runs-on"])).toBe("ubuntu-24.04");
-    expect(securityScan).toMatchObject({
-      name: "plugin-npm-security-scan",
-      needs: ["resolve_target", "plugin-npm-security-plan"],
-      permissions: { contents: "read" },
-      "runs-on": expect.any(String),
-      "timeout-minutes": 45,
-    });
-    const securityScanStepNames = securityScan.steps.map((step: WorkflowStep) => step.name);
-    expect(securityScanStepNames.indexOf("Install trusted scanner dependencies")).toBeLessThan(
-      securityScanStepNames.indexOf("Checkout candidate as inert package input"),
-    );
-    const packStep = securityScan.steps.find(
-      (step: WorkflowStep) => step.name === "Pack supplemental inert plugin inputs",
-    );
-    expect(packStep?.env?.EXPECTED_PACKAGES_JSON).toBe(
-      "${{ needs.plugin-npm-security-plan.outputs.packages_json }}",
-    );
-    expect(packStep?.run).toContain("plugin-npm-security-prepare.mts prepare");
-    expect(packStep?.run).toContain("if ! node --import tsx");
-    expect(packStep?.run).toContain("Package preparation failed");
-    expect(
-      securityScan.steps.find(
-        (step: WorkflowStep) => step.name === "Scan supplemental inert plugin inputs",
-      )?.run,
-    ).toContain("node scripts/plugin-npm-security-scan-runner.mjs");
-    expect(
-      securityScan.steps.find(
-        (step: WorkflowStep) => step.name === "Scan supplemental inert plugin inputs",
-      )?.run,
-    ).toContain('--target-context-ref "$TARGET_CONTEXT_REF"');
-    expect(source).not.toContain("actions/download-artifact@");
-    expect(source).not.toContain("plugin-npm-security-artifact-plan");
-    expect(source).not.toContain("npm-install-security-scan.release.test.ts");
-    expect(workflow.on.workflow_dispatch.inputs.target_context_ref).toEqual({
-      default: "",
-      description: "Canonical release context for an exact-SHA frozen-target validation",
-      required: false,
-      type: "string",
-    });
-  });
-
-  it("binds scanner identity independently of candidate-owned outputs", () => {
-    const workflow = readPluginPrereleaseWorkflow();
-    const root = tempDirs.make("openclaw-plugin-prerelease-identity-");
-    const admittedSha = "a".repeat(40);
-    const substitutedSha = "b".repeat(40);
-    mkdirSync(join(root, "scripts/lib"), { recursive: true });
-    mkdirSync(join(root, "workflow/scripts/github"), { recursive: true });
-    mkdirSync(join(root, "bin"));
-    symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
-    writeFileSync(
-      join(root, "workflow/scripts/github/resolve-openclaw-ref.sh"),
-      readFileSync("scripts/github/resolve-openclaw-ref.sh"),
-    );
-    writeFileSync(
-      join(root, "bin/git"),
-      `#!/bin/sh\n[ "$1" = rev-parse ] && [ "$2" = HEAD ] || exit 2\nprintf '%s\\n' '${admittedSha}'\n`,
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      join(root, "scripts/lib/plugin-prerelease-test-plan.mts"),
-      `import { appendFileSync } from "node:fs";
-       process.once("exit", () => appendFileSync(process.env.GITHUB_OUTPUT,
-         "checkout_revision=${substitutedSha}\\n"));
-       export function assertPluginPrereleaseTestPlanComplete() {
-         return { staticChecks: [{ checkName: "fixture", command: "true", check: "fixture" }], dockerLanes: [] };
-       }`,
-    );
-    writeFileSync(
-      join(root, "scripts/lib/extension-test-plan.mts"),
-      "export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 1; export function createExtensionTestShards() { return []; }",
-    );
-    writeFileSync(
-      join(root, "scripts/lib/ci-node-test-plan.mts"),
-      "export function createNodeTestShards() { return []; }",
-    );
-    const needs: Record<string, { outputs: Record<string, string> }> = {};
-    for (const [jobId, stepName] of [
-      ["resolve_target", "Resolve target SHA"],
-      ["preflight", "Build plugin prerelease manifest"],
-    ] as const) {
-      const job = workflow.jobs[jobId];
-      if (!job) {
-        continue;
-      }
-      const step = job.steps.find((entry: WorkflowStep) => entry.name === stepName);
-      const outputPath = join(root, `${jobId}-output`);
-      const result = spawnSync("bash", ["-c", step.run], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          EXPECTED_SHA: admittedSha,
-          FULL_RELEASE_VALIDATION: "true",
-          GITHUB_OUTPUT: outputPath,
-          PATH: `${join(root, "bin")}:${process.env.PATH}`,
-          PHASE: "independent",
-          TARGET_REF: admittedSha,
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      // Actions assigns each output in file order; the last duplicate wins.
-      const outputs = Object.fromEntries(
-        readFileSync(outputPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
-      );
-      if (jobId === "preflight") {
-        expect(outputs.checkout_revision).toBe(substitutedSha);
-      }
-      needs[jobId] = {
-        outputs: Object.fromEntries(
-          Object.entries(job.outputs).map(([key, expression]) => [
-            key,
-            runInNewContext(String(expression).slice(3, -2), {
-              steps: { [step.id]: { outputs }, node_test_exclusions: { outputs: {} } },
-            }),
-          ]),
-        ),
-      };
-    }
-    for (const jobId of ["plugin-npm-security-plan", "plugin-npm-security-scan"]) {
-      for (const step of workflow.jobs[jobId].steps as WorkflowStep[]) {
-        const candidateRef = step.with?.path === ".release-candidate" ? step.with.ref : undefined;
-        for (const expression of [candidateRef, step.env?.CANDIDATE_SHA]) {
-          if (expression !== undefined) {
-            if (typeof expression !== "string") {
-              throw new Error("Candidate identity must be a workflow expression");
-            }
-            expect(runInNewContext(expression.slice(3, -2), { needs })).toBe(admittedSha);
-          }
-        }
-      }
-    }
-  });
-
   it("wires the full plugin prerelease plan into its release workflow", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
     const pluginWorkflow = readPluginPrereleaseWorkflow();
     const pluginPreflight = pluginWorkflow.jobs.preflight;
-    const securityScan = pluginWorkflow.jobs["plugin-npm-security-scan"];
     const staticShard = pluginWorkflow.jobs["plugin-prerelease-static-shard"];
     const nodeShard = pluginWorkflow.jobs["plugin-prerelease-node-shard"];
     const extensionShard = pluginWorkflow.jobs["plugin-prerelease-extension-shard"];
@@ -622,9 +455,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       ".github/workflows/full-release-validation.yml",
       "utf8",
     );
-    const manifestScript = preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    ).run;
+    const manifestScript = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
     const manifestEnv = preflight.steps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
     ).env;
@@ -887,11 +718,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       run_plugin_prerelease_node: "${{ steps.manifest.outputs.run_plugin_prerelease_node }}",
       run_plugin_prerelease_static: "${{ steps.manifest.outputs.run_plugin_prerelease_static }}",
       run_plugin_prerelease_suite: "${{ steps.manifest.outputs.run_plugin_prerelease_suite }}",
+      upgrade_baseline: "${{ steps.qualification_baselines.outputs.baseline }}",
+      upgrade_baselines: "${{ steps.qualification_baselines.outputs.baselines }}",
     });
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
     );
-    expect(securityScan.needs).toEqual(["resolve_target", "plugin-npm-security-plan"]);
     expect(nodeShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}",
     );
@@ -1001,7 +833,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",
-      "plugin-npm-security-scan",
       "plugin-prerelease-static-shard",
       "plugin-prerelease-node-shard",
       "plugin-prerelease-extension-shard",
@@ -1011,9 +842,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(
       suite.steps.find((step: WorkflowStep) => step.name === "Verify plugin prerelease suite").run,
     ).toContain("plugin-prerelease-inspector advisory result");
-    expect(
-      suite.steps.find((step: WorkflowStep) => step.name === "Verify plugin prerelease suite").run,
-    ).toContain('check_required "plugin-npm-security-scan" "$RUN_NPM_SECURITY" "$SECURITY_RESULT"');
   });
 
   it.each([
@@ -1148,7 +976,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "plugin-prerelease-hourly-main",
     );
     expect(evaluate(workflow.concurrency["cancel-in-progress"])).toBe(false);
-    expect(evaluate(workflow.jobs["plugin-npm-security-plan"].if)).toBe(false);
     const validation = workflow.jobs.preflight.steps.find(
       (step: WorkflowStep) => step.name === "Validate phase inputs",
     );
@@ -1158,10 +985,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(evaluate(exclusions.env.NODE_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
     expect(evaluate(exclusions.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
-    const summaryStep = workflow.jobs["plugin-prerelease-suite"].steps.find(
-      (step: WorkflowStep) => step.name === "Verify plugin prerelease suite",
-    );
-    expect(evaluate(summaryStep.env.RUN_NPM_SECURITY)).toBe("false");
     expect(workflow.jobs["plugin-prerelease-extension-shard"].strategy["max-parallel"]).toBe(12);
 
     const hourly = runPluginManifest("independent", "schedule");
@@ -1211,7 +1034,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       .filter((row) => row.task === "extension-file-shard")
       .flatMap((row) => row.includePatterns ?? []);
     expect(new Set(fileTargets).size).toBe(fileTargets.length);
-    const sourceOnlyFile = "extensions/device-pair/doctor-contract-api.test.ts";
+    const sourceOnlyFile = "extensions/diffs/src/store.cleanup.test.ts";
     expect(fileTargets).not.toContain(sourceOnlyFile);
     for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
       const config = resolveExtensionTestConfig(file);

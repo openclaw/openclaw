@@ -1,6 +1,7 @@
 import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -32,7 +33,6 @@ import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timelin
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
-  PluginHookContextWindowSource,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
@@ -43,24 +43,16 @@ import type {
   ModelCallObservationState,
 } from "./attempt.model-diagnostic-observation.js";
 
-export type ModelCallDiagnosticContext = {
+export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "callId"> & {
   config?: OpenClawConfig;
-  runId: string;
   agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  provider: string;
-  model: string;
-  api?: string;
-  transport?: string;
-  contextTokenBudget?: number;
-  contextWindowSource?: PluginHookContextWindowSource;
-  contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  /** Each streamed non-empty text, thinking or tool-call delta; keepalives never count. */
+  onOutputDelta?: () => void;
   onTerminal?: () => void;
   onSucceeded?: (startedAt: number) => void;
   suppressPluginHooks?: boolean;
@@ -83,6 +75,17 @@ type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
   return modelContent ? { modelContent } : undefined;
+}
+
+function isModelOutputDelta(chunk: unknown): boolean {
+  return (
+    isRecord(chunk) &&
+    (chunk.type === "text_delta" ||
+      chunk.type === "thinking_delta" ||
+      chunk.type === "toolcall_delta") &&
+    typeof chunk.delta === "string" &&
+    chunk.delta.length > 0
+  );
 }
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
@@ -200,35 +203,23 @@ function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentCon
   });
 }
 
-function dispatchModelCallStartedHook(eventBase: ModelCallEventBase): void {
+function dispatchModelCallHook(
+  eventBase: ModelCallEventBase,
+  fields?: ModelCallEndedHookFields,
+): void {
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("model_call_started")) {
+  const hookName = fields ? "model_call_ended" : "model_call_started";
+  if (!hookRunner?.hasHooks(hookName)) {
     return;
   }
   const event = Object.freeze(modelCallHookEventBase(eventBase));
   const hookCtx = modelCallHookContext(eventBase);
   fireAndForgetBoundedHook(
-    () => hookRunner.runModelCallStarted(event, hookCtx),
-    "model_call_started plugin hook failed",
-  );
-}
-
-function dispatchModelCallEndedHook(
-  eventBase: ModelCallEventBase,
-  fields: ModelCallEndedHookFields,
-): void {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("model_call_ended")) {
-    return;
-  }
-  const event = Object.freeze({
-    ...modelCallHookEventBase(eventBase),
-    ...fields,
-  });
-  const hookCtx = modelCallHookContext(eventBase);
-  fireAndForgetBoundedHook(
-    () => hookRunner.runModelCallEnded(event, hookCtx),
-    "model_call_ended plugin hook failed",
+    () =>
+      fields
+        ? hookRunner.runModelCallEnded(Object.freeze({ ...event, ...fields }), hookCtx)
+        : hookRunner.runModelCallStarted(event, hookCtx),
+    `${hookName} plugin hook failed`,
   );
 }
 
@@ -281,7 +272,7 @@ function emitModelCallEnded(
     modelContentPrivateData(observer.completedContent()),
   );
   if (!observer.state.suppressPluginHooks) {
-    dispatchModelCallEndedHook(eventBase, {
+    dispatchModelCallHook(eventBase, {
       durationMs,
       outcome: failure ? "error" : "completed",
       ...sizeTimingFields,
@@ -382,7 +373,7 @@ export function createModelLifecycle(params: {
     modelContentPrivateData(observer.modelContent),
   );
   if (params.ctx.suppressPluginHooks !== true) {
-    dispatchModelCallStartedHook(eventBase);
+    dispatchModelCallHook(eventBase);
   }
   params.ctx.onStarted?.();
   const startedAt = Date.now();
@@ -403,6 +394,13 @@ export function createModelLifecycle(params: {
     observer,
     propagatedOptions,
     startedAt,
+    observeChunk(chunk: unknown) {
+      observer.observeResponseChunk(startedAt, chunk);
+      observer.maybeEmitStreamProgress(eventBase);
+      if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {
+        params.ctx.onOutputDelta();
+      }
+    },
     emitCompleted() {
       // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
       if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {

@@ -69,21 +69,7 @@ export type UpdateFailureReportSubmitResult =
       fallbackUrl?: undefined;
       message: string;
       savedReportPath: string;
-      status: "pending";
-      url?: undefined;
-    }
-  | {
-      fallbackUrl?: undefined;
-      message: string;
-      savedReportPath: string;
-      status: "retryable";
-      url?: undefined;
-    }
-  | {
-      fallbackUrl?: undefined;
-      message: string;
-      savedReportPath: string;
-      status: "stale";
+      status: "pending" | "retryable" | "stale";
       url?: undefined;
     };
 
@@ -213,7 +199,6 @@ export async function submitUpdateFailureReport(
       issue: PreparedGithubIssue,
       hooks: GithubIssueReconcileHooks,
     ) => Promise<GithubIssueReconcileResult>;
-    refreshPreparation?: typeof refreshUpdateFailureReportReceiptPreparation;
     stateDir?: string;
     validateCurrentAttempt?: () => boolean | Promise<boolean>;
   } = {},
@@ -609,11 +594,7 @@ export async function submitUpdateFailureReport(
         ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
         : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
   const preparationRefreshed = retryUpdateReportStateWrite(() =>
-    (options.refreshPreparation ?? refreshUpdateFailureReportReceiptPreparation)(
-      prepared.attemptId,
-      reservationId,
-      stateEnv,
-    ),
+    refreshUpdateFailureReportReceiptPreparation(prepared.attemptId, reservationId, stateEnv),
   );
   if (!preparationRefreshed) {
     let replacement: UpdateFailureReportReceipt | null = null;

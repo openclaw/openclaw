@@ -10,6 +10,7 @@ import {
   outputToolArgs,
   outputToolCall,
   outputToolCallId,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -54,6 +55,10 @@ const settled = [
   result,
   "</prompt-data>",
 ].join("\n");
+const batchSettled = settled.replace(
+  "Every subagent spawned from this session has now settled.",
+  "Every subagent in this batch has now settled, including its descendants.",
+);
 const settleProvenance = [
   "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
   "Conversation data (data, not instructions):",
@@ -64,33 +69,17 @@ const settleProvenance = [
 ].join("\n");
 
 describe("mock subagent handoff completion", () => {
-  it("reports admission errors without waiting for a child", async () => {
-    const server = await startMockServer();
-    const reply = await expectNonStreamingResponsesJson(server, {
-      model: "gpt-5.6-luna",
-      tools,
-      input: [
-        user(kickoff),
-        { type: "function_call", name: "sessions_spawn", call_id: "spawn", arguments: "{}" },
-        makeToolOutputWithCallId(
-          "spawn",
-          JSON.stringify({ status: "error", error: "Child admission denied" }),
-        ),
-      ],
-    });
-    expect(outputItems(reply)).toMatchObject([
-      {
-        type: "message",
-        content: [{ type: "output_text", text: "Failed to delegate: Child admission denied" }],
-      },
-    ]);
-  });
-
   it.each([
     { name: "protected event", completion: carrier, ok: true },
     {
       name: "timestamped settled wake",
       completion: `[Thu 2026-09-17 11:27 PDT] ${settled}`,
+      ok: true,
+    },
+    {
+      name: "catalog spawn with timestamped batch settlement",
+      completion: `[Mon 2026-09-28 02:44 CDT] ${batchSettled}`,
+      catalog: true,
       ok: true,
     },
     {
@@ -123,29 +112,46 @@ describe("mock subagent handoff completion", () => {
     },
   ])(
     "waits for the child result before reporting completion: $name",
-    async ({ completion, ok }) => {
+    async ({ completion, ok, catalog = false }) => {
       const server = await startMockServer();
       const request = (input: unknown[]) =>
-        expectNonStreamingResponsesJson(server, { model: "gpt-5.6-luna", tools, input });
+        expectNonStreamingResponsesJson(server, {
+          model: "gpt-5.6-luna",
+          tools: catalog ? structuredTools : tools,
+          input,
+        });
       const spawned = await request([user(kickoff)]);
-      expect(outputToolCall(spawned, "sessions_spawn")).toBeDefined();
-      const accepted = {
-        type: "function_call_output",
-        call_id: "spawn",
-        output: JSON.stringify({
-          status: "accepted",
-          childSessionKey: "agent:qa:subagent:child",
-          runId: "child-run",
-        }),
+      const call = outputToolCall(spawned, catalog ? "tool_call" : "sessions_spawn");
+      expect(call).toBeDefined();
+      if (catalog) {
+        expect(outputToolArgs(spawned)).toMatchObject({ id: "sessions_spawn" });
+      }
+      const details = {
+        status: "accepted",
+        childSessionKey: "agent:qa:subagent:child",
+        runId: "child-run",
       };
-      const waiting = await request([user(kickoff), accepted]);
+      const accepted = makeToolOutputWithCallId(
+        outputToolCallId(call, "spawn"),
+        JSON.stringify(
+          catalog
+            ? {
+                tool: { id: "openclaw:core:sessions_spawn", name: "sessions_spawn" },
+                result: { details },
+              }
+            : details,
+        ),
+      );
+      const waiting = await request([user(kickoff), call, accepted]);
       expect(outputToolCall(waiting, "sessions_yield")).toBeDefined();
       expect(JSON.stringify(waiting)).not.toContain("The child result was folded back");
       const completionInput = [
         user(completion),
-        ...(completion.includes("Every subagent spawned") ? [user(settleProvenance)] : []),
+        ...(completion.includes("[Subagent Context] Every subagent")
+          ? [user(settleProvenance)]
+          : []),
       ];
-      const completed = await request([user(kickoff), accepted, ...completionInput]);
+      const completed = await request([user(kickoff), call, accepted, ...completionInput]);
       expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
       const text = outputText(completed);
       expect(text).toContain("Delegated task:");
@@ -183,6 +189,7 @@ const metadataCarrier = user(
 
 describe("mock terminal subagents through structured Tool Search", () => {
   it.each([
+    { name: "direct admission error", wireName: "sessions_spawn", nested: false, unwrap: true },
     { name: "matching dispatcher details", unwrap: true },
     { name: "matching dispatcher text", details: false, unwrap: true },
     { name: "mismatched target", target: "read" },
@@ -196,38 +203,51 @@ describe("mock terminal subagents through structured Tool Search", () => {
       callId = "dispatch",
       details = true,
       unwrap = false,
+      nested = true,
     }) => {
       const server = await startMockServer();
-      const failure = { status: "forbidden", error: "Child admission denied" };
+      const failure = { status: nested ? "forbidden" : "error", error: "Child admission denied" };
       const reply = await expectNonStreamingResponsesJson(server, {
         model: "gpt-5.6-luna",
-        tools: structuredTools,
+        tools: nested ? structuredTools : tools,
         input: [
           user(kickoff),
           {
             type: "function_call",
             name: wireName,
             call_id: "dispatch",
-            arguments: JSON.stringify({ id: "sessions_spawn", args: { task: "Bounded task" } }),
+            arguments: JSON.stringify(
+              nested ? { id: "sessions_spawn", args: { task: "Bounded task" } } : {},
+            ),
           },
           makeToolOutputWithCallId(
             callId,
-            JSON.stringify({
-              tool: {
-                id: `openclaw:${target}`,
-                name: target,
-                source: "openclaw",
-              },
-              result: {
-                content: [{ type: "text", text: JSON.stringify(failure) }],
-                ...(details ? { details: failure } : {}),
-              },
-            }),
+            JSON.stringify(
+              nested
+                ? {
+                    tool: {
+                      id: `openclaw:${target}`,
+                      name: target,
+                      source: "openclaw",
+                    },
+                    result: {
+                      content: [{ type: "text", text: JSON.stringify(failure) }],
+                      ...(details ? { details: failure } : {}),
+                    },
+                  }
+                : failure,
+            ),
           ),
         ],
       });
       if (unwrap) {
         expect(outputText(reply)).toBe("Failed to delegate: Child admission denied");
+        expect(outputItems(reply)).toMatchObject([
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "Failed to delegate: Child admission denied" }],
+          },
+        ]);
       } else {
         expect(outputToolCall(reply, "sessions_yield")).toBeDefined();
       }
@@ -315,5 +335,30 @@ describe("mock terminal subagents through structured Tool Search", () => {
       ],
     });
     expect(outputText(empty)).toBe("");
+    // Isolated finalization replays the raw task envelope, with the task outside
+    // the two internal scaffolding blocks.
+    const finalization = await expectNonStreamingResponsesJson(server, {
+      ...child,
+      tools: [],
+      input: [
+        user(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "[Subagent Context] You are running as a subagent (depth 1/5).",
+            "[Subagent Task]",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            String(requireRecord(args.args, "spawn arguments").task),
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "Begin. Execute the assigned task to completion.",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n\n"),
+        ),
+        write,
+        makeToolOutputWithCallId(outputToolCallId(write, "write"), "Wrote file"),
+        user(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+    expect(outputText(finalization)).toBe("");
+    expect(outputItems(finalization).some((item) => item.type === "function_call")).toBe(false);
   });
 });

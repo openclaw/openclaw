@@ -72,19 +72,10 @@ function serializeToolInputSchema(
       return entry;
     });
   } catch {
-    return {
-      schema: {},
-      violations: [`${path} is not JSON-serializable`],
-    };
+    // A stringify failure reports the root even if an earlier entry was non-finite.
   }
-  if (!text) {
-    return {
-      schema: {},
-      violations: [`${path} is not JSON-serializable`],
-    };
-  }
-  if (nonFiniteNumber.path !== null) {
-    const violationPath = nonFiniteNumber.path;
+  if (!text || nonFiniteNumber.path !== null) {
+    const violationPath = text ? nonFiniteNumber.path : path;
     return {
       schema: {},
       violations: [`${violationPath} is not JSON-serializable`],
@@ -125,8 +116,7 @@ function inspectJsonSchema(
       violations.push(`${path.join("")}.${key}`);
     }
   }
-  for (const key of Object.keys(schema)) {
-    const value = schema[key];
+  for (const [key, value] of Object.entries(schema)) {
     if (typeof value === "number" && !Number.isFinite(value)) {
       return false;
     }
@@ -135,11 +125,7 @@ function inspectJsonSchema(
     }
     path.push(".", key);
     if (SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
-      for (const schemaName of Object.keys(value)) {
-        const childSchema = value[schemaName];
-        if (childSchema === undefined) {
-          return false;
-        }
+      for (const [schemaName, childSchema] of Object.entries(value)) {
         path.push(".", schemaName);
         const valid = inspectJsonSchema(childSchema, path, violations);
         path.length -= 2;

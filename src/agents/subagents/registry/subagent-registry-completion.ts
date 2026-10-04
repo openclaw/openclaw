@@ -1,12 +1,11 @@
-/**
- * Subagent run completion helpers.
- * Compares outcomes, maps them to lifecycle events, and emits completion hooks
- * exactly once per completed child run.
- */
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { SUBAGENT_KILL_TASK_ERROR, type SubagentTerminalState } from "./subagent-control.types.js";
+import {
+  SUBAGENT_KILL_TASK_ERROR,
+  type SubagentKillTargetState,
+} from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
@@ -17,58 +16,53 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Classify execution independently of reply capture, including cancelled yielded runs. */
-function resolveSubagentTaskTerminalStatus(
+export function resolveSubagentKillTargetState(
   entry: SubagentRunRecord,
-): SubagentTerminalState["status"] | undefined {
-  const outcome = entry.execution.outcome;
-  if (
-    typeof entry.execution.endedAt !== "number" ||
-    !outcome ||
-    entry.pauseReason === "sessions_yield"
-  ) {
-    return undefined;
-  }
+): SubagentKillTargetState | undefined {
   if (
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
     entry.suppressAnnounceReason !== "steer-restart"
   ) {
-    return "cancelled";
+    const taskEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+    return typeof taskEndedAt === "number"
+      ? {
+          state: "terminal",
+          task: {
+            status: "cancelled",
+            endedAt: taskEndedAt,
+            error: SUBAGENT_KILL_TASK_ERROR,
+          },
+        }
+      : undefined;
   }
-  return outcome.status === "ok"
-    ? "succeeded"
-    : outcome.status === "timeout"
-      ? "timed_out"
-      : "failed";
-}
-
-/** Returns terminal execution facts only after completion capture has settled. */
-export function resolveFinalizedSubagentTaskState(
-  entry: SubagentRunRecord,
-): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  const status = resolveSubagentTaskTerminalStatus(entry);
-  if (
-    typeof endedAt !== "number" ||
-    status === undefined ||
-    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
-  ) {
+  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
     return undefined;
   }
+  if (
+    !outcome ||
+    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+  ) {
+    return { state: "finalizing" };
+  }
   return {
-    status,
-    endedAt,
-    error:
-      status === "cancelled"
-        ? SUBAGENT_KILL_TASK_ERROR
-        : outcome?.status === "error"
-          ? outcome.error
-          : undefined,
+    state: "terminal",
+    task: {
+      status:
+        outcome.status === "ok"
+          ? "succeeded"
+          : outcome.status === "timeout"
+            ? "timed_out"
+            : "failed",
+      endedAt,
+      error: outcome.status === "error" ? outcome.error : undefined,
+    },
   };
 }
 
@@ -87,7 +81,6 @@ export function resolveKilledSubagentTaskEndedAt(entry: SubagentRunRecord): numb
     : endedAt;
 }
 
-/** Maps registry run outcome to lifecycle event outcome. */
 export function resolveLifecycleOutcomeFromRunOutcome(
   outcome: SubagentRunOutcome | undefined,
 ): SubagentLifecycleEndedOutcome {
@@ -100,7 +93,6 @@ export function resolveLifecycleOutcomeFromRunOutcome(
   return SUBAGENT_ENDED_OUTCOME_OK;
 }
 
-/** Emits the transient presentation event for a newly terminal child run. */
 export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("subagent_progress")) {
@@ -134,7 +126,6 @@ export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): P
   }
 }
 
-/** Emits the subagent_ended hook once per completed run. */
 export async function emitSubagentEndedHookOnce(params: {
   entry: SubagentRunRecord;
   reason: SubagentLifecycleEndedReason;
@@ -142,29 +133,24 @@ export async function emitSubagentEndedHookOnce(params: {
   accountId?: string;
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
-  inFlightRunIds: Set<string>;
-  persist: (...runIds: string[]) => void;
+  inFlightOwners: Set<object>;
+  recordEmitted: () => void | Promise<void>;
 }) {
   const runId = params.entry.runId.trim();
-  if (!runId) {
-    return false;
-  }
-  if (params.entry.endedHookEmittedAt) {
-    return false;
-  }
-  if (params.inFlightRunIds.has(runId)) {
+  const owner = getSubagentRunRuntimeKey(params.entry);
+  if (!runId || params.entry.endedHookEmittedAt || params.inFlightOwners.has(owner)) {
     return false;
   }
 
   // In-flight guard prevents concurrent completion paths from double-emitting
   // the hook before endedHookEmittedAt is persisted.
-  params.inFlightRunIds.add(runId);
+  params.inFlightOwners.add(owner);
   try {
     const hookRunner = getGlobalHookRunner();
     if (!hookRunner) {
       return false;
     }
-    if (hookRunner?.hasHooks("subagent_ended")) {
+    if (hookRunner.hasHooks("subagent_ended")) {
       await hookRunner.runSubagentEnded(
         {
           targetSessionKey: params.entry.childSessionKey,
@@ -184,15 +170,17 @@ export async function emitSubagentEndedHookOnce(params: {
         },
       );
     }
-    params.entry.endedHookEmittedAt = Date.now();
-    params.persist(runId);
+    await params.recordEmitted();
     return true;
   } catch (err) {
+    if (hasSqliteWorkerOutcomeUnknown(err)) {
+      throw err;
+    }
     log.warn(
       `failed to emit subagent_ended hook for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
     );
     return false;
   } finally {
-    params.inFlightRunIds.delete(runId);
+    params.inFlightOwners.delete(owner);
   }
 }

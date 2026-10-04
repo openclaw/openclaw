@@ -9,13 +9,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-skill-install-e2e" OPENCLAW_SKILL_INSTALL_E2E_IMAGE)"
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz skill-install "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 skill-install empty)"

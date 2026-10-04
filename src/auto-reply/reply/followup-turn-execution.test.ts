@@ -529,7 +529,7 @@ describe("executeFollowupTurn", () => {
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       await params.opts?.onToolStart?.({ name: "read", phase: "start" });
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -547,7 +547,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    expect(onChannelToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
+    expect(onChannelToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
     expect(onDurableToolResult).not.toHaveBeenCalled();
   });
 
@@ -586,7 +586,7 @@ describe("executeFollowupTurn", () => {
     });
     expect(onChannelToolResult).not.toHaveBeenCalled();
     expect(onDurableToolResult).toHaveBeenCalledOnce();
-    expect(onDurableToolResult).toHaveBeenCalledWith(payload, { runId: "run-1" });
+    expect(onDurableToolResult).toHaveBeenCalledWith(payload);
   });
 
   it("lets an opted-in queued fast auto callback own source-suppressed delivery", async () => {
@@ -613,7 +613,7 @@ describe("executeFollowupTurn", () => {
     expect(onChannelToolResult).toHaveBeenCalledOnce();
     expect(onChannelToolResult).toHaveBeenCalledWith(payload);
     expect(onDurableToolResult).toHaveBeenCalledOnce();
-    expect(onDurableToolResult).toHaveBeenCalledWith(payload, { runId: "run-1" });
+    expect(onDurableToolResult).toHaveBeenCalledWith(payload);
   });
 
   it("does not duplicate queued fast auto progress accepted with a void result", async () => {
@@ -631,7 +631,7 @@ describe("executeFollowupTurn", () => {
       opts: { forceToolResultProgress: true },
     });
     expect(onDurableToolResult).toHaveBeenCalledOnce();
-    expect(onDurableToolResult).toHaveBeenCalledWith(payload, { runId: "run-1" });
+    expect(onDurableToolResult).toHaveBeenCalledWith(payload);
   });
 
   it("routes queued hidden fast auto progress only to lifecycle callbacks", async () => {
@@ -745,7 +745,7 @@ describe("executeFollowupTurn", () => {
 
       expect(onChannelToolResult).not.toHaveBeenCalled();
       expect(onDurableToolResult).toHaveBeenCalledOnce();
-      expect(onDurableToolResult).toHaveBeenCalledWith(payload, { runId: "run-1" });
+      expect(onDurableToolResult).toHaveBeenCalledWith(payload);
     },
   );
 
@@ -753,7 +753,7 @@ describe("executeFollowupTurn", () => {
     const onChannelToolResult = vi.fn(async () => {});
     const onDurableToolResult = vi.fn(async () => {});
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -770,10 +770,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onChannelToolResult).not.toHaveBeenCalled();
-    expect(onDurableToolResult).toHaveBeenCalledWith(
-      { text: "📄 Web Fetch: working" },
-      { runId: "run-1" },
-    );
+    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
   });
 
   it("keeps forced tool results durable when channel progress is unavailable", async () => {
@@ -788,7 +785,7 @@ describe("executeFollowupTurn", () => {
       },
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      await params.opts?.onToolResult?.({ text: "Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -801,10 +798,7 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
-    expect(onDurableToolResult).toHaveBeenCalledWith(
-      { text: "📄 Web Fetch: working" },
-      { runId: "run-1" },
-    );
+    expect(onDurableToolResult).toHaveBeenCalledWith({ text: "Web Fetch: working" });
   });
 
   it.each([

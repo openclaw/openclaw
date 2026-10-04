@@ -75,6 +75,15 @@ type QaTestFileScenarioRunParams = {
 };
 
 type QaScenarioCommandRunner = typeof runQaScenarioCommandLifecycle;
+type QaScenarioCommandRunParams = Pick<
+  QaTestFileScenarioRunParams,
+  "onCommandOutput" | "outputDir" | "repoRoot"
+> & {
+  env: NodeJS.ProcessEnv;
+  commandTimeoutMs: number;
+  runCommand: QaScenarioCommandRunner;
+  scenario: QaTestFileScenario;
+};
 
 type QaTestFileScenarioResult = {
   evidenceOccurrenceId?: string;
@@ -103,7 +112,7 @@ type QaTestFileExecutionUnit =
     };
 
 export type QaTestFileScenarioRunResult = {
-  evidence: QaEvidenceSummaryJson;
+  evidence: QaEvidenceSummaryV3Json;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -155,16 +164,9 @@ function withScenarioCoverage<T extends QaEvidenceSummaryJson["entries"][number]
   };
 }
 
-async function runScenarioCommandSteps(params: {
-  commandTimeoutMs: number;
-  env: NodeJS.ProcessEnv;
-  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
-  outputDir: string;
-  repoRoot: string;
-  runCommand: QaScenarioCommandRunner;
-  scenario: QaTestFileScenario;
-  steps: readonly QaScenarioCommandStep[];
-}): Promise<QaTestFileScenarioResult> {
+async function runScenarioCommandSteps(
+  params: QaScenarioCommandRunParams & { steps: readonly QaScenarioCommandStep[] },
+): Promise<QaTestFileScenarioResult> {
   const startedAt = Date.now();
   const logPath = path.join(params.outputDir, `${params.scenario.id}.log`);
   const logChunks: string[] = [];
@@ -224,15 +226,7 @@ async function runScenarioCommandSteps(params: {
   };
 }
 
-async function runQaTestFileScenario(params: {
-  env: NodeJS.ProcessEnv;
-  commandTimeoutMs: number;
-  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
-  outputDir: string;
-  repoRoot: string;
-  runCommand: QaScenarioCommandRunner;
-  scenario: QaTestFileScenario;
-}) {
+async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
   const requiresProducerEvidence =
     params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
   if (requiresProducerEvidence) {
@@ -242,7 +236,10 @@ async function runQaTestFileScenario(params: {
   }
   const result = await runScenarioCommandSteps({
     ...params,
-    steps: buildQaScenarioCommandSteps(params.scenario, { outputDir: params.outputDir }),
+    steps: buildQaScenarioCommandSteps(params.scenario, {
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+    }),
   });
   if (params.scenario.execution.kind !== "script") {
     return result;

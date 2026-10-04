@@ -6,7 +6,7 @@ import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
+import type { ChatReplyTarget, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
@@ -21,6 +21,11 @@ import {
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
+import {
+  ownReactionEmoji,
+  type MessageReactionAction,
+  type MessageReactionOptions,
+} from "./chat-message-reactions.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -32,6 +37,7 @@ export type MessageActionDetails = {
   markdown?: string;
   fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
+  reactionMessageId?: string;
 };
 
 // Loading and completion each advance the revision: three automatic attempts.
@@ -69,8 +75,8 @@ export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageR
 // An explicit Markdown value is the displayed expansion, even when it is empty.
 export function resolveMessageReplyText(
   message: unknown,
-  normalizedMessage = normalizeMessage(message),
-  markdown = resolveMessageDisplayMarkdown(message, normalizedMessage),
+  normalizedMessage: NormalizedMessage,
+  markdown: string,
 ): string {
   return markdown || extractMessageMediaText(message, normalizedMessage.content);
 }
@@ -103,12 +109,15 @@ export function resolveMessageActionDetails(
     role === "assistant" || role === "user" || pendingInput ? visibleMarkdown : undefined;
   const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);
   const replyText = onReply && !pendingInput ? truncateUtf16Safe(copyMarkdown, 500) : "";
-  if (!copyMarkdown && !markdown && !replyText && !fullMessage) {
+  const sourceMessageId = persistedMessageEntryId(message);
+  const reactionMessageId =
+    (role === "user" || role === "assistant") && !pendingInput ? sourceMessageId : null;
+  if (!copyMarkdown && !markdown && !replyText && !fullMessage && !reactionMessageId) {
     return null;
   }
-  const sourceMessageId = persistedMessageEntryId(message);
   return {
     copyMarkdown,
+    ...(reactionMessageId ? { reactionMessageId } : {}),
     ...(markdown === undefined ? {} : { markdown }),
     fullMessage,
     ...(replyText
@@ -124,12 +133,29 @@ export function resolveMessageActionDetails(
   };
 }
 
+/** Whether `renderMessageActionButtons` renders at least one control for these options. */
+export function hasMessageActionButtons(
+  details: MessageActionDetails | null | undefined,
+  opts: { onReply?: (target: MessageReplyTarget) => void; onReact?: MessageReactionAction },
+): details is MessageActionDetails {
+  return Boolean(
+    details &&
+    (details.markdown ||
+      (details.replyTarget && opts.onReply) ||
+      (details.reactionMessageId && opts.onReact)),
+  );
+}
+
 export function renderMessageActionButtons(
-  details: MessageActionDetails,
-  opts: {
+  details: MessageActionDetails | null | undefined,
+  opts: MessageReactionOptions & {
     onReply?: (target: MessageReplyTarget) => void;
   },
 ) {
+  if (!details) {
+    return nothing;
+  }
+  const reactionMessageId = details.reactionMessageId;
   return html`
     ${
       details.replyTarget && opts.onReply
@@ -137,6 +163,17 @@ export function renderMessageActionButtons(
         : nothing
     }
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
+    ${
+      reactionMessageId && opts.onReact
+        ? html`<openclaw-message-reaction-picker
+            class="chat-reaction-action"
+            placement=${opts.reactionPlacement ?? "bottom-start"}
+            .activeEmoji=${ownReactionEmoji(opts.messageReactions?.get(reactionMessageId), opts.userId)}
+            .onSelect=${(emoji: string, remove: boolean) =>
+              opts.onReact?.(reactionMessageId, emoji, remove)}
+          ></openclaw-message-reaction-picker>`
+        : nothing
+    }
   `;
 }
 

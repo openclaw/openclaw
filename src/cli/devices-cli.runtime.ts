@@ -71,13 +71,6 @@ type ApprovePairingGatewayContext = {
   scopes?: OperatorScope[];
 };
 
-type PendingNodeApprovalNotice = {
-  action: "approval" | "reapproval";
-  label: string;
-  command: string;
-  connectionReminder: string | null;
-};
-
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 const FALLBACK_STATE_MISMATCH_MESSAGE =
@@ -113,34 +106,26 @@ function pairedDeviceMatchesNodeApprovalQuery(device: PairedDevice, query: strin
   );
 }
 
-function buildPendingNodeApprovalNotice(
-  device: PairedDevice,
-  opts: DevicesRpcOpts,
-): PendingNodeApprovalNotice | null {
+function buildPendingNodeApprovalNotice(device: PairedDevice, opts: DevicesRpcOpts): string | null {
   const pending = device.pendingNodeSurface;
   const requestId = normalizeOptionalString(pending?.requestId);
   if (!pending || !requestId) {
     return null;
   }
-  return {
-    action: device.nodeSurface ? "reapproval" : "approval",
-    label:
-      normalizeOptionalString(device.operatorLabel) ??
-      normalizeOptionalString(pending.displayName) ??
-      normalizeOptionalString(device.nodeSurface?.displayName) ??
-      normalizeOptionalString(device.displayName) ??
-      device.deviceId,
-    command: formatPairingApproveCommand("nodes", requestId, { timeout: opts.timeout }),
-    connectionReminder: formatConnectionFlagReminder(opts),
-  };
-}
-
-function formatNodeApprovalNotice(notice: PendingNodeApprovalNotice): string {
+  const action = device.nodeSurface ? "reapproval" : "approval";
+  const label =
+    normalizeOptionalString(device.operatorLabel) ??
+    normalizeOptionalString(pending.displayName) ??
+    normalizeOptionalString(device.nodeSurface?.displayName) ??
+    normalizeOptionalString(device.displayName) ??
+    device.deviceId;
+  const command = formatPairingApproveCommand("nodes", requestId, { timeout: opts.timeout });
+  const connectionReminder = formatConnectionFlagReminder(opts);
   const lines = [
-    `Node ${notice.action} pending for ${sanitizeForLog(notice.label)}. Run ${sanitizeForLog(notice.command)}`,
+    `Node ${action} pending for ${sanitizeForLog(label)}. Run ${sanitizeForLog(command)}`,
   ];
-  if (notice.connectionReminder) {
-    lines.push(notice.connectionReminder);
+  if (connectionReminder) {
+    lines.push(connectionReminder);
   }
   return lines.join("\n");
 }
@@ -148,22 +133,11 @@ function formatNodeApprovalNotice(notice: PendingNodeApprovalNotice): string {
 function findPairedDevicePendingNodeApprovalNotices(
   opts: DevicesRpcOpts,
   paired: PairedDevice[] | undefined,
-): PendingNodeApprovalNotice[] {
+): string[] {
   return (paired ?? []).flatMap((device) => {
     const notice = buildPendingNodeApprovalNotice(device, opts);
     return notice ? [notice] : [];
   });
-}
-
-function findQueryPendingNodeApprovalNotices(
-  opts: DevicesRpcOpts,
-  paired: PairedDevice[] | undefined,
-  query: string,
-): PendingNodeApprovalNotice[] {
-  return findPairedDevicePendingNodeApprovalNotices(
-    opts,
-    paired?.filter((device) => pairedDeviceMatchesNodeApprovalQuery(device, query)),
-  );
 }
 
 function isDevicePairingApprovalDenied(error: unknown): boolean {
@@ -809,7 +783,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     }
     const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(opts, list.paired);
     for (const notice of nodeApprovalNotices) {
-      defaultRuntime.log(theme.warn(formatNodeApprovalNotice(notice)));
+      defaultRuntime.log(theme.warn(notice));
     }
   }
   if (!list.pending.length && !list.paired.length) {
@@ -1006,13 +980,14 @@ export async function runDevicesApproveCommand(
     defaultRuntime.error(
       `No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`,
     );
-    const nodeApprovalNotices = findQueryPendingNodeApprovalNotices(
+    const nodeApprovalNotices = findPairedDevicePendingNodeApprovalNotices(
       opts,
-      approvalContext.pairingList?.paired,
-      resolvedRequestId,
+      approvalContext.pairingList?.paired.filter((device) =>
+        pairedDeviceMatchesNodeApprovalQuery(device, resolvedRequestId),
+      ),
     );
     for (const notice of nodeApprovalNotices) {
-      defaultRuntime.error(formatNodeApprovalNotice(notice));
+      defaultRuntime.error(notice);
     }
     defaultRuntime.exit(1);
     return;

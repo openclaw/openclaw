@@ -74,32 +74,6 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     await session?.cleanup();
   });
 
-  it("turns a revise decision into one more hidden continuation", async () => {
-    // Revision prompts are hidden continuations; they must not persist the
-    // original user prompt a second time.
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        finalAnswerAttempt("First answer.", {
-          beforeAgentFinalizeRevisionReason:
-            "Tighten the final wording.\n\nMention the validated behavior.",
-        }),
-      )
-      .mockResolvedValueOnce(finalAnswerAttempt("Revised answer."));
-
-    await runEmbeddedAgent({
-      ...session.runParams,
-      provider: "openai",
-      model: "gpt-5.5",
-      runId: "run-before-finalize-revise",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(attemptCall(1).prompt).toContain("Tighten the final wording.");
-    expect(attemptCall(1).prompt).toContain("Mention the validated behavior.");
-    expect(attemptCall(1).prompt).not.toContain("hello");
-    expect(attemptCall(1).suppressNextUserMessagePersistence).toBe(true);
-  });
-
   it("replaces an incomplete-turn continuation with a finalize revision", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(

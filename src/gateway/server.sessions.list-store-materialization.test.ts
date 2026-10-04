@@ -4,11 +4,12 @@
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as sessionEntryReader from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
@@ -18,7 +19,6 @@ import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -36,9 +36,10 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-test("sessions.list keeps roster enumeration bounded as ordinary rows grow", async () => {
+test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
+  testState.agentConfig = { sessionStore: { agentId: "main" } };
   const rosterReads: number[] = [];
   for (const rows of [20, 2_001]) {
     const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
@@ -50,13 +51,11 @@ test("sessions.list keeps roster enumeration bounded as ordinary rows grow", asy
       });
     }
     await writeSessionStore({ entries });
-    expect((await directSessionReq("sessions.list", LIST_PARAMS)).ok).toBe(true);
+    const request = { ...LIST_PARAMS, limit: rows + 1 };
+    expect((await directSessionReq("sessions.list", request)).ok).toBe(true);
     const roster = vi.spyOn(agentScope, "listAgentIds");
     try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", {
-        ...LIST_PARAMS,
-        limit: rows + 1,
-      });
+      const result = await directSessionReq<SessionsListResult>("sessions.list", request);
       expect(result.ok).toBe(true);
       expect(result.payload?.totalCount).toBe(rows + 1);
       expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
@@ -83,7 +82,7 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
   testState.sessionConfig = { store: storeTemplate };
   testState.agentsConfig = {
-    list: agentIds.map((id, index) => ({ id, default: index === 0 })),
+    entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
   };
 
   for (const [index, agentId] of agentIds.entries()) {
@@ -100,16 +99,23 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       },
       storePath,
     });
-    await seedSessionTranscript({
-      agentId,
-      messages: [
-        { role: "user", content: `Title ${agentId}` },
-        { role: "assistant", content: `Reply ${agentId}` },
-      ],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
+    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "question",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: `Title ${agentId}`, timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "question",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "assistant", content: `Reply ${agentId}`, timestamp: 2 },
+      },
+    ]);
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
@@ -183,32 +189,54 @@ test("sessions.list projects out prompt snapshots without changing full entry re
       },
     },
   );
-  database.db
-    .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-    )
-    .run("zz-malformed", "malformed", "{", Date.now());
-
   const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
   expect(fullEntries).toHaveLength(1);
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
   expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
 
-  const readonly = vi.spyOn(sessionEntryReader, "listSessionEntriesReadOnly");
   const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
+  const projectionReads = vi.fn();
+  const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+  const workerReads = vi
+    .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+    .mockImplementation((targets, consume, lane) =>
+      readDatabases(
+        targets,
+        (owners) =>
+          consume(
+            owners.map((owner) => ({
+              ...owner,
+              readStoreProjection: (input: Parameters<typeof owner.readStoreProjection>[0]) => {
+                projectionReads();
+                return owner.readStoreProjection(input);
+              },
+            })),
+          ),
+        lane,
+      ),
+    );
   const cfg = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   };
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
     projection = await createSessionRowProjection({ cfg });
-    expect(readonly.mock.calls[0]?.[0]).toMatchObject({ projection: "list", clone: false });
-    expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
+    expect(projectionReads).toHaveBeenCalled();
+    projectionReads.mockClear();
     const resident = projection.describe({ agentId: "main", key: stored.session_key });
+    expect(resident?.storedEntry?.sessionId).toBe("sess-main");
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
     expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
-    readonly.mockClear();
+
+    // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:zz-malformed", "malformed", "{", Date.now());
+    reads = trackSqliteStatementExecutions(database.db, ["sessionStore"], () => "sessionStore");
     decode.mockClear();
 
     const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {
@@ -216,11 +244,13 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     });
     expect(result.ok).toBe(true);
     expect(result.payload?.sessions.map((row) => row.sessionId)).toEqual(["sess-main"]);
-    expect(readonly).not.toHaveBeenCalled();
+    expect(reads.counts.sessionStore).toBe(0);
+    expect(projectionReads).not.toHaveBeenCalled();
     expect(decode).not.toHaveBeenCalled();
   } finally {
+    reads?.restore();
     projection?.dispose();
-    readonly.mockRestore();
+    workerReads.mockRestore();
     decode.mockRestore();
   }
 

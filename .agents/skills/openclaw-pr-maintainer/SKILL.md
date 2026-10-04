@@ -84,6 +84,14 @@ proof with the limitation stated. Explicit live requests, external API contracts
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
 
+## CODEOWNERS review
+
+`CODEOWNERS` routes review; check live GitHub enforcement. Restricted/security
+paths and material product, behavior, security, or ownership changes need
+listed-owner involvement. For ownership/review governance, verified active
+organization-admin direction also qualifies; repository admin/bypass alone does
+not. Neither route waives enforced reviews.
+
 ## Review and publish
 
 Before committing or landing nontrivial code, run `$autoreview` and resolve
@@ -126,3 +134,12 @@ Required pre-merge proof stays mandatory. Preserve requested deliverables,
 explicit retention requests, unfinished source, recovery state needed by unfinished
 operations, active owners, credentials, agent state, and shared dependencies.
 Optional follow-ups do not keep a completed task open.
+
+This applies to every task, not only PR work: report routine findings in
+chat/stdout. Create files only for deliverables or concrete tool/proof/recovery
+needs; state their purpose and reuse them. After the requested outcome and
+required verification are complete, remove task-owned proof, scratch, and
+finished worktrees through their native lifecycle. Do not require an archive or
+evidence handoff. Preserve requested deliverables, explicit retention requests,
+unfinished source and recovery state, live owners, credentials, agent state,
+shared dependencies, and unknown ownership.

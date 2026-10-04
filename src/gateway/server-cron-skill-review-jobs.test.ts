@@ -8,7 +8,7 @@ import { CronService } from "../cron/service.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -160,10 +160,10 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     ]);
     const cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/tmp/openclaw-shared" },
-          { id: "ops", workspace: "/tmp/openclaw-shared" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/openclaw-shared" },
+          ops: { workspace: "/tmp/openclaw-shared" },
+        },
       },
       skills: { workshop: { autonomous: { mode: "propose" } } },
     } as OpenClawConfig;
@@ -216,7 +216,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       },
     );
     const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
+      agents: { entries: { main: { workspace: "/tmp/openclaw-main" } } },
       skills: { workshop: { autonomous: { mode: "propose" } } },
     } as OpenClawConfig;
 
@@ -275,7 +275,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
           ...preferences,
         },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(testState.root);
       await expect(reconcileSkillCollectionReviewJobs({ cron, cfg, logger })).resolves.toEqual({
         ok: true,
       });
@@ -296,7 +296,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     const testState = await createOpenClawTestState({ label: "skill-review-convergence" });
     const storePath = testState.statePath("cron", "jobs.json");
     const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
     };
     const deps = {
       scheduler: createTestGatewayScheduler(),
@@ -383,7 +383,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     const config = (mode: "auto" | "off") =>
       ({
         agents: {
-          list: [{ id: "main", default: true, workspace: workspaceDir }],
+          entries: { main: { workspace: workspaceDir } },
         },
         skills: { workshop: { autonomous: { mode } } },
       }) satisfies OpenClawConfig;

@@ -1,10 +1,4 @@
-// Tlon plugin module implements errors behavior.
-type UrbitErrorCode =
-  | "invalid_url"
-  | "http_error"
-  | "auth_failed"
-  | "missing_cookie"
-  | "channel_not_open";
+type UrbitErrorCode = "invalid_url" | "http_error" | "auth_failed" | "missing_cookie";
 
 class UrbitError extends Error {
   readonly code: UrbitErrorCode;

@@ -9,7 +9,6 @@ import {
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -18,22 +17,22 @@ import { createCronContinuationController } from "../server-methods/agent-cron-c
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
-import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
+import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { replayAgentTurnIfCached, resolveAgentWaitSource } from "./agent-dedupe.js";
+import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
-import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
+import { prepareAgentWaitForTurn } from "./agent-wait.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -415,7 +414,7 @@ export function createAgentTurnService(
           canonicalSessionKey,
           sessionAgentId,
           mainSessionKey,
-          creation: prepareSkillLibrarySessionCreation(
+          creation: await prepareSkillLibrarySessionCreation(
             principal,
             () => context.getRuntimeConfig(),
             resolveAgentRunSessionCreation(principal),
@@ -648,72 +647,7 @@ export function createAgentTurnService(
     }
   };
 
-  const prepareWaitForTurn = (params: AgentWaitParams) => {
-    const runId = (params.runId ?? "").trim();
-    const timeoutMs =
-      typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-        ? Math.max(0, Math.floor(params.timeoutMs))
-        : 30_000;
-    const source = resolveAgentWaitSource(context, runId);
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const queuedResult = () => {
-      const queued = context.chatQueuedTurns.get(runId);
-      return queued
-        ? {
-            session: captureAgentJobSession({ ...queued, lifecycleGeneration }),
-            result: {
-              runId,
-              status: "pending" as const,
-              timeoutPhase: "queue" as const,
-              providerStarted: false,
-            },
-          }
-        : undefined;
-    };
-    const queuedBeforeWait = queuedResult();
-    // Compaction updates this registration; a reused run ID must not replace it.
-    const runContext = getAgentRunContext(runId);
-    const initialSession =
-      queuedBeforeWait?.session ??
-      getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
-      captureAgentJobSession(runContext);
-    const wait = async () => {
-      if (queuedBeforeWait) {
-        return queuedBeforeWait;
-      }
-      const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
-      const queuedAfterWait = queuedResult();
-      if (queuedAfterWait) {
-        return queuedAfterWait;
-      }
-      if (!snapshot) {
-        return {
-          result: { runId, status: "timeout" as const },
-          session: captureAgentJobSession(runContext) ?? initialSession,
-        };
-      }
-      return {
-        session: snapshot.session,
-        result: {
-          runId,
-          status: snapshot.status,
-          startedAt: snapshot.startedAt,
-          endedAt: snapshot.endedAt,
-          error: snapshot.error,
-          stopReason: snapshot.stopReason,
-          livenessState: snapshot.livenessState,
-          yielded: snapshot.yielded,
-          pendingError: snapshot.pendingError,
-          timeoutPhase: snapshot.timeoutPhase,
-          providerStarted: snapshot.providerStarted,
-          ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
-          terminalReceipt: snapshot.terminalReceipt,
-          terminalReply: snapshot.terminalReply,
-        },
-      };
-    };
-    return { session: initialSession, wait };
-  };
+  const prepareWaitForTurn = (params: AgentWaitParams) => prepareAgentWaitForTurn(context, params);
   const waitForTurn = async (params: AgentWaitParams) => await prepareWaitForTurn(params).wait();
 
   return { startTurn, prepareWaitForTurn, waitForTurn };

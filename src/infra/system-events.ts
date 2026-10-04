@@ -33,6 +33,8 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /** Queued by work a conversation turn started, not heartbeat or automation work. */
+  fromConversationTurn?: true;
   sessionStorePath?: string | null;
 };
 
@@ -65,6 +67,7 @@ type SystemEventOptions = {
   sessionStorePath?: string | null;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  fromConversationTurn?: boolean;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
 };
@@ -178,6 +181,7 @@ function enqueueOwnedSystemEventEntry(
     ...(sessionStorePath === undefined ? {} : { sessionStorePath }),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
@@ -258,25 +262,32 @@ function resetQueueState(key: string, entry: SessionQueue) {
 export function consumeSelectedSystemEventEntries(
   sessionKey: string,
   consumedEntries: readonly SystemEvent[],
+  options?: { deferredEventIds?: readonly string[] },
 ): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
   if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
     return [];
   }
-  const removed: SystemEvent[] = [];
+  // Prompt admission can defer captured occurrences to a delivery owner. Selection
+  // still resolves against the live queue, in captured order, never late arrivals.
+  const deferredIds = new Set(options?.deferredEventIds);
+  const selected: SystemEvent[] = [];
   for (const consumed of consumedEntries) {
     const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
     if (index === -1) {
       continue;
     }
-    const [event] = entry.queue.splice(index, 1);
+    const event = entry.queue[index];
     if (event) {
-      removed.push(cloneSystemEvent(event));
+      if (!event.id || !deferredIds.has(event.id)) {
+        entry.queue.splice(index, 1);
+      }
+      selected.push(cloneSystemEvent(event));
     }
   }
   resetQueueState(key, entry);
-  return removed;
+  return selected;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {

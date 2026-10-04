@@ -141,13 +141,7 @@ export function buildContextOverflowRecoveryText(params: {
     (params.runtimeProvider === params.activeSessionEntry?.modelProvider &&
       params.runtimeModel === params.activeSessionEntry?.model);
   const heartbeatBleedHint = explicitRuntimeMatchesSession
-    ? resolveHeartbeatBleedHint({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        primaryProvider: params.primaryProvider,
-        primaryModel: params.primaryModel,
-        activeSessionEntry: params.activeSessionEntry,
-      })
+    ? resolveHeartbeatBleedHint(params)
     : undefined;
   return (
     prefix +

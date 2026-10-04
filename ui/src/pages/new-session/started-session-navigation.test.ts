@@ -117,14 +117,14 @@ describe("confirmed session navigation", () => {
     expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: "start this task" });
     expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:created");
 
-    const readSignal = flow.attachmentDraft.readSignal;
-    flow.attachmentDraft.updatePending(readSignal, 1);
+    const readSignal = flow.attachmentDraft.reads.readSignal;
+    flow.attachmentDraft.reads.updatePending(readSignal, 1);
     expect(flow.submitBlock()?.gate).toBe("attachment-reads");
     expect(flow.canSubmit()).toBe(false);
     await flow.submit();
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(context.navigateAndWait).toHaveBeenCalledOnce();
-    flow.attachmentDraft.updatePending(readSignal, -1);
+    flow.attachmentDraft.reads.updatePending(readSignal, -1);
 
     expect(flow.canSubmit()).toBe(true);
     await flow.openSubmittedSession();

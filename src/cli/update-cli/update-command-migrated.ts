@@ -41,8 +41,6 @@ import {
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
 
-export type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
-
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
   params: Pick<
@@ -70,10 +68,18 @@ export async function inspectActivatedUpdateState(
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
+    const incompleteAgents = candidateSchemaVersions
+      ? current.filter(
+          (entry) =>
+            entry !== shared &&
+            entry.userVersion !== null &&
+            entry.userVersion !== candidateSchemaVersions.agent,
+        )
+      : [];
     if (
       result.status === "ok" &&
       candidateSchemaVersions &&
-      sharedVersion !== candidateSchemaVersions.state
+      (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
     ) {
       // Doctor can warn without failing. Require applied content so startup
       // cannot migrate late; deferred publication alone is already ready.
@@ -85,7 +91,17 @@ export async function inspectActivatedUpdateState(
         cwd: result.root ?? root,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
+        stderrTail: [
+          ...(sharedVersion !== candidateSchemaVersions.state
+            ? [
+                `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
+              ]
+            : []),
+          ...incompleteAgents.map(
+            (entry) =>
+              `Agent database migration did not finish: ${entry.path}; expected schema ${candidateSchemaVersions.agent}, found ${entry.userVersion}.`,
+          ),
+        ].join("\n"),
       });
     }
     return updateStateSchemaVersionsMatch(schemaVersions, current, {
@@ -304,6 +320,12 @@ export async function continueMigratedUpdateInFreshProcess(
     ) {
       throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
     }
+    const finalization = {
+      result: response.result,
+      exitCode: response.exitCode,
+      automaticTriage: response.automaticTriage,
+      candidateStartAttempted: response.candidateStartAttempted,
+    };
     const restoreDatabases =
       params.databaseBackup !== undefined &&
       params.packageTransaction !== undefined &&
@@ -314,20 +336,17 @@ export async function continueMigratedUpdateInFreshProcess(
     if (restoreDatabases) {
       // The waiting driver still owns the package transaction and stopped
       // lifecycle. Its database restoration and rollback publish the final result.
-      return {
-        result: response.result,
-        exitCode: response.exitCode,
-        automaticTriage: response.automaticTriage,
-        candidateStartAttempted: false,
-        databaseRollbackAvailable: true,
-      };
+      return { ...finalization, databaseRollbackAvailable: true };
     }
     if (child.stdout) {
       process.stdout.write(child.stdout);
     }
     try {
       await windowsRecovery?.complete(
-        response.result.status === "ok" || isUpdateGatewayReadinessPending(response.result),
+        response.result.status === "ok" ||
+          isUpdateGatewayReadinessPending(response.result) ||
+          (response.result.recovery?.serviceRestartSafe === true &&
+            response.result.recovery.service === "healthy"),
       );
     } catch (cause) {
       throw new UpdateCommandFailure(
@@ -345,12 +364,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (cleanupFailure) {
       throw cleanupFailure;
     }
-    return {
-      result: response.result,
-      exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
-      candidateStartAttempted: response.candidateStartAttempted,
-    };
+    return finalization;
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and

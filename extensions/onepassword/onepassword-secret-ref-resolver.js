@@ -3,9 +3,14 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_SECRET_FILE_MAX_BYTES, tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
+import { text as consumeText } from "node:stream/consumers";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { coerceErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveTrustedOnePasswordCli } from "./onepassword-op-path.js";
 import { resolveOnePasswordSecretReference } from "./onepassword-secret-id.js";
 
@@ -13,18 +18,6 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
-
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      input += String(chunk);
-    });
-    process.stdin.on("error", reject);
-    process.stdin.on("end", () => resolve(input));
-  });
-}
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
@@ -204,18 +197,6 @@ async function runOpRead(opCommand, token, secretReference) {
   return result.stdout.toString("utf8");
 }
 
-async function runWithConcurrency(values, limit, task) {
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(values.length, limit) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await task(values[index]);
-    }
-  });
-  await Promise.all(workers);
-}
-
 async function resolveFromOnePassword(ids) {
   const response = { protocolVersion: 1, values: {}, errors: {} };
   if (ids.length > MAX_SECRET_REFS_PER_REQUEST) {
@@ -227,24 +208,28 @@ async function resolveFromOnePassword(ids) {
   }
   const opCommand = await resolveOpCommand();
   const token = readServiceAccountToken();
-  await runWithConcurrency(ids, OP_READ_CONCURRENCY, async (id) => {
-    try {
-      response.values[id] = await runOpRead(
-        opCommand,
-        token,
-        resolveOnePasswordSecretReference(id),
-      );
-    } catch (error) {
-      response.errors[id] = {
-        message: errorMessage(error),
-      };
-    }
+  await runTasksWithConcurrency({
+    limit: OP_READ_CONCURRENCY,
+    throwOnError: true,
+    tasks: ids.map((id) => async () => {
+      try {
+        response.values[id] = await runOpRead(
+          opCommand,
+          token,
+          resolveOnePasswordSecretReference(id),
+        );
+      } catch (error) {
+        response.errors[id] = {
+          message: errorMessage(error),
+        };
+      }
+    }),
   });
   return response;
 }
 
 async function main() {
-  const input = await readStdin();
+  const input = await consumeText(process.stdin.setEncoding("utf8"));
   const request = parseRequest(input);
   writeResponse(await resolveFromOnePassword(request.ids));
 }

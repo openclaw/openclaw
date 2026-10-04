@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
-export type TemporalDecayConfig = {
-  enabled: boolean;
-  halfLifeDays: number;
-};
+export type TemporalDecayConfig = ResolvedMemorySearchConfig["query"]["hybrid"]["temporalDecay"];
 
 export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
   enabled: false,

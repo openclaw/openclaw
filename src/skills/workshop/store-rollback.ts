@@ -10,11 +10,8 @@ export async function writeSkillProposalRollback(
   params: WriteSkillProposalRollbackInput & { store?: SkillWorkshopStoreOptions },
 ) {
   assertProposalId(params.proposalId);
-  return executeSkillWorkshopOperation(
-    "workshop.rollback.write",
-    { proposalId: params.proposalId, rollback: params.rollback },
-    params.store,
-  );
+  const { store, ...input } = params;
+  return executeSkillWorkshopOperation("workshop.rollback.write", input, store);
 }
 
 export async function readSkillProposalRollback(
@@ -29,9 +26,6 @@ export async function clearSkillProposalRollback(
   params: ClearSkillProposalRollbackInput & { store?: SkillWorkshopStoreOptions },
 ) {
   assertProposalId(params.proposalId);
-  return executeSkillWorkshopOperation(
-    "workshop.rollback.clear",
-    { proposalId: params.proposalId, expectedRecordJson: params.expectedRecordJson },
-    params.store,
-  );
+  const { store, ...input } = params;
+  return executeSkillWorkshopOperation("workshop.rollback.clear", input, store);
 }

@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
@@ -115,10 +116,8 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
 ] as const;
 
 function isGraphSharedLinkUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return false;
   }
   const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
@@ -145,23 +144,6 @@ export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undef
     return undefined;
   }
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return "";
-  }
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -271,13 +253,7 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
 }
 
 function fileHintFromUrl(src: string): string | undefined {
-  try {
-    const url = new URL(src);
-    const name = url.pathname.split("/").pop();
-    return name || undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(src)?.pathname.split("/").pop() || undefined;
 }
 
 export function extractInlineImageReferences(
@@ -325,11 +301,8 @@ export function extractInlineImageReferences(
 }
 
 export function safeHostForUrl(url: string): string {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-  } catch {
-    return "invalid-url";
-  }
+  const parsed = URL.parse(url);
+  return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }
 
 export type MSTeamsAttachmentFetchPolicy = {
@@ -337,11 +310,9 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
-export type MSTeamsAttachmentDownloadLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
+export type MSTeamsAttachmentDownloadLogger = Partial<
+  Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
+>;
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
@@ -401,21 +372,17 @@ export function applyAuthorizationHeaderForUrl(params: {
   authAllowHosts: string[];
   bearerToken?: string;
 }): void {
-  if (!params.bearerToken) {
-    params.headers.delete("Authorization");
-    return;
-  }
-  if (isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (params.bearerToken && isUrlAllowed(params.url, params.authAllowHosts)) {
     params.headers.set("Authorization", `Bearer ${params.bearerToken}`);
-    return;
+  } else {
+    params.headers.delete("Authorization");
   }
-  params.headers.delete("Authorization");
 }
 
 async function resolveAndValidateIP(
   hostname: string,
   resolveFn?: MSTeamsAttachmentResolveFn,
-): Promise<string> {
+): Promise<void> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
   try {
@@ -426,7 +393,6 @@ async function resolveAndValidateIP(
   if (isPrivateIpAddress(resolved.address)) {
     throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
   }
-  return resolved.address;
 }
 
 const MAX_SAFE_REDIRECTS = 5;
@@ -453,11 +419,7 @@ export async function safeFetchWithPolicy(params: {
 }): Promise<Response> {
   const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
-  const hasDispatcher = Boolean(
-    params.requestInit &&
-    typeof params.requestInit === "object" &&
-    "dispatcher" in (params.requestInit as Record<string, unknown>),
-  );
+  const hasDispatcher = params.requestInit && "dispatcher" in params.requestInit;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
@@ -520,10 +482,8 @@ export async function safeFetchWithPolicy(params: {
     return res;
   }
 
-  let redirectUrl: string;
-  try {
-    redirectUrl = new URL(location, currentUrl).toString();
-  } catch {
+  const redirectUrl = URL.parse(location, currentUrl)?.toString();
+  if (!redirectUrl) {
     throw new Error(`Invalid redirect URL: ${location}`);
   }
 

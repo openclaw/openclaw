@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import "../../styles/lobster-pet.css";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
@@ -47,46 +46,6 @@ export type { ConfigProps, ConfigViewState } from "./view-types.ts";
 // the page instead of racing the first raw-draft keystroke.
 void warmJson5().catch(() => undefined);
 
-function renderAppearance(props: ConfigProps) {
-  return renderAppearanceSection(props, {
-    chatMessageWidth: html`
-      <input
-        class="settings-input"
-        data-settings-chat-message-width
-        aria-label=${t("configView.chatPrefs.messageWidth")}
-        type="text"
-        spellcheck="false"
-        placeholder="48rem"
-        .value=${props.chatMessageMaxWidth ?? ""}
-        @change=${(event: Event) => {
-          const input = event.currentTarget as HTMLInputElement;
-          const normalized = normalizeChatMessageMaxWidth(input.value);
-          if (input.value.trim() && !normalized) {
-            input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
-            input.reportValidity();
-            return;
-          }
-          input.setCustomValidity("");
-          input.value = normalized ?? "";
-          props.setChatMessageMaxWidth(normalized);
-        }}
-      />
-    `,
-    customThemeImport: html`
-      <input
-        class="settings-theme-import__input"
-        data-custom-theme-import-input
-        type="text"
-        spellcheck="false"
-        placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
-        .value=${props.customThemeImportUrl}
-        @input=${(event: Event) =>
-          props.onCustomThemeImportUrlChange((event.currentTarget as HTMLInputElement).value)}
-      />
-    `,
-  });
-}
-
 export function renderConfig(props: ConfigProps) {
   const renderSection = props.renderSection ?? ((editor) => editor);
   const viewState = props.viewState;
@@ -99,8 +58,6 @@ export function renderConfig(props: ConfigProps) {
   const analysis = getConfigSchemaAnalysis(
     viewState,
     asConfigSchema(props.schema),
-    props.includeSections,
-    props.excludeSections,
     include,
     exclude,
   );
@@ -232,9 +189,7 @@ export function renderConfig(props: ConfigProps) {
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
       : []),
-    ...allCategories.flatMap((category) =>
-      category.sections.map((section) => ({ key: section.key, label: section.label })),
-    ),
+    ...allCategories.flatMap((category) => category.sections),
   ];
   const settingsLayout = props.settingsLayout ?? "tabs";
 
@@ -464,7 +419,7 @@ export function renderConfig(props: ConfigProps) {
       ${
         props.activeSection === "__appearance__"
           ? includeVirtualSections
-            ? renderAppearance(props)
+            ? renderAppearanceSection(props)
             : nothing
           : props.activeSection === "__notifications__"
             ? includeVirtualSections
@@ -488,7 +443,7 @@ export function renderConfig(props: ConfigProps) {
                         </div>`
                       : nothing
                   }
-                  ${showAppearanceOnRoot ? renderAppearance(props) : nothing}
+                  ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                   ${
                     props.schemaLoading
                       ? html`<div class="config-loading">
@@ -537,6 +492,7 @@ export function renderConfig(props: ConfigProps) {
                             sectionPrelude: props.sectionPrelude,
                             revealSensitive:
                               props.activeSection === "env" ? envSensitiveVisible : false,
+                            maskSensitive: true,
                             isSensitivePathRevealed: (path) =>
                               isSensitivePathRevealed(viewState, path),
                             onToggleSensitivePath: (path) => {

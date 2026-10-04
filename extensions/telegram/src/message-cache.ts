@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -145,16 +146,6 @@ function telegramMessageCacheKeyPrefix(params: {
   return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
 }
 
-function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
-  while (messages.size > maxMessages) {
-    const oldest = messages.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    messages.delete(oldest);
-  }
-}
-
 function upsertCachedMessageNode(params: {
   messages: Map<string, TelegramCachedMessageNode>;
   key: string;
@@ -254,7 +245,7 @@ async function hydrateMessageCacheBucket(
           node: entry.node,
           mode: entry.mode,
         });
-        trimMessages(bucket.messages, maxMessages);
+        pruneMapToMaxSize(bucket.messages, maxMessages);
       }
     }
     bucket.hydrated = true;
@@ -586,7 +577,7 @@ export function createTelegramMessageCache(params?: {
           if (messageId === currentObservation.node.messageId) {
             recordedEntry = cachedNode;
           }
-          trimMessages(messages, maxMessages);
+          pruneMapToMaxSize(messages, maxMessages);
           await persistCachedNode({
             bucket,
             key,

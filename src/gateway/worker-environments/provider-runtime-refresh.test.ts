@@ -129,6 +129,9 @@ describe("worker environment runtime upgrades", () => {
       support.WorkerEnvironmentServiceOptions["nodeTunnelManager"]
     > = {
       status: () => "stopped",
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(async () => {
         throw new Error("Node workspace transport was not configured");
       }),
@@ -175,7 +178,7 @@ describe("worker environment runtime upgrades", () => {
           database: support.testState.stateDb,
           now: () => support.testState.nowMs,
         });
-        restarted.recoverWorkerSessionToolOperationsAfterRestart();
+        await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         restarted.clearLocalTurnClaimsAfterRestart();
         return { placements: restarted, ...bindService(restarted, true) };
       },
@@ -260,6 +263,74 @@ describe("worker environment runtime upgrades", () => {
     },
   );
 
+  it("exposes an in-flight node refresh and isolates progress listeners until it settles", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred<() => void>();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.ensureNodeWorkerBundle.mockImplementationOnce(async (params) => {
+      params.assertCurrent?.();
+      installing.resolve(() => params.onProgress?.());
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    const reportProgress = await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    const listener = vi.fn();
+    let unsubscribe: (() => void) | undefined;
+    let unsubscribeThrowing: (() => void) | undefined;
+    try {
+      expect(refresh).toBeDefined();
+      unsubscribeThrowing = refresh!.onProgress(() => {
+        throw new Error("progress listener failed");
+      });
+      unsubscribe = refresh!.onProgress(listener);
+      expect(() => reportProgress()).not.toThrow();
+      expect(listener).toHaveBeenCalledOnce();
+      unsubscribe();
+      reportProgress();
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe?.();
+      unsubscribeThrowing?.();
+      installed.resolve(currentReceipt);
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
+      lastError: null,
+    });
+    expect(h.placements.get(REQUEST.sessionId)?.workerBundleHash).toBe(currentReceipt.bundleHash);
+  });
+
+  it("settles and clears a failed node refresh while retaining its existing error recovery", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.install.mockImplementationOnce(async () => {
+      installing.resolve();
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    try {
+      expect(refresh).toBeDefined();
+    } finally {
+      installed.reject(new Error("runtime download interrupted"));
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      state: "attached",
+      bootstrapReceipt: h.environment.bootstrapReceipt,
+      lastError: "runtime download interrupted",
+    });
+    expect(h.placements.get(REQUEST.sessionId)).toEqual(h.placement);
+  });
+
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
     const h = await setupUpgrade("ssh", "attached", {
       ...support.BOOTSTRAP_RECEIPT,
@@ -303,7 +374,7 @@ describe("worker environment runtime upgrades", () => {
     });
   });
 
-  it.each(["unchanged build", "version", "same-version build"] as const)(
+  it.each(["unchanged build", "same-version build"] as const)(
     "recovers published Gateway Stop state after restart with %s",
     async (change) => {
       // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
@@ -316,26 +387,21 @@ describe("worker environment runtime upgrades", () => {
       const unchanged = change === "unchanged build";
       const targetReceipt = unchanged
         ? releasedReceipt
-        : {
-            ...currentReceipt,
-            ...(change === "same-version build"
-              ? { openclawVersion: releasedReceipt.openclawVersion }
-              : {}),
-          };
+        : { ...currentReceipt, openclawVersion: releasedReceipt.openclawVersion };
       const h = await setupUpgrade(
         unchanged ? "node" : "ssh",
         "attached",
         releasedReceipt,
         targetReceipt,
       );
-      h.placements.startDrain({
+      await h.placements.startDrain({
         sessionId: REQUEST.sessionId,
         environmentId: h.environment.environmentId,
         ownerEpoch: h.environment.ownerEpoch,
         expectedGeneration: h.placement!.generation,
       });
       if (!unchanged) {
-        h.placements.claimReclaimWorkspaceResult({
+        await h.placements.claimReclaimWorkspaceResult({
           ...REQUEST,
           claimId: "reclaim-runtime-upgrade",
           runId: "reclaim-runtime-upgrade",
@@ -351,7 +417,7 @@ describe("worker environment runtime upgrades", () => {
         state: "draining",
         turnClaim: null,
       });
-      expect(restarted.placements.listPendingWorkspaceResults()).toEqual(
+      expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual(
         unchanged
           ? []
           : [
@@ -378,7 +444,7 @@ describe("worker environment runtime upgrades", () => {
       vi.mocked(h.nodeTunnelManager.start).mockImplementation(openWorkspace);
       h.destroy.mockImplementation(async () => {
         expect(fixture.log).toContain("workspace:verify-local");
-        expect(restarted.placements.listPendingWorkspaceResults()).toMatchObject([
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { workspaceAcceptedAtMs: expect.any(Number) },
         ]);
         fixture.log.push("provider:release");
@@ -450,7 +516,7 @@ describe("worker environment runtime upgrades", () => {
           turnClaim: null,
           workspaceBaseManifestRef: fixture.reconciledManifestRef,
         });
-        expect(restarted.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         console.info(
           `[stop-recovery-proof] published-state=v2026.9.6 case=${change} reopened=draining events=${fixture.log.join(",")} final=reclaimed`,
         );

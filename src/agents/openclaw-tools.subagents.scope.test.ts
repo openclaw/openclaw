@@ -17,8 +17,8 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 describe("subagents scope isolation", () => {
   let storePath = "";
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     resetSubagentsConfigOverride();
     callGatewayMock.mockReset();
     storePath = path.join(os.tmpdir(), `openclaw-subagents-scope-${randomUUID()}.json`);
@@ -49,7 +49,7 @@ describe("subagents scope isolation", () => {
     }
     fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
     for (const [index, run] of runs.entries()) {
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         ...run,
         runId: `run-${index}`,
         requesterDisplayKey: run.requesterSessionKey,

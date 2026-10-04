@@ -9,8 +9,7 @@ import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
-// System-run approval context normalizes prepared node-run payloads and legacy
-// command fields before they enter exec approval policy.
+// System-run approval context normalizes prepared node-run payloads before exec policy.
 export type PreparedRunExecPolicy = {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -108,40 +107,16 @@ export function parsePreparedSystemRunPayload(raw: unknown): PreparedRunPayload 
   const execPolicy = normalizePreparedRunExecPolicy(raw.execPolicy);
   const allowAlwaysCoverage = normalizeAllowAlwaysCoverage(raw.allowAlwaysCoverage);
   const plan = normalizeSystemRunApprovalPlan(raw.plan);
-  if (plan) {
-    return {
-      plan,
-      ...(execPolicy ? { execPolicy } : {}),
-      ...(allowAlwaysCoverage ? { allowAlwaysCoverage } : {}),
-    };
-  }
-  if (!isRecord(raw.plan)) {
-    return null;
-  }
-  const legacyPlan = raw.plan;
-  const argv = normalizeStringArray(legacyPlan.argv);
-  const commandText =
-    normalizeNonEmptyString(legacyPlan.rawCommand) ??
-    normalizeNonEmptyString(raw.commandText) ??
-    normalizeNonEmptyString(raw.cmdText);
-  if (argv.length === 0 || !commandText) {
+  if (!plan) {
     return null;
   }
   return {
-    plan: {
-      argv,
-      cwd: normalizeNonEmptyString(legacyPlan.cwd),
-      commandText,
-      commandPreview: normalizeNonEmptyString(legacyPlan.commandPreview),
-      agentId: normalizeNonEmptyString(legacyPlan.agentId),
-      sessionKey: normalizeNonEmptyString(legacyPlan.sessionKey),
-    },
+    plan,
     ...(execPolicy ? { execPolicy } : {}),
     ...(allowAlwaysCoverage ? { allowAlwaysCoverage } : {}),
   };
 }
 
-/** Build the approval request context from tool payload fields. */
 export function resolveSystemRunApprovalRequestContext(params: {
   host?: unknown;
   command?: unknown;

@@ -1,6 +1,7 @@
 // Qa Lab tests cover tool coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
-import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityResult } from "./runtime-parity.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   buildQaToolCoverageReport,
@@ -418,6 +419,53 @@ describe("qa tool coverage report", () => {
     );
   });
 
+  it("counts Codex-native workspace receipts under their native tool names", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-exec", "exec", {
+          toolName: "exec",
+          nativeWorkspaceBehavior: "exec",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            capabilityLayer: "codex-native-workspace",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool exec",
+            status: "pass",
+            runtimeParity: {
+              scenarioId: "tool-exec",
+              drift: "tool-call-shape",
+              cells: {
+                openclaw: makeCell("openclaw", {
+                  toolCalls: [{ tool: "exec", argsHash: "a", resultHash: "openclaw-ok" }],
+                }),
+                codex: makeCell("codex", {
+                  toolCalls: [{ tool: "bash", argsHash: "b", resultHash: "codex-ok" }],
+                }),
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.rows[0]).toMatchObject({
+      runtimeToolName: "exec",
+      codexRuntimeToolName: "bash",
+      openclawSuccessfulToolCalls: 1,
+      codexSuccessfulToolCalls: 1,
+    });
+  });
+
   it("fails required OpenClaw dynamic tool coverage when a runtime skips the tool", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [makeRequiredToolScenario("web-search", "web_search")],
@@ -637,6 +685,7 @@ describe("qa tool coverage report", () => {
     expect(applyPatchRow?.tracking).toBeUndefined();
     expect(report.rows.find((row) => row.tool === "sessions_spawn")).toEqual(
       expect.objectContaining({
+        capabilityLayer: "openclaw-dynamic-direct",
         required: true,
         action: expect.stringContaining("hard gate"),
       }),
@@ -653,6 +702,7 @@ describe("qa tool coverage report", () => {
     expect(report.rows.find((row) => row.tool === "image_generate")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
+        capabilityLayer: "openclaw-dynamic-searchable",
         expectedLayer: "openclaw-dynamic",
         required: false,
       }),
@@ -660,7 +710,7 @@ describe("qa tool coverage report", () => {
     expect(report.rows.find((row) => row.tool === "web_search")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
-        capabilityLayer: "openclaw-dynamic-direct",
+        capabilityLayer: "openclaw-dynamic-searchable",
         required: true,
       }),
     );

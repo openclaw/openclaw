@@ -1,4 +1,3 @@
-// Runtime-backed fleet command handlers and human/JSON output formatting.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import {
   createFleetService,

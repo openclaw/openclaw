@@ -1,7 +1,8 @@
 // Control UI tests cover the responsive disconnected login gate.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -26,6 +27,76 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+    const gateway = await installMockGateway(page, { awaitInitialRoster: false });
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
+    );
+    await page.addInitScript(() => {
+      class RefusedWebSocket extends EventTarget {
+        readyState: WebSocket["readyState"] = WebSocket.CONNECTING;
+
+        send() {
+          throw new Error("Upgrade failed before WebSocket open");
+        }
+
+        close() {
+          this.readyState = WebSocket.CLOSED;
+        }
+      }
+      let refused = 0;
+      window.WebSocket = new Proxy(window.WebSocket, {
+        construct(target, args) {
+          if (refused++ >= 2) {
+            return Reflect.construct(target, args);
+          }
+          const socket = new RefusedWebSocket();
+          queueMicrotask(() => {
+            socket.readyState = WebSocket.CLOSED;
+            socket.dispatchEvent(new Event("error"));
+            socket.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+          });
+          return socket;
+        },
+      });
+    });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await page.clock.runFor(1);
+      const failure = page.locator('.login-gate__failure[data-kind="busy"]');
+      await failure.waitFor();
+      expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
+        "Gateway busy, retrying…",
+      );
+      expect(await gateway.getRequests("connect")).toHaveLength(0);
+
+      const retryHealthResponse = page.waitForResponse("**/healthz");
+      await page.clock.runFor(1_000);
+      // The first probe's busy state can survive while the retry probe is still in flight.
+      // Finish its real response before advancing the virtual one-second abort deadline.
+      expect(await (await retryHealthResponse).finished()).toBeNull();
+      const countdown = failure.locator(".login-gate__retry");
+      await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
+      await page.clock.runFor(1_000);
+      expect((await countdown.textContent())?.trim()).toBe("Retrying in 1s…");
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+
+      await page.clock.runFor(1_000);
+      await gateway.waitForRequest("connect");
+      await page.clock.runFor(1);
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("shows a bare protocol mismatch as compatibility guidance without reconnecting", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -308,7 +379,7 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
     {
       name: "GitHub profile rate limit",
@@ -320,13 +391,16 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
     const viewport = { height: 900, width: 1280 };
     const context = await suite.browser.newContext({
       viewport,
-      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+      recordVideo:
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
+          : undefined,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -411,6 +485,67 @@ suite.define(() => {
     }
   });
 
+  it.each(["rejected", "expired"])(
+    "shows a terminal pairing %s until Request again",
+    async (decision) => {
+      const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+      const page = await context.newPage();
+      await page.clock.install();
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      try {
+        await page.goto(suite.server.baseUrl);
+        const request = await gateway.waitForRequest("connect");
+        assert(isRecord(request.params) && isRecord(request.params.device));
+        const deviceId = request.params.device.id;
+        assert(typeof deviceId === "string");
+        await gateway.rejectDeferred("connect", {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: {
+            code: "PAIRING_REQUIRED",
+            requestId: "waiting-request",
+            deviceId,
+            waitForResolution: true,
+            pauseReconnect: false,
+          },
+        });
+        await page.getByRole("button", { name: "Check now", exact: true }).waitFor();
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        await gateway.emitGatewayEvent("device.pair.resolved", {
+          requestId: "waiting-request",
+          deviceId,
+          decision,
+          ts: Date.now(),
+        });
+        await page
+          .getByText(
+            decision === "rejected" ? "Access request declined" : "Access request expired",
+            { exact: true },
+          )
+          .waitFor();
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("online"));
+          window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+        });
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(await page.getByText("Waiting for approval", { exact: false }).count()).toBe(0);
+        await page.screenshot({
+          path: path.join(RECOVERY_ARTIFACT_DIR, `pairing-${decision}.png`),
+          fullPage: true,
+        });
+        await gateway.deferNext("connect");
+        await page.getByRole("button", { name: "Request again", exact: true }).click();
+        await gateway.waitForRequest("connect", { after: 1 });
+        await gateway.resolveDeferred("connect");
+        await page.locator("openclaw-app-shell").waitFor();
+      } finally {
+        await closeContext(context);
+      }
+    },
+  );
+
   it("copies an exact recovery command from the application gateway snapshot", async () => {
     const context = await suite.browser.newContext({
       permissions: ["clipboard-read", "clipboard-write"],
@@ -492,7 +627,7 @@ suite.define(() => {
     const page = await context.newPage();
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl);
+      const gateway = await renderLoginGate(page, suite.server.baseUrl);
       const gatewayInput = page.locator(".login-gate__form .field input").first();
       expect(await gatewayInput.getAttribute("inputmode")).toBe("url");
       expect(await gatewayInput.getAttribute("autocapitalize")).toBe("none");
@@ -500,8 +635,27 @@ suite.define(() => {
       expect(await gatewayInput.getAttribute("spellcheck")).toBe("false");
       expect(await gatewayInput.getAttribute("enterkeyhint")).toBe("go");
 
+      // App renders must retain the real connection action, not a fixture-owned callback.
+      await page.evaluate(async () => {
+        const app = document.querySelector<
+          HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> }
+        >("openclaw-app")!;
+        app.requestUpdate();
+        await app.updateComplete;
+        await document.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+          "openclaw-login-gate",
+        )!.updateComplete;
+      });
+      await gateway.deferNext("connect");
       await gatewayInput.press("Enter");
-      expect(await page.locator("body").getAttribute("data-connect-count")).toBe("1");
+      await gateway.waitForRequest("connect", { after: 1 });
+      expect(await gateway.getRequests("connect")).toHaveLength(2);
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
 
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");

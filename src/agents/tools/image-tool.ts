@@ -18,7 +18,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-media.js";
+import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -47,12 +47,9 @@ import {
   resolveImageModelConfigForOverride,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
+import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
-  buildImageToolReferenceDetails,
-  buildNativeImageToolResult,
-  type LoadedImageForTool,
-} from "./image-tool.result.js";
-import {
+  buildMediaReferenceDetails,
   buildTextToolResult,
   normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -65,25 +62,19 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
+  prepareToolAuthProfileStoreSource,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
+import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-type ImageToolLoadWebMediaOptions = Exclude<
-  Parameters<typeof import("../../media/web-media.js").loadWebMedia>[1],
-  number | undefined
+type ImageWebMediaRuntime = Pick<
+  typeof import("../../media/web-media.js"),
+  "loadWebMedia" | "optimizeImageBufferForWebMedia"
 >;
-
-type ImageWebMediaRuntime = {
-  loadWebMedia: (
-    mediaUrl: string,
-    options?: ImageToolLoadWebMediaOptions,
-  ) => Promise<WebMediaResult>;
-  optimizeImageBufferForWebMedia: (typeof import("../../media/web-media.js"))["optimizeImageBufferForWebMedia"];
-};
 
 async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
   return await import("../../media/web-media.js");
@@ -191,6 +182,7 @@ function resolveImageModelConfigForTool(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): ImageModelConfig | null {
   // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
@@ -250,35 +242,25 @@ function resolveImageModelConfigForTool(params: {
     cfg: params.cfg,
     provider: primary.provider,
   });
-  const primaryCandidates = (() => {
-    if (providerVisionFromConfig) {
-      if (primary.provider === "openai") {
-        return [
-          resolveImplicitOpenAiImageCandidate(
-            providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
-          ),
-        ];
-      }
-      return [providerVisionFromConfig];
-    }
-    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      providerId: primary.provider,
-      capability: "image",
-      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-    });
-    if (providerDefault) {
-      if (primary.provider === "openai") {
-        return [resolveImplicitOpenAiImageCandidate(providerDefault)];
-      }
-      return [`${primary.provider}/${providerDefault}`];
-    }
-    if (isMinimaxVlmProvider(primary.provider)) {
-      return [`${primary.provider}/MiniMax-VL-01`];
-    }
-    return [];
-  })();
+  const primaryModelId = providerVisionFromConfig
+    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+    : imageToolProviderDeps.resolveDefaultMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId: primary.provider,
+        capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+      });
+  const primaryCandidates =
+    providerVisionFromConfig || primaryModelId
+      ? [
+          primary.provider === "openai"
+            ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
+            : (providerVisionFromConfig ?? `${primary.provider}/${primaryModelId}`),
+        ]
+      : isMinimaxVlmProvider(primary.provider)
+        ? [`${primary.provider}/MiniMax-VL-01`]
+        : [];
 
   const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
@@ -327,6 +309,7 @@ function resolveImageModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
@@ -351,6 +334,7 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
@@ -391,6 +375,7 @@ export function createImageTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
         preparedModelRuntime: options?.preparedModelRuntime,
       })
     : explicitImageModelConfig;
@@ -458,15 +443,10 @@ export function createImageTool(options?: {
 
         const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
         if (pathInputs.length > maxImages) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
-              },
-            ],
-            details: { error: "too_many_images", count: pathInputs.length, max: maxImages },
-          };
+          return textResult(
+            `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
+            { error: "too_many_images", count: pathInputs.length, max: maxImages },
+          );
         }
 
         const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
@@ -489,19 +469,24 @@ export function createImageTool(options?: {
         if (modelHasVision) {
           imageRoute = { kind: "native" };
         } else {
-          const imageModelConfig =
+          let imageModelConfig =
             resolvedImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
-            }) ??
-            resolveImageModelConfigForTool({
+            });
+          if (!imageModelConfig) {
+            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            assertCurrent();
+            imageModelConfig = resolveImageModelConfigForTool({
               cfg: options?.config,
               agentDir,
               workspaceDir: options?.workspaceDir,
               authStore: options?.authProfileStore,
+              authProfileStoreSource,
               preparedModelRuntime: options?.preparedModelRuntime,
             });
+          }
           if (!imageModelConfig) {
             throw new Error(
               "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
@@ -546,18 +531,13 @@ export function createImageTool(options?: {
           const refInfo = classifyMediaReferenceSource(normalizedRef);
           const { isDataUrl, isHttpUrl } = refInfo;
           if (refInfo.hasUnsupportedScheme) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-                },
-              ],
-              details: {
+            return textResult(
+              `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+              {
                 error: "unsupported_image_reference",
                 path: pathRawInput,
               },
-            };
+            );
           }
 
           if (sandboxConfig && isHttpUrl) {
@@ -623,7 +603,7 @@ export function createImageTool(options?: {
           loadedImages.push({
             buffer: media.buffer,
             mimeType,
-            resolvedImage,
+            resolvedInput: resolvedImage,
             ...(rewrittenFrom ? { rewrittenFrom } : {}),
           });
         }
@@ -656,7 +636,7 @@ export function createImageTool(options?: {
           imageToolProviderDeps,
         );
 
-        return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+        return buildTextToolResult(result, buildMediaReferenceDetails(loadedImages, "image"));
       }),
   };
 }

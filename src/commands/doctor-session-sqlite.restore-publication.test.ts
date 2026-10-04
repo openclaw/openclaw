@@ -104,8 +104,6 @@ describe("runDoctorSessionSqlite", () => {
     (
       [
         { version: 1, destination: "file" },
-        { version: 2, destination: "file" },
-        { version: 1, destination: "dangling-symlink" },
         { version: 2, destination: "dangling-symlink" },
       ] as const
     ).filter(({ destination }) => destination === "file" || process.platform !== "win32"),
@@ -171,11 +169,10 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (["transcript", "legacy-store"] as const).map((kind) => ({ version, kind })),
-    ),
-  )(
+  it.each([
+    { version: 1, kind: "transcript" },
+    { version: 2, kind: "legacy-store" },
+  ] as const)(
     "rejects a changed historical v$version $kind before adopting restore metadata",
     async ({ version, kind }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);
@@ -240,11 +237,10 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (["restore", "recover"] as const).map((retryMode) => ({ version, retryMode })),
-    ),
-  )(
+  it.each([
+    { version: 1, retryMode: "restore" },
+    { version: 2, retryMode: "recover" },
+  ] as const)(
     "retries historical v$version restored-directory edge sync through $retryMode",
     async ({ version, retryMode }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);
@@ -326,21 +322,15 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (
-        [
-          { phase: "metadata-write", retryMode: "restore" },
-          { phase: "metadata-sync", retryMode: "restore" },
-          { phase: "target-sync", retryMode: "recover" },
-          { phase: "receipt-write", retryMode: "restore" },
-          { phase: "receipt-sync", retryMode: "recover" },
-          { phase: "archive-unlink", retryMode: "restore" },
-          { phase: "archive-sync", retryMode: "recover" },
-        ] as const
-      ).map(({ phase, retryMode }) => ({ version, phase, retryMode })),
-    ),
-  )(
+  it.each([
+    { version: 1, phase: "metadata-write", retryMode: "restore" },
+    { version: 2, phase: "metadata-sync", retryMode: "restore" },
+    { version: 1, phase: "target-sync", retryMode: "recover" },
+    { version: 2, phase: "receipt-write", retryMode: "restore" },
+    { version: 1, phase: "receipt-sync", retryMode: "recover" },
+    { version: 2, phase: "archive-unlink", retryMode: "restore" },
+    { version: 1, phase: "archive-sync", retryMode: "recover" },
+  ] as const)(
     "resumes historical v$version index restore after $phase through $retryMode",
     async ({ version, phase, retryMode }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);

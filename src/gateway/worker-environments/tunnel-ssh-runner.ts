@@ -8,6 +8,7 @@ import {
   type SpawnResult,
 } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 
 export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
@@ -126,11 +127,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         settleExited({ code, signal });
       });
       child.stdin.on("error", () => {});
-      if (options.input !== undefined) {
-        child.stdin.end(options.input);
-      } else {
-        child.stdin.end();
-      }
+      child.stdin.end(options.input);
 
       let stopPromise: Promise<void> | undefined;
       return {
@@ -142,33 +139,12 @@ export function createWorkerSshRunner(): WorkerSshRunner {
               return;
             }
             child.kill("SIGTERM");
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            await Promise.race([
-              exited,
-              new Promise<void>((resolve) => {
-                timer = setTimeout(resolve, STOP_GRACE_MS);
-                timer.unref?.();
-              }),
-            ]);
-            clearTimeout(timer);
+            await settlesWithin(exited, STOP_GRACE_MS);
             if (!closed && !exitedSettled) {
               // A false return can also mean the child died a moment ago with its "exit"
               // event still queued; always take the bounded wait before judging.
               const killDelivered = child.kill("SIGKILL");
-              let killTimer: ReturnType<typeof setTimeout> | undefined;
-              let killWaitExpired = false;
-              await Promise.race([
-                exited,
-                new Promise<void>((resolve) => {
-                  killTimer = setTimeout(() => {
-                    killWaitExpired = true;
-                    resolve();
-                  }, STOP_KILL_WAIT_MS);
-                  killTimer.unref?.();
-                }),
-              ]);
-              clearTimeout(killTimer);
-              if (killWaitExpired) {
+              if (!(await settlesWithin(exited, STOP_KILL_WAIT_MS))) {
                 // Neither delivered SIGKILL nor failed delivery proves termination without
                 // an exit event; fail the stop so the owner keeps tracking the live child.
                 throw workerSshProcessError(

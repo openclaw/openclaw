@@ -86,35 +86,26 @@ function listBundledStaticCatalogPlugins(
   metadataSnapshot?: PluginMetadataSnapshot,
 ): StaticCatalogPlugin[] {
   const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  const plugins: StaticCatalogPlugin[] = metadataSnapshot
-    ? metadataSnapshot.plugins
-        .filter((plugin) => plugin.origin === "bundled")
-        .map(({ id, providers, modelCatalog, providerEndpoints }) => ({
-          id,
-          providers,
-          modelCatalog,
-          providerEndpoints,
-        }))
-    : listOpenClawPluginManifestMetadata(params.env).flatMap((record): StaticCatalogPlugin[] => {
+  const plugins = metadataSnapshot
+    ? metadataSnapshot.plugins.filter((plugin) => plugin.origin === "bundled")
+    : listOpenClawPluginManifestMetadata(params.env).flatMap((record) => {
         if (record.origin !== "bundled") {
           return [];
         }
         const loaded = loadPluginManifest(record.pluginDir);
-        return loaded.ok
-          ? [
-              {
-                id: loaded.manifest.id,
-                providers: loaded.manifest.providers,
-                modelCatalog: loaded.manifest.modelCatalog,
-                providerEndpoints: loaded.manifest.providerEndpoints,
-              },
-            ]
-          : [];
+        return loaded.ok ? [loaded.manifest] : [];
       });
-  return plugins.filter(
-    (plugin) =>
-      Boolean(plugin.modelCatalog) && passesManifestOwnerBasePolicy({ plugin, normalizedConfig }),
-  );
+  return plugins
+    .map(({ id, providers, modelCatalog, providerEndpoints }) => ({
+      id,
+      providers,
+      modelCatalog,
+      providerEndpoints,
+    }))
+    .filter(
+      (plugin) =>
+        Boolean(plugin.modelCatalog) && passesManifestOwnerBasePolicy({ plugin, normalizedConfig }),
+    );
 }
 
 function resolveBundledStaticCatalogState(
@@ -199,23 +190,25 @@ export function createBundledStaticCatalogModelResolver(params?: {
     if (state.plugins.length === 0) {
       return undefined;
     }
-    let plan = state.plans.get(provider);
-    if (!plan) {
-      plan = planEffectiveModelCatalogRows({
-        registry: { plugins: state.plugins },
-        config: params?.cfg ?? {},
-        providerFilter: provider,
-      });
-      state.plans.set(provider, plan);
-    }
+    const getPlan = (providerFilter?: string) => {
+      const key = providerFilter ?? "";
+      let plan = state.plans.get(key);
+      if (!plan) {
+        plan = planEffectiveModelCatalogRows({
+          registry: { plugins: state.plugins },
+          config: params?.cfg ?? {},
+          ...(providerFilter ? { providerFilter } : {}),
+        });
+        state.plans.set(key, plan);
+      }
+      return plan;
+    };
+    const acceptsDiscovery = (discovery: string | undefined) =>
+      discovery === "static" ||
+      (params?.includeRuntimeDiscovery && (discovery === "runtime" || discovery === "refreshable"));
+    const plan = getPlan(provider);
     for (const entry of plan.entries) {
-      if (
-        entry.discovery !== "static" &&
-        !(
-          params?.includeRuntimeDiscovery &&
-          (entry.discovery === "runtime" || entry.discovery === "refreshable")
-        )
-      ) {
+      if (!acceptsDiscovery(entry.discovery)) {
         continue;
       }
       const row = entry.rows.find((candidate: NormalizedModelCatalogRow) =>
@@ -257,23 +250,10 @@ export function createBundledStaticCatalogModelResolver(params?: {
       return cachedDonor ? { ...modelFromStaticCatalogRow(cachedDonor), provider } : undefined;
     }
     const findDonor = (): NormalizedModelCatalogRow | undefined => {
-      let donors = state.plans.get("");
-      if (!donors) {
-        donors = planEffectiveModelCatalogRows({
-          registry: { plugins: state.plugins },
-          config: params?.cfg ?? {},
-        });
-        state.plans.set("", donors);
-      }
+      const donors = getPlan();
       let donor: NormalizedModelCatalogRow | undefined;
       for (const entry of donors.entries) {
-        if (
-          entry.discovery !== "static" &&
-          !(
-            params?.includeRuntimeDiscovery &&
-            (entry.discovery === "runtime" || entry.discovery === "refreshable")
-          )
-        ) {
+        if (!acceptsDiscovery(entry.discovery)) {
           continue;
         }
         for (const row of entry.rows) {
@@ -378,15 +358,12 @@ function resolveBundledProviderStaticCatalogPluginIds(params: {
   return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).toSorted();
 }
 
-async function loadBundledProviderStaticCatalogModels(params: {
-  pluginIds: string[];
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
-  providerMetadataOwners?: PluginMetadataSnapshot["owners"];
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<Map<string, ProviderRuntimeModel[]>> {
+async function loadBundledProviderStaticCatalogModels(
+  params: BundledProviderStaticCatalogResolverParams & {
+    pluginIds: string[];
+    env: NodeJS.ProcessEnv;
+  },
+): Promise<Map<string, ProviderRuntimeModel[]>> {
   const pluginIds = new Set(params.pluginIds);
   const preparedProviders = (params.preparedStaticProviderCatalog?.providers ?? []).filter(
     (provider) => provider.pluginId !== undefined && pluginIds.has(provider.pluginId),
@@ -409,9 +386,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
           requireCompleteDiscoveryEntryCoverage: true,
           discoveryEntriesOnly: true,
           includeManifestModelCatalogProviders: false,
-          ...(params.pluginMetadataSnapshot
-            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-            : {}),
+          ...(params.metadataSnapshot ? { pluginMetadataSnapshot: params.metadataSnapshot } : {}),
         });
   const providers = [...preparedProviders, ...discoveredProviders];
   const preparedEntries = params.preparedStaticProviderCatalog?.entries.filter(
@@ -427,7 +402,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
     : undefined;
   const modelsByProvider = new Map<string, ProviderRuntimeModel[]>();
   for (const catalogProvider of providers) {
-    const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+    const plugin = params.metadataSnapshot?.manifestRegistry.plugins.find(
       (candidate) => candidate.id === (catalogProvider.pluginId ?? catalogProvider.id),
     );
     const includeProvider = (provider: string) =>
@@ -470,7 +445,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
       models.push(
         ...buildInlineProviderModels(
           { [provider]: providerConfig },
-          { providerMetadataOwners: params.providerMetadataOwners },
+          { providerMetadataOwners: params.metadataSnapshot?.owners },
         ).map((model) => completeInlineProviderModel(model, providerConfig)),
       );
       modelsByProvider.set(provider, models);
@@ -549,12 +524,10 @@ export async function loadBundledProviderStaticCatalogContextModels(
     pluginIds.map((pluginId) =>
       loadBundledProviderStaticCatalogModels({
         pluginIds: [pluginId],
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
+        ...params,
         env,
         preparedStaticProviderCatalog,
-        ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
-        ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
+        metadataSnapshot,
       }),
     ),
   );
@@ -599,18 +572,8 @@ function createScopedBundledProviderStaticCatalogModelResolver(
     if (!catalog) {
       catalog = loadBundledProviderStaticCatalogModels({
         pluginIds,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
+        ...params,
         env,
-        ...(params.preparedStaticProviderCatalog
-          ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
-          : {}),
-        ...(params.metadataSnapshot
-          ? {
-              providerMetadataOwners: params.metadataSnapshot.owners,
-              pluginMetadataSnapshot: params.metadataSnapshot,
-            }
-          : {}),
       });
       pluginCatalogs.set(catalogKey, catalog);
     }

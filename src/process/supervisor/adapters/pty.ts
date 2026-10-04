@@ -58,6 +58,7 @@ export async function createPtyAdapter(
     },
     {
       abortSignal: params.abortSignal,
+      initiateSpawn: params.initiateSpawn,
       assertCurrent: () => {
         params.assertCurrent?.();
         params.beforeSpawn?.();
@@ -164,43 +165,37 @@ export async function createPtyAdapter(
     },
   };
 
-  const onStdout = (listener: (chunk: string) => void) => {
-    dataListener = pty.onData(listener) ?? null;
-  };
-
-  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
-
-    if (signal === "SIGKILL") {
-      scheduleForceKillWaitFallback(signal);
-    }
-  };
-
-  const dispose = () => {
-    stdinDestroyed = true;
-    stdinEnded = true;
-    for (const listener of [dataListener, exitListener]) {
-      try {
-        listener?.dispose();
-      } catch {
-        // Both subscriptions must be released even if one disposal fails.
-      }
-    }
-    clearForceKillWaitFallback();
-    dataListener = null;
-    exitListener = null;
-    settleWait({ code: null, signal: null });
-  };
-
   return {
     pid: pty.pid || undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: false,
-    onStdout,
+    onStdout: (listener) => {
+      dataListener = pty.onData(listener) ?? null;
+    },
     onStderr: () => {}, // PTY output is unified.
     wait: async () => await completion.promise,
-    kill,
-    dispose,
+    kill: (signal = "SIGKILL") => {
+      signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
+
+      if (signal === "SIGKILL") {
+        scheduleForceKillWaitFallback(signal);
+      }
+    },
+    dispose: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
+      for (const listener of [dataListener, exitListener]) {
+        try {
+          listener?.dispose();
+        } catch {
+          // Both subscriptions must be released even if one disposal fails.
+        }
+      }
+      clearForceKillWaitFallback();
+      dataListener = null;
+      exitListener = null;
+      settleWait({ code: null, signal: null });
+    },
   };
 }

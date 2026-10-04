@@ -51,9 +51,9 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"),
       "slept-ok\n",
     );
-    fixture
-      .openSessionManager()
-      .appendMessage(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
+    await (
+      await fixture.openSessionManager()
+    ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
     edited.resolve();
     await finish.promise;
     return {
@@ -69,6 +69,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     environmentId: ENVIRONMENT_ID,
     ownerEpoch: OWNER_EPOCH,
     measureLaunchTurn: fixture.measureLaunchTurn,
+    readLaunchToolNames: fixture.readLaunchToolNames,
     launchTurn,
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
@@ -142,7 +143,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     if (!claim) {
       throw new Error("Expected live worker claim");
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]); // No finishing ACK yet.
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -158,9 +159,9 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     resetGatewayWorkAdmission();
     const recovered = createWorkerSessionPlacementStore({ database });
     const published = vi.fn(async () => {
-      expect(recovered.listPendingWorkspaceResults()[0]?.workspaceAcceptedAtMs).toEqual(
-        expect.any(Number),
-      );
+      expect(
+        (await recovered.listPendingWorkspaceResultsAsync())[0]?.workspaceAcceptedAtMs,
+      ).toEqual(expect.any(Number));
     });
     const recovery = createPlacementRecoveryActions({
       placements: recovered,
@@ -187,7 +188,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       "slept-ok\n",
     );
     expect(published).toHaveBeenCalledOnce();
-    expect(recovered.listPendingWorkspaceResults()).toEqual([]);
+    expect(await recovered.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(recovered.get(SESSION_ID)).toMatchObject({
       state: "active",
       turnClaim: null,

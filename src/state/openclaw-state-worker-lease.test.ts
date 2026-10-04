@@ -153,70 +153,65 @@ function createLeaseFixture() {
   return { maintenance, context };
 }
 
-it.each(["execute", "runOperation"] as const)(
-  "closes fresh %s admission while accepted callbacks and terminal writes finish",
-  async (entry) => {
-    const { maintenance, context } = createLeaseFixture();
-    const acceptedCommand = {
-      type: "capture.endSession" as const,
-      input: { sessionId: "accepted", endedAt: 1 },
-    };
-    const terminalCommand = {
-      type: "capture.endSession" as const,
-      input: { sessionId: "terminal", endedAt: 2 },
-    };
-    const forbiddenCommand = {
-      type: "capture.endSession" as const,
-      input: { sessionId: "not-admitted", endedAt: 3 },
-    };
-    const finishAccepted = createDeferredCore();
-    const acceptedFinished = createDeferredCore();
-    const pendingCommand = createDeferredCore();
-    const lease = maintenance.run(() =>
-      createOpenClawStateWorkerLease(context, async (terminal) => {
-        physical.events.push("finalize-start");
-        finishAccepted.resolve();
-        await acceptedFinished.promise;
-        await terminal.execute(terminalCommand);
-        physical.events.push("finalize-end");
-      }),
-    );
-    await lease.ready;
-    const accepted = lease.runOperation(async (operation) => {
-      try {
-        await finishAccepted.promise;
-        await operation.execute(acceptedCommand);
-        physical.events.push("accepted-complete");
-      } finally {
-        acceptedFinished.resolve();
-      }
-    });
-    void maintenance.track(pendingCommand.promise);
-    const closed = maintenance.close();
-    const lateCallback = vi.fn(async (operation: DomainScope) =>
-      operation.execute(forbiddenCommand),
-    );
+it("closes fresh callback admission while accepted callbacks and terminal writes finish", async () => {
+  const { maintenance, context } = createLeaseFixture();
+  const acceptedCommand = {
+    type: "capture.endSession" as const,
+    input: { sessionId: "accepted", endedAt: 1 },
+  };
+  const terminalCommand = {
+    type: "capture.endSession" as const,
+    input: { sessionId: "terminal", endedAt: 2 },
+  };
+  const forbiddenCommand = {
+    type: "capture.endSession" as const,
+    input: { sessionId: "not-admitted", endedAt: 3 },
+  };
+  const finishAccepted = createDeferredCore();
+  const acceptedFinished = createDeferredCore();
+  const pendingCommand = createDeferredCore();
+  const lease = maintenance.run(() =>
+    createOpenClawStateWorkerLease(context, async (terminal) => {
+      physical.events.push("finalize-start");
+      finishAccepted.resolve();
+      await acceptedFinished.promise;
+      await terminal.execute(terminalCommand);
+      physical.events.push("finalize-end");
+    }),
+  );
+  await lease.ready;
+  const accepted = lease.runOperation(async (operation) => {
     try {
-      const late =
-        entry === "execute" ? lease.execute(forbiddenCommand) : lease.runOperation(lateCallback);
-      await expect(late).rejects.toThrow("Database maintenance resource admission is closed");
-      expect(lateCallback).not.toHaveBeenCalled();
-      expect(physical.events).toEqual([]);
+      await finishAccepted.promise;
+      await operation.execute(acceptedCommand);
+      physical.events.push("accepted-complete");
     } finally {
-      pendingCommand.resolve();
-      await closed;
-      await accepted;
+      acceptedFinished.resolve();
     }
-    expect(physical.events).toEqual([
-      "finalize-start",
-      acceptedCommand,
-      "accepted-complete",
-      terminalCommand,
-      "finalize-end",
-      "physical-close",
-    ]);
-  },
-);
+  });
+  void maintenance.track(pendingCommand.promise);
+  const closed = maintenance.close();
+  const lateCallback = vi.fn(async (operation: DomainScope) => operation.execute(forbiddenCommand));
+  try {
+    await expect(lease.runOperation(lateCallback)).rejects.toThrow(
+      "Database maintenance resource admission is closed",
+    );
+    expect(lateCallback).not.toHaveBeenCalled();
+    expect(physical.events).toEqual([]);
+  } finally {
+    pendingCommand.resolve();
+    await closed;
+    await accepted;
+  }
+  expect(physical.events).toEqual([
+    "finalize-start",
+    acceptedCommand,
+    "accepted-complete",
+    terminalCommand,
+    "finalize-end",
+    "physical-close",
+  ]);
+});
 
 it("drains a command accepted before cold acquisition after its callback returns", async () => {
   const openGate = createDeferredCore();

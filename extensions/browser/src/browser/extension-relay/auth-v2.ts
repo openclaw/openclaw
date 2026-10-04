@@ -1,4 +1,4 @@
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasExactKeys } from "../../../chrome-extension/modules/strict-json.js";
 import {
   BROWSER_RELAY_AUTH_VERSION,
   createRelayProof,
@@ -78,16 +78,8 @@ type ChallengeState = {
   fields: BrowserRelayProofFields;
 };
 
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-export function parseRelayAuthHello(value: unknown): BrowserRelayAuthHello | null {
-  const record = asNullableRecord(value);
+export function parseRelayAuthHello(record: unknown): BrowserRelayAuthHello | null {
   if (
-    !record ||
     !hasExactKeys(record, ["type", "v", "keyId", "clientNonce"]) ||
     record.type !== "auth.hello" ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
@@ -101,10 +93,8 @@ export function parseRelayAuthHello(value: unknown): BrowserRelayAuthHello | nul
   return record as BrowserRelayAuthHello;
 }
 
-export function parseRelayAuthResponse(value: unknown): BrowserRelayAuthResponse | null {
-  const record = asNullableRecord(value);
+export function parseRelayAuthResponse(record: unknown): BrowserRelayAuthResponse | null {
   if (
-    !record ||
     !hasExactKeys(record, ["type", "v", "sessionId", "clientProof"]) ||
     record.type !== "auth.response" ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
@@ -117,11 +107,9 @@ export function parseRelayAuthResponse(value: unknown): BrowserRelayAuthResponse
 }
 
 export function parseRelayHttpChallengeRequest(
-  value: unknown,
+  record: unknown,
 ): BrowserRelayHttpChallengeRequest | null {
-  const record = asNullableRecord(value);
   if (
-    !record ||
     !hasExactKeys(record, [
       "v",
       "keyId",
@@ -152,11 +140,9 @@ export function parseRelayHttpChallengeRequest(
 }
 
 export function parseRelayHttpCompleteRequest(
-  value: unknown,
+  record: unknown,
 ): BrowserRelayHttpCompleteRequest | null {
-  const record = asNullableRecord(value);
   if (
-    !record ||
     !hasExactKeys(record, ["v", "sessionId", "clientProof"]) ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
     !isCanonicalBase64UrlBytes(record.sessionId, 16) ||
@@ -168,13 +154,8 @@ export function parseRelayHttpCompleteRequest(
 }
 
 export function parseExtensionRelayResource(rawUrl: string, expectedPath: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
-  if (url.pathname !== expectedPath || url.hash) {
+  const url = URL.parse(rawUrl, "http://127.0.0.1");
+  if (!url || url.pathname !== expectedPath || url.hash) {
     return null;
   }
   const entries = [...url.searchParams.entries()];

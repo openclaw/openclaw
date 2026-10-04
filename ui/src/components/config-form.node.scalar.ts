@@ -37,12 +37,7 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import {
-  configFieldId,
-  hintForPath,
-  redactedPlaceholder,
-  schemaType,
-} from "./config-form.shared.ts";
+import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
   value: string,
@@ -139,10 +134,31 @@ function applyNumericInputState(
   }
 }
 
+function createScalarValueCommitter(
+  { value, path, onPatch }: Pick<ConfigNodeRenderParams, "value" | "path" | "onPatch">,
+  renderedValue: string,
+  revalidate: (target: HTMLInputElement) => void,
+) {
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
+  return (target: HTMLInputElement, candidate: unknown, skipUnchanged = false): boolean => {
+    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
+      return true;
+    }
+    if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
+      return true;
+    }
+    target.value = renderedValue;
+    revalidate(target);
+    return false;
+  };
+}
+
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch, inputType } = params;
+  const { schema, value, path, hints, disabled, inputType } = params;
   const hint = hintForPath(path, hints);
   const field = resolveConfigFieldPresentation(params);
   const { label, helpId } = field;
@@ -162,7 +178,7 @@ export function renderTextInput(
         : t("configForm.structuredSecretFile")
       : masked
         ? "••••••••"
-        : redactedPlaceholder()
+        : t("configForm.redactedPlaceholder")
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -220,25 +236,14 @@ export function renderTextInput(
       textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
   const commitChange = (target: HTMLInputElement) => {
     if (effectiveRedacted) {
       return;
     }
     // Change follows input on blur; only a newly normalized value needs another patch.
-    const commit = (candidate: unknown) =>
-      configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
+    const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
     if (inputType === "number") {
       applyNumericInputState(target, resolveNumericInputState(target, params), commit);
       return;
@@ -289,7 +294,12 @@ export function renderTextInput(
       ?disabled=${disabled}
       ?readonly=${effectiveRedacted}
       @click=${() => {
-        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+        if (
+          !masked &&
+          sensitiveState.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
+        ) {
           params.onToggleSensitivePath(path);
         }
       }}
@@ -338,7 +348,11 @@ export function renderTextInput(
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
-  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
   const presentedInput = isPhonePresentation
     ? html`
         <span class="settings-phone-presentation">
@@ -379,17 +393,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(target, resolveNumericInputState(target, params).message);
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
   // Touch devices and some browsers hide native number spinners; keep explicit
   // adjust buttons so schema-sized edits stay possible without typing.
@@ -481,11 +485,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
         target.value = formatConfigValueText(normalized);
-        if (
-          setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
-          !configValuesEqual(patchedValue, normalized)
-        ) {
-          commitScalarValue(target, normalized);
+        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
+          commitScalarValue(target, normalized, true);
         }
       }}
       @blur=${(event: FocusEvent) => {
@@ -500,11 +501,9 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           state.message = numericConstraintMessage(state.parsed, schema);
           target.value = formatConfigValueText(state.parsed);
         }
-        applyNumericInputState(target, state, (candidate) => {
-          if (!configValuesEqual(patchedValue, candidate)) {
-            commitScalarValue(target, candidate);
-          }
-        });
+        applyNumericInputState(target, state, (candidate) =>
+          commitScalarValue(target, candidate, true),
+        );
       }}
     />
     ${renderStepButton(1)}

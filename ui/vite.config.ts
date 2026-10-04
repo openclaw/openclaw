@@ -7,7 +7,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
-import type { Plugin, ResolveModulePreloadDependenciesFn, UserConfig } from "vite";
+import {
+  runnerImport,
+  type Plugin,
+  type ResolveModulePreloadDependenciesFn,
+  type UserConfig,
+} from "vite";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
@@ -15,15 +21,24 @@ import {
   hashControlUiAssetManifestEntries,
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
-import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
+import {
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  isControlUiVersionedPublicAsset,
+} from "../src/gateway/control-ui-root-assets.ts";
+import {
+  collectControlUiBootAssets,
+  controlUiBootPreloadsPlugin,
+} from "./config/control-ui-boot-preloads.ts";
 import {
   controlUiCodeSplitting,
+  controlUiIsolatedDesktopRuntimePlugin,
   controlUiLocaleConfigHintsChunkPrefix,
 } from "./config/control-ui-chunking.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -364,6 +379,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "grapheme"),
+    sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
@@ -481,7 +497,7 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
           : marked;
       },
     },
-    writeBundle({ dir: buildOutDir }, bundle) {
+    async writeBundle({ dir: buildOutDir }, bundle) {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
       }
@@ -515,16 +531,6 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      const swPath = path.join(buildOutDir, "sw.js");
-      const publicSwPath = path.join(here, "public/sw.js");
-      const source = fs.readFileSync(publicSwPath, "utf8");
-      const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
-      const updated = source.replace(placeholder, JSON.stringify(buildId));
-      if (updated === source) {
-        throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
-      }
-      fs.mkdirSync(buildOutDir, { recursive: true });
-      fs.writeFileSync(swPath, updated);
       for (const asset of publicAssets) {
         const fontStylesheet = asset.path.startsWith("fonts/") && asset.path.endsWith(".css");
         if (!fontStylesheet && asset.path !== "manifest.webmanifest") {
@@ -547,6 +553,69 @@ function controlUiBuildOutputPlugin(buildId: string): Plugin {
           fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
         }
       }
+      const swPath = path.join(buildOutDir, "sw.js");
+      const publicSwPath = path.join(here, "public/sw.js");
+      const source = fs.readFileSync(publicSwPath, "utf8");
+      const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
+      // Embed only build-owned HTML, never a fetched Gateway document (which may
+      // contain identity, route metadata, or an HTTP login response). The measured
+      // route graph also warms assets loaded before the first worker controls a tab.
+      const bootAssets = collectControlUiBootAssets(bundle);
+      const offlineShell = {
+        html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
+        // Public fonts and theme styles are selected at runtime by preferences.
+        // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
+        assets: [
+          ...new Set([
+            ...bootAssets.chat,
+            ...bootAssets.new,
+            ...bootAssets.login,
+            ...publicAssets
+              .filter(
+                (asset) =>
+                  /\.(?:css|woff2)$/u.test(asset.path) &&
+                  isControlUiVersionedPublicAsset(asset.path),
+              )
+              .map((asset) => asset.path),
+          ]),
+        ]
+          .toSorted()
+          .map((file) => ({
+            path: file.startsWith("assets/")
+              ? file
+              : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+            integrity:
+              "sha256-" +
+              createHash("sha256")
+                .update(fs.readFileSync(path.join(buildOutDir, file)))
+                .digest("base64"),
+          })),
+      };
+      // Same-commit source rebuilds must not pair a new document with an old shell.
+      const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
+        path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
+        { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+      );
+      const offlineBuild = {
+        ...offlineShell,
+        csp: csp.buildControlUiCspHeader({
+          inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
+        }),
+        publicAssetVersion: cacheId,
+        publicAssets: publicAssets
+          .map((asset) => asset.path)
+          .filter(isControlUiVersionedPublicAsset),
+        id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
+      };
+      const offlinePlaceholder = "const OFFLINE_BOOT = null;";
+      if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
+        throw new Error(`Control UI service worker build placeholders missing in ${swPath}`);
+      }
+      const updated = source
+        .replace(placeholder, JSON.stringify(buildId))
+        .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
+      fs.mkdirSync(buildOutDir, { recursive: true });
+      fs.writeFileSync(swPath, updated);
       const assets = collectControlUiAssetManifestEntries(buildOutDir);
       const manifest = {
         version: CONTROL_UI_ASSET_MANIFEST_VERSION,
@@ -623,6 +692,13 @@ export default function controlUiViteConfig(
   };
   return {
     base,
+    worker: {
+      format: "iife",
+      plugins: () => [mermaidClassicBundlePlugin()],
+      rolldownOptions: {
+        output: { codeSplitting: false },
+      },
+    },
     define: {
       "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
@@ -632,7 +708,7 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin()],
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
       },
     },
     optimizeDeps: {
@@ -675,6 +751,8 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      mermaidClassicBundlePlugin(),
+      controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
@@ -689,6 +767,7 @@ export default function controlUiViteConfig(
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

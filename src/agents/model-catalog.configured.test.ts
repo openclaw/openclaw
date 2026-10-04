@@ -41,7 +41,9 @@ describe("configured catalog overlay", () => {
         reasoning: true,
         thinkingLevelMap: { high: "high" },
         thinkingPolicyProvider: "captured-policy",
-        [PREPARED_THINKING_POLICY]: () => ({ levels: [{ id: "high" }], defaultLevel: "high" }),
+        [PREPARED_THINKING_POLICY]: {
+          resolve: () => ({ levels: [{ id: "high" }], defaultLevel: "high" }),
+        },
         contextWindow: 32_000,
         contextWindows: [{ id: "large", label: "Large", contextWindow: 32_000 }],
         contextWindowDefault: "large",

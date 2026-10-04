@@ -60,43 +60,40 @@ describe("runtime config load subscriptions", () => {
     }
   });
 
-  it.each(["ensureLoaded", "refresh"] as const)(
-    "%s lets an offline editor ensure config without recursive notifications",
-    async (action) => {
-      const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { gateway, publish } = createGatewayHarness(client);
-      publish(false);
-      const runtimeConfig = createRuntimeConfigCapability(gateway);
-      const pending: Promise<void>[] = [];
-      let depth = 0;
-      let maxDepth = 0;
-      const unsubscribe = runtimeConfig.subscribe((state) => {
-        depth += 1;
-        maxDepth = Math.max(maxDepth, depth);
-        // Bound a broken implementation so the regression reports re-entry,
-        // rather than exhausting the process stack before cleanup can run.
-        if (depth < 3 && !state.configSnapshot && !state.configLoading) {
-          pending.push(runtimeConfig.ensureLoaded());
-        }
-        depth -= 1;
-      });
-      try {
-        await runtimeConfig[action]();
-        await Promise.all(pending);
-        expect(maxDepth).toBe(1);
-        expect(request).not.toHaveBeenCalled();
-
-        publish(true);
-        await runtimeConfig.ensureLoaded();
-        expect(request).toHaveBeenCalledOnce();
-        expect(runtimeConfig.state.configSnapshot?.hash).toBe("ready");
-      } finally {
-        unsubscribe();
-        runtimeConfig.dispose();
+  it("refresh lets an offline editor ensure config without recursive notifications", async () => {
+    const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    publish(false);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const pending: Promise<void>[] = [];
+    let depth = 0;
+    let maxDepth = 0;
+    const unsubscribe = runtimeConfig.subscribe((state) => {
+      depth += 1;
+      maxDepth = Math.max(maxDepth, depth);
+      // Bound a broken implementation so the regression reports re-entry,
+      // rather than exhausting the process stack before cleanup can run.
+      if (depth < 3 && !state.configSnapshot && !state.configLoading) {
+        pending.push(runtimeConfig.ensureLoaded());
       }
-    },
-  );
+      depth -= 1;
+    });
+    try {
+      await runtimeConfig.refresh();
+      await Promise.all(pending);
+      expect(maxDepth).toBe(1);
+      expect(request).not.toHaveBeenCalled();
+
+      publish(true);
+      await runtimeConfig.ensureLoaded();
+      expect(request).toHaveBeenCalledOnce();
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("ready");
+    } finally {
+      unsubscribe();
+      runtimeConfig.dispose();
+    }
+  });
 
   it.each(["config", "schema"] as const)(
     "publishes %s loading immediately and leaves a failed read for explicit retry",

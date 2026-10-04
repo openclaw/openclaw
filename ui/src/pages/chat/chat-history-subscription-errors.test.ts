@@ -1,7 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
@@ -37,6 +39,70 @@ function createSubscriptionState(options?: {
 }
 
 describe("visible chat message subscription failures", () => {
+  it.each(["dispose", "selection", "connection", "capability"] as const)(
+    "retires a delayed subscription retry on %s without touching drafts or sending requests",
+    async (change) => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const subscribeMessages = vi.fn<SessionCapability["subscribeMessages"]>().mockRejectedValue(
+        new GatewayProtocolRequestTimeoutError({
+          method: "sessions.messages.subscribe",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      );
+      const { state } = createSubscriptionState({ subscribeMessages });
+      state.chatMessage = "New unsent draft";
+      const pending = syncSelectedSessionMessageSubscription(state);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subscribeMessages).toHaveBeenCalledTimes(1);
+      if (change === "dispose") {
+        disposeSelectedSessionMessageSubscription(state);
+        expect(vi.getTimerCount()).toBe(0);
+      } else if (change === "selection") {
+        state.sessionKey = "agent:main:new";
+      } else if (change === "connection") {
+        state.connectionEpoch += 1;
+      } else {
+        state.sessions = { subscribeMessages: vi.fn(), unsubscribeMessages: vi.fn() };
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).resolves.toBe(false);
+      expect(subscribeMessages).toHaveBeenCalledTimes(1);
+      expect(state.chatMessage).toBe("New unsent draft");
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("bounds repeated transient admission failures and retains one recoverable history notice", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const subscribeMessages = vi.fn<SessionCapability["subscribeMessages"]>().mockRejectedValue(
+      new GatewayProtocolRequestTimeoutError({
+        method: "sessions.messages.subscribe",
+        timeoutMs: 30_000,
+        requestSent: true,
+      }),
+    );
+    const { state } = createSubscriptionState({ subscribeMessages });
+    const pending = syncSelectedSessionMessageSubscription(state);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(pending).resolves.toBe(false);
+    expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
+    expect(subscribeMessages.mock.calls.length).toBeLessThan(20);
+    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable: true });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(state.sessionsError).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows a failed initial subscription in the existing chat error surface", async () => {
     const { state } = createSubscriptionState({
       subscribeMessages: vi
@@ -47,9 +113,13 @@ describe("visible chat message subscription failures", () => {
     await syncSelectedSessionMessageSubscription(state);
 
     expect(state.chatSessionMessageSubscription).toBeNull();
-    expect(state.sessionsError).toBe("Live messages unavailable");
-    expect(state.lastError).toBe("Live messages unavailable");
-    expect(state.chatError).toBe("Live messages unavailable");
+    expect(state.sessionsError).toBeNull();
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: "Live messages unavailable",
+    });
     expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
@@ -64,8 +134,12 @@ describe("visible chat message subscription failures", () => {
     await syncSelectedSessionMessageSubscription(state);
 
     expect(state.chatSessionMessageSubscription).toBe(previous);
-    expect(state.lastError).toBe("Previous observer release failed");
-    expect(state.chatError).toBe(state.lastError);
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: "Previous observer release failed",
+    });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
     expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
@@ -84,13 +158,15 @@ describe("visible chat message subscription failures", () => {
     const warning =
       "Previous observer release failed; replacement release failed: Replacement observer release failed";
     expect(state.chatSessionMessageSubscription).toEqual(selected);
-    expect(state.lastError).toBe(warning);
-    expect(state.chatError).toBe(warning);
+    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", message: warning });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
 
     await syncSelectedSessionMessageSubscription(state);
 
-    expect(state.lastError).toBe(warning);
-    expect(state.chatError).toBe(warning);
+    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", message: warning });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
 
     await syncSelectedSessionMessageSubscription(state);
 
@@ -110,7 +186,10 @@ describe("visible chat message subscription failures", () => {
     const { state } = createSubscriptionState({ subscribeMessages });
 
     await syncSelectedSessionMessageSubscription(state);
-    expect(state.lastError).toBe("Live messages unavailable");
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: "Live messages unavailable",
+    });
 
     await syncSelectedSessionMessageSubscription(state);
 

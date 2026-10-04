@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
+import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
 import { listPage } from "./service/ops-read.js";
@@ -83,7 +84,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped", "job-unset"]);
   });
 
-  it("listPage does not clone the complete store, detaches only requested rows, and revisions cover off-page changes", async () => {
+  it("shares immutable requested rows until a list revision changes", async () => {
     const jobs = [
       createBaseJob({ id: "job-a", name: "alpha" }),
       createBaseJob({ id: "job-b", name: "beta" }),
@@ -91,29 +92,43 @@ describe("cron listPage sort guards", () => {
     ];
     const state = createMockCronStateForJobs({ jobs });
     const clone = vi.spyOn(globalThis, "structuredClone");
+    const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
     state.schedulerStarted = true;
 
     try {
       const options = { limit: 1, offset: 1, sortBy: "name" as const };
       const page = await listPage(state, options);
-      const clonedArrays = clone.mock.calls.filter(([value]) => Array.isArray(value));
-
       expect(clone).not.toHaveBeenCalledWith(state.store);
-      expect(clonedArrays).toHaveLength(1);
-      expect(clonedArrays[0]?.[0]).toEqual([jobs[1]]);
       expect(page.jobs[0]).not.toBe(jobs[1]);
-      jobs[1]!.state.lastStatus = "ok";
-      expect(page.jobs[0]?.state.lastStatus).toBeUndefined();
+      expect(() => {
+        page.jobs[0]!.state.lastStatus = "error";
+      }).toThrow(TypeError);
+      expect(clone).toHaveBeenCalledExactlyOnceWith(jobs[1]);
+      const visibilityPass = await listPage(state, options, () => false);
+      expect(visibilityPass.jobs).toEqual([]);
+      expect(visibilityPass.total).toBe(0);
+      const repeated = await listPage(state, options);
+      expect(repeated.jobs[0]).toBe(page.jobs[0]);
+      expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
+      expect(clone).toHaveBeenCalledTimes(1);
+      expect(revision).toHaveBeenCalledTimes(2);
+      page.jobs.length = 0;
+      expect(repeated.jobs).toHaveLength(1);
 
       await locked(state, async () => {
+        jobs[1]!.state.lastStatus = "ok";
         jobs[2]!.state.lastStatus = "ok";
       });
       const changed = await listPage(state, options);
 
       expect(changed.jobs.map((job) => job.id)).toEqual(["job-b"]);
       expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
+      expect(changed.jobs[0]?.state.lastStatus).toBe("ok");
+      expect(repeated.jobs[0]?.state.lastStatus).toBeUndefined();
+      expect(clone).toHaveBeenCalledTimes(2);
     } finally {
       clone.mockRestore();
+      revision.mockRestore();
     }
   });
 

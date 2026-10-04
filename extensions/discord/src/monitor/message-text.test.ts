@@ -4,16 +4,9 @@ import {
   MessageReferenceType,
   StickerFormatType,
 } from "discord-api-types/v10";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Message } from "../internal/discord.js";
-
-let resolveDiscordMessageText: typeof import("./message-text.js").resolveDiscordMessageText;
-let resolveDiscordMessageHistoryText: typeof import("./message-text.js").resolveDiscordMessageHistoryText;
-
-beforeAll(async () => {
-  ({ resolveDiscordMessageHistoryText, resolveDiscordMessageText } =
-    await import("./message-text.js"));
-});
+import { resolveDiscordMessageHistoryText, resolveDiscordMessageText } from "./message-text.js";
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;

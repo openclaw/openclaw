@@ -16,7 +16,6 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
   maxWidth?: () => number;
-  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -83,17 +82,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.setOpen(false, false);
   }
 
-  /**
-   * Full-page route takeovers (settings) own the viewport, so docks hide while
-   * one renders. Hiding never persists — the user's open preference must survive
-   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
-   * mid-takeover cannot pop the panel back over settings. Returns true when the
-   * caller must resume its surface after the takeover ends.
-   *
-   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
-   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
-   * requested terminal would be a worse papercut than the one this fixes.
-   */
+  /** Hide during route takeovers without losing the persisted open preference.
+   * Suppression blocks automatic restores, but explicit opens still win.
+   * Returns true when the caller must resume its surface after the takeover. */
   setSuppressed(suppressed: boolean): boolean {
     if (this.suppressed === suppressed) {
       return false;
@@ -115,9 +106,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     ) {
       return false;
     }
-    this.open = true;
-    this.syncReservation();
-    this.host.requestUpdate();
+    this.setOpen(true, false);
     return true;
   }
 
@@ -141,13 +130,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
-    // Embedded docks live inside a parent layout that already owns their geometry.
-    // Reserving the viewport here would apply the standalone dock a second time.
-    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
-    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
+    const visible = this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -202,12 +188,22 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   private clearReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
+  }
+
+  // Only a standalone dock owns its panel's viewport reservation. Embedded, fullscreen,
+  // and inline hosts are laid out by their parent, and the standalone dock of the same
+  // panel can be open at the same time, so they neither reserve nor clear its properties.
+  private reservesViewport(): boolean {
+    return (
+      !this.isFullscreen() &&
+      !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
+    );
   }
 
   private isFullscreen(): boolean {

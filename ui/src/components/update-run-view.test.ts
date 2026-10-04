@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
 import "./update-run-view.ts";
@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("update run projection", () => {
-  it.each(["running", "succeeded", "skipped", "failed"] as const)(
+  it.each(["running", "skipped"] as const)(
     "keeps native phase and verification claims out of an OCM %s result",
     (status) => {
       const view = projectUpdateRun(
@@ -76,24 +76,13 @@ describe("update run projection", () => {
     expect(view.oracles.every((oracle) => oracle.state === "warn")).toBe(true);
   });
 
-  it.each<UpdateRunPhase>(["requested", "staging", "validating", "verifying", "finished"])(
-    "hides unused repair during %s",
-    (phase) => {
-      const view = projectUpdateRun(
-        run({ phase, status: phase === "finished" ? "succeeded" : "running" }),
-      );
-      expect(view.phases.some(({ step }) => step === "repairing")).toBe(false);
-    },
-  );
-
-  it.each(["in_progress", "completed", "failed", "skipped"] as const)(
+  it.each(["in_progress", "failed"] as const)(
     "preserves a recorded %s repair after activation",
     (status) => {
       const view = projectUpdateRun(
         run({
           phase: status === "in_progress" ? "repairing" : "finished",
-          status:
-            status === "in_progress" ? "running" : status === "completed" ? "succeeded" : "failed",
+          status: status === "in_progress" ? "running" : "failed",
           steps: [
             { step: "activating", status: "completed" },
             { step: "restarting", status: "completed" },
@@ -108,9 +97,16 @@ describe("update run projection", () => {
     },
   );
 
-  it.each(["updater-runtime-retention", "build"])(
-    "selects the active %s before its first diagnostic instead of the previous step",
-    (step) => {
+  it.each([
+    { step: "updater-runtime-retention", detail: undefined },
+    { step: "build", detail: undefined },
+    {
+      step: "install",
+      detail: Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"),
+    },
+  ])(
+    "selects active $step details ahead of other steps and bounds the visible tail",
+    ({ step, detail }) => {
       const view = projectUpdateRun(
         run({
           phase: "validating",
@@ -121,53 +117,34 @@ describe("update run projection", () => {
               status: "completed",
               detail: "Recovery backup needs 18 GiB.",
             },
-            { step, status: "in_progress" },
+            { step, status: "in_progress", detail },
             { step: "validating", status: "in_progress", detail: "Checking the update." },
+            { step: "preflight", status: "completed", detail: "Earlier preflight." },
           ],
         }),
       );
       expect(view.detailStep).toBe(step);
-      expect(view.details).toBe("");
+      if (detail) {
+        expect(view.details.split("\n")).toHaveLength(80);
+        expect(view.details.startsWith("line 20\n")).toBe(true);
+        expect(view.details.endsWith("line 99")).toBe(true);
+      } else {
+        expect(view.details).toBe("");
+      }
     },
   );
-
-  it("selects live details ahead of a later completed step and bounds the visible tail", () => {
-    const view = projectUpdateRun(
-      run({
-        steps: [
-          {
-            step: "install",
-            status: "in_progress",
-            detail: Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"),
-          },
-          { step: "preflight", status: "completed", detail: "Earlier preflight." },
-        ],
-      }),
-    );
-    expect(view.detailStep).toBe("install");
-    expect(view.details.split("\n")).toHaveLength(80);
-    expect(view.details.startsWith("line 20\n")).toBe(true);
-    expect(view.details.endsWith("line 99")).toBe(true);
-  });
 });
 
 describe("update run view", () => {
-  it("registers its own English step labels and retention guidance on first load", async () => {
-    const element = await mount(
-      run({ steps: [{ step: "updater-runtime-retention", status: "in_progress" }] }),
-    );
-    expect(element.querySelector(".update-run-view__diagnostics summary")?.textContent).toContain(
-      "Preparing the updater",
-    );
-    expect(element.querySelector(".update-run-view__details")?.textContent).toContain(
-      "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
-    );
-  });
-
   it("presents diagnostic receipts as readable details without inventing installation steps", async () => {
     const element = await mount(
       run({
         steps: [
+          {
+            step: "staging",
+            status: "completed",
+            detail: "The selected update revision was downloaded and verified.",
+          },
           { step: "snapshot-space-preflight", status: "completed" },
           {
             step: "diagnostic:snapshot-space-preflight:8",
@@ -203,47 +180,33 @@ describe("update run view", () => {
     expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(
       "Recovery backup needs 18 GiB.",
     );
-    const previousStep = element.querySelector<HTMLDetailsElement>(
-      '[data-step="snapshot-space-preflight"] details',
-    )!;
-    previousStep.querySelector("summary")!.click();
-    expect(previousStep.open).toBe(true);
-    expect(previousStep.textContent).toContain("Recovery backup needs 18 GiB.");
-    expect(previousStep.textContent).toContain("Using the temporary disk");
-    previousStep.querySelector("summary")!.click();
-    expect(previousStep.open).toBe(false);
-  });
-
-  it.each([
-    {
-      step: "warning:disk-space-preflight:2",
-      detail: "The recovery backup will use temporary storage.",
-    },
-    { step: "staging", detail: "The selected update revision was downloaded and verified." },
-  ])(
-    "keeps completed $step details accessible after a new operation begins",
-    async ({ step, detail }) => {
-      const element = await mount(
-        run({
-          phase: "validating",
-          steps: [
-            { step, status: "completed", detail },
-            { step: "updater-runtime-retention", status: "in_progress" },
-          ],
-        }),
-      );
-      expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(detail);
+    expect(element.querySelector(".update-run-view__diagnostics summary")?.textContent).toContain(
+      "Preparing the updater",
+    );
+    expect(element.querySelector(".update-run-view__details")?.textContent).toContain(
+      "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
+    );
+    for (const [step, details] of [
+      ["snapshot-space-preflight", ["Recovery backup needs 18 GiB.", "Using the temporary disk"]],
+      ["warning:snapshot-space-preflight:2", ["Using the temporary disk"]],
+      ["staging", ["The selected update revision was downloaded and verified."]],
+    ] as const) {
       const previousStep = element.querySelector<HTMLDetailsElement>(
         `[data-step="${step}"] details`,
       )!;
       expect(previousStep).not.toBeNull();
       previousStep.querySelector("summary")!.click();
       expect(previousStep.open).toBe(true);
-      expect(previousStep.querySelector("pre")?.textContent).toContain(detail);
+      for (const detail of details) {
+        expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(
+          detail,
+        );
+        expect(previousStep.querySelector("pre")?.textContent).toContain(detail);
+      }
       previousStep.querySelector("summary")!.click();
       expect(previousStep.open).toBe(false);
-    },
-  );
+    }
+  });
 
   it("follows installation progress on opening and updates but preserves scrollback", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });

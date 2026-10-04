@@ -2,12 +2,13 @@
  * Regression coverage for effective tool inventory resolution.
  * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 function mockTool(params: {
@@ -60,10 +61,16 @@ vi.mock("./agent-scope.js", async () => {
   };
 });
 
+// mock-isolation: Project fixture inventories without constructing the agent tool runtime.
 vi.mock("./agent-tools.js", () => ({
-  createOpenClawCodingToolsInternal: (
+  createOpenClawCodingToolsInternalAsync: async (
     options?: Parameters<typeof createOpenClawCodingToolsInternal>[0],
   ) => effectiveInventoryState.createToolsMock(options),
+}));
+
+// mock-isolation: Inventory metadata fixtures require storage-free tool construction for synthetic agent paths.
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
 vi.mock("./channel-tools.js", () => ({
@@ -91,8 +98,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     effectiveInventoryState.normalizeTransportMock(options),
 }));
 
-let resolveEffectiveToolInventory: typeof import("./tools-effective-inventory.js").resolveEffectiveToolInventory;
-
 async function loadHarness(options?: {
   tools?: AnyAgentTool[];
   createToolsMock?: typeof effectiveInventoryState.createToolsMock;
@@ -118,22 +123,8 @@ async function loadHarness(options?: {
 }
 
 describe("resolveEffectiveToolInventory", () => {
-  beforeAll(async () => {
-    ({ resolveEffectiveToolInventory } = await import("./tools-effective-inventory.js"));
-  });
-
-  beforeEach(() => {
-    effectiveInventoryState.tools = [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-      mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
-    ];
-    effectiveInventoryState.channelMeta = {};
-    effectiveInventoryState.normalizeToolsMock = vi.fn((options) => options.tools);
-    effectiveInventoryState.staticCatalogModelMock = vi.fn((_options: unknown) => undefined);
-    effectiveInventoryState.normalizeTransportMock = vi.fn((_options: unknown) => undefined);
-    effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
-      (_options) => effectiveInventoryState.tools,
-    );
+  beforeEach(async () => {
+    await loadHarness();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -157,7 +148,7 @@ describe("resolveEffectiveToolInventory", () => {
         channelMeta: { message_actions: { channelId: "telegram" } },
       });
 
-    const result = resolveEffectiveToolInventoryLocal11({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal11({ cfg: {} });
 
     const { toolAccess: _toolAccess, ...inventory } = result;
     expect(inventory).toEqual({
@@ -225,7 +216,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal10({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal10({ cfg: {} });
 
     expect(result.groups).toEqual([
       {
@@ -268,7 +259,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal11({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal11({ cfg: {} });
 
     expect(result.groups).toEqual([
       {
@@ -308,13 +299,13 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal9({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal9({ cfg: {} });
     const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
 
     expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
   });
 
-  it("projects plugin tool metadata into the effective inventory", async () => {
+  it("projects plugin metadata published during provider normalization", async () => {
     const registry = createEmptyPluginRegistry();
     registry.toolMetadata = [
       {
@@ -330,9 +321,12 @@ describe("resolveEffectiveToolInventory", () => {
         },
       },
     ];
-    setActivePluginRegistry(registry);
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal8 } =
       await loadHarness({
+        normalizeToolsMock: vi.fn((options) => {
+          setActivePluginRegistry(registry);
+          return options.tools;
+        }),
         tools: [
           mockTool({
             name: "docs_lookup",
@@ -343,7 +337,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal8({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal8({ cfg: {} });
 
     expect(result.groups[0]?.tools[0]).toEqual({
       id: "docs_lookup",
@@ -377,7 +371,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal7({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal7({ cfg: {} });
 
     expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
     expect(result.notices).toEqual([
@@ -405,7 +399,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryLocal12({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal12({ cfg: {} });
 
     expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
     expect(result.notices).toEqual([
@@ -437,7 +431,7 @@ describe("resolveEffectiveToolInventory", () => {
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal13 } =
       await loadHarness({ tools });
 
-    const result = resolveEffectiveToolInventoryLocal13({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryLocal13({ cfg: {} });
 
     expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
     expect(result.notices).toEqual([
@@ -480,7 +474,7 @@ describe("resolveEffectiveToolInventory", () => {
         normalizeToolsMock,
       });
 
-    const result = resolveEffectiveToolInventoryLocal6({
+    const result = await resolveEffectiveToolInventoryLocal6({
       cfg: {},
       modelProvider: "openai",
       modelId: "gpt-test",
@@ -535,7 +529,7 @@ describe("resolveEffectiveToolInventory", () => {
       baseUrl: "https://api.openai.com/v1",
     });
 
-    resolveEffectiveToolInventoryLocal5({
+    await resolveEffectiveToolInventoryLocal5({
       cfg: {
         models: {
           providers: {
@@ -605,7 +599,7 @@ describe("resolveEffectiveToolInventory", () => {
       baseUrl: "https://api.openai.com/v1",
     });
 
-    resolveEffectiveToolInventoryLocal4({
+    await resolveEffectiveToolInventoryLocal4({
       cfg: {
         models: {
           providers: {
@@ -666,7 +660,7 @@ describe("resolveEffectiveToolInventory", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
 
-    resolveEffectiveToolInventoryLocal3({
+    await resolveEffectiveToolInventoryLocal3({
       cfg: {
         models: {
           providers: {
@@ -738,7 +732,7 @@ describe("resolveEffectiveToolInventory", () => {
       baseUrl: "https://api.githubcopilot.com",
     });
 
-    resolveEffectiveToolInventoryLocal2({
+    await resolveEffectiveToolInventoryLocal2({
       cfg: {
         models: {
           providers: {
@@ -820,7 +814,7 @@ describe("resolveEffectiveToolInventory", () => {
       maxTokens: 1024,
     };
 
-    const result = resolveEffectiveToolInventoryInner({
+    const result = await resolveEffectiveToolInventoryInner({
       cfg: {},
       modelProvider: "openai",
       modelId: "chat-latest",
@@ -875,7 +869,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryScoped({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryScoped({ cfg: {} });
 
     expect(result.groups[0]?.tools[0]).toEqual({
       id: "docs_lookup",
@@ -899,7 +893,7 @@ describe("resolveEffectiveToolInventory", () => {
       ],
     });
 
-    const result = resolveEffectiveToolInventoryItem({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryItem({ cfg: {} });
 
     expect(result.groups[0]?.tools[0]).toEqual({
       id: "cron",
@@ -923,7 +917,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryCandidate({ cfg: {} });
+    const result = await resolveEffectiveToolInventoryCandidate({ cfg: {} });
 
     const description = result.groups[0]?.tools[0]?.description ?? "";
     expect(description).toContain(
@@ -942,7 +936,7 @@ describe("resolveEffectiveToolInventory", () => {
       },
     );
 
-    const result = resolveEffectiveToolInventoryEntry({
+    const result = await resolveEffectiveToolInventoryEntry({
       cfg: { tools: { profile: "minimal", byProvider: { openai: { profile: "coding" } } } },
       modelProvider: "openai",
     });
@@ -958,7 +952,7 @@ describe("resolveEffectiveToolInventory", () => {
         ],
       });
 
-    const result = resolveEffectiveToolInventoryResult({
+    const result = await resolveEffectiveToolInventoryResult({
       cfg: {
         tools: { profile: "coding" },
         browser: { enabled: true },
@@ -986,7 +980,7 @@ describe("resolveEffectiveToolInventory", () => {
       },
     );
 
-    const result = resolveEffectiveToolInventoryValue({
+    const result = await resolveEffectiveToolInventoryValue({
       cfg: {
         tools: { profile: "coding" },
         browser: { enabled: true },
@@ -1007,7 +1001,7 @@ describe("resolveEffectiveToolInventory", () => {
       },
     );
 
-    resolveEffectiveToolInventoryLocal({
+    await resolveEffectiveToolInventoryLocal({
       cfg: {
         models: {
           providers: {

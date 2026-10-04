@@ -56,15 +56,6 @@ type LintMemoryWikiResult = {
   reportPath: string;
 };
 
-function isUnmanagedRawSourcePage(
-  page: WikiPageSummary,
-  managedImportedSourcePagePaths: Set<string>,
-): boolean {
-  return (
-    isUnmanagedRawSourceSummary(page) && !managedImportedSourcePagePaths.has(page.relativePath)
-  );
-}
-
 type WikiLinkTargetIndex = {
   pathTargets: Set<string>;
   aliasTargets: Set<string>;
@@ -132,11 +123,6 @@ function addSlugAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined)
   }
 }
 
-function addTitleTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  addAliasTarget(index, raw);
-  addSlugAliasTarget(index, raw);
-}
-
 function addPathSuffixTargets(index: WikiLinkTargetIndex, raw: string | undefined) {
   const normalized = raw ? normalizeLintPathTarget(raw) : "";
   if (!normalized) {
@@ -157,7 +143,8 @@ function buildWikiLinkTargetIndex(pages: WikiPageSummary[]): WikiLinkTargetIndex
   };
   for (const page of pages) {
     addPathTarget(index, page.relativePath);
-    addTitleTarget(index, page.title);
+    addAliasTarget(index, page.title);
+    addSlugAliasTarget(index, page.title);
     addPathSuffixTargets(index, page.sourcePath);
     addPathSuffixTargets(index, page.bridgeRelativePath);
     addPathSuffixTargets(index, page.unsafeLocalRelativePath);
@@ -214,10 +201,8 @@ function collectPageIssues(
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
-    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
-      page,
-      managedImportedSourcePagePaths,
-    );
+    const requiresStructuredPageMetadata =
+      !isUnmanagedRawSourceSummary(page) || managedImportedSourcePagePaths.has(page.relativePath);
 
     if (!page.id) {
       if (requiresStructuredPageMetadata) {

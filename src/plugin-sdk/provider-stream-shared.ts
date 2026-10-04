@@ -1,4 +1,3 @@
-// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
@@ -117,7 +116,13 @@ function normalizeProviderDoneMessage(
   matcher: PlainTextToolCallNameMatcher,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
+  const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates: false,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
   }
@@ -128,21 +133,6 @@ function normalizeProviderDoneMessage(
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
-}
-
-function scrubProviderTerminalMessage(
-  message: unknown,
-  matcher: PlainTextToolCallNameMatcher,
-  preserveEmptyTextBlocks = false,
-  forceKnownCandidates = false,
-): PlainTextToolCallMessageProjection | undefined {
-  return projectScrubbedPlainTextToolCallMessage({
-    forceKnownCandidates,
-    matcher,
-    message,
-    preserveEmptyTextBlocks,
-    resolveProtectedRanges: findCodeRegions,
-  });
 }
 
 function wrapPlainTextToolCallStream(
@@ -315,32 +305,19 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   };
 }
 
-function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
-  const thinking = payload.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
-  }
-  return (thinking as { type?: unknown }).type !== "disabled";
-}
-
 function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
+  return (
+    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => {
+        const type = asOptionalObjectRecord(block)?.type;
+        return type === "tool_use" || type === "toolCall";
+      }))
   );
 }
 
-function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+/** Removes trailing assistant prefills while preserving assistant tool calls. */
+export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
   if (!Array.isArray(payload.messages)) {
     return 0;
   }
@@ -367,10 +344,10 @@ function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>)
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
-  if (!isAnthropicThinkingEnabled(payload)) {
-    return 0;
-  }
-  return stripTrailingAssistantPrefillMessages(payload);
+  const thinking = asOptionalObjectRecord(payload.thinking);
+  return thinking && thinking.type !== "disabled"
+    ? stripTrailingAssistantPrefillMessages(payload)
+    : 0;
 }
 
 /** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
@@ -441,21 +418,14 @@ export function setQwenChatTemplateThinking(
   enabled: boolean,
 ): void {
   const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
+  const next: Record<string, unknown> = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
     enable_thinking: enabled,
-    preserve_thinking: true,
   };
+  if (!Object.hasOwn(next, "preserve_thinking")) {
+    next.preserve_thinking = true;
+  }
+  payload.chat_template_kwargs = next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -555,8 +525,6 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   };
 }
 
-type ThinkingOnlyFinalTextStream = Awaited<ReturnType<StreamFn>>;
-
 function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -569,8 +537,6 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     return;
   }
 
-  let hasVisibleText = false;
-  let hasToolCall = false;
   let hasVisibleThinking = false;
   for (const block of record.content) {
     if (!block || typeof block !== "object") {
@@ -578,14 +544,13 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     }
     const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
     if (
-      typedBlock.type === "text" &&
-      typeof typedBlock.text === "string" &&
-      typedBlock.text.trim()
+      (typedBlock.type === "text" &&
+        typeof typedBlock.text === "string" &&
+        typedBlock.text.trim()) ||
+      typedBlock.type === "toolCall" ||
+      typedBlock.type === "tool_use"
     ) {
-      hasVisibleText = true;
-    }
-    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
-      hasToolCall = true;
+      return;
     }
     if (
       typedBlock.type === "thinking" &&
@@ -595,7 +560,7 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       hasVisibleThinking = true;
     }
   }
-  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+  if (!hasVisibleThinking) {
     return;
   }
 
@@ -604,24 +569,23 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       return block;
     }
     const typedBlock = block as { type?: unknown; thinking?: unknown };
-    if (
-      typedBlock.type !== "thinking" ||
-      typeof typedBlock.thinking !== "string" ||
-      !typedBlock.thinking.trim()
-    ) {
-      return block;
-    }
-    return { type: "text", text: typedBlock.thinking };
+    return typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+      ? { type: "text", text: typedBlock.thinking }
+      : block;
   });
 }
 
-function wrapThinkingOnlyFinalTextStream(
-  stream: ThinkingOnlyFinalTextStream,
-): ThinkingOnlyFinalTextStream {
+/** Mutate streamed and final message objects without replacing or buffering events. */
+export function transformProviderStreamMessages(
+  stream: Awaited<ReturnType<StreamFn>>,
+  transformMessage: (message: unknown) => void,
+): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    promoteThinkingOnlyFinalOutputToText(message);
+    transformMessage(message);
     return message;
   };
 
@@ -634,8 +598,8 @@ function wrapThinkingOnlyFinalTextStream(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            promoteThinkingOnlyFinalOutputToText(event.partial);
-            promoteThinkingOnlyFinalOutputToText(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -668,9 +632,11 @@ export function createThinkingOnlyFinalTextWrapper(params: {
       return maybeStream;
     }
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) => wrapThinkingOnlyFinalTextStream(stream));
+      return Promise.resolve(maybeStream).then((stream) =>
+        transformProviderStreamMessages(stream, promoteThinkingOnlyFinalOutputToText),
+      );
     }
-    return wrapThinkingOnlyFinalTextStream(maybeStream);
+    return transformProviderStreamMessages(maybeStream, promoteThinkingOnlyFinalOutputToText);
   };
 }
 
@@ -708,10 +674,10 @@ export function createGoogleThinkingStreamWrapper(
 }
 
 export {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingKeep,

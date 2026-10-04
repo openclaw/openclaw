@@ -1,6 +1,7 @@
 import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
+  asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
@@ -11,13 +12,13 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -142,14 +143,8 @@ type LlmTimeoutParams = {
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
   const baseUrl = params?.model?.baseUrl;
-  let hostname: string | undefined;
-  if (typeof baseUrl === "string" && baseUrl.length > 0) {
-    try {
-      hostname = new URL(baseUrl).hostname.toLowerCase();
-    } catch {
-      hostname = undefined;
-    }
-  }
+  const hostname =
+    typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
   const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
     isLocalRuntimeModel: Boolean(hostname && isLocalProviderHostname(hostname) && notCloudModel),
@@ -169,25 +164,18 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
 }
 
 function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
-  const runTimeoutMs = params?.runTimeoutMs;
+  const runTimeoutMs = asPositiveFiniteNumber(params?.runTimeoutMs);
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
     params?.cfg?.agents?.defaults?.timeoutSeconds,
   );
-  const hasExplicitRunTimeout =
-    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const hasExplicitRunTimeout = runTimeoutMs !== undefined;
   // Unlimited runs omit the sentinel but still retain provider liveness defaults.
   const boundedRunTimeoutMs =
     hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS ? runTimeoutMs : undefined;
   const timeoutBounds = [
     boundedRunTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
-  ].filter(
-    (value): value is number =>
-      typeof value === "number" &&
-      Number.isFinite(value) &&
-      value > 0 &&
-      value < MAX_TIMER_TIMEOUT_MS,
-  );
+  ].filter((value): value is number => value !== undefined && value < MAX_TIMER_TIMEOUT_MS);
   return { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds };
 }
 
@@ -222,12 +210,8 @@ export function resolveLlmIdleTimeoutMs(
   // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
   // declared "run is unlimited". The two are independent: an unlimited run does
   // not imply opting out of chunk-level hang detection.
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
+  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  if (modelRequestTimeoutMs !== undefined) {
     // Provider opt-ins may exceed the cloud ceiling; shorter run budgets still win.
     const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
     return clampTimeoutMs(boundedTimeoutMs);
@@ -261,12 +245,8 @@ export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number
   const { timeoutBounds } = resolveLlmTimeoutBounds(params);
   const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
 
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
+  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  if (modelRequestTimeoutMs !== undefined) {
     return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
   }
 
@@ -365,7 +345,6 @@ export function streamWithIdleTimeout(
         const producerCompletion = getEventStreamCompletion(stream);
         let idleTimer: NodeJS.Timeout | null = null;
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
-        let firstArmPending = true;
         // Pre-stream tool timestamps are consumed after the first bridged wait
         // so that subsequent provider chunk progress restores a full idle budget.
         // Without this guard a stale pre-stream timestamp would shorten every
@@ -392,15 +371,12 @@ export function streamWithIdleTimeout(
           }
           const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
           const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
-          const isFirstStreamArm = firstArmPending && !streamFirstArmDone;
+          const isFirstStreamArm = !streamFirstArmDone;
           const effectiveTimeout =
             isFirstStreamArm && recentActivity
               ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
               : timeoutMs;
-          firstArmPending = false;
-          if (isFirstStreamArm) {
-            streamFirstArmDone = true;
-          }
+          streamFirstArmDone = true;
           idleTimer = setTimeout(() => {
             idleTimer = null;
             const error = createIdleTimeoutError();
@@ -441,7 +417,6 @@ export function streamWithIdleTimeout(
             try {
               const timeoutPromise = new Promise<never>((_, reject) => {
                 rejectIdleTimeout = reject;
-                firstArmPending = true;
                 armTimer();
               });
               // Providers may ignore their mirrored abort signal, so caller

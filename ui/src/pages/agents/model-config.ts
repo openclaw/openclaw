@@ -11,39 +11,50 @@ export function createAgentModelActions(params: {
   return {
     onModelChange: (agentId: string, modelId: string | null) => {
       if (params.canUpdate(agentId)) {
-        stageAgentPrimaryModel(params.getRuntimeConfig(), agentId, modelId);
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
+        if (target) {
+          // Clearing the primary must preserve authored agent fallbacks.
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            modelId,
+            existingModelParts(target.entry.model).fallbacks,
+          );
+        }
         params.onPrimaryChanged();
       }
     },
     onDecisionModelChange: (agentId: string, modelId: string | null) => {
       if (params.canUpdate(agentId)) {
-        stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: modelId !== null });
+        if (target) {
+          const path = [...target.path, "decisionModel"];
+          // Null inherits; an empty string explicitly disables the per-agent model.
+          if (modelId === null) {
+            runtimeConfig.removeFormValue(path);
+          } else {
+            runtimeConfig.patchForm(path, modelId);
+          }
+        }
       }
     },
     onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
       if (params.canUpdate(agentId)) {
-        stageAgentModelFallbacks(params.getRuntimeConfig(), agentId, fallbacks);
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: true });
+        if (target) {
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            existingModelParts(target.entry.model).primary,
+            normalizeStringEntries(fallbacks),
+          );
+        }
       }
     },
   };
-}
-
-/** Null inherits; an empty string is an explicit per-agent disable. */
-function stageAgentDecisionModel(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  model: string | null,
-) {
-  const target = runtimeConfig.agentEntry(agentId, { ensure: model !== null });
-  if (!target) {
-    return;
-  }
-  const path = [...target.path, "decisionModel"];
-  if (model === null) {
-    runtimeConfig.removeFormValue(path);
-  } else {
-    runtimeConfig.patchForm(path, model);
-  }
 }
 
 // Stage the smallest config shape that expresses the selection. The gateway
@@ -82,40 +93,4 @@ function existingModelParts(existing: unknown): {
     };
   }
   return { primary: null, fallbacks: null };
-}
-
-function stageAgentPrimaryModel(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  modelId: string | null,
-) {
-  const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
-  if (!target) {
-    return;
-  }
-  // Clearing the primary must not delete authored agent fallbacks: the
-  // { fallbacks }-only shape stays representable.
-  stageModelShape(
-    runtimeConfig,
-    [...target.path, "model"],
-    modelId,
-    existingModelParts(target.entry.model).fallbacks,
-  );
-}
-
-function stageAgentModelFallbacks(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  fallbacks: string[],
-) {
-  const target = runtimeConfig.agentEntry(agentId, { ensure: true });
-  if (!target) {
-    return;
-  }
-  stageModelShape(
-    runtimeConfig,
-    [...target.path, "model"],
-    existingModelParts(target.entry.model).primary,
-    normalizeStringEntries(fallbacks),
-  );
 }

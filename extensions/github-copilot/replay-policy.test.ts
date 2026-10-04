@@ -27,7 +27,9 @@ describe("buildGithubCopilotReplayPolicy", () => {
 
   it("drops replayed thinking for thinking-preserving Claude ids", () => {
     for (const modelId of [
+      "claude-opus-5.5",
       "claude-opus-5",
+      "claude-sonnet-5.5",
       "claude-sonnet-5",
       "claude-fable-5",
       "claude-fable-5-1",

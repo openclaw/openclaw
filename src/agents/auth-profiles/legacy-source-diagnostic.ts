@@ -8,7 +8,10 @@ import {
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
-import { coerceLegacyFlatCredential } from "./legacy-flat-credential.js";
+import {
+  coerceLegacyFlatCredential,
+  parseLegacyCredentialEntry,
+} from "./legacy-flat-credential.js";
 import {
   listLegacyAuthProfileSources,
   resolveLegacyAuthProfileSourceCandidates,
@@ -16,7 +19,6 @@ import {
   type LegacyAuthProfileSourceKind,
 } from "./legacy-source-files.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
-import { parseLegacyCredentialEntry } from "./persisted.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -87,8 +89,11 @@ function resolveAuthProfileOwnerPath(agentDir?: string, env?: NodeJS.ProcessEnv)
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
-export function hasLegacyAuthProfileCredentialSource(agentDir?: string): boolean {
-  return listLegacyAuthProfileSources({ agentDir }).some(isCredentialSource);
+export function hasLegacyAuthProfileCredentialSource(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return listLegacyAuthProfileSources({ agentDir, env }).some(isCredentialSource);
 }
 
 /**

@@ -20,12 +20,10 @@ import {
   readErrorCauses,
   readErrorName,
 } from "./errors.js";
+import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { isPublicUpdateFailureCode } from "./update-failure-public-identifiers.js";
-import {
-  UpdateDestinationFailureSchema,
-  type UpdateFailureFactSchema,
-} from "./update-run-schema.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
 
 export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
 
@@ -166,17 +164,24 @@ export function createUpdateFailureFact(
       : fact.message
         ? line(fact.message, Number.MAX_SAFE_INTEGER)
         : undefined;
-  const message = fact.errorName
-    ? diagnostic
-        ?.replace(
-          /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
-          "[redacted-host]",
-        )
-        .replace(
-          /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
-          "$1=[redacted-host]",
-        )
-    : diagnostic;
+  // Closed recovery facts contain generated basenames, not hostnames.
+  const recoveryDiagnostic = diagnostic?.startsWith("Package recovery ")
+    ? redactPublicSupportDiagnosticLine(diagnostic, context)
+    : undefined;
+  const message =
+    recoveryDiagnostic && recoveryDiagnostic !== "[redacted-diagnostic]"
+      ? recoveryDiagnostic
+      : fact.errorName
+        ? diagnostic
+            ?.replace(
+              /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
+              "[redacted-host]",
+            )
+            .replace(
+              /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
+              "$1=[redacted-host]",
+            )
+        : diagnostic;
   const location =
     fact.location &&
     /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)
@@ -195,6 +200,16 @@ export function createUpdateFailureFact(
     ...(fact.affectedKey ? { affectedKey: line(fact.affectedKey, 128) } : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
     ...(destination ? { destination } : {}),
+    ...(fact.npmErrorCode || fact.code === "global-install-failed"
+      ? {
+          npmErrorCode:
+            UpdateFailureFactSchema.shape.npmErrorCode.safeParse(fact.npmErrorCode).data ??
+            "unknown",
+        }
+      : {}),
+    ...(fact.packageSpec && npmFailurePackageName(fact.packageSpec)
+      ? { packageSpec: fact.packageSpec }
+      : {}),
   };
 }
 
@@ -203,6 +218,51 @@ export function normalizeUpdateFailureFacts(
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact[] {
   return facts.slice(0, 5).map((fact) => createUpdateFailureFact(fact, env));
+}
+
+export function createUpdateCanaryFailureFacts(params: {
+  phase: string;
+  name: string;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  exitWarning?: string;
+  failureMessage: string;
+  diagnostic?: string;
+  findings?: UpdateFailureFact[];
+  env: NodeJS.ProcessEnv;
+}): UpdateFailureFact[] {
+  const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
+    params;
+  if (signal) {
+    return [
+      createUpdateFailureFact(
+        {
+          check: phase,
+          code: "signal",
+          message: `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`,
+        },
+        env,
+      ),
+      ...(findings ?? []).slice(0, 4),
+    ];
+  }
+  return findings?.length
+    ? findings
+    : [
+        createUpdateFailureFact(
+          {
+            check: phase,
+            code:
+              timedOut && !exitWarning
+                ? "candidate-checks-timeout"
+                : phase === "doctor" || phase === "lint"
+                  ? "doctor-failed"
+                  : `candidate-${phase}-failed`,
+            message: timedOut ? failureMessage : (diagnostic ?? failureMessage),
+          },
+          env,
+        ),
+      ];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

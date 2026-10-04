@@ -403,6 +403,22 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
   const primaryProvider = providers[0]?.provider;
+  const recordSkipped = (
+    provider: TtsProvider,
+    skipped: Extract<TtsProviderOperation<TSynthesis>, { kind: "skip" }>,
+    binding: Pick<TtsProviderAttempt, "personaBinding">,
+  ) => {
+    errors.push(skipped.message);
+    attempts.push({
+      provider,
+      outcome: "skipped",
+      reasonCode: skipped.reasonCode,
+      persona: persona?.id,
+      ...binding,
+      error: skipped.message,
+    });
+    logVerbose(`${params.logLabel}: provider ${provider} skipped (${skipped.message})`);
+  };
   logVerbose(
     `${params.logLabel}: starting with provider ${primaryProvider}, fallbacks: ${
       providers
@@ -427,35 +443,19 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
-        errors.push(resolvedProvider.message);
-        attempts.push({
+        recordSkipped(
           provider,
-          outcome: "skipped",
-          reasonCode: resolvedProvider.reasonCode,
-          persona: persona?.id,
-          ...(resolvedProvider.personaBinding
+          resolvedProvider,
+          resolvedProvider.personaBinding
             ? { personaBinding: resolvedProvider.personaBinding }
-            : {}),
-          error: resolvedProvider.message,
-        });
-        logVerbose(
-          `${params.logLabel}: provider ${provider} skipped (${resolvedProvider.message})`,
+            : {},
         );
         continue;
       }
 
       const operation = params.selectOperation({ provider, resolvedProvider });
       if (operation.kind === "skip") {
-        errors.push(operation.message);
-        attempts.push({
-          provider,
-          outcome: "skipped",
-          reasonCode: operation.reasonCode,
-          persona: persona?.id,
-          personaBinding: resolvedProvider.personaBinding,
-          error: operation.message,
-        });
-        logVerbose(`${params.logLabel}: provider ${provider} skipped (${operation.message})`);
+        recordSkipped(provider, operation, { personaBinding: resolvedProvider.personaBinding });
         continue;
       }
 
@@ -497,8 +497,14 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
           synthesis,
           latencyMs,
           provider,
-          providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
-          providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
+          providerModel: resolveTtsResultDetail(prepared, ["modelId", "model"]),
+          providerVoice: resolveTtsResultDetail(prepared, [
+            "speakerVoiceId",
+            "speakerVoice",
+            "voiceId",
+            "voiceName",
+            "voice",
+          ]),
           persona: persona?.id,
           fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
           attemptedProviders,
@@ -543,34 +549,19 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   };
 }
 
-function resolveTtsResultModel(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
+function resolveTtsResultDetail(
+  prepared: Pick<SpeechSynthesisRequest, "providerConfig" | "providerOverrides">,
+  keys: readonly string[],
 ): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.modelId) ??
-    readTtsResultString(providerOverrides?.model) ??
-    readTtsResultString(providerConfig.modelId) ??
-    readTtsResultString(providerConfig.model)
-  );
-}
-
-function resolveTtsResultVoice(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
-): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.speakerVoiceId) ??
-    readTtsResultString(providerOverrides?.speakerVoice) ??
-    readTtsResultString(providerOverrides?.voiceId) ??
-    readTtsResultString(providerOverrides?.voiceName) ??
-    readTtsResultString(providerOverrides?.voice) ??
-    readTtsResultString(providerConfig.speakerVoiceId) ??
-    readTtsResultString(providerConfig.speakerVoice) ??
-    readTtsResultString(providerConfig.voiceId) ??
-    readTtsResultString(providerConfig.voiceName) ??
-    readTtsResultString(providerConfig.voice)
-  );
+  for (const config of [prepared.providerOverrides, prepared.providerConfig]) {
+    for (const key of keys) {
+      const value = readTtsResultString(config?.[key]);
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolvePersonaBinding(

@@ -4,7 +4,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForFile } from "../../../test/helpers/process-wait.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -20,18 +24,31 @@ import { initializeScriptGitWorkspace } from "./workspace-sync-scripts.test-supp
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, argv, { env, stdio: ["pipe", "pipe", "pipe"] });
+  const ready = createDeferred();
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+    if (stdout.split("\n").includes("fixture ready")) {
+      ready.resolve();
+    }
+  });
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = waitForChildClose(child, 10_000).then(({ code, signal }) => ({
-    code,
-    signal,
-    stderr,
-  }));
-  return { exited };
+  // close follows stdout drainage, so a readiness line cannot lose to successful settlement.
+  const exited = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+  }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, stderr }));
+  });
+  return { child, ready: ready.promise, exited };
 }
 
 describe("remote workspace manifest script", () => {
@@ -321,19 +338,16 @@ describe("remote workspace manifest script", () => {
     ).toEqual([]);
   });
 
-  it("serializes a live apply against rollback and recovery", async () => {
+  it("serializes a live apply against rollback and recovery", async ({ signal }) => {
     for (const contender of ["rollback", "recover"] as const) {
       const root = tempDirs.make(`openclaw-accepted-${contender}-`);
       let workspace = path.join(root, "workspace");
-      const gate = path.join(root, "gate.fifo");
       const applyMarker = path.join(root, "apply-started");
       const contenderMarker = path.join(root, "contender-waiting");
       const preload = path.join(root, "gate.cjs");
       await fs.mkdir(workspace);
       workspace = await fs.realpath(workspace);
       await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
-      const mkfifo = await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 });
-      expect(mkfifo.code).toBe(0);
       await fs.writeFile(
         preload,
         `const fs = require("node:fs");
@@ -344,8 +358,8 @@ fs.renameSync = function(source, destination) {
   const result = renameSync.apply(this, arguments);
   if (!applyGated && process.argv[1] === "apply" && source === process.env.OPENCLAW_TEST_GATE_SOURCE && destination.includes(path.sep + "backup" + path.sep)) {
     applyGated = true;
-    fs.writeFileSync(process.env.OPENCLAW_TEST_APPLY_MARKER, "");
-    fs.readFileSync(process.env.OPENCLAW_TEST_GATE);
+    fs.writeSync(1, "fixture ready\\n");
+    fs.readFileSync(0);
   }
   return result;
 };
@@ -354,7 +368,7 @@ let contenderMarked = false;
 process.kill = function(pid, signal) {
   if (!contenderMarked && signal === 0 && process.argv[1] === process.env.OPENCLAW_TEST_CONTENDER) {
     contenderMarked = true;
-    fs.writeFileSync(process.env.OPENCLAW_TEST_CONTENDER_MARKER, "");
+    fs.writeSync(1, "fixture ready\\n");
   }
   return kill(pid, signal);
 };
@@ -362,11 +376,8 @@ process.kill = function(pid, signal) {
       );
       const env = {
         ...process.env,
-        OPENCLAW_TEST_GATE: gate,
         OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
-        OPENCLAW_TEST_APPLY_MARKER: applyMarker,
         OPENCLAW_TEST_CONTENDER: contender,
-        OPENCLAW_TEST_CONTENDER_MARKER: contenderMarker,
       };
       const nonce = contender === "rollback" ? "3".repeat(32) : "4".repeat(32);
       const begin = await runCommandWithTimeout(
@@ -396,43 +407,67 @@ process.kill = function(pid, signal) {
         ],
         env,
       );
-      await waitForFile(applyMarker, 10_000);
-      const transaction = path.dirname(staging);
-      await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-      await expect(fs.readFile(path.join(transaction, "backup/result.txt"), "utf8")).resolves.toBe(
-        "old\n",
-      );
-      await expect(fs.readFile(path.join(staging, "result.txt"), "utf8")).resolves.toBe("new\n");
+      let competing: ReturnType<typeof spawnTransaction> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            apply.ready,
+            apply.exited,
+            `timeout waiting for ${applyMarker}`,
+          ),
+          signal,
+        );
+        const transaction = path.dirname(staging);
+        await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
+        await expect(
+          fs.readFile(path.join(transaction, "backup/result.txt"), "utf8"),
+        ).resolves.toBe("old\n");
+        await expect(fs.readFile(path.join(staging, "result.txt"), "utf8")).resolves.toBe("new\n");
 
-      const contenderNonce = contender === "rollback" ? nonce : "5".repeat(32);
-      const competing = runCommandWithTimeout(
-        [
-          process.execPath,
-          "--require",
-          preload,
-          "-e",
-          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-          contender,
-          workspace,
-          contenderNonce,
-        ],
-        { timeoutMs: 10_000, baseEnv: env },
-      );
-      await waitForFile(contenderMarker, 10_000);
-      await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-      await expect(fs.readFile(path.join(transaction, "backup/result.txt"), "utf8")).resolves.toBe(
-        "old\n",
-      );
+        const contenderNonce = contender === "rollback" ? nonce : "5".repeat(32);
+        competing = spawnTransaction(
+          [
+            "--require",
+            preload,
+            "-e",
+            REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+            contender,
+            workspace,
+            contenderNonce,
+          ],
+          env,
+        );
+        await withinTest(
+          awaitGateBeforeSettlement(
+            competing.ready,
+            competing.exited,
+            `timeout waiting for ${contenderMarker}`,
+          ),
+          signal,
+        );
+        await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
+        await expect(
+          fs.readFile(path.join(transaction, "backup/result.txt"), "utf8"),
+        ).resolves.toBe("old\n");
 
-      const gateWriter = await fs.open(gate, "w");
-      await gateWriter.write("release");
-      await gateWriter.close();
-      expect(await apply.exited).toMatchObject({ code: 0, signal: null, stderr: "" });
-      expect(await competing).toMatchObject({ code: 0, stderr: "" });
-      await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe("old\n");
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-      ).toEqual([]);
+        apply.child.stdin.end("release");
+        expect(await withinTest(apply.exited, signal)).toMatchObject({
+          code: 0,
+          signal: null,
+          stderr: "",
+        });
+        expect(await withinTest(competing.exited, signal)).toMatchObject({ code: 0, stderr: "" });
+        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+          "old\n",
+        );
+        expect(
+          (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+        ).toEqual([]);
+      } finally {
+        apply.child.kill("SIGKILL");
+        competing?.child.kill("SIGKILL");
+        await Promise.allSettled([apply.exited, competing?.exited]);
+      }
     }
   });
 

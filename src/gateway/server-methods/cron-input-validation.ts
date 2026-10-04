@@ -21,6 +21,15 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import type { CronCallerScope } from "./cron-caller-scope.js";
+
+// Published clients send "deliver"; translate only the already-snapshotted request.
+function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
+  const delivery = input?.delivery;
+  if (typeof delivery?.mode === "string" && delivery.mode.trim().toLowerCase() === "deliver") {
+    delivery.mode = "announce";
+  }
+}
 
 /** Validate authored fields before normalization can erase blank or invalid input. */
 export function normalizeCronAddRequest(params: unknown): {
@@ -40,11 +49,12 @@ export function normalizeCronAddRequest(params: unknown): {
     throw new Error("enabled must be a boolean");
   }
   assertCronDeliveryInputNonBlankFields(rawParams?.delivery);
+  const normalized = normalizeCronJobCreate(params, {
+    sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
+  });
+  normalizeCronRequestDeliveryMode(normalized);
   return {
-    candidate:
-      normalizeCronJobCreate(params, {
-        sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
-      }) ?? params,
+    candidate: normalized ?? params,
     enabledExplicit: parsedEnabled !== undefined,
   };
 }
@@ -62,6 +72,7 @@ export function normalizeCronUpdateRequest(params: unknown): {
   }
   assertCronDeliveryInputNonBlankFields(patchFields?.delivery);
   const normalizedPatch = normalizeCronJobPatch(rawPatch);
+  normalizeCronRequestDeliveryMode(normalizedPatch);
   return {
     candidate: normalizedPatch && rawParams ? { ...rawParams, patch: normalizedPatch } : params,
     normalizedPatch,
@@ -178,4 +189,25 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   // Cron's detached runner does not carry the owning harness lock. Harness
   // execution targets must enter through ordinary session dispatch instead.
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+}
+
+export function createCronCreatorSessionGuard(
+  callerScope: CronCallerScope | undefined,
+  creatorSession: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"],
+): () => void {
+  const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+  return () => {
+    if (creatorSession && callerScope?.sessionKey) {
+      const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+        agentId: callerScope.agentId,
+      }).entry;
+      if (
+        latest?.sessionId !== creatorSession.sessionId ||
+        latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+        JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+      ) {
+        throw new Error("Creator session changed before scheduling; retry from the current turn.");
+      }
+    }
+  };
 }

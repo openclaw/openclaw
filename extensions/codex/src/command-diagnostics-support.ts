@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -61,20 +62,9 @@ export function formatDiagnosticsUsage(commandPrefix: string): string {
   ].join("\n");
 }
 
-export function createCodexDiagnosticsConfirmation(params: {
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  now: number;
-}): string {
+export function createCodexDiagnosticsConfirmation(
+  params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
+): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
   if (
     !pendingCodexDiagnosticsConfirmationTokensByScope.has(params.scopeKey) &&
@@ -97,20 +87,11 @@ export function createCodexDiagnosticsConfirmation(params: {
   const token = crypto.randomBytes(6).toString("hex");
   scopeTokens.push(token);
   pendingCodexDiagnosticsConfirmationTokensByScope.set(params.scopeKey, scopeTokens);
+  const { now, ...confirmation } = params;
   pendingCodexDiagnosticsConfirmations.set(token, {
+    ...confirmation,
     token,
-    targets: params.targets,
-    note: params.note,
-    senderId: params.senderId,
-    channel: params.channel,
-    accountId: params.accountId,
-    channelId: params.channelId,
-    messageThreadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-    sessionKey: params.sessionKey,
-    scopeKey: params.scopeKey,
-    ...(params.privateRouted === undefined ? {} : { privateRouted: params.privateRouted }),
-    createdAt: params.now,
+    createdAt: now,
   });
   return token;
 }
@@ -257,28 +238,20 @@ export function formatCodexDiagnosticsTargetLines(
   targets: readonly CodexDiagnosticsTarget[],
 ): string[] {
   return targets.flatMap((target, index) => {
-    const lines = formatCodexDiagnosticsTargetBlock(target, index);
+    const lines = [`Session ${index + 1}`];
+    if (target.channel) {
+      lines.push(`Channel: ${formatCodexDisplayText(target.channel)}`);
+    }
+    if (target.sessionKey) {
+      lines.push(`OpenClaw session key: ${formatCodexCopyableValueForDisplay(target.sessionKey)}`);
+    }
+    if (target.sessionId) {
+      lines.push(`OpenClaw session id: ${formatCodexCopyableValueForDisplay(target.sessionId)}`);
+    }
+    lines.push(`Codex thread id: ${formatCodexCopyableValueForDisplay(target.threadId)}`);
+    lines.push(`Inspect locally: ${formatCodexResumeCommandForDisplay(target.threadId)}`);
     return index < targets.length - 1 ? [...lines, ""] : lines;
   });
-}
-
-function formatCodexDiagnosticsTargetBlock(
-  target: CodexDiagnosticsTarget,
-  index: number,
-): string[] {
-  const lines = [`Session ${index + 1}`];
-  if (target.channel) {
-    lines.push(`Channel: ${formatCodexDisplayText(target.channel)}`);
-  }
-  if (target.sessionKey) {
-    lines.push(`OpenClaw session key: ${formatCodexCopyableValueForDisplay(target.sessionKey)}`);
-  }
-  if (target.sessionId) {
-    lines.push(`OpenClaw session id: ${formatCodexCopyableValueForDisplay(target.sessionId)}`);
-  }
-  lines.push(`Codex thread id: ${formatCodexCopyableValueForDisplay(target.threadId)}`);
-  lines.push(`Inspect locally: ${formatCodexResumeCommandForDisplay(target.threadId)}`);
-  return lines;
 }
 
 function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): string {
@@ -337,7 +310,13 @@ export function recordCodexDiagnosticsUpload(
   now: number,
   cooldownScope?: string,
 ): void {
-  pruneCodexDiagnosticsCooldowns(now);
+  for (const map of [lastCodexDiagnosticsUploadByThread, lastCodexDiagnosticsUploadByScope]) {
+    for (const [key, lastSentAt] of map) {
+      if (now - lastSentAt >= CODEX_DIAGNOSTICS_COOLDOWN_MS) {
+        map.delete(key);
+      }
+    }
+  }
   recordBoundedCodexDiagnosticsCooldown(
     lastCodexDiagnosticsUploadByScope,
     cooldownScope ?? readCodexDiagnosticsCooldownScope(ctx),
@@ -402,28 +381,9 @@ function recordBoundedCodexDiagnosticsCooldown(
   now: number,
 ): void {
   if (!map.has(key)) {
-    while (map.size >= maxSize) {
-      const oldestKey = map.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      map.delete(oldestKey);
-    }
+    pruneMapToMaxSize(map, maxSize - 1);
   }
   map.set(key, now);
-}
-
-function pruneCodexDiagnosticsCooldowns(now: number): void {
-  pruneCodexDiagnosticsCooldownMap(lastCodexDiagnosticsUploadByThread, now);
-  pruneCodexDiagnosticsCooldownMap(lastCodexDiagnosticsUploadByScope, now);
-}
-
-function pruneCodexDiagnosticsCooldownMap(map: Map<string, number>, now: number): void {
-  for (const [key, lastSentAt] of map) {
-    if (now - lastSentAt >= CODEX_DIAGNOSTICS_COOLDOWN_MS) {
-      map.delete(key);
-    }
-  }
 }
 
 function formatCodexErrorForDisplay(error: string): string {

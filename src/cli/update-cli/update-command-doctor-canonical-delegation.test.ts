@@ -15,7 +15,7 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 it.each([
@@ -122,7 +122,7 @@ it.each([
       mocks.runGitUpdate.mockImplementation(runUpdate);
       const update = withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(root);
-        return executeMutableUpdate(params);
+        return executeMutableUpdate(await bindExecutionGuards(params));
       });
       if (fault !== "healthy") {
         await expect(update).rejects.toThrow("requester-revoked");

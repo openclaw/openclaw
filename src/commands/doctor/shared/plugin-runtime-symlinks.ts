@@ -4,6 +4,7 @@ import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
+import { readInstallOwner } from "../../../infra/install-owner.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import { shortenHomePath } from "../../../utils.js";
 
@@ -27,7 +28,7 @@ async function collectStalePluginRuntimeSymlinks(
     cwd: process.cwd(),
   }),
 ): Promise<StalePluginRuntimeSymlink[]> {
-  if (!packageRoot) {
+  if (!packageRoot || (await readInstallOwner(packageRoot))) {
     return [];
   }
   const containingNodeModules = path.dirname(packageRoot);

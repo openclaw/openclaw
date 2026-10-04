@@ -32,10 +32,20 @@ genuinely needs the requester's current transcript, spawn it with
 follow-up thread.
 </Note>
 
-A subagent run ends; a session does not. When you open a subagent run in the
-Control UI, its transcript is view-only. Use **Open parent session** in the
-composer area to continue the conversation with the parent. You can still use
-**Stop** when the Gateway reports an abortable run. Persistent sessions created
+The Control UI shows the assigned task without model-only subagent instructions.
+Named subagent sessions use their task title without an automatic “Subagent:”
+prefix; their parent relationship and view-only state still identify the run.
+
+A subagent run ends; a session does not. In the Control UI, open **Subagents**
+from the parent conversation to see ordinary child runs under **Running** and
+**Finished**. Selecting a run opens its existing view-only transcript beside
+the parent. **Back to Subagents** returns to the list without replacing the
+parent conversation or its draft. Swarm members stay in the parallel-tasks view.
+
+A directly opened subagent page keeps a compact notice naming its parent and an
+**Open parent session** button. The embedded panel omits that notice because the
+parent is already beside it. You can still use **Stop** when the Gateway reports
+an abortable run and your session access permits it. Persistent sessions created
 with `visible: true` are ordinary sessions in the session tree: they keep their
 parent for navigation and completion announcements, and you can always type in
 them and steer them like any other session.

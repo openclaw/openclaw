@@ -118,7 +118,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
       createStores: () => {
-        const authStorage = discovery.discoverAuthStorage(input.agentDir);
+        const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
         const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
           ...(input.config ? { config: input.config } : {}),
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -138,7 +138,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
 });
 
 vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverAuthStorageFacts: vi.fn(() => ({ authStorage: { mocked: true } })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 

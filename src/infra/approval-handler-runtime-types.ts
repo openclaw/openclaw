@@ -2,25 +2,20 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
-import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
+import type {
+  ApprovalRequestInput,
+  ApprovalResolved,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 import type {
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalResolved } from "./exec-approvals-core.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
-
-export type { ChannelApprovalKind } from "./approval-types.js";
+export type { ApprovalResolved, ChannelApprovalKind } from "./approval-types.js";
 
 /** Backward-compatible approval request accepted by public plugin callbacks. */
 export type ApprovalRequest = ApprovalRequestInput;
-/** Union of approval resolution events a native approval handler can finalize. */
-export type ApprovalResolved =
-  | ExecApprovalResolved
-  | PluginApprovalResolved
-  | SystemAgentApprovalResolved;
 
 /** Shared context passed to channel-native approval hooks. */
 export type ChannelApprovalCapabilityHandlerContext = {

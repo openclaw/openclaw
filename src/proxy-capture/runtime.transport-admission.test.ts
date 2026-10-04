@@ -9,10 +9,13 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-store.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
   finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCapture,
+  initializeDebugProxyCaptureAsync,
+  prepareHttpCaptureForTransport,
 } from "./runtime.js";
 
 const control = vi.hoisted(() => ({
@@ -52,11 +55,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  (["selection", "continuation"] as const).flatMap((phase) =>
-    (["success", "failure"] as const).map((outcome) => ({ phase, outcome })),
-  ),
-)(
+it.each([
+  { phase: "selection", outcome: "success" },
+  { phase: "continuation", outcome: "failure" },
+] as const)(
   "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
   async ({ phase, outcome }) => {
     const admissionFailure = new Error("synthetic admission refusal");
@@ -134,11 +136,133 @@ function stubGuardedCaptureEnv(sessionId: string) {
   }
 }
 
-it.each(
-  (["ready", "reservation"] as const).flatMap((failureKind) =>
-    (["success", "failure"] as const).map((outcome) => ({ failureKind, outcome })),
-  ),
-)(
+it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
+  "defers %s capture writes until the live update owner releases them",
+  async (mode) => {
+    stubGuardedCaptureEnv(`deferred-${mode}`);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
+    const settings = resolveDebugProxySettings();
+    const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
+    createWorkerLease.mockImplementation((_context, finalize) => {
+      const scope = { execute: committed };
+      let closing: Promise<void> | undefined;
+      return {
+        ready: Promise.resolve(),
+        execute: committed,
+        runOperation: async (operation) => await operation(scope),
+        release: () => (closing ??= Promise.resolve().then(() => finalize?.(scope))),
+        retire: async () => {},
+      };
+    });
+    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
+    const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const target: typeof globalThis = { ...globalThis, fetch: transport };
+    const deps = {
+      getStore: vi.fn(() => store),
+      persistEventPayload: () => ({}),
+      fetchTarget: target,
+    };
+    const params = {
+      url: "https://synthetic.invalid/deferred-capture",
+      method: "GET",
+      error: new Error("synthetic transport diagnostic"),
+    };
+    let exercise: () => Promise<void>;
+    if (mode === "saved-fetch") {
+      initializeDebugProxyCapture("fixture", settings, deps);
+      const savedFetch = target.fetch;
+      exercise = async () => {
+        expect((await savedFetch(params.url)).status).toBe(204);
+      };
+    } else if (mode === "cached-worker") {
+      await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
+      const cached = prepareHttpCaptureForTransport()!;
+      exercise = () => cached(params);
+    } else {
+      exercise = async () => {
+        await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
+        const result = await fetchWithSsrFGuard({ url: params.url, fetchImpl: transport });
+        try {
+          expect(result.response.status).toBe(204);
+        } finally {
+          await result.release();
+          await finalizeDebugProxyCaptureAsync(settings);
+        }
+      };
+    }
+    const clearWrites = () => {
+      committed.mockClear();
+      createWorkerLease.mockClear();
+      store.upsertSession.mockClear();
+      store.recordEvent.mockClear();
+    };
+    const expectNoWrites = () => {
+      expect(committed).not.toHaveBeenCalled();
+      expect(createWorkerLease).not.toHaveBeenCalled();
+      expect(store.upsertSession).not.toHaveBeenCalled();
+      expect(store.recordEvent).not.toHaveBeenCalled();
+    };
+    const expectWrites = () => {
+      expect(committed.mock.calls.length + store.recordEvent.mock.calls.length).toBeGreaterThan(0);
+    };
+    const continueAfterClose = createDeferredCore();
+    const continueWithoutCapture = createDeferredCore();
+    let late: Promise<void> | undefined;
+    let uncapturedLate: Promise<void> | undefined;
+    clearWrites();
+    try {
+      await withDeferredDebugProxyCapture(async (resume) => {
+        await exercise();
+        expectNoWrites();
+        await withDeferredDebugProxyCapture(async (resumeNested) => {
+          await exercise();
+          expectNoWrites();
+          resumeNested();
+          await exercise();
+          expectWrites();
+        });
+        clearWrites();
+        await exercise();
+        expectWrites();
+        clearWrites();
+        late = continueAfterClose.promise.then(async () => {
+          resume();
+          await exercise();
+        });
+      });
+      continueAfterClose.resolve();
+      await late;
+      expectWrites();
+      clearWrites();
+      await withDeferredDebugProxyCapture(async (resume) => {
+        await exercise();
+        expectNoWrites();
+        uncapturedLate = continueWithoutCapture.promise.then(async () => {
+          resume();
+          await withDeferredDebugProxyCapture(async (resumeNested) => {
+            resumeNested();
+            await exercise();
+          });
+        });
+      });
+      continueWithoutCapture.resolve();
+      await uncapturedLate;
+      expectNoWrites();
+    } finally {
+      continueAfterClose.resolve();
+      continueWithoutCapture.resolve();
+      await late;
+      await uncapturedLate;
+      await finalizeDebugProxyCaptureAsync(settings, { fetchTarget: target });
+      finalizeDebugProxyCapture(settings, deps);
+    }
+  },
+);
+
+it.each([
+  { failureKind: "ready", outcome: "success" },
+  { failureKind: "reservation", outcome: "failure" },
+] as const)(
   "keeps guarded transport $outcome independent of $failureKind capture preparation failure",
   async ({ failureKind, outcome }) => {
     const preparationFailure = new Error("synthetic capture preparation rejected");

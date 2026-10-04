@@ -117,7 +117,6 @@ export type SlackQaMessageScenarioRun = {
   matchText: string;
   /** Observation window for negative scenarios; must stay below the enclosing flow deadline. */
   noReplyObservationMs?: number;
-  preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
   verifyObserved?: (params: {
@@ -206,11 +205,16 @@ export type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
   gateway: QaGatewayChild;
-  postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
-  waitForReady: () => Promise<void>;
+};
+
+export type SlackQaApprovalContext = Pick<
+  SlackQaScenarioContext,
+  "sutIdentity" | "sutReadClient"
+> & {
+  gateway: Pick<QaGatewayChild, "call">;
 };
 
 export type SlackQaScenarioImplementation = {

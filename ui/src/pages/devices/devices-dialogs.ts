@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
@@ -15,7 +16,9 @@ import {
   revokeDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
 
-export type DeviceAliasTarget = {
+registerDevicesEnglish();
+
+type DeviceAliasTarget = {
   id: string;
   name: string;
   operatorLabel?: string;
@@ -80,9 +83,6 @@ export class DevicesDialogController {
   }
 
   confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     if (prompt.kind === "entry") {
       const entry = prompt.entry;
       return this.confirmDestructiveAction(
@@ -112,9 +112,6 @@ export class DevicesDialogController {
   }
 
   confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t(
@@ -133,9 +130,6 @@ export class DevicesDialogController {
   }
 
   confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
@@ -159,7 +153,7 @@ export class DevicesDialogController {
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
   ) {
-    if (this.pending) {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();

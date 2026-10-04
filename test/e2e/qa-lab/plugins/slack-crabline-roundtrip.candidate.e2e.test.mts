@@ -18,6 +18,7 @@ import {
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
 
 let startedAdapter: StartedOpenClawCrablineAdapter | undefined;
 let retainedResources = false;
@@ -231,17 +232,37 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
     const runBody = async () => {
       assertActive();
       startedAdapter = undefined;
-      transport = await createQaCrablineTransportAdapter({
+      const activeTransport = await createQaCrablineTransportAdapter({
         outputDir: directory,
         selection: resolveOpenClawCrablineChannelDriverSelection({ channel: "slack" }),
         state: bus,
       });
+      transport = activeTransport;
       assertActive();
       const adapter = capturedAdapter();
       if (!adapter || !adapter.bindGateway || adapter.manifest.provider !== "slack") {
         throw new Error("Installed public Slack adapter is missing its callback contract");
       }
       const manifest = adapter.manifest;
+      const sendProviderInbound = async (
+        input: Parameters<typeof adapter.createInbound>[0]["input"],
+      ) => {
+        const inbound = adapter.createInbound({ input });
+        // Register reply correlation before the public callback can produce a reply.
+        activeTransport.buildAgentDelivery({ target: inbound.qaTarget });
+        const response = await fetch(inbound.providerUrl, {
+          method: "POST",
+          headers: inbound.providerHeaders,
+          body: JSON.stringify(inbound.providerBody),
+          signal: AbortSignal.any([signal, fixture.signal]),
+        });
+        const body: unknown = await response.json();
+        expect(response.ok).toBe(true);
+        if (!isRecord(body) || !isRecord(body.message) || typeof body.message.ts !== "string") {
+          throw new Error("Crabline Slack inbound omitted its native message timestamp");
+        }
+        return { id: body.message.ts };
+      };
       const probe = await adapter.probe();
       if (!isRecord(probe) || typeof probe.user_id !== "string") {
         throw new Error("Slack auth.test did not return its native bot identity");
@@ -271,6 +292,10 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       assertActive();
       const channelConfig = transport.createGatewayConfig({ baseUrl: mock.baseUrl });
       runtimeIdentity = await slackRuntimeIdentity();
+      const entryObservation = await createQaPluginEntryObservation({
+        directory,
+        entry: runtimeIdentity.entry,
+      });
       assertActive();
       gateway = await gatewayOwner.start({
         repoRoot,
@@ -283,6 +308,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         controlUiEnabled: false,
         enabledPluginIds: [...transport.requiredPluginIds],
         runtimeEnvPatch: transport.createRuntimeEnvPatch(),
+        runtimePreloads: [entryObservation.preloadUrl],
         mutateConfig: (cfg) => ({
           ...cfg,
           logging: { ...cfg.logging, level: "debug", consoleLevel: "debug" },
@@ -311,13 +337,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       assertActive();
       await transport.waitReady({ gateway });
       assertActive();
-      const loaded = [...gateway.logs().matchAll(/\[plugins\] loading slack from ([^\r\n]+)/gu)]
-        .at(-1)?.[1]
-        ?.trim();
-      if (!loaded) {
-        throw new Error("Gateway did not report its actual Slack executable entry");
-      }
-      expect(await fs.realpath(loaded)).toBe(runtimeIdentity.entry);
+      await entryObservation.verify(gateway.pid, runtimeIdentity.entrySha256);
       const slack = gateway.cfg.channels?.slack;
       const accounts = slack?.accounts ?? {};
       const key = Object.hasOwn(accounts, "default")
@@ -341,7 +361,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       const firstBusCursor = outbound().length;
       const unboundMarker = "p03-unbound-no-replay";
       assertActive();
-      const unbound = await transport.sendInbound({
+      const unbound = await sendProviderInbound({
         conversation: { id: "D0000000001", kind: "direct" },
         senderId: "U0000000001",
         text: unboundMarker,
@@ -386,7 +406,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         const recorderCursor = (await records()).length;
         const busCursor = outbound().length;
         assertActive();
-        const inbound = await transport.sendInbound({
+        const inbound = await sendProviderInbound({
           conversation: { id: "D0000000002", kind: "direct" },
           senderId: "U0000000001",
           text: `${marker}: reply exactly \`${reply}\``,

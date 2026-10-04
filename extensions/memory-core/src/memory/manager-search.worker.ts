@@ -10,7 +10,13 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
+import type {
+  MemoryOriginReadInput,
+  MemoryOriginReadOutput,
+} from "../memory-entry-origins-task.js";
+import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
+import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
@@ -20,20 +26,16 @@ import { searchChunksByEmbedding } from "./manager-search-vector.js";
 import { searchKeyword, searchPathKeyword } from "./manager-search.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 
-type KeywordParameters = Omit<
-  Parameters<typeof searchKeyword>[0],
-  "db" | "buildFtsQuery" | "bm25RankToScore"
->;
-type PathParameters = Omit<
-  Parameters<typeof searchPathKeyword>[0],
-  "db" | "buildFtsQuery" | "bm25RankToScore"
->;
+type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
+type PathParameters = Omit<Parameters<typeof searchPathKeyword>[0], "db">;
 export type MemoryKeywordWorkerQuery = { body: KeywordParameters; path: PathParameters };
 export type MemoryVectorWorkerQuery = Omit<
   Parameters<typeof searchChunksByEmbedding>[0],
   "db" | "signal"
 >;
 export type MemorySearchWorkerInput =
+  | ForgetIndexReadInput
+  | MemoryOriginReadInput
   | { kind: "prewarm" }
   | { kind: "presence"; databasePath: string }
   | ({ databasePath: string; agentId: string } & (
@@ -51,6 +53,8 @@ export type MemorySearchWorkerInput =
     ));
 type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
+  | { kind: "forget-index-plan"; plan: ForgetIndexPlan }
+  | MemoryOriginReadOutput
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
@@ -80,6 +84,17 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "presence") {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
+  }
+  if (request.kind === "forget-index-plan") {
+    return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
+  }
+  if (
+    request.kind === "origin-rows" ||
+    request.kind === "origin-exists" ||
+    request.kind === "session-tombstones" ||
+    request.kind === "origin-index-keys"
+  ) {
+    return readMemoryOriginsInWorker(request);
   }
   if (request.kind === "recall-metadata") {
     const result = withOpenClawAgentDatabaseReadOnly(
@@ -143,15 +158,10 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const body = await searchKeyword({ ...request.query.body, db, buildFtsQuery, bm25RankToScore })
+    const body = await searchKeyword({ ...request.query.body, db })
       .then((rows) => ({ rows }))
       .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-    const path = await searchPathKeyword({
-      ...request.query.path,
-      db,
-      buildFtsQuery,
-      bm25RankToScore,
-    })
+    const path = await searchPathKeyword({ ...request.query.path, db })
       .then((rows) => ({ rows }))
       .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
     return { kind: "keyword", body, path, ...(indexState ? { indexState } : {}) };

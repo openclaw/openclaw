@@ -47,8 +47,6 @@ function Resolve-OpenClawProgramScope($rule) {
     $value = ([string]$rule.$field).Trim()
     if ($value) { return $value }
   }
-  $ports = ([string]$rule.LocalPorts).Trim()
-  if ($ports -ne '' -and $ports -ne '*') { return 'Any' }
   return 'Any'
 }
 function Get-OpenClawManagedRules {
@@ -235,28 +233,26 @@ async function runBestEffortCommand(
   }
 }
 
-function parseJsonRows(value: unknown): unknown[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  return value && typeof value === "object" ? [value] : [];
+function parseJsonRows(value: unknown): Record<string, unknown>[] {
+  return (Array.isArray(value) ? value : [value]).filter(
+    (row): row is Record<string, unknown> => Boolean(row) && typeof row === "object",
+  );
 }
 
-function parseJsonPayload(stdout: string): unknown {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return safeParseJson(trimmed) ?? null;
-}
-
-function stringField(row: Record<string, unknown>, key: string): string {
-  const value = row[key];
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value).trim();
+function stringField(row: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      const text = String(value).trim();
+      if (text) {
+        return text;
+      }
+    }
   }
   return "";
 }
@@ -271,7 +267,6 @@ function normalizeProfileName(value: string): string {
 
 function parseFirewallProfiles(value: unknown): FirewallProfile[] {
   return parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
     .map((row) => ({
       name: normalizeProfileName(stringField(row, "Name")),
       enabled: stringField(row, "Enabled").toLowerCase(),
@@ -284,36 +279,25 @@ function parseFirewallProfiles(value: unknown): FirewallProfile[] {
 
 function parseConnectionProfileNames(value: unknown): string[] {
   const names = parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
     .map((row) => normalizeProfileName(stringField(row, "NetworkCategory")))
     .filter(Boolean);
   return [...new Set(names)];
 }
 
 function parseFirewallRules(value: unknown): FirewallRule[] {
-  return parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
-    .map((row) => ({
-      displayName:
-        stringField(row, "DisplayName") ||
-        stringField(row, "displayName") ||
-        stringField(row, "Name") ||
-        "unnamed rule",
-      profile: (stringField(row, "Profile") || stringField(row, "profile")).toLowerCase(),
-      policyStoreSource: (
-        stringField(row, "PolicyStoreSource") || stringField(row, "policyStoreSource")
-      ).toLowerCase(),
-      policyStoreSourceType: (
-        stringField(row, "PolicyStoreSourceType") || stringField(row, "policyStoreSourceType")
-      ).toLowerCase(),
-      program: (stringField(row, "Program") || stringField(row, "program")).toLowerCase(),
-      localAddress: (
-        stringField(row, "LocalAddress") || stringField(row, "localAddress")
-      ).toLowerCase(),
-      remoteAddress: (
-        stringField(row, "RemoteAddress") || stringField(row, "remoteAddress")
-      ).toLowerCase(),
-    }));
+  return parseJsonRows(value).map((row) => ({
+    displayName: stringField(row, "DisplayName", "displayName", "Name") || "unnamed rule",
+    profile: stringField(row, "Profile", "profile").toLowerCase(),
+    policyStoreSource: stringField(row, "PolicyStoreSource", "policyStoreSource").toLowerCase(),
+    policyStoreSourceType: stringField(
+      row,
+      "PolicyStoreSourceType",
+      "policyStoreSourceType",
+    ).toLowerCase(),
+    program: stringField(row, "Program", "program").toLowerCase(),
+    localAddress: stringField(row, "LocalAddress", "localAddress").toLowerCase(),
+    remoteAddress: stringField(row, "RemoteAddress", "remoteAddress").toLowerCase(),
+  }));
 }
 
 function isTruthyFirewallValue(value: string): boolean {
@@ -441,148 +425,121 @@ function classifyWindowsGatewayFirewallState(
     (rule) => !ruleMatchesActiveProfile(rule, state.activeProfileNames),
   );
   const activeProfileText = formatProfiles(state.activeProfileNames);
+  const diagnostic = (
+    code: WindowsGatewayFirewallDiagnosticCode,
+    message: string,
+    details: string[] = [],
+    severity: WindowsGatewayFirewallDiagnostic["severity"] = "warning",
+  ): WindowsGatewayFirewallDiagnostic => ({
+    applies: true,
+    severity,
+    code,
+    message,
+    details: [`Active network profile: ${activeProfileText}.`, ...details],
+  });
+  const localRulesIgnored = (
+    ruleDetail: string,
+    policyDetail = "Local firewall rules are disabled for the active profile.",
+  ) =>
+    diagnostic(
+      "windows_firewall_local_rules_ignored",
+      "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      [
+        ruleDetail,
+        policyDetail,
+        "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
+      ],
+    );
 
   if (activeProfiles.length > 0 && blockingProfiles.length === 0) {
-    return {
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_unrestricted",
-      message:
-        "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
-      details: [`Active network profile: ${activeProfileText}.`],
-    };
+    return diagnostic(
+      "windows_firewall_unrestricted",
+      "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
+      [],
+      "info",
+    );
   }
 
   if (programAgnosticMatchingRules.length > 0) {
     if (!inboundRulesAreAllowed(activeProfiles)) {
-      return {
-        applies: true,
-        severity: "warning",
-        code: "windows_firewall_inbound_rules_disabled",
-        message:
-          "Windows Firewall is configured to block inbound connections even when allow rules exist.",
-        details: [
-          `Active network profile: ${activeProfileText}.`,
+      return diagnostic(
+        "windows_firewall_inbound_rules_disabled",
+        "Windows Firewall is configured to block inbound connections even when allow rules exist.",
+        [
           `Matching allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
           "Enable inbound rules for the active Windows Firewall profile, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
         ],
-      };
+      );
     }
-    const localRules = programAgnosticMatchingRules.filter(isLocalRule);
-    const onlyLocalRules = localRules.length === programAgnosticMatchingRules.length;
+    const onlyLocalRules = programAgnosticMatchingRules.every(isLocalRule);
     if (onlyLocalRules && !localRulesAreAllowed(state)) {
-      return {
-        applies: true,
-        severity: "warning",
-        code: "windows_firewall_local_rules_ignored",
-        message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-        details: [
-          `Active network profile: ${activeProfileText}.`,
-          `Matching local allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
-          "Local firewall rules are not explicitly enabled for the active profile.",
-          "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
-        ],
-      };
+      return localRulesIgnored(
+        `Matching local allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
+        "Local firewall rules are not explicitly enabled for the active profile.",
+      );
     }
-    return {
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_rule_present",
-      message:
-        "Windows Firewall has an inbound TCP allow rule for the Gateway port on the active profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_rule_present",
+      "Windows Firewall has an inbound TCP allow rule for the Gateway port on the active profile.",
+      [
         `Matching allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
         "If another device still cannot connect, verify the advertised LAN URL from that device.",
       ],
-    };
+      "info",
+    );
   }
 
   if (programScopedMatchingRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_program_scoped_rule_unverified",
-      message:
-        "Windows Firewall has a matching port allow rule, but it is scoped to a specific program.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_program_scoped_rule_unverified",
+      "Windows Firewall has a matching port allow rule, but it is scoped to a specific program.",
+      [
         `Program-scoped allow rule(s): ${formatRuleNames(programScopedMatchingRules)}.`,
         "Create an inbound TCP allow rule for the Gateway port that is not scoped to another executable, or verify the advertised LAN URL from another device.",
       ],
-    };
+    );
   }
 
   if (addressScopedMatchingRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_address_scoped_rule_unverified",
-      message:
-        "Windows Firewall has a matching port allow rule, but it is scoped to specific addresses.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_address_scoped_rule_unverified",
+      "Windows Firewall has a matching port allow rule, but it is scoped to specific addresses.",
+      [
         `Address-scoped allow rule(s): ${formatRuleNames(addressScopedMatchingRules)}.`,
         "Create an inbound TCP allow rule for the Gateway port that covers LAN clients, or verify the advertised LAN URL from another device.",
       ],
-    };
+    );
   }
 
   if (programAgnosticLocalRules.length > 0 && !localRulesAreAllowed(state)) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
-        `Matching local allow rule(s): ${formatRuleNames(programAgnosticLocalRules)}.`,
-        "Local firewall rules are disabled for the active profile.",
-        "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
-      ],
-    };
+    return localRulesIgnored(
+      `Matching local allow rule(s): ${formatRuleNames(programAgnosticLocalRules)}.`,
+    );
   }
 
   if (mismatchedRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_rule_profile_mismatch",
-      message: "Windows Firewall has a Gateway allow rule, but not for the active network profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_rule_profile_mismatch",
+      "Windows Firewall has a Gateway allow rule, but not for the active network profile.",
+      [
         `Mismatched allow rule(s): ${formatRuleNames(mismatchedRules)}.`,
         "Create or update an inbound TCP allow rule for the active profile, or change the Windows network profile intentionally.",
       ],
-    };
+    );
   }
 
   if (!localRulesAreAllowed(state) && state.localMatchingRules.length === 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
-        "No active inbound TCP allow rule for the Gateway port was found.",
-        "Local firewall rules are disabled for the active profile.",
-        "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
-      ],
-    };
+    return localRulesIgnored("No active inbound TCP allow rule for the Gateway port was found.");
   }
 
-  return {
-    applies: true,
-    severity: "warning",
-    code: "windows_firewall_no_allow_rule",
-    message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
-    details: [
-      `Active network profile: ${activeProfileText}.`,
+  return diagnostic(
+    "windows_firewall_no_allow_rule",
+    "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+    [
       "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
       "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
     ],
-  };
+  );
 }
 
 function firewallInspectionFailed(message: string): WindowsGatewayFirewallDiagnostic {
@@ -623,7 +580,7 @@ export async function inspectWindowsGatewayFirewall(
       "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
     );
   }
-  const quickPayload = parseJsonPayload(quickJson) as QuickFirewallPayload | null;
+  const quickPayload = safeParseJson(quickJson.trim()) as QuickFirewallPayload | null;
   if (
     !quickPayload ||
     typeof quickPayload !== "object" ||

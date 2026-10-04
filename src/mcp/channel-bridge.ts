@@ -1,4 +1,3 @@
-// Channel MCP bridge translates MCP tool calls into channel runtime operations.
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -89,7 +88,6 @@ export class OpenClawChannelBridge {
     this.claudeChannelMode = params.claudeChannelMode;
   }
 
-  /** Attach the MCP server used for outbound protocol notifications. */
   setServer(server: McpServer): void {
     this.server = server;
   }
@@ -230,7 +228,6 @@ export class OpenClawChannelBridge {
       );
   }
 
-  /** Resolve one conversation by its stable session key. */
   async getConversation(sessionKey: string): Promise<ConversationDescriptor | null> {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
@@ -245,7 +242,6 @@ export class OpenClawChannelBridge {
     return response.session ? toConversation(response.session) : null;
   }
 
-  /** Read recent history through the Gateway session API. */
   async readMessages(
     sessionKey: string,
     limit = 20,
@@ -288,7 +284,6 @@ export class OpenClawChannelBridge {
     });
   }
 
-  /** Return locally tracked approval requests that are still open. */
   listPendingApprovals(): PendingApproval[] {
     this.sweepPendingExpired();
     return [...this.pendingApprovals.values()]
@@ -296,7 +291,6 @@ export class OpenClawChannelBridge {
       .toSorted((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0));
   }
 
-  /** Forward an MCP approval decision to the matching Gateway approval resolver. */
   async respondToApproval(params: {
     kind: ChannelApprovalKind;
     id: string;

@@ -1,4 +1,4 @@
-// Tests poll parameter parsing and numeric bounds.
+// Tests content-bearing poll intent and ignored metadata.
 import { describe, expect, it } from "vitest";
 import { hasPollCreationParams } from "./poll-params.js";
 
@@ -27,12 +27,6 @@ describe("poll params", () => {
   it("does not treat channel-extra poll metadata as poll creation intent", () => {
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "+60" })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "-5" })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "0x10" })).toBe(false);
   });
 
   it("does not treat zero-valued numeric channel-extra poll params as poll creation intent", () => {

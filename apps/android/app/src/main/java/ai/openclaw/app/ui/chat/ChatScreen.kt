@@ -6,6 +6,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeApp
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.R
@@ -28,6 +29,7 @@ import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -147,9 +149,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -167,7 +167,6 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -348,6 +347,9 @@ internal fun ChatScreen(
   features: List<DisplayFeature> = emptyList(),
 ) {
   val messages by viewModel.chatMessages.collectAsState()
+  val messageReactions by viewModel.chatMessageReactions.collectAsState()
+  val canReact by viewModel.chatCanReact.collectAsState()
+  val reactionViewerId by viewModel.chatReactionViewerId.collectAsState()
   val browserPresentation =
     remember(messages) {
       messages.asReversed().firstNotNullOfOrNull { message ->
@@ -649,7 +651,7 @@ internal fun ChatScreen(
       if (activeSession.agentRuntimeId == "codex") nativeString("Native Codex model") else nativeString("Locked session model")
     } else {
       selectedModelRef?.let { selected ->
-        modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
+        selectedCatalogModel?.name?.takeIf { it.isNotBlank() }
           ?: selected.substringAfterLast('/')
       } ?: nativeString("Model")
     }
@@ -679,7 +681,7 @@ internal fun ChatScreen(
   val dictationPartialTranscript by dictationController.partialTranscript.collectAsState()
   val dictationActive = dictationState.isActive
 
-  fun importGalleryMedia(
+  fun importPickedMedia(
     lease: ChatComposerMediaLease,
     uris: List<android.net.Uri>,
   ) {
@@ -709,37 +711,12 @@ internal fun ChatScreen(
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(CHAT_COMPOSER_MAX_ATTACHMENTS)) { uris ->
       val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      importGalleryMedia(lease, uris)
+      importPickedMedia(lease, uris)
     }
   val pickMediaOrDocument =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
       val lease = filePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      if (uri == null) {
-        composerState.cancelMediaAcquisition(lease.authorizationId)
-        return@rememberLauncherForActivityResult
-      }
-      val importOwner =
-        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
-          currentPickerOwner
-        } else {
-          lease.owner
-        }
-      viewModel.importChatComposerAttachments(
-        owner = importOwner,
-        mediaAuthorizationId = lease.authorizationId,
-        mainSessionKey = currentPickerMainSessionKey,
-        expectedCount = 1,
-      ) {
-        listOfNotNull(
-          try {
-            loadPickedMediaOrDocumentAttachment(resolver, uri)
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            null
-          },
-        )
-      }
+      importPickedMedia(lease, listOfNotNull(uri))
     }
 
   LaunchedEffect(composerOwner) {
@@ -761,7 +738,6 @@ internal fun ChatScreen(
     pendingRunCount,
     thinkingLevel,
   ) {
-    if (!healthOk) return@LaunchedEffect
     val pending =
       resolvePendingAssistantAutoSend(
         pending = pendingAssistantAutoSend,
@@ -845,14 +821,7 @@ internal fun ChatScreen(
           }
         }
       if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@withChatShareDraftLease
-      if (
-        !canCommitStagedChatShare(
-          stagedId = share.id,
-          currentHead = viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey),
-          ownerSnapshot = ownerSnapshot,
-          currentOwner = ownerSnapshot,
-        )
-      ) {
+      if (viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey)?.id != share.id) {
         return@withChatShareDraftLease
       }
       // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
@@ -995,6 +964,18 @@ internal fun ChatScreen(
     prepareFullMessageRead = { message -> viewModel.prepareFullMessageRead(composerOwner, selectionGeneration, gatewayCatalogRevision, message) },
     session = activeSession,
     messages = messages,
+    messageReactions = messageReactions,
+    reactionViewerId = reactionViewerId,
+    onReact =
+      if (canReact) {
+        { messageId, emoji, remove ->
+          if (viewModel.isCurrentChatComposerOwner(composerOwner)) {
+            viewModel.chatSetMessageReaction(messageId, emoji, remove)
+          }
+        }
+      } else {
+        null
+      },
     transcriptAnchor = transcriptAnchor,
     historyLoading = historyLoading,
     activeRunCount = selectedActiveRun.count,
@@ -1751,6 +1732,9 @@ private fun ChatMessageList(
   prepareFullMessageRead: (ChatMessage) -> ChatController.FullMessageRead?,
   session: ChatSessionEntry?,
   messages: List<ChatMessage>,
+  messageReactions: Map<String, List<ChatReactionSummary>>,
+  reactionViewerId: String?,
+  onReact: ((String, String, Boolean) -> Unit)?,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
   activeRunCount: Int,
@@ -1797,7 +1781,6 @@ private fun ChatMessageList(
     workingRunTracker.resolve(
       indicatorVisible = indicatorVisible,
       clockKey = activeRunClockKey,
-      authoritativeRunId = activeRunId,
       nowElapsedMs = SystemClock.elapsedRealtime(),
       outputTokens = activeRunOutputTokens,
     )
@@ -1886,42 +1869,47 @@ private fun ChatMessageList(
                 ChatReaderItem(chatTimelineItemKey(item)) {
                   when (item) {
                     is ChatTimelineItem.Message -> {
-                      ChatBubble(
-                        messageId = item.message.id,
-                        entryId = item.message.entryId,
-                        role = item.message.role,
-                        live = false,
-                        content = visibleContent(item.message).filter { it.toolActivity == null },
-                        timestampMs = item.message.timestampMs,
-                        metadata = chatMessageMetadata(item.message),
-                        onReplyMessage = onReplyMessage,
-                        sessionActionsEnabled = sessionActionsEnabled,
-                        onRewindMessage = onRewindMessage,
-                        onForkMessage = onForkMessage,
-                        speechState = speechState,
-                        onToggleListen = onToggleListen,
-                        inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-                        inlineWidgetResolverReady = healthOk,
-                        resolveInlineWidgetResource = resolveInlineWidgetResource,
-                        loadImageArtifact = loadImageArtifact,
-                        loadMediaArtifact = loadMediaArtifact,
-                        sourcePreviews =
-                          remember(messages, item.message, sourcePreviewConfig, activeRunId) {
-                            if (item.message.runId == activeRunId || item.hasUnresolvedTools) {
-                              emptyList()
-                            } else {
-                              extractChatSourcePreviews(
-                                messages,
-                                item.message,
-                                ChatSourceLinkContext(sourcePreviewConfig?.gatewayUrl, sourcePreviewConfig?.basePath.orEmpty(), sourcePreviewConfig?.publicOrigin),
-                              )
-                            }
-                          },
-                        sourcePreviewConfig = sourcePreviewConfig,
-                        loadSourceFavicon = loadSourceFavicon,
-                        senderLabel = item.message.senderLabel,
-                        disclosure = { disclosure(item.message) },
-                      )
+                      key(fullMessageOwner, selectionGeneration) {
+                        ChatBubble(
+                          messageId = item.message.id,
+                          entryId = item.message.entryId,
+                          role = item.message.role,
+                          live = false,
+                          content = visibleContent(item.message).filter { it.toolActivity == null },
+                          timestampMs = item.message.timestampMs,
+                          metadata = chatMessageMetadata(item.message),
+                          reactions = messageReactions[item.message.entryId].orEmpty(),
+                          reactionViewerId = reactionViewerId,
+                          onReact = onReact,
+                          onReplyMessage = onReplyMessage,
+                          sessionActionsEnabled = sessionActionsEnabled,
+                          onRewindMessage = onRewindMessage,
+                          onForkMessage = onForkMessage,
+                          speechState = speechState,
+                          onToggleListen = onToggleListen,
+                          inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+                          inlineWidgetResolverReady = healthOk,
+                          resolveInlineWidgetResource = resolveInlineWidgetResource,
+                          loadImageArtifact = loadImageArtifact,
+                          loadMediaArtifact = loadMediaArtifact,
+                          sourcePreviews =
+                            remember(messages, item.message, sourcePreviewConfig, activeRunId) {
+                              if (item.message.runId == activeRunId || item.hasUnresolvedTools) {
+                                emptyList()
+                              } else {
+                                extractChatSourcePreviews(
+                                  messages,
+                                  item.message,
+                                  ChatSourceLinkContext(sourcePreviewConfig?.gatewayUrl, sourcePreviewConfig?.basePath.orEmpty(), sourcePreviewConfig?.publicOrigin),
+                                )
+                              }
+                            },
+                          sourcePreviewConfig = sourcePreviewConfig,
+                          loadSourceFavicon = loadSourceFavicon,
+                          senderLabel = item.message.senderLabel,
+                          disclosure = { disclosure(item.message) },
+                        )
+                      }
                     }
 
                     is ChatTimelineItem.OutboxCommand -> {
@@ -2037,7 +2025,6 @@ private fun ChatMessageList(
 internal data class ChatWorkingRun(
   val clockKey: String,
   val observedAtElapsedMs: Long,
-  val authoritativeRunId: String?,
   val outputTokens: Long?,
 )
 
@@ -2049,7 +2036,6 @@ internal class ChatWorkingRunTracker(
   fun resolve(
     indicatorVisible: Boolean,
     clockKey: String?,
-    authoritativeRunId: String?,
     nowElapsedMs: Long,
     outputTokens: Long?,
   ): ChatWorkingRun? {
@@ -2063,16 +2049,11 @@ internal class ChatWorkingRunTracker(
       return ChatWorkingRun(
         clockKey = resolvedClockKey,
         observedAtElapsedMs = nowElapsedMs,
-        authoritativeRunId = authoritativeRunId,
         outputTokens = outputTokens,
       ).also { current = it }
     }
-    if (previous.authoritativeRunId != authoritativeRunId || previous.outputTokens != outputTokens) {
-      current =
-        previous.copy(
-          authoritativeRunId = authoritativeRunId,
-          outputTokens = outputTokens,
-        )
+    if (previous.outputTokens != outputTokens) {
+      current = previous.copy(outputTokens = outputTokens)
     }
     return current
   }
@@ -2226,6 +2207,9 @@ internal fun ChatBubble(
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
   senderLabel: String? = null,
   metadata: List<Pair<String, String>> = emptyList(),
+  reactions: List<ChatReactionSummary> = emptyList(),
+  reactionViewerId: String? = null,
+  onReact: ((String, String, Boolean) -> Unit)? = null,
   disclosure: @Composable () -> Unit = {},
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
@@ -2267,6 +2251,10 @@ internal fun ChatBubble(
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  val reactionMessageId = entryId?.takeIf { !live && (isUser || normalizedRole == "assistant") }
+  val canReact = reactionMessageId != null && onReact != null
+  var reactionPickerOpen by remember(reactionMessageId, canReact) { mutableStateOf(false) }
+  val addReaction: (() -> Unit)? = if (canReact) ({ reactionPickerOpen = true }) else null
   val collapsibleUserText = shouldUseUserMessageDisclosure(isUser, displayableContent)
   var userMessageExpanded by rememberSaveable(messageId, messageText) { mutableStateOf(false) }
   val messageSpeech = speechState?.takeIf { it.messageId == messageId }
@@ -2292,6 +2280,7 @@ internal fun ChatBubble(
         enabled = !live,
         listenActive = messageSpeech?.isActive == true,
         onToggleListen = toggleListen,
+        onAddReaction = addReaction,
         modifier = modifier,
         content = body,
       )
@@ -2417,7 +2406,26 @@ internal fun ChatBubble(
           modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
         )
       }
+      if (reactionMessageId != null) {
+        ChatMessageReactions(
+          reactions = reactions,
+          viewerId = reactionViewerId,
+          onReact = onReact?.let { react -> { emoji, remove -> react(reactionMessageId, emoji, remove) } },
+          onAddReaction = addReaction,
+        )
+      }
     }
+  }
+  if (reactionPickerOpen && canReact) {
+    ChatReactionPicker(
+      reactions = reactions,
+      viewerId = reactionViewerId,
+      onDismiss = { reactionPickerOpen = false },
+      onSelect = { emoji, remove ->
+        onReact(checkNotNull(reactionMessageId), emoji, remove)
+        reactionPickerOpen = false
+      },
+    )
   }
 }
 
@@ -2674,6 +2682,8 @@ private fun ToolActivityItem(
     ProgressToolReceipt(tool)
     return
   }
+  val context = LocalContext.current
+  val toolDisplayConfig = remember(context) { (context.applicationContext as NodeApp).toolDisplayConfig }
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val resultPresentation = completedToolResultPresentation(tool)
   val isError = tool.hasFailedOutcome
@@ -2719,13 +2729,7 @@ private fun ToolActivityItem(
             if (isError) {
               Icons.Default.Close
             } else {
-              when (kind) {
-                CompletedToolKind.Command -> Icons.Default.Terminal
-                CompletedToolKind.Read -> Icons.Default.Description
-                CompletedToolKind.Edit, CompletedToolKind.Write -> Icons.Default.Edit
-                CompletedToolKind.Search, CompletedToolKind.Fetch -> Icons.Default.Search
-                else -> Icons.AutoMirrored.Filled.List
-              }
+              toolDisplayConfig.iconForTool(tool.name, kind)
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
@@ -3685,12 +3689,7 @@ private fun ChatEffortSliderTrack(
   optionCount: Int,
   enabled: Boolean,
 ) {
-  val activeFraction =
-    if (optionCount > 1) {
-      (state.value / (optionCount - 1)).coerceIn(0f, 1f)
-    } else {
-      0f
-    }
+  val activeFraction = (state.value / (optionCount - 1)).coerceIn(0f, 1f)
   val inactiveColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.07f else 0.04f)
   val activeColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.18f else 0.08f)
   val dotColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.28f else 0.12f)
@@ -4500,9 +4499,9 @@ internal fun chatContextSummary(
   usage: ChatContextUsage,
   locale: Locale = Locale.getDefault(),
 ): ChatContextSummary? {
-  val fraction = contextMeterWidth(usage) ?: return null
   val used = usage.totalTokens?.takeIf { it >= 0L } ?: return null
   val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
+  val fraction = (used.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
   val approximate = usage.totalTokensFresh == false
   val approximation = if (approximate) "~" else ""
   val percent = (fraction * 100).roundToInt()
@@ -4830,12 +4829,6 @@ internal fun userFacingChatError(
     lower.contains("unauthorized") || lower.contains("auth") -> nativeString("Gateway authentication needs attention.")
     else -> error
   }
-}
-
-internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
-  val total = usage.totalTokens?.takeIf { it >= 0L } ?: return null
-  val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
-  return (total.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
 }
 
 internal fun chatThinkingSupported(

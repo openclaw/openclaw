@@ -1,6 +1,7 @@
 // Imessage tests cover monitor.media policy plugin behavior.
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -185,7 +186,7 @@ describe("iMessage monitor attachment policy", () => {
     });
 
     await monitorIMessageProvider({
-      includeAttachments: true,
+      scheduler: createTestPluginServiceScheduler(),
       config: {
         channels: {
           imessage: {
@@ -291,7 +292,7 @@ describe("iMessage monitor attachment policy", () => {
       });
 
       await monitorIMessageProvider({
-        includeAttachments: true,
+        scheduler: createTestPluginServiceScheduler(),
         config: {
           channels: {
             imessage: {

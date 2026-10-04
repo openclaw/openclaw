@@ -26,21 +26,15 @@ export function buildMinimaxModelDiscovery(
 }
 
 export function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const rawHost = env.MINIMAX_API_HOST?.trim();
-  if (!rawHost) {
+  const url = URL.parse(env.MINIMAX_API_HOST?.trim() ?? "");
+  if (!url) {
     return MINIMAX_API_BASE_URL;
   }
-
-  try {
-    const url = new URL(rawHost);
-    const basePath = url.pathname.replace(/\/+$/, "");
-    if (basePath.endsWith("/anthropic")) {
-      return `${url.origin}${basePath}`;
-    }
-    return `${url.origin}/anthropic`;
-  } catch {
-    return MINIMAX_API_BASE_URL;
+  const basePath = url.pathname.replace(/\/+$/, "");
+  if (basePath.endsWith("/anthropic")) {
+    return `${url.origin}${basePath}`;
   }
+  return `${url.origin}/anthropic`;
 }
 
 export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {

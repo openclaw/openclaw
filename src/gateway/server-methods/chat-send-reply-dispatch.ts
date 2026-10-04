@@ -1,8 +1,12 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  PreparedReplyTranscriptStart,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -13,12 +17,13 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
-  loadTranscriptEventRowsAfterSeqSync,
-  readActiveTranscriptEntryAnchor,
-  readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readActiveTranscriptEntryAnchorAsync,
+  readSessionTranscriptAnchorsAsync,
+} from "../../config/sessions/session-transcript-anchor-read.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
@@ -42,7 +47,10 @@ import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
+import {
+  readSessionMessageByIdAsync,
+  readSessionTranscriptWatermarkAsync,
+} from "../session-transcript-readers.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -66,9 +74,13 @@ import {
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
-  appendAssistantTranscriptMessage,
+  resolveChatReplyDeliveryFromAnchors,
+  resolveChatReplyTranscriptStart,
+} from "./chat-send-reply-delivery.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
@@ -153,32 +165,21 @@ export function createChatSendReplyDispatch(params: {
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  let assistantTranscriptRewriteState = {
-    sessionId: undefined as string | undefined,
-    generation: null as string | null,
-    afterSeq: 0,
-  };
+  let assistantTranscriptRewriteState: ReturnType<typeof resolveChatReplyTranscriptStart>;
   let agentRunId = clientRunId;
   let agentTranscriptLifecycleRevision: string | undefined;
-  const captureAgentTranscriptStart = (runId = clientRunId) => {
+  const captureAgentTranscriptStart = (
+    runId = clientRunId,
+    prepared?: PreparedReplyTranscriptStart | null,
+  ) => {
     agentRunId = runId;
     const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
-    const sessionId = current.entry?.sessionId ?? backingSessionId;
-    const watermark = sessionId
-      ? readSessionTranscriptWatermark({
-          agentId: session.agentId,
-          sessionId,
-          sessionKey: session.sessionKey,
-          storePath: current.storePath,
-        })
-      : { generation: null, maxSeq: null };
-    assistantTranscriptRewriteState = {
-      sessionId,
-      generation: watermark.generation,
-      afterSeq: watermark.maxSeq ?? 0,
-    };
-    agentTranscriptLifecycleRevision = current.entry?.lifecycleRevision;
-    return true;
+    const transcriptStart = resolveChatReplyTranscriptStart(session, current, prepared);
+    assistantTranscriptRewriteState = transcriptStart;
+    agentTranscriptLifecycleRevision = transcriptStart
+      ? current.entry?.lifecycleRevision
+      : undefined;
+    return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -187,7 +188,6 @@ export function createChatSendReplyDispatch(params: {
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
-  let appendedWebchatAgentMedia = false;
   let preparingTranscript = false;
   const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
     message,
@@ -239,7 +239,12 @@ export function createChatSendReplyDispatch(params: {
         }) === admission.storePath
       );
     };
-    if (!admission || transcriptStart.sessionId !== admission.sessionId || !isCurrent()) {
+    if (
+      !admission ||
+      !transcriptStart ||
+      transcriptStart.sessionId !== admission.sessionId ||
+      !isCurrent()
+    ) {
       return "missing";
     }
     const scope = admission;
@@ -247,30 +252,35 @@ export function createChatSendReplyDispatch(params: {
     if (!isCurrent()) {
       return "missing";
     }
-    const input = readActiveTranscriptEntryAnchor(admission);
+    const watermark = await readSessionTranscriptWatermarkAsync(scope);
+    if (!isCurrent()) {
+      return "missing";
+    }
+    const initial = await readSessionTranscriptAnchorsAsync(scope, {
+      entryIds: [admission.entryId],
+      afterSeq: transcriptStart.afterSeq,
+    });
+    if (!isCurrent()) {
+      return "missing";
+    }
+    const input = initial.anchors[0];
     if (!input || input.rawSeq !== admission.rawSeq) {
       return "missing";
     }
-    const watermark = readSessionTranscriptWatermark(scope);
     let latestInputPosition = input.activeMessagePosition;
     let latestInputId = input.entryId;
     const candidateIds: string[] = [];
     // Stream indices also advance between content blocks. Fence with committed input
     // identities instead of treating the number of persisted assistant rows as an index.
-    for (const { event } of loadTranscriptEventRowsAfterSeqSync(scope, transcriptStart.afterSeq)) {
-      const row = asOptionalRecord(event);
-      const message = asOptionalRecord(row?.message);
-      if (typeof row?.id !== "string") {
-        continue;
-      }
-      if (message?.role === "user") {
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
+    for (const row of initial.tail?.entries ?? []) {
+      if (row.role === "user") {
+        const anchor = row.anchor;
         if (anchor && anchor.activeMessagePosition > latestInputPosition) {
           latestInputPosition = anchor.activeMessagePosition;
           latestInputId = anchor.entryId;
         }
-      } else if (message?.role === "assistant" && readSessionTranscriptRunId(message) === runId) {
-        candidateIds.push(row.id);
+      } else if (row.role === "assistant" && row.runId === runId) {
+        candidateIds.push(row.entryId);
       }
     }
     if (minimumAssistantMessageIndex > 0 && latestInputId === input.entryId) {
@@ -281,25 +291,15 @@ export function createChatSendReplyDispatch(params: {
         currentOnly: true,
         maxBytes: Number.MAX_SAFE_INTEGER,
       });
-      if (!isCurrent() || !readActiveTranscriptEntryAnchor(admission)) {
+      const admitted = await readActiveTranscriptEntryAnchorAsync(admission);
+      if (!isCurrent() || !admitted) {
         return "missing";
       }
       if (!stored.found) {
         continue;
       }
-      const currentInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: latestInputId });
-      if (!currentInput) {
-        return "missing";
-      }
-      const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
       const message = asOptionalRecord(stored.message);
-      if (
-        !anchor ||
-        anchor.rawSeq <= transcriptStart.afterSeq ||
-        anchor.activeMessagePosition <= currentInput.activeMessagePosition ||
-        message?.role !== "assistant" ||
-        readSessionTranscriptRunId(message) !== runId
-      ) {
+      if (message?.role !== "assistant" || readSessionTranscriptRunId(message) !== runId) {
         continue;
       }
       const hasTools =
@@ -314,29 +314,39 @@ export function createChatSendReplyDispatch(params: {
         !isSuppressedControlReplyText(answer) &&
         extractAssistantPhaseText(projectChatDisplayMessage(message))
       ) {
-        const currentWatermark = readSessionTranscriptWatermark(scope);
-        if (
-          currentWatermark.generation !== watermark.generation ||
-          currentWatermark.maxSeq !== watermark.maxSeq
-        ) {
-          // A benign rewrite must not authorize another answer, but a newly committed
-          // input still owns a distinct obligation even while this row is being read.
-          for (const { event } of loadTranscriptEventRowsAfterSeqSync(
-            scope,
-            transcriptStart.afterSeq,
-          )) {
-            const row = asOptionalRecord(event);
-            if (asOptionalRecord(row?.message)?.role !== "user" || typeof row?.id !== "string") {
-              continue;
+        const currentWatermark = await readSessionTranscriptWatermarkAsync(scope);
+        // Consume final facts inside the existing writer FIFO; projection repair and
+        // message restoration above must stay outside because they can need that writer.
+        let decision: ReplyDeliveryState | undefined = "pending";
+        await readSessionTranscriptAnchorsAsync(
+          scope,
+          {
+            entryIds: [admission.entryId, latestInputId, messageId],
+            afterSeq: transcriptStart.afterSeq,
+          },
+          undefined,
+          (facts) => {
+            if (!isCurrent()) {
+              decision = "missing";
+              return;
             }
-            const newerInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
-            if (newerInput && newerInput.activeMessagePosition > anchor.activeMessagePosition) {
-              return "missing";
-            }
-          }
-          return "pending";
+            decision = resolveChatReplyDeliveryFromAnchors({
+              facts,
+              admissionId: admission.entryId,
+              inputId: latestInputId,
+              messageId,
+              afterSeq: transcriptStart.afterSeq,
+              watermark,
+              currentWatermark,
+            });
+          },
+        );
+        if (!isCurrent()) {
+          return "missing";
         }
-        return "delivered";
+        if (decision !== undefined) {
+          return decision;
+        }
       }
     }
     return "missing";
@@ -437,15 +447,13 @@ export function createChatSendReplyDispatch(params: {
       extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyTextFromInputs(transcriptInputs);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const sourceMediaUrls = Array.from(
-      new Set(
-        payloadMetadata?.assistantTranscriptMediaUrls?.length
-          ? payloadMetadata.assistantTranscriptMediaUrls
-          : [
-              ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-              ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-            ],
-      ),
+    const sourceMediaUrls = uniqueStrings(
+      payloadMetadata?.assistantTranscriptMediaUrls?.length
+        ? payloadMetadata.assistantTranscriptMediaUrls
+        : [
+            ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+            ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+          ],
     );
     const ownedTranscriptIdempotencyKey =
       transcript?.idempotencyKey ??
@@ -487,12 +495,8 @@ export function createChatSendReplyDispatch(params: {
     } else if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
-      if (assistantTranscriptRewriteState.sessionId !== sessionId) {
-        assistantTranscriptRewriteState = {
-          sessionId,
-          generation: null,
-          afterSeq: 0,
-        };
+      if (assistantTranscriptRewriteState?.sessionId !== sessionId) {
+        return;
       }
       const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
@@ -500,6 +504,8 @@ export function createChatSendReplyDispatch(params: {
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        rejectedMediaCount: mediaFailures.filter((failure) => failure.code === "invalid-reference")
+          .length,
         scope: transcriptScope,
       });
       if (indexedRewrite) {
@@ -508,7 +514,6 @@ export function createChatSendReplyDispatch(params: {
       }
     }
     if (rewritten && transcriptScope) {
-      appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       if (assistantContent?.length) {
         await attachManagedOutgoingMediaToMessage({
@@ -556,14 +561,13 @@ export function createChatSendReplyDispatch(params: {
     const appendContent = isRuntimeMediaSupplement
       ? persistedContentForAppend.filter((block) => block.type !== "text")
       : persistedContentForAppend;
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = await appendInjectedAssistantMessageToTranscript({
       sessionKey,
       message: isRuntimeMediaSupplement ? "" : transcriptReply,
       content: appendContent,
       sessionId,
       storePath: latestStorePath,
       agentId,
-      createIfMissing: true,
       // Runtime message identity is the dedupe boundary; distinct rows must not collapse
       // onto the single unkeyed media fallback used by tool/audio-only payloads.
       idempotencyKey:
@@ -571,7 +575,7 @@ export function createChatSendReplyDispatch(params: {
           ? `${clientRunId}:assistant-media:${assistantMessageIndex}`
           : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
-      cfg,
+      config: cfg,
       onMessageCommitted: (receipt, acceptCompletion) => {
         const blocks = readAssistantDisplayContent(receipt.message);
         if (hasManagedOutgoingAssistantContent(blocks)) {
@@ -582,7 +586,6 @@ export function createChatSendReplyDispatch(params: {
       },
     });
     if (appended.ok) {
-      appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       return;
     }
@@ -692,6 +695,7 @@ export function createChatSendReplyDispatch(params: {
         const commentaryRewrite = await commentaryMedia.close();
         if (
           commentaryRewrite &&
+          assistantTranscriptRewriteState &&
           commentaryRewrite.sessionId === assistantTranscriptRewriteState.sessionId
         ) {
           assistantTranscriptRewriteState.generation = commentaryRewrite.generation;
@@ -706,7 +710,7 @@ export function createChatSendReplyDispatch(params: {
     captureAgentTranscriptStart,
     deliveredReplies,
     dispatcherOptions,
-    hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
+    hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
     prepareAssistantTranscriptMessage,
     resolveReplyDelivery,

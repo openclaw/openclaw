@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
@@ -17,9 +19,7 @@ import {
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
-  applyCostBreakdown,
-  applyCostTotal,
-  applyUsageTotals,
+  computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
@@ -68,16 +68,7 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
 }
 
 function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
-  const text = line.toString("utf8").trim();
-  if (!text) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeParseJsonRecord(line.toString("utf8").trim());
 }
 
 async function scanJsonlRange(params: {
@@ -155,11 +146,25 @@ function appendParsedEntryToRollup(
   let usageTotals: CostUsageTotals | undefined;
   if (entry.usage) {
     usageTotals = emptyTotals();
-    applyUsageTotals(usageTotals, entry.usage);
-    if (entry.costBreakdown?.total !== undefined) {
-      applyCostBreakdown(usageTotals, entry.costBreakdown);
+    const tokens = computeUsageTokenTotals(entry.usage);
+    usageTotals.input += tokens.input;
+    usageTotals.output += tokens.output;
+    usageTotals.cacheRead += tokens.cacheRead;
+    usageTotals.cacheWrite += tokens.cacheWrite;
+    usageTotals.totalTokens += tokens.totalTokens;
+    const cost = entry.costBreakdown;
+    if (cost?.total !== undefined) {
+      usageTotals.totalCost += cost.total;
+      usageTotals.inputCost += cost.input ?? 0;
+      usageTotals.outputCost += cost.output ?? 0;
+      usageTotals.cacheReadCost += cost.cacheRead ?? 0;
+      usageTotals.cacheWriteCost += cost.cacheWrite ?? 0;
+    } else if (entry.costTotal === undefined) {
+      usageTotals.missingCostEntries = 1;
+      const modelKey = `${normalizeOptionalString(entry.provider) ?? "unknown"}/${normalizeOptionalString(entry.model) ?? "unknown"}`;
+      usageTotals.missingCostByModel = { [modelKey]: 1 };
     } else {
-      applyCostTotal(usageTotals, entry.costTotal, entry.provider, entry.model);
+      usageTotals.totalCost += entry.costTotal;
     }
   }
   const timestamp = entry.timestamp?.getTime();
@@ -302,9 +307,8 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
 function selectIncrementalSqliteRecords(
   records: Record<string, unknown>[],
   previousLeafId: string | undefined,
-): { records: Record<string, unknown>[]; visibleLeafId?: string } | undefined {
+): { visibleLeafId?: string } | undefined {
   let visibleLeafId = previousLeafId;
-  const visible: Record<string, unknown>[] = [];
   for (const record of records) {
     if (isSessionTranscriptLeafControl(record) || record.appendMode === "side") {
       return undefined;
@@ -322,10 +326,9 @@ function selectIncrementalSqliteRecords(
         return undefined;
       }
     }
-    visible.push(record);
     visibleLeafId = id;
   }
-  return { records: visible, ...(visibleLeafId ? { visibleLeafId } : {}) };
+  return { visibleLeafId };
 }
 
 function sqliteCheckpointAnchorHash(event: unknown): string {

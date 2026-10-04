@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 const profileDisplay = vi.hoisted(() => ({ displayName: "" }));
 
-vi.mock("../../state/user-model-accounts.js", () => ({
-  readUserModelAccountSummary: () => undefined,
+vi.mock("../../state/user-model-account-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-model-account-operations.js")>()),
+  readUserModelAccountSummaryAsync: () => undefined,
 }));
 
 vi.mock("../../state/user-profiles.js", () => ({

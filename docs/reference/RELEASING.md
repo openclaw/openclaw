@@ -15,17 +15,17 @@ For switching channels, see [Release channels](/install/development-channels).
 
 ## Release channels
 
-| Channel         | What you get                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| Stable          | The regular release promoted to npm `latest`.                                                             |
-| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion.                |
-| Extended-stable | A Gateway maintenance release from either of the two trailing completed months, on npm `extended-stable`. |
-| Dev             | The moving head of `main`, for development.                                                               |
+| Channel         | What you get                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| Stable          | The regular release promoted to npm `latest`.                                              |
+| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion. |
+| Extended-stable | A Gateway maintenance release from the trailing completed month, on npm `extended-stable`. |
+| Dev             | The moving head of `main`, for development.                                                |
 
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when it falls outside the two supported completed months.
+line retires when `main` advances into the next month.
 
 ## Version naming
 
@@ -39,6 +39,11 @@ line retires when it falls outside the two supported completed months.
 Versions use `year.month.patch`, without zero-padding. The patch is a release
 number within the month, not a day of the month. Regular releases use patches
 below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
+Release tags are annotated and signed. The shared publication workflow verifies
+the tag signature before checkout or evidence downloads and refuses lightweight,
+unsigned, or unverified tags. This also applies to recovery and republishing:
+historical unsigned tags are not eligible for the shared publication workflow,
+and recovery must use a new signed release version rather than replacing a tag.
 
 Published npm versions and release tags are never replaced. A fix receives a
 new version. Historical alpha-only versions do not advance the regular release
@@ -61,16 +66,83 @@ Stable publication requires stable or full validation, longer-running soak tests
 and blocking performance checks. These requirements also apply to a final version
 first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Every selected validation lane must pass; publication waivers cannot bypass
-failures or required coverage. Validation covers source CI, packages, plugins,
+Every failed test needs an explicit release-lead decision: blocker or flake.
+Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
+issue or PR on `main`, and retain the original failure. Do not re-cut, change
+tooling, or start another Full Release Validation solely to clear a flake; a
+selected job that remains red blocks publication.
+
+Blocking jobs include the CI coverage gate, seal/evidence,
+Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
+including Windows packaged install/upgrade checks in Release Checks. A cancelled
+run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
+skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
+or required coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+For selected official npm plugins, Full Release Validation packs and qualifies
+the exact tarballs intended for publication and records their immutable artifact
+descriptors. Publication consumes those same bytes. Unpacked source fixtures do
+not participate unless npm includes them in a shipped tarball.
+
+Dependency advisories never block or delay a release. Release dependency
+evidence records every advisory finding, at any severity, and CI dispatched by
+release validation or publication reports a failing dependency audit as a
+warning. The dependency fix ships through `main` after publication. Only a
+known-malware finding stops publication.
+
+The health of `main` CI does not gate a release. Validation and publication run
+from the release branch with pinned release tooling, so a red `main` is not a
+reason to wait, re-cut, or pause.
+
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
+
+### Frozen qualification identity
+
+New candidate qualification records three separate identities:
+
+- **C — candidate:** the exact commit whose source and publication bytes are checked.
+- **Q — qualification:** the full workflow closure at C, including reusable workflows,
+  local actions, scripts, planners, contracts, and coverage data. By default **Q=C**.
+- **P — admission, verification, and publication tooling:** an independently trusted
+  main revision or protected publication tag. P may differ from C/Q; C/Q does not
+  need to be an ancestor of P. Trust in P does not replace qualification of C.
+
+The canonical SHA-pinned helper first asks P to record the reviewed operator
+attestation, complete normalized inputs, and data-only frozen Q coverage in an
+immutable admission artifact. Only then does that same helper dispatch Full
+Release Validation from an immutable `release-ci/*` ref at Q. A publication
+`release-publish/*` tag belongs to P, never to Q merely to make validation run.
+Admission is not a successful test result or publication approval.
+
+A candidate missing the required qualification contracts needs a deliberate
+backport. The helper does not silently use future-main checks or import
+main-only scenarios. A repair to the qualification harness changes C and Q and
+requires newly bound evidence; a P-only verifier/publisher repair can preserve
+C/Q and their original artifacts. Explicit trusted-main or protected-tag
+cross-revision validation is limited to diagnostic, main-qualification, and
+postpublish-confidence requests. It cannot supply new final candidate
+qualification. Existing historical publish requests keep their original meaning
+and remain recoverable. New publish qualification requires admitted Q=C.
+
+Evidence reuse preserves both the original producer identity and the current
+consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
+an old run as candidate-owned. Reconciliation is read-only; explicit resume is
+limited to a candidate request before any qualification-ref mutation or FRV
+dispatch. An uncertain write never authorizes another dispatch. All publication
+gates, stable soak, blocking performance, environment approvals, and exact-byte
+checks remain unchanged.
+
+Local contract tests can prove input binding, refusal, and recovery behavior.
+They do not prove hosted workflow admission, environment access, OIDC, signing,
+or publication. Report hosted evidence and untested deployment prerequisites
+separately; a local green check is not a hosted release receipt.
 
 ## Packages and apps can become available at different times
 
@@ -117,6 +189,12 @@ To consume a release lock:
 The companion `npm-package-locks.md` includes counts and a package table. Each
 entry records `bundleRuntimeDependencies` and direct dependency counts so
 packagers can identify lockless packages that need an external lock.
+Each entry also records a path-sorted `bundledDependencies` array with `path`,
+`name`, `version`, and `parent`. These dependencies carry `inBundle: true` in the
+npm lock; `parent` identifies the nearest enclosing non-bundled package whose
+`resolved` and `integrity` verify the tarball carrying their bytes. The report
+rejects missing or unverifiable carriers and preserves the lock payload. The
+Markdown table counts bundled dependencies per package and includes their total.
 
 ## Maintainer procedures
 

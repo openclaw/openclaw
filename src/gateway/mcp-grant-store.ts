@@ -11,21 +11,27 @@ import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-de
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { ReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
+  /** Host-verified completion context; never read from MCP request headers. */
+  trustedInternalHandoff?: Omit<TrustedSubagentCompletionHandoff, "settleBatch">;
+  inputProvenance?: InputProvenance;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   /** Agent whose execution policy applies when it differs from the durable session owner. */
@@ -89,6 +95,7 @@ export type McpLoopbackRequestContext = {
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
+  continuesConversation?: boolean;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
   senderName?: string;
@@ -129,6 +136,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
+  personalToolParticipants?: ReplyTurnParticipants;
   /** Trusted source-turn authority retained only by the host. */
   messageActionTurnCapability?: string;
   /** Original native creator scope, kept outside all child-visible context. */
@@ -267,6 +276,9 @@ export function mintMcpLoopbackClientGrant(
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    ...(params.personalToolParticipants
+      ? { personalToolParticipants: params.personalToolParticipants }
+      : {}),
     ...(params.messageActionTurnCapability
       ? { messageActionTurnCapability: params.messageActionTurnCapability }
       : {}),
@@ -470,6 +482,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       context: McpLoopbackRequestContext;
       captureKey: string;
       admittedRunContext: AdmittedRunContext;
+      personalToolParticipants?: ReplyTurnParticipants;
       messageActionTurnCapability?: string;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
@@ -512,6 +525,9 @@ export function resolveMcpLoopbackClientGrant(params: {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
     admittedRunContext,
+    ...(grant.personalToolParticipants
+      ? { personalToolParticipants: grant.personalToolParticipants }
+      : {}),
     ...(grant.messageActionTurnCapability
       ? { messageActionTurnCapability: grant.messageActionTurnCapability }
       : {}),

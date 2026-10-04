@@ -121,7 +121,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const ownerConfig = {
       agents: {
         defaults: { model: "google/gemini-2.0-flash" },
-        list: [{ id: "main", default: true, workspace: "/tmp/replacement-workspace" }],
+        entries: { main: { workspace: "/tmp/replacement-workspace" } },
       },
     };
     const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
@@ -153,7 +153,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
   it("rejects a replacement owner that changes an explicitly requested agent", async () => {
     const callerConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+      agents: { entries: { main: {}, worker: {} } },
     };
     loadModelCatalogOwnerMock.mockResolvedValueOnce({
       agentId: "main",
@@ -238,6 +238,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
     const runPromise = runCronIsolatedAgentTurn(
       makeParams({
+        sessionKey: "existing-cron-session",
         job: makeJob({ sessionTarget: "session:existing-cron-session" }),
         onExecutionPhase: (info: unknown) => phases.push(info),
       }),
@@ -370,6 +371,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
       const result = await runCronIsolatedAgentTurn(
         makeParams({
+          sessionKey: "existing-cron-session",
           job: makeJob({ sessionTarget: "session:existing-cron-session" }),
         }),
       );
@@ -514,7 +516,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
                 fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
               },
             },
-            list: [{ id: "default", model: "deepseek/deepseek-v4-pro" }],
+            entries: { default: { model: "deepseek/deepseek-v4-pro" } },
           },
         },
         job: jobWithoutModel,
@@ -571,10 +573,11 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
                 fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
               },
             },
-            list: [{ id: "main", model: "deepseek/deepseek-v4-pro" }],
+            entries: { main: { model: "deepseek/deepseek-v4-pro" } },
           },
         },
         job: jobWithoutModel,
+        sessionKey: "existing-cron-session",
       }),
     );
 

@@ -200,13 +200,7 @@ export type AcpRuntimeEvent =
       status?: "completed" | "cancelled";
       stopReason?: string;
     }
-  | {
-      type: "error";
-      message: string;
-      code?: string;
-      detailCode?: string;
-      retryable?: boolean;
-    };
+  | ({ type: "error" } & AcpRuntimeTurnResultError);
 
 export type AcpRuntimeTurnResultError = {
   message: string;

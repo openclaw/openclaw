@@ -9,6 +9,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { groupBy } from "./lib/group-by.mts";
 import {
   createNativeTypeScriptParser,
   type NativeTypeScriptParser,
@@ -249,14 +250,8 @@ async function collectCoreImports(parser: NativeTypeScriptParser) {
 }
 
 function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
-  const grouped = new Map<string, ImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = grouped.get(entry.family) ?? [];
-    bucket.push(entry);
-    grouped.set(entry.family, bucket);
-  }
-
-  const duplicated = Object.fromEntries(
+  const grouped = groupBy(inventory, (entry) => entry.family);
+  return Object.fromEntries(
     [...grouped.entries()]
       .map(([family, entries]) => {
         const files = [...new Set(entries.map((entry) => entry.file))].toSorted(compareStrings);
@@ -279,17 +274,10 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
         );
       }),
   );
-
-  return duplicated;
 }
 
 function buildOverlapFiles(inventory: ImportEntry[]) {
-  const byFile = new Map<string, ImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = byFile.get(entry.file) ?? [];
-    bucket.push(entry);
-    byFile.set(entry.file, bucket);
-  }
+  const byFile = groupBy(inventory, (entry) => entry.file);
 
   return [...byFile.entries()]
     .map(([file, entries]) => {
@@ -311,12 +299,7 @@ function buildOverlapFiles(inventory: ImportEntry[]) {
 }
 
 function buildOptionalClusterStaticLeaks(inventory: OptionalClusterImportEntry[]) {
-  const grouped = new Map<string, OptionalClusterImportEntry[]>();
-  for (const entry of inventory) {
-    const bucket = grouped.get(entry.cluster) ?? [];
-    bucket.push(entry);
-    grouped.set(entry.cluster, bucket);
-  }
+  const grouped = groupBy(inventory, (entry) => entry.cluster);
 
   return Object.fromEntries(
     [...grouped.entries()]
@@ -337,26 +320,6 @@ function buildOptionalClusterStaticLeaks(inventory: OptionalClusterImportEntry[]
   );
 }
 
-function packageClusterMeta(relativePackagePath: string) {
-  if (relativePackagePath === "ui/package.json") {
-    return {
-      cluster: "ui",
-      packageName: "openclaw-control-ui",
-      packagePath: relativePackagePath,
-      reachability: "workspace-ui",
-    };
-  }
-  const cluster = path.basename(path.dirname(relativePackagePath));
-  return {
-    cluster,
-    packageName: null,
-    packagePath: relativePackagePath,
-    reachability: relativePackagePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)
-      ? "extension-workspace"
-      : "workspace",
-  };
-}
-
 function classifyMissingPackageCluster(params: {
   cluster: string;
   pluginSdkEntries: string[];
@@ -370,24 +333,14 @@ function classifyMissingPackageCluster(params: {
     };
   }
   if (optionalBundledClusterSet.has(params.cluster)) {
-    if (params.cluster === "ui") {
-      return {
-        decision: "optional",
-        reason:
-          "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages.",
-      };
-    }
-    if (params.pluginSdkEntries.length > 0) {
-      return {
-        decision: "optional",
-        reason:
-          "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph.",
-      };
-    }
     return {
       decision: "optional",
       reason:
-        "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
+        params.cluster === "ui"
+          ? "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages."
+          : params.pluginSdkEntries.length > 0
+            ? "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph."
+            : "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
     };
   }
   return {
@@ -397,7 +350,7 @@ function classifyMissingPackageCluster(params: {
   };
 }
 
-async function buildMissingPackages(params: { staticLeakClusters?: Set<string> } = {}) {
+async function buildMissingPackages(staticLeakClusters: ReadonlySet<string>) {
   const rootPackage: PackageJson = JSON.parse(
     await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
   );
@@ -438,20 +391,21 @@ async function buildMissingPackages(params: { staticLeakClusters?: Set<string> }
     if (missing.length === 0) {
       continue;
     }
-    const meta = packageClusterMeta(relativePackagePath);
-    const pluginSdkEntries = [...(pluginSdkReachability.get(meta.cluster) ?? new Set())].toSorted(
+    const cluster = path.basename(path.dirname(relativePackagePath));
+    const pluginSdkEntries = [...(pluginSdkReachability.get(cluster) ?? [])].toSorted(
       compareStrings,
     );
     const classification = classifyMissingPackageCluster({
-      cluster: meta.cluster,
+      cluster,
       pluginSdkEntries,
-      hasStaticLeak: params.staticLeakClusters?.has(meta.cluster) === true,
+      hasStaticLeak: staticLeakClusters.has(cluster),
     });
     output.push({
-      cluster: meta.cluster,
+      cluster,
       decision: classification.decision,
       decisionReason: classification.reason,
-      packageName: pkg.name ?? meta.packageName,
+      packageName:
+        pkg.name ?? (relativePackagePath === "ui/package.json" ? "openclaw-control-ui" : null),
       packagePath: relativePackagePath,
       npmSpec: redactNpmSpec(pkg.openclaw?.install?.npmSpec),
       private: pkg.private === true,
@@ -497,10 +451,14 @@ function isSubagentProductionPath(relativePath: string) {
   return (
     (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
     isProductionLikeFile(relativePath) &&
-    (/subagent|sessions-spawn|acp-spawn/.test(relativePath) ||
-      relativePath === "src/agents/tools/sessions-spawn-tool.ts" ||
-      relativePath === "src/agents/tools/subagents-tool.ts")
+    /subagent|sessions-spawn|acp-spawn/.test(relativePath)
   );
+}
+
+function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp]>) {
+  return rules
+    .filter(([, enabled, pattern]) => enabled && pattern.test(source))
+    .map(([kind]) => kind);
 }
 
 function describeCronSeamKinds(relativePath: string, source: string) {
@@ -508,7 +466,6 @@ function describeCronSeamKinds(relativePath: string, source: string) {
     return [];
   }
 
-  const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
     "../../agents/cli-runner.js",
     "../../agents/embedded-agent.js",
@@ -549,59 +506,38 @@ function describeCronSeamKinds(relativePath: string, source: string) {
       "../store.js",
     ]);
 
-  if (
-    importsAgentRunner &&
-    /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-agent-handoff");
-  }
-
-  if (
-    importsOutboundDelivery &&
-    /\bdeliverOutboundPayloads\b|\bbuildOutboundSessionContext\b|\bresolveAgentOutboundIdentity\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-outbound-delivery");
-  }
-
-  if (
-    importsHeartbeat &&
-    /\bstripHeartbeatToken\b|\bHeartbeat\b|\bheartbeat\b|\bnext-heartbeat\b/.test(source)
-  ) {
-    seamKinds.push("cron-heartbeat-handoff");
-  }
-
-  if (
-    importsSchedulerModules &&
-    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-scheduler-state");
-  }
-
-  if (
-    importsOutboundDelivery &&
-    /\bmediaUrl\b|\bmediaUrls\b|\bfilename\b|\baudioAsVoice\b|\bdeliveryPayloads\b|\bdeliveryPayloadHasStructuredContent\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-media-delivery");
-  }
-
-  if (
-    importsFollowup &&
-    /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReply\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("cron-followup-handoff");
-  }
-
-  return seamKinds;
+  return matchingSeamKinds(source, [
+    [
+      "cron-agent-handoff",
+      importsAgentRunner,
+      /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/,
+    ],
+    [
+      "cron-outbound-delivery",
+      importsOutboundDelivery,
+      /\bdeliverOutboundPayloads\b|\bbuildOutboundSessionContext\b|\bresolveAgentOutboundIdentity\b/,
+    ],
+    [
+      "cron-heartbeat-handoff",
+      importsHeartbeat,
+      /\bstripHeartbeatToken\b|\bHeartbeat\b|\bheartbeat\b|\bnext-heartbeat\b/,
+    ],
+    [
+      "cron-scheduler-state",
+      importsSchedulerModules,
+      /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/,
+    ],
+    [
+      "cron-media-delivery",
+      importsOutboundDelivery,
+      /\bmediaUrl\b|\bmediaUrls\b|\bfilename\b|\baudioAsVoice\b|\bdeliveryPayloads\b|\bdeliveryPayloadHasStructuredContent\b/,
+    ],
+    [
+      "cron-followup-handoff",
+      importsFollowup,
+      /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReply\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/,
+    ],
+  ]);
 }
 
 function describeSubagentSeamKinds(relativePath: string, source: string) {
@@ -609,7 +545,6 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     return [];
   }
 
-  const seamKinds = [];
   const isAnnounceDispatchPath =
     relativePath === "src/agents/subagents/announce/subagent-announce.ts" ||
     relativePath === "src/agents/subagents/announce/subagent-announce-dispatch.ts";
@@ -670,52 +605,33 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     "../../../infra/agent-events.js",
   ]);
 
-  if (
-    importsSpawnRuntime &&
-    /\bspawnSubagentDirect\b|\bspawnAcpDirect\b|\bregisterSubagentRun\b|\bgetAcpSessionManager\b|\bspawnSubagent\b|\bspawnAcp\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-session-spawn");
-  }
-
-  if (
-    importsLifecycleRegistry &&
-    /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-lifecycle-registry");
-  }
-
-  if (
-    (importsAnnounceDelivery || isAnnounceDispatchPath) &&
-    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-announce-delivery");
-  }
-
-  if (
-    importsCleanup &&
-    /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-session-cleanup");
-  }
-
-  if (
-    importsParentStream &&
-    /\bstartAcpSpawnParentStreamRelay\b|\brequestHeartbeatNow\b|\benqueueSystemEvent\b|\bonAgentEvent\b|\bstreamTo\b/.test(
-      source,
-    )
-  ) {
-    seamKinds.push("subagent-parent-stream");
-  }
-
-  return seamKinds;
+  return matchingSeamKinds(source, [
+    [
+      "subagent-session-spawn",
+      importsSpawnRuntime,
+      /\bspawnSubagentDirect\b|\bspawnAcpDirect\b|\bregisterSubagentRun\b|\bgetAcpSessionManager\b|\bspawnSubagent\b|\bspawnAcp\b/,
+    ],
+    [
+      "subagent-lifecycle-registry",
+      importsLifecycleRegistry,
+      /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/,
+    ],
+    [
+      "subagent-announce-delivery",
+      importsAnnounceDelivery || isAnnounceDispatchPath,
+      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
+    ],
+    [
+      "subagent-session-cleanup",
+      importsCleanup,
+      /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/,
+    ],
+    [
+      "subagent-parent-stream",
+      importsParentStream,
+      /\bstartAcpSpawnParentStreamRelay\b|\brequestHeartbeatNow\b|\benqueueSystemEvent\b|\bonAgentEvent\b|\bstreamTo\b/,
+    ],
+  ]);
 }
 
 export function describeSeamKinds(relativePath: string, source: string) {
@@ -772,7 +688,6 @@ async function buildTestIndex(testFiles: string[]) {
       const baseName = path.basename(stem);
       const source = await readScannableText(filePath);
       return {
-        filePath,
         relativePath,
         stem,
         baseName,
@@ -806,8 +721,6 @@ function hasModuleMockReference(source: string, importPath: string) {
   return patterns.some((pattern) => pattern.test(source));
 }
 
-const matchQualityRank = (quality: MatchQuality) => MATCH_QUALITY_RANK[quality] ?? 4;
-
 function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): RelatedTestMatch[] {
   const stem = stemFromRelativePath(relativePath);
   const baseName = path.basename(stem);
@@ -823,12 +736,11 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const relativeImportPath = path.posix.relative(entryDir, stem);
     const importPath =
-      path.posix.relative(entryDir, stem) === path.basename(stem)
-        ? `./${path.basename(stem)}`
-        : path.posix.relative(entryDir, stem).startsWith(".")
-          ? path.posix.relative(entryDir, stem)
-          : `./${path.posix.relative(entryDir, stem)}`;
+      relativeImportPath === baseName || !relativeImportPath.startsWith(".")
+        ? `./${relativeImportPath}`
+        : relativeImportPath;
     if (
       hasExecutableImportReference(entry.source, importPath) &&
       !hasModuleMockReference(entry.source, importPath)
@@ -845,20 +757,9 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
     return [];
   });
 
-  const byFile = new Map<string, RelatedTestMatch>();
-  for (const match of matches) {
-    const existing = byFile.get(match.file);
-    if (
-      !existing ||
-      matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)
-    ) {
-      byFile.set(match.file, match);
-    }
-  }
-
-  return [...byFile.values()].toSorted((left, right) => {
+  return matches.toSorted((left, right) => {
     return (
-      matchQualityRank(left.matchQuality) - matchQualityRank(right.matchQuality) ||
+      MATCH_QUALITY_RANK[left.matchQuality] - MATCH_QUALITY_RANK[right.matchQuality] ||
       left.file.localeCompare(right.file)
     );
   });
@@ -961,7 +862,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
     overlapFiles: buildOverlapFiles(inventory),
     optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-    missingPackages: await buildMissingPackages({ staticLeakClusters }),
+    missingPackages: await buildMissingPackages(staticLeakClusters),
     seamTestInventory: await buildSeamTestInventory(),
   };
 

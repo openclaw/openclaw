@@ -1,6 +1,6 @@
--- Session storage doctrine: session_nodes.entry_json is the canonical logical-session
--- record. Promoted session_nodes columns are query indexes projected only by the
--- session entry writer; session_windows and their children own transcript generations.
+-- Session storage doctrine: session_nodes.entry_json owns hot logical-session facts;
+-- session_entry_snapshots owns keyed cold values. Promoted node columns are query
+-- indexes; session_windows and their children own transcript generations.
 -- Legacy ACP provenance is private import evidence carried with its logical session.
 
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  snapshot_revision INTEGER NOT NULL DEFAULT 0,
   legacy_acp_migration_json TEXT,
   entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
@@ -46,6 +47,37 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   last_interaction_at INTEGER,
   last_activity_at INTEGER
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_entry_snapshots (
+  session_key TEXT NOT NULL,
+  field TEXT NOT NULL CHECK (field IN ('sessionDiffBaseline', 'skillsSnapshot', 'systemPromptReport')),
+  value_json TEXT NOT NULL,
+  PRIMARY KEY (session_key, field),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_insert
+AFTER INSERT ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_update
+AFTER UPDATE OF session_key, field, value_json ON session_entry_snapshots
+WHEN NEW.session_key IS NOT OLD.session_key
+  OR NEW.field IS NOT OLD.field OR NEW.value_json IS NOT OLD.value_json
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key IN (OLD.session_key, NEW.session_key);
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_delete
+AFTER DELETE ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = OLD.session_key;
+END;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
   ON session_nodes(updated_at DESC, session_key);
@@ -415,6 +447,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_session_state_created
 CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_author_created
   ON session_suggestions(author_id, created_at, id);
 
+CREATE TABLE IF NOT EXISTS session_reactions (
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  identity_id TEXT NOT NULL,
+  identity_label TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, session_id, message_id, emoji, identity_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_reactions_message
+  ON session_reactions(session_key, session_id, message_id);
+
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,
@@ -618,8 +665,7 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
-  ON trajectory_runtime_events(session_id, run_id, seq)
-  WHERE run_id IS NOT NULL;
+  ON trajectory_runtime_events(session_id, run_id, created_at, octet_length(event_json));
 
 CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
   session_id TEXT NOT NULL,
@@ -940,9 +986,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
   ON memory_index_chunks(path, source);
-
-CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-  ON memory_index_chunks(path);
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);

@@ -7,7 +7,7 @@ import {
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -132,12 +132,7 @@ export async function isPotentialConfiguredMessageChannel(params: {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.plugin.id
   ];
-  if (
-    channelConfig &&
-    typeof channelConfig === "object" &&
-    !Array.isArray(channelConfig) &&
-    (channelConfig as { enabled?: unknown }).enabled === false
-  ) {
+  if (!Array.isArray(channelConfig) && !isAccountEnabled(channelConfig)) {
     return false;
   }
   if (isConfiguredChannel(params.cfg, params.plugin.id)) {

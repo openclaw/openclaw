@@ -97,9 +97,6 @@ function isProviderAuthRelevantReloadPath(path: string): boolean {
   if (PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS.has(head)) {
     return true;
   }
-  if (head === "agent" && second === "model") {
-    return true;
-  }
   if (head !== "agents") {
     return false;
   }
@@ -121,7 +118,6 @@ export function reloadPlanNeedsRecovery(plan: GatewayReloadPlan): boolean {
     plan.restartCron ||
     plan.restartGmailWatcher ||
     plan.reloadPlugins ||
-    (plan.restartServices?.size ?? 0) > 0 ||
     plan.restartChannels.size > 0 ||
     (plan.restartChannelAccounts?.size ?? 0) > 0 ||
     shouldRefreshContextWindowCache(plan)

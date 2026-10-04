@@ -53,13 +53,8 @@ struct ConnectOptions {
             let arg = args[i]
             if let handler = flagHandlers[arg] {
                 handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            } else if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
-                i += 1
-                continue
             }
             i += 1
         }
@@ -200,15 +195,7 @@ func runConnect(_ args: [String], configURL: URL) async {
 
 private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+        printCLIJSON(output, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 
@@ -310,7 +297,7 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     components?.password = nil
     let queryItems = components?.queryItems
     components?.queryItems = queryItems?.filter { queryItem in
-        !isSensitiveGatewayQueryItem(queryItem.name)
+        !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
     }
     if components?.queryItems?.isEmpty == true {
         components?.query = nil
@@ -321,19 +308,6 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     let digest = SHA256.hash(data: Data(route.utf8))
     let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
     return "openclaw-mac-cli:route:\(fingerprint)"
-}
-
-private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {
-    let normalized = value
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .replacingOccurrences(of: "-", with: "_")
-    return [
-        "access_token", "api_key", "apikey", "app_secret", "auth", "auth_token",
-        "authorization", "client_secret", "code", "credential", "hook_token", "id_token",
-        "jwt", "key", "pass", "passwd", "password", "private_key", "refresh_token",
-        "secret", "session", "signature", "token", "x_amz_security_token", "x_amz_signature",
-    ].contains(normalized)
 }
 
 private func resolveLocalHost(bind: String?) -> String {

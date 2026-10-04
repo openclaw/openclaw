@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,7 +17,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "./event-ledger-bytes.js";
 import {
-  cloneAcpLedgerValue,
   createAcpPromptUpdates,
   normalizeAcpLedgerEvent,
   normalizeAcpLedgerOptions,
@@ -231,21 +231,8 @@ function createSqliteLedgerQueries(db: DatabaseSync) {
   };
 }
 
-const sqliteLedgerQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createSqliteLedgerQueries>
->();
-
-function getSqliteLedgerQueries(db: DatabaseSync) {
-  let queries = sqliteLedgerQueries.get(db);
-  if (!queries) {
-    // Retain compilation per physical connection; native statements and their
-    // invalidation remain owned by the bounded shared executor cache.
-    queries = createSqliteLedgerQueries(db);
-    sqliteLedgerQueries.set(db, queries);
-  }
-  return queries;
-}
+// Native statements and their invalidation remain owned by the shared executor cache.
+const getSqliteLedgerQueries = createSqliteQueryCache(createSqliteLedgerQueries);
 
 function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | undefined {
   let update: unknown;
@@ -438,7 +425,7 @@ function appendSqliteUpdate(
     complete: false,
   });
   const now = state.now();
-  const updateJson = JSON.stringify(cloneAcpLedgerValue(params.update));
+  const updateJson = JSON.stringify(structuredClone(params.update));
   const eventBytes = estimateAcpEventRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

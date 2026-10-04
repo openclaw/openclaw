@@ -1,6 +1,8 @@
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { DecryptionFailureCode } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { LogService, noop } from "./logger.js";
 
 type MatrixDecryptIfNeededClient = {
@@ -220,29 +222,19 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         this.runDecryptRetry(retryKey).catch(noop);
       }
     }
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        Promise.all([
-          Promise.allSettled(pendingSdkDecryptions),
-          this.waitForActiveRetryRunsToFinish(),
-        ]),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(
-              new Error(
-                `Matrix decryption drain did not finish within ${MATRIX_DECRYPT_DRAIN_TIMEOUT_MS}ms`,
-              ),
-            );
-          }, MATRIX_DECRYPT_DRAIN_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
-    }
+    await raceWithTimeout(
+      Promise.all([
+        Promise.allSettled(pendingSdkDecryptions),
+        this.waitForActiveRetryRunsToFinish(),
+      ]),
+      MATRIX_DECRYPT_DRAIN_TIMEOUT_MS,
+      () => {
+        throw new Error(
+          `Matrix decryption drain did not finish within ${MATRIX_DECRYPT_DRAIN_TIMEOUT_MS}ms`,
+        );
+      },
+      { ref: false },
+    );
   }
 
   private handleEncryptedEventDecrypted(params: {
@@ -443,13 +435,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         this.exhaustedDecryptRetries.delete(retryKey);
       }
     }
-    while (this.exhaustedDecryptRetries.size > MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
-      const oldest = this.exhaustedDecryptRetries.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this.exhaustedDecryptRetries.delete(oldest);
-    }
+    pruneMapToMaxSize(this.exhaustedDecryptRetries, MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES);
   }
 
   private rememberDecryptedMessage(roomId: string, eventId: string): void {
@@ -468,14 +454,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         this.decryptedMessageDedupe.delete(key);
       }
     }
-    const maxEntries = 2048;
-    while (this.decryptedMessageDedupe.size > maxEntries) {
-      const oldest = this.decryptedMessageDedupe.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this.decryptedMessageDedupe.delete(oldest);
-    }
+    pruneMapToMaxSize(this.decryptedMessageDedupe, 2048);
   }
 
   private async waitForActiveRetryRunsToFinish(): Promise<void> {
@@ -484,10 +463,6 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     await new Promise<void>((resolve) => {
       this.retryIdleResolvers.add(resolve);
-      if (this.activeRetryRuns === 0) {
-        this.retryIdleResolvers.delete(resolve);
-        resolve();
-      }
     });
   }
 

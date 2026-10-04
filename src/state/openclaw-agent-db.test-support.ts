@@ -55,6 +55,35 @@ export function removeCanonicalValidationFromHistoricalAgentFixture(database: Da
   }
 }
 
+export function seedSchema19SessionKeyRepairFixture(database: DatabaseSync): void {
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
+  database
+    .prepare(
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(
+      "agent:worker-1:session-1",
+      "session-1",
+      JSON.stringify({ sessionId: "session-1", updatedAt: 1 }),
+      1,
+    );
+  database.exec(`
+    DROP TABLE session_transcript_cold_archives;
+    PRAGMA user_version = 19;
+    UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+    DROP TRIGGER session_nodes_entry_valid_after_insert;
+    DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+    DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+    DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+    DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+    DROP INDEX idx_agent_session_nodes_entry_not_valid;
+    DROP TABLE session_key_contract;
+    ALTER TABLE session_nodes DROP COLUMN entry_valid;
+    ALTER TABLE session_conversations DROP COLUMN route_context_json;
+  `);
+}
+
 /** List process-held agent databases without opening or inspecting fixture state. */
 export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
   return [...cache.databases.values()]

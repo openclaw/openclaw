@@ -4,6 +4,15 @@ export type ModelSetupPrepareOption = NonNullable<
   SystemAgentSetupDetectResult["prepareOptions"]
 >[number];
 
+/** Keep discovery-only metadata out of activation RPC payloads. */
+export function candidateActivation({
+  kind,
+  modelRef,
+  modelTarget,
+}: Pick<SystemAgentSetupDetectResult["candidates"][number], "kind" | "modelRef" | "modelTarget">) {
+  return { kind, modelRef, ...(modelTarget ? { modelTarget } : {}) };
+}
+
 function providerAutoSetupKind(choiceId: string): `provider-auto:${string}` {
   return `provider-auto:${encodeURIComponent(choiceId)}`;
 }

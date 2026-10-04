@@ -92,6 +92,11 @@ vi.mock("./gateway-rpc.js", () => ({
     mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: ({ runLocal }: { runLocal: (scope: unknown) => unknown }) =>
+    runLocal({ env: process.env, assertCurrent() {} }),
+}));
+
 vi.mock("./nodes-cli/rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
   return {

@@ -19,6 +19,14 @@ function resolveAssistantDecision(
   });
 }
 
+const promptFailure = {
+  stage: "prompt",
+  externalAbort: false,
+  fallbackConfigured: true,
+  failoverFailure: true,
+  profileRotated: false,
+} as const;
+
 describe("resolveRunFailoverDecision", () => {
   it("escalates retry-limit exhaustion for replay-safe failover reasons", () => {
     // Retry-limit exhaustion is only a model-fallback signal when the carried
@@ -79,12 +87,8 @@ describe("resolveRunFailoverDecision", () => {
     // the current provider profile before spending the configured fallback.
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "rate_limit",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "rotate_profile",
@@ -95,10 +99,7 @@ describe("resolveRunFailoverDecision", () => {
   it("falls back after prompt rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "rate_limit",
         profileRotated: true,
       }),
@@ -111,12 +112,8 @@ describe("resolveRunFailoverDecision", () => {
   it("sends prompt TLS certificate failures directly to model fallback", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "tls_certificate",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "fallback_model",
@@ -129,13 +126,9 @@ describe("resolveRunFailoverDecision", () => {
     (failoverCode) => {
       expect(
         resolveRunFailoverDecision({
-          stage: "prompt",
-          externalAbort: false,
-          fallbackConfigured: true,
+          ...promptFailure,
           failoverCode,
-          failoverFailure: true,
           failoverReason: "unknown",
-          profileRotated: false,
         }),
       ).toEqual({
         action: "surface_error",
@@ -147,10 +140,7 @@ describe("resolveRunFailoverDecision", () => {
   it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         promptTimeoutFallbackSafe: true,
         timedOutByRunBudget: true,
@@ -165,13 +155,9 @@ describe("resolveRunFailoverDecision", () => {
   it("does not rotate prompt failures after the run budget is exhausted (#60388)", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "rate_limit",
         timedOutByRunBudget: true,
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
@@ -182,12 +168,8 @@ describe("resolveRunFailoverDecision", () => {
   it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "format",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
@@ -198,13 +180,9 @@ describe("resolveRunFailoverDecision", () => {
   it("can still rotate explicitly retryable prompt format failures", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
+        ...promptFailure,
         allowFormatRetry: true,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
         failoverReason: "format",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "rotate_profile",
@@ -294,12 +272,9 @@ describe("resolveRunFailoverDecision", () => {
   it("does not model-fallback prompt failures after an external abort", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
+        ...promptFailure,
         externalAbort: true,
-        fallbackConfigured: true,
-        failoverFailure: true,
         failoverReason: "timeout",
-        profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
@@ -515,10 +490,7 @@ describe("resolveRunFailoverDecision", () => {
   it("surfaces harness-owned prompt timeouts instead of falling back", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         profileRotated: true,
@@ -532,10 +504,7 @@ describe("resolveRunFailoverDecision", () => {
   it("falls back on fallback-safe harness-owned prompt timeouts", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: true,
+        ...promptFailure,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         promptTimeoutFallbackSafe: true,
@@ -550,10 +519,8 @@ describe("resolveRunFailoverDecision", () => {
   it("surfaces fallback-safe harness-owned prompt timeouts when no fallback is configured", () => {
     expect(
       resolveRunFailoverDecision({
-        stage: "prompt",
-        externalAbort: false,
+        ...promptFailure,
         fallbackConfigured: false,
-        failoverFailure: true,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
         promptTimeoutFallbackSafe: true,

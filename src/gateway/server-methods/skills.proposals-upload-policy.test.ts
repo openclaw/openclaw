@@ -159,37 +159,64 @@ beforeEach(() => {
 });
 
 describe("proposal upload policy through production Gateway dispatch and storage", () => {
-  it.each(methods)("persists %s support bytes by default and explicitly enabled", async (kind) => {
-    for (const enabled of [undefined, true]) {
-      setUploads(enabled);
+  it.each(methods)("persists allowed %s content under the upload policy", async (kind) => {
+    for (const enabled of [undefined, true, false]) {
       const request = await prepare(kind);
       const before = await persisted();
+      if (enabled === false) {
+        delete request.params.supportFiles;
+      }
+      setUploads(enabled);
       expect(await dispatch(request.method, request.params)).toHaveBeenCalledWith(
         true,
         expect.anything(),
         undefined,
       );
-      const stored = await persisted();
-      expect(
-        stored.files.some(
-          ([file, content]) =>
-            !before.files.some(([old]) => old === file) &&
-            file.endsWith("/references/client.txt") &&
-            content === supportFile.content,
-        ),
-      ).toBe(true);
+      if (enabled === false) {
+        if ("proposalId" in request.params) {
+          const stored = await inspectSkillProposal(request.params.proposalId, {
+            config,
+            agentId: "main",
+          });
+          expect(stored?.content).toContain("# Revised proof");
+          expect(stored?.supportFiles).toEqual([
+            expect.objectContaining({
+              path: "references/existing.txt",
+              content: "Existing server bytes.\n",
+            }),
+          ]);
+        }
+      } else {
+        const stored = await persisted();
+        expect(
+          stored.files.some(
+            ([file, content]) =>
+              !before.files.some(([old]) => old === file) &&
+              file.endsWith("/references/client.txt") &&
+              content === supportFile.content,
+          ),
+        ).toBe(true);
+      }
     }
   });
   it.each(methods)(
-    "rejects disabled %s without writing a proposal or support bytes",
+    "rejects disabled %s including spoofed internal flags without writing",
     async (kind) => {
       const request = await prepare(kind);
       const before = await persisted();
       setUploads(false);
-      expect
-        .soft(await dispatch(request.method, request.params))
-        .toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabledError));
-      expect(await persisted()).toEqual(before);
+      for (const params of [
+        request.params,
+        {
+          ...request.params,
+          internal: { syntheticClient: true, agentRuntimeIdentity: {} },
+        },
+      ]) {
+        expect
+          .soft(await dispatch(request.method, params))
+          .toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabledError));
+        expect(await persisted()).toEqual(before);
+      }
     },
   );
 
@@ -284,41 +311,6 @@ describe("proposal upload policy through production Gateway dispatch and storage
       expect(await persisted()).toEqual(before);
     },
   );
-  it.each(methods)("preserves text-only %s while disabled", async (kind) => {
-    const request = await prepare(kind);
-    delete request.params.supportFiles;
-    setUploads(false);
-    expect(await dispatch(request.method, request.params)).toHaveBeenCalledWith(
-      true,
-      expect.anything(),
-      undefined,
-    );
-    if ("proposalId" in request.params) {
-      const stored = await inspectSkillProposal(request.params.proposalId, {
-        config,
-        agentId: "main",
-      });
-      expect(stored?.content).toContain("# Revised proof");
-      expect(stored?.supportFiles).toEqual([
-        expect.objectContaining({
-          path: "references/existing.txt",
-          content: "Existing server bytes.\n",
-        }),
-      ]);
-    }
-  });
-  it.each(methods)("ignores spoofed internal flags in %s payloads", async (kind) => {
-    const request = await prepare(kind);
-    const before = await persisted();
-    setUploads(false);
-    expect(
-      await dispatch(request.method, {
-        ...request.params,
-        internal: { syntheticClient: true, agentRuntimeIdentity: {} },
-      }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabledError));
-    expect(await persisted()).toEqual(before);
-  });
   it("preserves trusted synthetic ingress and service-agent support files while disabled", async () => {
     setUploads(false);
     const request = await prepare("create");

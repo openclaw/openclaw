@@ -637,11 +637,8 @@ fn percent_decode_once(raw: &str) -> Option<String> {
             index += 1;
             continue;
         }
-        if index + 2 >= bytes.len() {
-            return None;
-        }
-        let byte = u8::from_str_radix(&raw[index + 1..index + 3], 16).ok()?;
-        decoded.push(byte);
+        let digits = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+        decoded.push(u8::from_str_radix(digits, 16).ok()?);
         index += 3;
     }
     String::from_utf8(decoded).ok()
@@ -880,6 +877,8 @@ mod tests {
             "http://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/status/index.html",
             "https://gateway.example/__openclaw__/canvas/documents/status/index.html",
             "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%252e%252e/private-file",
+            "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%25a%C3%A9/index.html",
+            "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/%25%E2%82%AC/index.html",
         ] {
             assert!(validate_widget_layout(&test_widget("status", url, "scripts")).is_err());
         }

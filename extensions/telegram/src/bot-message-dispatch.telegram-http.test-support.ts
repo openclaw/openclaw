@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -58,6 +59,8 @@ export function createTelegramDispatchHttpFixture() {
   let stopped: Promise<never>;
   let stop: (error: Error) => void;
   const pendingDispatches = new Set<Promise<unknown>>();
+  const pendingTranscriptMirrors: Promise<unknown>[] = [];
+  let restoreTranscriptMirror: () => void;
   const bindingAdapters = new Map<string, SessionBindingAdapter>();
   const pendingRequests = new Set<Promise<unknown>>();
   type Rejection =
@@ -225,7 +228,19 @@ export function createTelegramDispatchHttpFixture() {
   });
 
   beforeEach(async () => {
+    // The fixture owns a loopback Bot API; inherited host proxies must not intercept it.
+    vi.stubEnv("NO_PROXY", "127.0.0.1,localhost,::1");
+    vi.stubEnv("no_proxy", "127.0.0.1,localhost,::1");
     state = await createOpenClawTestState({ label: "telegram-dispatch-http" });
+    const append = transcriptRuntime.appendAssistantMirrorMessageByIdentity;
+    const observer = vi
+      .spyOn(transcriptRuntime, "appendAssistantMirrorMessageByIdentity")
+      .mockImplementation((params) => {
+        const pending = append(params);
+        pendingTranscriptMirrors.push(pending);
+        return pending;
+      });
+    restoreTranscriptMirror = () => observer.mockRestore();
     lifetime = new AbortController();
     stopped = new Promise<never>((_resolve, reject) => {
       stop = reject;
@@ -293,6 +308,10 @@ export function createTelegramDispatchHttpFixture() {
     await Promise.allSettled(pendingDispatches);
     await Promise.allSettled([...pendingRequests, typingSend]);
     await settleDetachedDeletes();
+    // Preview mirrors start before entering the writer queue; join their full
+    // lifetime so cleanup cannot delete a store that a late mirror recreates.
+    await Promise.allSettled(pendingTranscriptMirrors.splice(0));
+    restoreTranscriptMirror();
     for (const adapter of bindingAdapters.values()) {
       unregisterSessionBindingAdapter({ ...adapter, adapter });
     }
@@ -304,6 +323,7 @@ export function createTelegramDispatchHttpFixture() {
     botApiCallWaiters.clear();
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
     await state.cleanup();
   });
 

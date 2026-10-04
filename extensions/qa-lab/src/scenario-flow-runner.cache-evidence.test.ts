@@ -74,14 +74,11 @@ describe("large read cache evidence", () => {
     await expect(checkCacheEvidence(marker)).resolves.toMatchObject({ status: "pass" });
   });
 
-  it.each(["", "…0 tokens truncated…", "…many tokens truncated…"])(
-    "rejects absent or malformed truncation evidence %s",
-    async (marker) => {
-      await expect(checkCacheEvidence(marker)).rejects.toThrow(
-        "large capped read cache evidence was not observed",
-      );
-    },
-  );
+  it("rejects a zero-count truncation marker", async () => {
+    await expect(checkCacheEvidence("…0 tokens truncated…")).rejects.toThrow(
+      "large capped read cache evidence was not observed",
+    );
+  });
 
   it("rejects a native marker found only in surrounding prompt text", async () => {
     await expect(

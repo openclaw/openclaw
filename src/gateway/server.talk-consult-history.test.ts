@@ -248,7 +248,9 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
   expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect.soft(markdown?.match(/^## You(?: \(|$)/gm), `${surface} human headings`).toHaveLength(1);
+  expect
+    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
+    .toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
   expect
     .soft(
@@ -448,6 +450,10 @@ describe("Browser Talk consult input custody", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
       ];
       runEmbeddedAgent.mockImplementation(async (params) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
         params.onExecutionPhase?.({ phase: "model_call_started" });
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();

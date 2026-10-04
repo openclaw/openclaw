@@ -21,6 +21,7 @@ import {
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   type ModelCatalogBrowseView,
@@ -230,6 +231,10 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
     catalog,
     routeVariants: params.snapshot.routeVariants,
   });
+  const runtimePolicies = new WeakMap<
+    ModelCatalogEntry,
+    ReturnType<typeof resolveAgentHarnessPolicy>
+  >();
   const providerEndpoints = new Map<string, { endpoint?: string; api?: string }>();
   for (const [id, configured] of Object.entries(params.cfg.models?.providers ?? {})) {
     const provider = normalizeProviderId(id);
@@ -252,14 +257,18 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       host: ModelAuthAvailabilityEvaluation,
       runtimeId?: string,
     ): ModelAuthAvailabilityEvaluation => {
-      const policy = resolveAgentHarnessPolicy({
-        provider: entry.provider,
-        modelId: entry.id,
-        modelApi: entry.api,
-        modelBaseUrl: entry.baseUrl,
-        config: params.cfg,
-        agentId: params.agentId,
-      });
+      let policy = runtimePolicies.get(entry);
+      if (!policy) {
+        policy = resolveAgentHarnessPolicy({
+          provider: entry.provider,
+          modelId: entry.id,
+          modelApi: entry.api,
+          modelBaseUrl: entry.baseUrl,
+          config: params.cfg,
+          agentScope: { kind: "prepared", agentId: params.agentId },
+        });
+        runtimePolicies.set(entry, policy);
+      }
       const runtime =
         runtimeId ??
         host.requestedRuntimeId ??
@@ -373,6 +382,10 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         routeResolution: null,
         ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),
         runtimeAuth: { id: runtime, source: "native" },
+        selectedCredential: resolveSelectedModelCredential({
+          provider,
+          runtimeAuth: { id: runtime, source: "native" },
+        }),
         ...(authMode ? { selectedAuthMode: authMode } : {}),
       };
     },

@@ -12,6 +12,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import {
   applySessionEntryLifecycleMutation,
+  loadSessionEntry,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
@@ -93,16 +94,24 @@ describe("SQLite reset boundary transcript header", () => {
     "preserves the prior workspace for a $writer reset",
     async ({ writer, previous, expectedCwd }) => {
       const sessionKey = "agent:main:custom-workspace-reset";
+      const conversationLink = {
+        url: "https://chat.example.test/thread/123",
+        label: "Source Thread",
+      };
       await replaceSessionEntry(
         { sessionKey, storePath },
         {
           sessionId: "custom-window",
           updatedAt: 10,
+          conversationLink,
           ...previous,
         },
       );
 
       await reset(writer, sessionKey, "next-custom");
+      expect(loadSessionEntry({ sessionKey, storePath })?.conversationLink).toEqual(
+        conversationLink,
+      );
 
       expect(
         SessionManager.open({

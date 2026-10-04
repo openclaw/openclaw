@@ -29,7 +29,12 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
         case let .unsupportedRegistryVersion(version):
             "Gateway profiles were written by a newer OpenClaw version (schema \(version))."
         case let .keychain(status):
-            "Could not save Gateway settings in Keychain (\(status))."
+            if !AppLaunchRuntimePlan.current.allowsActivation {
+                "Could not access Gateway settings in Keychain (\(status)). " +
+                    "Authorization dialogs are disabled by --no-activate; relaunch without the flag and retry."
+            } else {
+                "Could not save Gateway settings in Keychain (\(status))."
+            }
         }
     }
 }
@@ -725,7 +730,7 @@ actor MacGatewayConnectionFleet {
         }
         let chatStoreID = MacChatTranscriptCache.gatewayID(
             mode: .local,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             remoteTransport: .ssh,
             directURL: nil,
             sshTarget: "",

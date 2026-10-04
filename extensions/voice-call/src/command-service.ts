@@ -4,22 +4,9 @@ import type { CallMode } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import type { CallRecord } from "./types.js";
 
-type VoiceCallStatus = Pick<
-  CallRecord,
-  | "callId"
-  | "providerCallId"
-  | "provider"
-  | "direction"
-  | "state"
-  | "startedAt"
-  | "answeredAt"
-  | "endedAt"
-  | "endReason"
->;
-
 export class VoiceCallCommandInputError extends Error {}
 
-function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
+function toVoiceCallStatus(call: CallRecord) {
   return {
     callId: call.callId,
     ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),

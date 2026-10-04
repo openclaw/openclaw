@@ -51,7 +51,6 @@ const remoteWorkspaceManifestEnvelopeSchema = z
 
 export type RemoteWorkspaceManifestEnvelope = z.infer<typeof remoteWorkspaceManifestEnvelopeSchema>;
 
-/** Parses and validates a memo-v1 capture response from the remote manifest script. */
 export function parseRemoteWorkspaceManifestEnvelope(
   stdout: string,
 ): RemoteWorkspaceManifestEnvelope {

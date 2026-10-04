@@ -30,7 +30,8 @@ export function withExistingAgentLeaseWrite<T>(
     {
       operationLabel: "agent.database.maintenance.admission",
       schemaSql: existingAgentLeaseSchema,
-      busyTimeoutMs: 0,
+      // Maintenance must drain published lease schemas before first-use provenance is added.
+      schemaCompatibility: { allowedMissingColumns: ["agent_database_leases.provenance"] },
     },
   );
 }

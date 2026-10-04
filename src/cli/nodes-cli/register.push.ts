@@ -43,12 +43,8 @@ export function registerNodesPushCommand(nodes: Command) {
           const parsed = asRecord(result);
           const ok = parsed.ok === true;
           const status = typeof parsed.status === "number" ? parsed.status : 0;
-          const reason =
-            typeof parsed.reason === "string" ? normalizeOptionalString(parsed.reason) : undefined;
-          const env =
-            typeof parsed.environment === "string"
-              ? (normalizeOptionalString(parsed.environment) ?? "unknown")
-              : "unknown";
+          const reason = normalizeOptionalString(parsed.reason);
+          const env = normalizeOptionalString(parsed.environment) ?? "unknown";
           if (opts.json) {
             defaultRuntime.writeJson(result);
           } else {

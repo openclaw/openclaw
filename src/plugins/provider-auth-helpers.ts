@@ -1,4 +1,3 @@
-// Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -9,6 +8,7 @@ import {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "../agents/auth-profiles/profiles.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -63,19 +63,13 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
-  if (input !== null && typeof input === "object") {
-    const coercedRef = coerceSecretRef(input);
-    if (!coercedRef || !isValidSecretRef(coercedRef)) {
-      throw new Error("API key SecretRef is invalid.");
-    }
-    return coercedRef;
-  }
-  if (options?.secretInputMode === "plaintext") {
+  const objectInput = input !== null && typeof input === "object";
+  if (!objectInput && options?.secretInputMode === "plaintext") {
     return normalizeSecretInput(input);
   }
   const coercedRef = coerceSecretRef(input);
-  if (coercedRef) {
-    if (!isValidSecretRef(coercedRef)) {
+  if (objectInput || coercedRef) {
+    if (!coercedRef || !isValidSecretRef(coercedRef)) {
       throw new Error("API key SecretRef is invalid.");
     }
     return coercedRef;
@@ -296,16 +290,14 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(path.resolve(dir));
-    if (real && !seen.has(real)) {
-      seen.add(real);
-      result.push(real);
-    }
-  }
-  return result;
+  // Publish the shared profile before siblings decide whether to inherit it.
+  const sharedAgentDir = safeRealpathSync(resolveSharedMainAuthAgentDir());
+  return uniqueStrings(
+    [normalized, ...discovered].flatMap((dir) => {
+      const real = safeRealpathSync(path.resolve(dir));
+      return real ? [real] : [];
+    }),
+  ).toSorted((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
 }
 
 export async function writeOAuthCredentials(

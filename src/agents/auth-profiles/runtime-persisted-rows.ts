@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AuthProfileRowRead } from "./types.js";
 
 const IDENTITY_PROBE_INTERVAL_MS = 100;
@@ -12,17 +13,6 @@ export class AuthProfileRuntimeReadStaleError extends Error {
   constructor(readonly waitForSettlement?: (signal?: AbortSignal) => Promise<void>) {
     super("Auth profile store changed during its runtime read; retry resolution");
     this.name = "AuthProfileRuntimeReadStaleError";
-  }
-}
-
-// Worker rows contain JSON values; normalization builds each caller's mutable store.
-function freezeRows(value: unknown): void {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
-    return;
-  }
-  Object.freeze(value);
-  for (const child of Object.values(value)) {
-    freezeRows(child);
   }
 }
 
@@ -112,7 +102,7 @@ export function createRuntimeAuthProfileRowsCache(
             revisionAtPath(databasePath).rows === revision.rows &&
             readIdentity(databasePath) === identity
           ) {
-            freezeRows(rows);
+            freezeJsonSnapshot(rows);
             entries.set(databasePath, { identity, checkedAt, revision: revision.rows, rows });
             // Bound retained credential owners; eviction never changes read authority.
             while (entries.size > 64) {

@@ -55,10 +55,11 @@ describe("openclaw npm resume run identity", () => {
     overrides: Record<string, unknown> = {},
     publish = true,
     latest: Record<string, unknown> = {},
+    jobs?: OpenClawNpmResumeValidationInput["jobs"],
   ) {
     return vi.fn((args: string[]) => {
       const endpoint = args[1];
-      if (endpoint === "repos/openclaw/openclaw/actions/runs/456") {
+      if (!jobs && endpoint === "repos/openclaw/openclaw/actions/runs/456") {
         return JSON.stringify({ ...fixture().run, ...overrides, ...latest });
       }
       if (endpoint === "repos/openclaw/openclaw/actions/runs/456/attempts/1") {
@@ -71,10 +72,12 @@ describe("openclaw npm resume run identity", () => {
         return JSON.stringify({ object: { sha: SHA, type: "commit" } });
       }
       if (args[0] === "run") {
-        return JSON.stringify([
-          { conclusion: "success", name: "validate_publish_request" },
-          { name: "publish_openclaw_npm", conclusion: publish ? "success" : "skipped" },
-        ]);
+        return JSON.stringify(
+          jobs ?? [
+            { conclusion: "success", name: "validate_publish_request" },
+            { name: "publish_openclaw_npm", conclusion: publish ? "success" : "skipped" },
+          ],
+        );
       }
       throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
     });
@@ -89,13 +92,41 @@ describe("openclaw npm resume run identity", () => {
     });
   }
 
-  it("recovers the exact published version's original publisher after parent tooling changes", () => {
-    expect(recover()).toMatchObject({
-      runId: "456",
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-  });
+  it.each([false, true])(
+    "recovers delayed registry readback only without another failed job: %s",
+    (otherFailure) => {
+      const jobs = [
+        { conclusion: "success", name: "validate_publish_request", steps: [] },
+        {
+          conclusion: "failure",
+          name: "publish_openclaw_npm",
+          steps: [
+            { conclusion: "success", name: "Publish" },
+            { conclusion: "failure", name: "Verify extended-stable registry readback" },
+          ],
+        },
+        ...(otherFailure ? [{ conclusion: "failure", name: "unexpected_failure", steps: [] }] : []),
+      ];
+      const runGh = publicationRun({ conclusion: "failure" }, true, {}, jobs);
+      if (otherFailure) {
+        expect(() =>
+          validateOpenClawNpmResumeRun(
+            fixture({
+              run: { ...fixture().run, conclusion: "failure" },
+              jobs,
+            }),
+          ),
+        ).toThrow("untrusted workflow identity");
+      } else {
+        expect(recover(publicationEvidence(), runGh)).toMatchObject({
+          runId: "456",
+          runAttempt: 1,
+          workflowRef: `refs/tags/${BRANCH}`,
+          workflowSha: SHA,
+        });
+      }
+    },
+  );
 
   it.each(["success", "failure"])(
     "retains the signed attempt after a later %s rerun",
@@ -121,42 +152,62 @@ describe("openclaw npm resume run identity", () => {
     expect(() => recover(publication)).toThrow("ambiguous publisher evidence");
   });
 
-  it.each([
-    ["different version", { version: "2026.9.6" }],
-    ["different tarball", { tarballSha512: "e".repeat(128) }],
-  ])("refuses discovery from a %s", (_name, overrides) => {
-    expect(() => recover({ ...publicationEvidence(), ...overrides })).toThrow(
-      "missing or ambiguous publisher evidence",
-    );
+  it.each<{
+    label: string;
+    publication?: ReturnType<typeof publicationEvidence>;
+    overrides?: Record<string, unknown>;
+    publish?: boolean;
+    runId?: string;
+    message: string;
+    noLookup?: boolean;
+  }>([
+    {
+      label: "different version",
+      publication: { ...publicationEvidence(), version: "2026.9.6" },
+      message: "missing or ambiguous publisher evidence",
+    },
+    {
+      label: "different tarball",
+      publication: { ...publicationEvidence(), tarballSha512: "e".repeat(128) },
+      message: "missing or ambiguous publisher evidence",
+    },
+    {
+      label: "contradictory supplied run",
+      runId: "999",
+      message: "original publisher",
+      noLookup: true,
+    },
+    {
+      label: "another repository",
+      publication: publicationEvidence("https://github.com/other/repo/actions/runs/456/attempts/1"),
+      message: "this repository's npm release workflow",
+    },
+    {
+      label: "failed publisher",
+      overrides: { conclusion: "failure" },
+      message: "untrusted workflow identity",
+    },
+    { label: "wrong attempt response", overrides: { run_attempt: 2 }, message: "SHA and attempt" },
+    { label: "wrong run response", overrides: { id: 789 }, message: "SHA and attempt" },
+    {
+      label: "unfinished attempt",
+      overrides: { status: "in_progress" },
+      message: "SHA and attempt",
+    },
+    {
+      label: "changed workflow",
+      overrides: { head_sha: "e".repeat(40) },
+      message: "SHA and attempt",
+    },
+    { label: "preflight-only publisher", publish: false, message: "successful npm publish job" },
+  ])("rejects $label", ({ publication, overrides, publish, runId, message, noLookup }) => {
+    const runGh = publicationRun(overrides, publish);
+    expect(() => recover(publication, runGh, runId)).toThrow(message);
+    if (noLookup) {
+      expect(runGh).not.toHaveBeenCalled();
+    }
   });
 
-  it("rejects a supplied run id that contradicts the immutable publication receipt", () => {
-    const runGh = publicationRun();
-    expect(() => recover(publicationEvidence(), runGh, "999")).toThrow("original publisher");
-    expect(runGh).not.toHaveBeenCalled();
-  });
-
-  it("rejects a publisher invocation from another repository", () => {
-    expect(() =>
-      recover(publicationEvidence("https://github.com/other/repo/actions/runs/456/attempts/1")),
-    ).toThrow("this repository's npm release workflow");
-  });
-
-  it.each([
-    ["failed", { conclusion: "failure" }, "untrusted workflow identity"],
-    ["wrong attempt response", { run_attempt: 2 }, "SHA and attempt"],
-    ["wrong run response", { id: 789 }, "SHA and attempt"],
-    ["unfinished attempt", { status: "in_progress" }, "SHA and attempt"],
-    ["changed workflow", { head_sha: "e".repeat(40) }, "SHA and attempt"],
-  ])("rejects a %s original publisher", (_name, overrides, message) => {
-    expect(() => recover(publicationEvidence(), publicationRun(overrides))).toThrow(message);
-  });
-
-  it("does not adopt a successful preflight-only run as the publisher", () => {
-    expect(() => recover(publicationEvidence(), publicationRun({}, false))).toThrow(
-      "successful npm publish job",
-    );
-  });
   it("bounds each GitHub lookup", () => {
     const execFileSyncImpl = vi.fn(() => "result");
 
@@ -249,18 +300,29 @@ describe("openclaw npm resume run identity", () => {
     expect(() => validateOpenClawNpmResumeRun(fixture(overrides))).toThrow(message);
   });
 
-  it("loads the exact run, workflow, signed tag, ancestry, and approval job", () => {
+  it.each([true, false])("loads the immutable publisher with an annotated tag: %s", (annotated) => {
+    const input = fixture();
     const responses = new Map<string, unknown>([
-      [`api repos/openclaw/openclaw/actions/runs/456/attempts/1 --method GET`, fixture().run],
+      [`api repos/openclaw/openclaw/actions/runs/456/attempts/1 --method GET`, input.run],
       [
         `api repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml --method GET`,
         { id: 101 },
       ],
-      [`api repos/openclaw/openclaw/git/ref/tags/${BRANCH} --method GET`, fixture().tagRef],
-      [`api repos/openclaw/openclaw/git/tags/${TAG_OBJECT_SHA} --method GET`, fixture().tag],
-      [`api repos/openclaw/openclaw/compare/${SHA}...main --method GET`, { status: "identical" }],
-      [`run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs`, fixture().jobs],
+      [
+        `api repos/openclaw/openclaw/git/ref/tags/${BRANCH} --method GET`,
+        annotated ? input.tagRef : { object: { sha: SHA, type: "commit" } },
+      ],
+      [`run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs`, input.jobs],
     ]);
+    if (annotated) {
+      responses.set(
+        `api repos/openclaw/openclaw/git/tags/${TAG_OBJECT_SHA} --method GET`,
+        input.tag,
+      );
+      responses.set(`api repos/openclaw/openclaw/compare/${SHA}...main --method GET`, {
+        status: "identical",
+      });
+    }
     const runGh = vi.fn((args: string[]) => {
       const response = responses.get(args.join(" "));
       if (!response) {
@@ -268,70 +330,20 @@ describe("openclaw npm resume run identity", () => {
       }
       return JSON.stringify(response);
     });
-
-    expect(
-      resolveOpenClawNpmResumeRun({
-        repo: "openclaw/openclaw",
-        runGh,
-        runId: "456",
-        publication: publicationEvidence(),
-      }),
-    ).toEqual({
+    expect(recover(publicationEvidence(), runGh, "456")).toEqual({
       runId: "456",
       runAttempt: 1,
-      tagObjectSha: TAG_OBJECT_SHA,
+      tagObjectSha: annotated ? TAG_OBJECT_SHA : SHA,
       url: URL,
       workflowRef: `refs/tags/${BRANCH}`,
       workflowSha: SHA,
     });
-    expect(runGh).toHaveBeenCalledTimes(6);
-  });
-
-  it("loads a lightweight protected tag without requiring tag metadata or main ancestry", () => {
-    const lightweight = fixture({
-      compareStatus: undefined,
-      tag: {},
-      tagRef: { object: { sha: SHA, type: "commit" } },
-    });
-    const responses = new Map<string, unknown>([
-      [`api repos/openclaw/openclaw/actions/runs/456/attempts/1 --method GET`, lightweight.run],
-      [
-        `api repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml --method GET`,
-        { id: 101 },
-      ],
-      [`api repos/openclaw/openclaw/git/ref/tags/${BRANCH} --method GET`, lightweight.tagRef],
-      [
-        `run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs`,
-        lightweight.jobs,
-      ],
-    ]);
-    const runGh = vi.fn((args: string[]) => {
-      const response = responses.get(args.join(" "));
-      if (!response) {
-        throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
-      }
-      return JSON.stringify(response);
-    });
-
-    expect(
-      resolveOpenClawNpmResumeRun({
-        repo: "openclaw/openclaw",
-        runGh,
-        runId: "456",
-        publication: publicationEvidence(),
-      }),
-    ).toEqual({
-      runId: "456",
-      runAttempt: 1,
-      tagObjectSha: SHA,
-      url: URL,
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-    expect(runGh).toHaveBeenCalledTimes(4);
-    expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
-      `repos/openclaw/openclaw/compare/${SHA}...main`,
-    );
+    expect(runGh).toHaveBeenCalledTimes(annotated ? 6 : 4);
+    if (!annotated) {
+      expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+      );
+    }
   });
 });
 

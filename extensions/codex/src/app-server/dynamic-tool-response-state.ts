@@ -16,6 +16,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;
+  /** A `canDeliverSourceReply` tool authored the turn's final reply; siblings cannot reopen it. */
+  toolAuthoredFinalReply?: true;
   transcriptDetails?: unknown;
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };

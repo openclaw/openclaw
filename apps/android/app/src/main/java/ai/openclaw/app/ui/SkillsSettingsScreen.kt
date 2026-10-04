@@ -45,7 +45,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -236,6 +235,12 @@ private fun SkillDetailSettingsScreen(
   }
 }
 
+private data class SkillReadinessSegment(
+  val label: String,
+  val count: Int,
+  val color: Color,
+)
+
 @Composable
 private fun SkillsOverviewPanel(
   installedCount: Int,
@@ -243,81 +248,44 @@ private fun SkillsOverviewPanel(
   needsSetupCount: Int,
   disabledCount: Int,
 ) {
+  val segments =
+    listOf(
+      SkillReadinessSegment(nativeString("Ready"), readyCount, ClawTheme.colors.success),
+      SkillReadinessSegment(nativeString("Needs Setup"), needsSetupCount, ClawTheme.colors.warning),
+      SkillReadinessSegment(nativeString("Off"), disabledCount, ClawTheme.colors.textSubtle),
+    )
   ClawPanel(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
       Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
       Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-    SkillDistributionBar(
-      readyCount = readyCount,
-      needsSetupCount = needsSetupCount,
-      disabledCount = disabledCount,
-    )
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(6.dp)
+          .clip(RoundedCornerShape(ClawTheme.radii.pill))
+          .background(ClawTheme.colors.surfacePressed),
+    ) {
+      if (segments.sumOf { it.count } > 0) {
+        segments.forEach { segment ->
+          if (segment.count > 0) {
+            Box(modifier = Modifier.weight(segment.count.toFloat()).fillMaxHeight().background(segment.color))
+          }
+        }
+      }
+    }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      SkillCountLegend(
-        label = nativeString("Ready"),
-        count = readyCount,
-        color = ClawTheme.colors.success,
-        modifier = Modifier.weight(1f),
-      )
-      SkillCountLegend(
-        label = nativeString("Needs Setup"),
-        count = needsSetupCount,
-        color = ClawTheme.colors.warning,
-        modifier = Modifier.weight(1f),
-      )
-      SkillCountLegend(
-        label = nativeString("Off"),
-        count = disabledCount,
-        color = ClawTheme.colors.textSubtle,
-        modifier = Modifier.weight(1f),
-      )
-    }
-  }
-}
-
-@Composable
-private fun SkillDistributionBar(
-  readyCount: Int,
-  needsSetupCount: Int,
-  disabledCount: Int,
-) {
-  val total = readyCount + needsSetupCount + disabledCount
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .height(6.dp)
-        .clip(RoundedCornerShape(ClawTheme.radii.pill))
-        .background(ClawTheme.colors.surfacePressed),
-  ) {
-    if (total > 0) {
-      if (readyCount > 0) {
-        Box(modifier = Modifier.weight(readyCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.success))
-      }
-      if (needsSetupCount > 0) {
-        Box(modifier = Modifier.weight(needsSetupCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.warning))
-      }
-      if (disabledCount > 0) {
-        Box(modifier = Modifier.weight(disabledCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.textSubtle))
+      segments.forEach { segment ->
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(segment.color))
+            Text(text = segment.label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+          }
+          Text(text = segment.count.toString(), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        }
       }
     }
-  }
-}
-
-@Composable
-private fun SkillCountLegend(
-  label: String,
-  count: Int,
-  color: Color,
-  modifier: Modifier = Modifier,
-) {
-  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
-      Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
-    }
-    Text(text = count.toString(), style = ClawTheme.type.section, color = ClawTheme.colors.text)
   }
 }
 
@@ -647,9 +615,12 @@ private fun ClawHubInstallReviewDialog(
   onDismiss: () -> Unit,
   onInstall: () -> Unit,
 ) {
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(text = nativeString("Review ClawHub skill")) },
+  AppConfirmationDialog(
+    title = nativeString("Review ClawHub skill"),
+    confirmLabel = nativeString("Verify and install"),
+    onConfirm = onInstall,
+    onDismiss = onDismiss,
+    confirmEnabled = canInstall,
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = review.displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -663,16 +634,6 @@ private fun ClawHubInstallReviewDialog(
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )
-      }
-    },
-    confirmButton = {
-      TextButton(onClick = onInstall, enabled = canInstall) {
-        Text(text = nativeString("Verify and install"))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(text = nativeString("Cancel"))
       }
     },
   )

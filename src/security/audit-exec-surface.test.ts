@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
@@ -157,7 +157,7 @@ describe("security audit exec surface findings", () => {
         await collectSecurityAuditFindings({
           agents: {
             entries: {
-              ops: { default: true },
+              ops: {},
             },
           },
           tools: {
@@ -187,7 +187,7 @@ describe("security audit exec surface findings", () => {
         await collectSecurityAuditFindings({
           agents: {
             entries: {
-              ops: { default: true, tools: { exec: { strictInlineEval: false } } },
+              ops: { tools: { exec: { strictInlineEval: false } } },
             },
           },
           tools: {
@@ -258,7 +258,6 @@ describe("security audit exec surface findings", () => {
       agents: {
         entries: {
           ops: {
-            default: true,
             tools: {
               allow: ["read", "exec", "process"],
               deny: ["write", "edit", "apply_patch"],

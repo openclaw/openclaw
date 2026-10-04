@@ -281,8 +281,8 @@ describe("sessions.github.publish", () => {
   );
 
   it.each([
-    ["agent:research:main", "research", "legacy", undefined],
-    ["global", "ops", "legacy", undefined],
+    ["agent:research:main", "research", "configured", undefined],
+    ["global", "ops", "configured", undefined],
     ["agent:research:main", "research", "explicit", undefined],
     ["global", "research", "explicit", "research"],
   ])(
@@ -292,8 +292,12 @@ describe("sessions.github.publish", () => {
         await state.writeConfig({
           session: { scope: "global" },
           agents:
-            ownership === "legacy"
-              ? { entries: { ops: { default: true }, research: {} } }
+            ownership === "configured"
+              ? {
+                  ownership: "explicit",
+                  defaults: { systemAgent: { agentId: "ops" } },
+                  entries: { ops: {}, research: {} },
+                }
               : { ownership: "explicit", entries: { ops: {}, research: {} } },
         });
         for (const agentId of ["ops", "research"]) {

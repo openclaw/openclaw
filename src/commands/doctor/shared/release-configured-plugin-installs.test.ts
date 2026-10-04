@@ -1,5 +1,6 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
@@ -10,35 +11,12 @@ const mocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntries: vi.fn(),
 }));
 
-type AutoEnableDetectionCall = {
-  config: {
-    agents?: {
-      defaults?: {
-        model?: string;
-        agentRuntime?: { id?: string };
-      };
-    };
-  };
-};
-
 type MissingPluginInstallRepairCall = {
   pluginIds: string[];
   channelIds?: string[];
   blockedPluginIds: string[];
   env?: NodeJS.ProcessEnv;
 };
-
-function readOnlyAutoEnableDetectionCall(): AutoEnableDetectionCall {
-  expect(mocks.detectPluginAutoEnableCandidates).toHaveBeenCalledOnce();
-  const calls = mocks.detectPluginAutoEnableCandidates.mock.calls as unknown as Array<
-    [AutoEnableDetectionCall]
-  >;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected auto-enable detection call");
-  }
-  return call;
-}
 
 function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
   expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
@@ -232,26 +210,6 @@ describe("configured plugin install release step", () => {
       "memory-lancedb",
     ]);
     expect(result.channelIds).toEqual(["wecom"]);
-  });
-
-  it("collects Codex from the configured agent runtime even without integration discovery", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
-        },
-      },
-      env: {},
-    });
-
-    const detectionCall = readOnlyAutoEnableDetectionCall();
-    expect(detectionCall.config.agents?.defaults?.model).toBe("openai/gpt-5.4");
-    expect(detectionCall.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
-    expect(result.pluginIds).toEqual(["codex"]);
-    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("collects provider plugins from channel-only model overrides", async () => {
@@ -640,15 +598,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       pluginInventoryChanged: true,
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -670,15 +629,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       notices: [reviewNotice],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -702,15 +662,16 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {

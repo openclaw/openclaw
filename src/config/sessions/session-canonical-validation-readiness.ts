@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -23,7 +24,10 @@ import {
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
-import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import {
+  withSqliteReclamationWorker,
+  type ClaimedReclamationWorkerUse,
+} from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
@@ -38,7 +42,7 @@ const runtimeDrains = new WeakMap<DatabaseSync, Promise<void>>();
 /** Certify dirty persisted rows before startup maintenance reads their full entries. */
 export async function certifySessionCanonicalValidationPending(
   options: OpenClawAgentDatabaseOptions,
-  withWorker = withSqliteReclamationWorker,
+  withWorker: ClaimedReclamationWorkerUse = withSqliteReclamationWorker,
   assertCurrentOwner?: () => void,
 ): Promise<void> {
   assertCurrentOwner?.();
@@ -54,10 +58,21 @@ export async function certifySessionCanonicalValidationPending(
   const { database, claim } = retained;
   let oversizedRows = 0;
   try {
-    let initializeCanonicalValidation = !hasOpenClawAgentCanonicalValidation(database);
-    if (!initializeCanonicalValidation && !hasPendingCanonicalSessionValidation(database)) {
+    const readiness = runSqliteReadOperationSync(
+      database.db,
+      () => {
+        const initialize = !hasOpenClawAgentCanonicalValidation(database);
+        return {
+          initialize,
+          hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+        };
+      },
+      "fresh",
+    );
+    if (!readiness.hasWork) {
       return;
     }
+    let initializeCanonicalValidation = readiness.initialize;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,

@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -8,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const UPDATER_CLEANUP_GUARD_MS = 5_000;
 beforeEach(async () => {
   // resetModules gives each outcome a fresh owner; install spies on that same module instance.
   const [tmpOwner, systemdScope] = await Promise.all([
@@ -70,6 +72,9 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
       waitForSystemServiceUpdateHandoffs,
       cancelManagedServiceUpdateHandoff,
     } = await import("./update-managed-service-handoff.js");
+    const { activeManagedServiceUpdateHandoffs } =
+      await import("./update-managed-service-handoff-current.js");
+    let helperClosed: Promise<void> | undefined;
     let updater: net.Socket | undefined;
     let updaterPid: number | undefined;
     let updaterStart: number | null = null;
@@ -91,6 +96,11 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
       });
       if (started.status !== "started" || !started.pid) {
         throw new Error("expected owned helper");
+      }
+      // Retain the spawn-time close observer before transfer can retire the active owner.
+      helperClosed = activeManagedServiceUpdateHandoffs.get(started.installRoot)?.closed;
+      if (!helperClosed) {
+        throw new Error("expected owned helper close observer");
       }
       helperStart = getFileLockProcessStartTime(started.pid);
       await expect(
@@ -145,7 +155,8 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         getFileLockProcessStartTime(updaterPid) === updaterStart
       ) {
         updater?.write("finish");
-        await waitForDead(updaterPid, 5_000);
+        // Cleanup hang guard after the owner requested updater settlement, not a readiness race.
+        await waitForDead(updaterPid, AbortSignal.timeout(UPDATER_CLEANUP_GUARD_MS));
       }
       updater?.destroy();
       if (
@@ -154,8 +165,8 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         getFileLockProcessStartTime(started.pid) === helperStart
       ) {
         process.kill(started.pid, "SIGKILL");
-        await waitForDead(started.pid, 5_000);
       }
+      await helperClosed;
       if (started?.status === "started") {
         await cancelManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started });
         await fs.rm(path.dirname(started.logPath), { recursive: true, force: true });

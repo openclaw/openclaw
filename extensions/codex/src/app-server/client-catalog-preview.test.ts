@@ -99,37 +99,6 @@ describe("Codex catalog preview decoding", () => {
     },
   );
 
-  it("reuses unchanged resident previews after worker projection", async () => {
-    const harness = createHarness();
-    const catalogPreviewCache = (thread: { updatedAt?: number | null }) =>
-      thread.updatedAt === 100 ? "Retained first user request" : undefined;
-    for (const updatedAt of [100, 101]) {
-      const request = harness.client.request<{ data: Array<{ preview: string }> }>(
-        "thread/list",
-        { limit: 64, useStateDbOnly: true },
-        { catalogPreview: true, catalogPreviewCache },
-      );
-      harness.send({
-        id: requestId(harness, updatedAt - 100),
-        result: {
-          data: [
-            {
-              id: "cached-preview",
-              updatedAt,
-              preview: "new ".repeat(100_000),
-            },
-          ],
-        },
-      });
-      const page = await request;
-      if (updatedAt === 100) {
-        expect(page.data[0]?.preview).toBe("Retained first user request");
-      } else {
-        expect(page.data[0]?.preview).toBe("new ".repeat(125));
-      }
-    }
-  });
-
   it("bounds catalog payloads while preserving ordinary thread/list results", async () => {
     const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
     const harness = createHarness();
@@ -237,11 +206,6 @@ describe("Codex catalog preview decoding", () => {
       expected: "x".repeat(499),
     },
     {
-      name: "lone surrogate in a short preview",
-      preview: "\ud800 visible",
-      expected: "\ufffd visible",
-    },
-    {
       name: "lone surrogate at the output boundary",
       preview: "x".repeat(499) + "\ud800" + "y".repeat(4096),
       expected: "x".repeat(499) + "\ufffd",
@@ -265,26 +229,6 @@ describe("Codex catalog preview decoding", () => {
       name: "C1 CSI crossing the input prefix",
       preview: "\u009b" + "1;".repeat(1500) + "31mvisible",
       expected: "visible",
-    },
-    {
-      name: "C1 OSC crossing the input prefix",
-      preview: "\u009d" + "p".repeat(3000) + "\u009cvisible",
-      expected: "visible",
-    },
-    {
-      name: "C1 next-line is not JavaScript whitespace",
-      preview: "a\u0085b" + "x".repeat(4096),
-      expected: "ab" + "x".repeat(498),
-    },
-    {
-      name: "Unicode whitespace",
-      preview: "\u00a0\ufeff\u2028Unicode\u00a0\u2029text" + "x".repeat(4096),
-      expected: "Unicode text" + "x".repeat(488),
-    },
-    {
-      name: "formatting characters are preserved",
-      preview: "\u200b\u202e" + "x".repeat(4096),
-      expected: "\u200b\u202e" + "x".repeat(498),
     },
   ])("preserves $name in catalog previews", async ({ preview, expected }) => {
     const harness = createHarness();

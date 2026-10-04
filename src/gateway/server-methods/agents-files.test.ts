@@ -140,20 +140,6 @@ for (const storage of ["local", "remote"] as const) {
         expect(readMemory()).toBe("# Memory\n- first operator\n");
       });
 
-      it.each([
-        { expectedMissing: true, expectedHash: hashContent("old") },
-        { expectedMissing: false },
-      ])("rejects invalid create preconditions: %j", async (preconditions) => {
-        const result = await invokeAgentFilesHandler("agents.files.set", {
-          agentId: "main",
-          name: "MEMORY.md",
-          content: "new",
-          ...preconditions,
-        });
-        expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-        expect(fs.existsSync(path.join(storageDir, "MEMORY.md"))).toBe(false);
-      });
-
       it.runIf(storage === "remote")(
         "keeps the draft when a workspace provider lacks exclusive creation, while preserving blind writes",
         async () => {
@@ -199,47 +185,55 @@ for (const storage of ["local", "remote"] as const) {
         expect(file).not.toHaveProperty("size", expect.any(Number));
       });
 
-      it("returns the on-disk content hash from agents.files.get", async () => {
-        fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "# Memory\n");
+      it.each(["conflicting-preconditions", "expected-present", "stale", "gone"] as const)(
+        "refuses a save with %s preconditions without overwriting the document",
+        async (variant) => {
+          const name = "MEMORY.md";
+          let expectedHash = hashContent("# Memory\n");
+          if (variant === "stale") {
+            fs.writeFileSync(path.join(storageDir, name), "# Memory\n");
+            const opened = await invokeAgentFilesHandler("agents.files.get", {
+              agentId: "main",
+              name,
+            });
+            expect(opened.ok).toBe(true);
+            const openedHash = (opened.payload as { file: { hash: string } }).file.hash;
+            expect(openedHash).toBe(expectedHash);
+            expectedHash = openedHash;
+            fs.appendFileSync(path.join(storageDir, name), "- agent learned a birthday\n");
+          }
+          const preconditions =
+            variant === "conflicting-preconditions"
+              ? { expectedMissing: true, expectedHash: hashContent("old") }
+              : variant === "expected-present"
+                ? { expectedMissing: false }
+                : { expectedHash };
+          const call = await invokeAgentFilesHandler("agents.files.set", {
+            agentId: "main",
+            name,
+            content: "# Memory\n- operator note\n",
+            ...preconditions,
+          });
+          expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+          if (variant === "stale" || variant === "gone") {
+            expect(call.error?.details).toEqual({
+              type: "agent_file_conflict",
+              name,
+              ...(variant === "stale"
+                ? { currentHash: hashContent("# Memory\n- agent learned a birthday\n") }
+                : {}),
+            });
+          }
+          if (variant === "stale") {
+            expect(readMemory()).toBe("# Memory\n- agent learned a birthday\n");
+          } else {
+            expect(fs.existsSync(path.join(storageDir, name))).toBe(false);
+          }
+        },
+      );
 
-        const call = await invokeAgentFilesHandler("agents.files.get", {
-          agentId: "main",
-          name: "MEMORY.md",
-        });
-
-        expect(call.ok).toBe(true);
-        expect((call.payload as { file: { hash?: string } }).file.hash).toBe(
-          hashContent("# Memory\n"),
-        );
-      });
-
-      it("refuses a stale expectedHash and keeps the lines written since the read", async () => {
-        fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "# Memory\n");
-        const opened = await invokeAgentFilesHandler("agents.files.get", {
-          agentId: "main",
-          name: "MEMORY.md",
-        });
-        const openedHash = (opened.payload as { file: { hash: string } }).file.hash;
-        fs.appendFileSync(path.join(storageDir, "MEMORY.md"), "- agent learned a birthday\n");
-
-        const call = await invokeAgentFilesHandler("agents.files.set", {
-          agentId: "main",
-          name: "MEMORY.md",
-          content: "# Memory\n- operator note\n",
-          expectedHash: openedHash,
-        });
-
-        expect(call.ok).toBe(false);
-        expect((call.error as { details?: unknown }).details).toEqual({
-          type: "agent_file_conflict",
-          name: "MEMORY.md",
-          currentHash: hashContent("# Memory\n- agent learned a birthday\n"),
-        });
-        expect(readMemory()).toBe("# Memory\n- agent learned a birthday\n");
-      });
-
-      it.each(["lowercase", "uppercase"])(
-        "writes when the %s expectedHash matches and returns the new hash",
+      it.each(["uppercase", "omitted"] as const)(
+        "writes with an %s expectedHash and returns the new hash",
         async (hashCase) => {
           fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "# Memory\n");
           const expectedHash = hashContent("# Memory\n");
@@ -248,7 +242,7 @@ for (const storage of ["local", "remote"] as const) {
             agentId: "main",
             name: "MEMORY.md",
             content: "# Memory\n- operator note\n",
-            expectedHash: hashCase === "uppercase" ? expectedHash.toUpperCase() : expectedHash,
+            ...(hashCase === "uppercase" ? { expectedHash: expectedHash.toUpperCase() } : {}),
           });
 
           expect(call.ok).toBe(true);
@@ -258,38 +252,6 @@ for (const storage of ["local", "remote"] as const) {
           expect(readMemory()).toBe("# Memory\n- operator note\n");
         },
       );
-
-      it("reports a conflict without currentHash when the expected file is gone", async () => {
-        const call = await invokeAgentFilesHandler("agents.files.set", {
-          agentId: "main",
-          name: "MEMORY.md",
-          content: "# Memory\n",
-          expectedHash: hashContent("# Memory\n"),
-        });
-
-        expect(call.ok).toBe(false);
-        expect((call.error as { details?: unknown }).details).toEqual({
-          type: "agent_file_conflict",
-          name: "MEMORY.md",
-        });
-        expect(fs.existsSync(path.join(storageDir, "MEMORY.md"))).toBe(false);
-      });
-
-      it("keeps the unconditional overwrite when expectedHash is omitted", async () => {
-        fs.writeFileSync(
-          path.join(storageDir, "MEMORY.md"),
-          "# Memory\n- agent learned a birthday\n",
-        );
-
-        const call = await invokeAgentFilesHandler("agents.files.set", {
-          agentId: "main",
-          name: "MEMORY.md",
-          content: "# Memory\n- operator note\n",
-        });
-
-        expect(call.ok).toBe(true);
-        expect(readMemory()).toBe("# Memory\n- operator note\n");
-      });
 
       it("admits only one of two concurrent saves that share an expectedHash", async () => {
         fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "# Memory\n");

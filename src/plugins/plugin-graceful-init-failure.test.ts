@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const fixtureTempDirs: string[] = [];
@@ -159,7 +159,7 @@ describe("graceful plugin initialization failure", () => {
     expect(failed.error).toContain("invalid schema");
   });
 
-  it("keeps loading other plugins when a manifest schema is nested past the stack limit", async () => {
+  it("keeps loading siblings and retries validation when a schema cannot be serialized", async () => {
     // Serialize the fixture without spending the stack that validation must contain.
     const deep =
       '{"type":"object","properties":{"nested":'.repeat(3_000) +
@@ -175,24 +175,40 @@ describe("graceful plugin initialization failure", () => {
       body: `module.exports = { id: "shallow-schema-plugin", register() {} };`,
     });
 
-    const registry = await loadPlugins([broken.file, healthy.file]);
+    const brokenSource = fs.realpathSync(broken.file);
+    const stringify = JSON.stringify;
+    let signatureFailures = 0;
+    // Native serialization limits differ; only the broken candidate's retention signature fails.
+    const serialization = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      if (Array.isArray(value) && value[0] === brokenSource) {
+        signatureFailures++;
+        throw new RangeError("fixture retention signature exceeds serialization limits");
+      }
+      return stringify(value, ...args);
+    });
+    try {
+      const registry = await loadPlugins([broken.file, healthy.file]);
 
-    expect(requirePluginEntry(registry, "shallow-schema-plugin").status).toBe("loaded");
-    expect(requirePluginEntry(registry, "deep-schema-plugin")).toMatchObject({
-      status: "error",
-      failurePhase: "validation",
-    });
-    const replacement = await loadPlugins([broken.file, healthy.file], undefined, registry);
-    expect(requirePluginEntry(replacement, "shallow-schema-plugin")).toBe(
-      requirePluginEntry(registry, "shallow-schema-plugin"),
-    );
-    expect(requirePluginEntry(replacement, "deep-schema-plugin")).toMatchObject({
-      status: "error",
-      failurePhase: "validation",
-    });
-    expect(requirePluginEntry(replacement, "deep-schema-plugin")).not.toBe(
-      requirePluginEntry(registry, "deep-schema-plugin"),
-    );
+      expect(requirePluginEntry(registry, "shallow-schema-plugin").status).toBe("loaded");
+      expect(requirePluginEntry(registry, "deep-schema-plugin")).toMatchObject({
+        status: "error",
+        failurePhase: "validation",
+      });
+      const replacement = await loadPlugins([broken.file, healthy.file], undefined, registry);
+      expect(requirePluginEntry(replacement, "shallow-schema-plugin")).toBe(
+        requirePluginEntry(registry, "shallow-schema-plugin"),
+      );
+      expect(requirePluginEntry(replacement, "deep-schema-plugin")).toMatchObject({
+        status: "error",
+        failurePhase: "validation",
+      });
+      expect(requirePluginEntry(replacement, "deep-schema-plugin")).not.toBe(
+        requirePluginEntry(registry, "deep-schema-plugin"),
+      );
+      expect(signatureFailures).toBe(2);
+    } finally {
+      serialization.mockRestore();
+    }
   });
 
   it("records failed register metadata", async () => {

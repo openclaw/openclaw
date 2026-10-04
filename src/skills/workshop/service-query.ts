@@ -7,12 +7,15 @@ import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
-import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
 import { resolveSkillProposalName } from "./frontmatter.js";
-import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
+import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import type {
+  SkillWorkshopDirectoryStoreOptions,
+  SkillWorkshopStoreOptions,
+} from "./store-sqlite-schema.js";
+import { commitPendingSkillProposalTransition } from "./store-transition.js";
 import {
   SkillProposalDraftMissingError,
   readSkillProposal,
@@ -23,21 +26,57 @@ import {
 } from "./store.js";
 import { withSkillProposalCommitLock } from "./target-lock.js";
 import type {
+  SkillProposalActionInput,
+  SkillProposalEvent,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalRecord,
 } from "./types.js";
 
+export async function transitionPendingSkillProposalToStale(params: {
+  store?: SkillWorkshopStoreOptions;
+  record: SkillProposalRecord;
+  reason: string;
+  input: Pick<
+    SkillProposalActionInput,
+    "agentId" | "config" | "correlationId" | "env" | "eventActor"
+  >;
+}): Promise<{ record: SkillProposalRecord; event: SkillProposalEvent }> {
+  const now = new Date().toISOString();
+  const stale: SkillProposalRecord = {
+    ...params.record,
+    status: "stale",
+    updatedAt: now,
+    staleAt: now,
+    statusReason: params.reason,
+  };
+  const commit = await commitPendingSkillProposalTransition({
+    expected: params.record,
+    record: stale,
+    event: createSkillProposalEvent({
+      record: stale,
+      type: "stale",
+      actor: params.input.eventActor,
+      ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
+      occurredAt: now,
+    }),
+    store: params.store ?? {
+      ...(params.input.env ? { env: params.input.env } : {}),
+      ...(params.input.agentId ? { agentId: params.input.agentId } : {}),
+      config: params.input.config,
+    },
+    operationLabel: "skill-workshop.stale.commit",
+  });
+  if (commit.state !== "committed") {
+    throw new Error("Failed to record stale Skill Workshop proposal.");
+  }
+  return { record: stale, event: commit.event };
+}
+
 type SkillProposalScopeOptions = SkillWorkshopStoreOptions & {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   config: OpenClawConfig;
-};
-
-type RequiredProposalReadOptions = {
-  config: OpenClawConfig;
-  reconcile?: boolean;
-  store?: SkillWorkshopStoreOptions;
 };
 
 export async function listSkillProposals(
@@ -138,20 +177,14 @@ export async function resolvePendingSkillProposal(input: {
 
 export async function readRequiredProposal(
   proposalId: string,
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  readOptions: RequiredProposalReadOptions,
+  store: SkillWorkshopDirectoryStoreOptions,
+  options: { reconcile?: boolean } = {},
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
-    {
-      ...readOptions.store,
-      env: readOptions.store?.env ?? env,
-      agentId,
-      config: readOptions.config,
-    },
-    { agentId },
-    readOptions,
+    store,
+    { agentId: store.agentId },
+    { config: store.config, ...options },
   );
   if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);

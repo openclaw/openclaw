@@ -4,7 +4,7 @@ import type { AdoptedSessionEntry, nodeAdoptedSourceKey } from "./session-catalo
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import type { CodexSessionCatalogHost } from "./session-catalog-types.js";
 
-type NodeSnapshot = { key: string; generation: number; host: CodexSessionCatalogHost };
+type NodeSnapshot = { key: string; host: CodexSessionCatalogHost };
 type NodePublication = {
   connection: number | undefined;
   generation: number;
@@ -69,8 +69,7 @@ export class CodexCatalogNodeSnapshots {
           return false;
         }
         publication.generation = generation;
-        publication.snapshot =
-          node.connected && host.connected ? { key, generation, host } : undefined;
+        publication.snapshot = node.connected && host.connected ? { key, host } : undefined;
         return true;
       },
       isCurrent: (snapshot: NodeSnapshot) => valid() && publication.snapshot === snapshot,

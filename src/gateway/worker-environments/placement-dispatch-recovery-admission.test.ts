@@ -5,8 +5,15 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -95,7 +102,7 @@ describe("placement recovery session admission with persisted placements", () =>
         throw new Error("Stop fixture was not active");
       }
       harness.markEnvironmentOwnerEpoch(2);
-      placements.startDrain({
+      await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
@@ -120,9 +127,9 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
         if (state === "busy") {
           expect(reads).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         } else {
-          expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
             { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
           ]);
         }
@@ -143,7 +150,7 @@ describe("placement recovery session admission with persisted placements", () =>
     async (mode) => {
       const placements = createStore();
       const requested = await placements.startDispatch(REQUEST);
-      placements.fail({
+      await placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "previous attempt",
@@ -276,6 +283,77 @@ describe("placement recovery session admission with persisted placements", () =>
     },
   );
 
+  it("lent result recovery leaves the admitted Move intent for its owner and later recovery", async () => {
+    const placements = createStore();
+    const claimWaitEntered = createDeferredCore();
+    const releaseClaimWait = createDeferredCore();
+    const interruption = new Error("fixture Move interrupted after claim wait");
+    const harness = createHarness(support.testState.stateDb, placements, {
+      workspacePath: support.testState.root,
+      runMoveBarrier: async ({ sessionId, begin }) => {
+        await begin();
+        await coordinated.awaitTurnClaimRelease(sessionId, () => {
+          claimWaitEntered.resolve();
+          return releaseClaimWait.promise;
+        });
+        throw interruption;
+      },
+    });
+    const active = await harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("Move fixture was not active");
+    }
+    harness.markEnvironmentOwnerEpoch(2);
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      claimId: "move-wait-claim",
+      runId: "move-wait-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const coordinated = coordinate(harness);
+    const move = coordinated.move({
+      ...REQUEST,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+    });
+    void move.catch(claimWaitEntered.reject);
+    let recovery: Promise<void> | undefined;
+    try {
+      await claimWaitEntered.promise;
+      const intent = placements.getPlacementMove(REQUEST.sessionId);
+      expect(intent).toBeDefined();
+      recovery = coordinated.reconcileActive(active.environmentId);
+      await recovery;
+      expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "draining",
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await placements.releaseTurn(claim);
+      } finally {
+        releaseClaimWait.resolve();
+        await Promise.allSettled([move, recovery]);
+      }
+    }
+    await expect(move).rejects.toBe(interruption);
+    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeDefined();
+    await coordinated.reconcileActive(active.environmentId);
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
+    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it("reads pending results after a same-session Stop has settled", async () => {
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
@@ -295,7 +373,7 @@ describe("placement recovery session admission with persisted placements", () =>
     const stop = coordinated.reclaim(REQUEST);
     void stop.catch(reconciliationEntered.reject);
     await reconciliationEntered.promise;
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const observation = observe(harness);
     abandon.mockClear();
     const sweep = coordinated.reconcileActive(active.environmentId!);
@@ -307,10 +385,125 @@ describe("placement recovery session admission with persisted placements", () =>
       await stop;
       await sweep;
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
     expect(abandon).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("spreads startup orphan inventories across idle sweeps and eventually reclaims every checkout", async () => {
+    const template = path.join(support.testState.root, "template");
+    await fs.mkdir(template);
+    await git(template, "init", "--quiet", "--template=");
+    const tree = await git(template, "write-tree");
+    const placements = createStore();
+    const roots = Array.from({ length: 64 }, (_, index) =>
+      path.join(support.testState.root, `checkout-${String(index).padStart(2, "0")}`),
+    );
+    const rootsBySession = new Map<string, string>();
+    for (const [index, root] of roots.entries()) {
+      await fs.cp(template, root, { recursive: true });
+      const sessionId = `orphan-scan-${String(index).padStart(2, "0")}`;
+      rootsBySession.set(sessionId, root);
+      const placement = await placements.startDispatch({
+        ...REQUEST,
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+      });
+      await placements.fail({
+        sessionId,
+        expectedGeneration: placement.generation,
+        recoveryError: "finished fixture",
+      });
+    }
+    const orphanRoot = roots.at(-1)!;
+    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
+    await git(orphanRoot, "update-ref", cleanupRef, tree);
+    const harness = createHarness(support.testState.stateDb, placements, {
+      resolveWorkspace: async ({ sessionId }) => {
+        const root = rootsBySession.get(sessionId);
+        if (!root) {
+          throw new Error(`Unknown fixture session: ${sessionId}`);
+        }
+        return { kind: "local", path: root };
+      },
+    });
+    const coordinated = coordinate(harness);
+    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
+    const gitSpawns = () =>
+      spawns.mock.calls.filter(
+        ([command]) => path.basename(command).replace(/\.exe$/, "") === "git",
+      );
+    const inventoryRoots = () =>
+      gitSpawns().flatMap(([, child]) => {
+        const args = child.spawnargs;
+        return args.includes("for-each-ref") ? [args[args.indexOf("-C") + 1]!] : [];
+      });
+
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(false);
+    spawnDiagnostics.emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    const byOperation = new Map<string, number>();
+    const stopDiagnostics = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.child_process.spawn" && event.family === "git") {
+        const operation = event.operation ?? "unknown";
+        byOperation.set(operation, (byOperation.get(operation) ?? 0) + event.count);
+      }
+    });
+    const startedAt = performance.now();
+    const measurement = (phase: string) => ({
+      phase,
+      checkouts: roots.length,
+      totalSpawns: gitSpawns().length,
+      inventoryCount: inventoryRoots().length,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      rssBytes: process.memoryUsage().rss,
+    });
+    try {
+      await coordinated.reconcile("startup");
+      expect(gitSpawns()).toHaveLength(0);
+      for (let sweep = 0; sweep < 3; sweep++) {
+        await coordinated.reconcileActive();
+      }
+      console.info(JSON.stringify(measurement("first-three-sweeps")));
+      expect(inventoryRoots().length).toBeGreaterThan(0);
+      expect(inventoryRoots().length).toBeLessThanOrEqual(24);
+
+      const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground-request");
+      if (!foreground) {
+        throw new Error("Foreground fixture could not acquire Gateway admission");
+      }
+      const beforeBusySweep = gitSpawns().length;
+      try {
+        await coordinated.reconcileActive();
+        expect(gitSpawns()).toHaveLength(beforeBusySweep);
+      } finally {
+        foreground.release();
+      }
+
+      for (let sweep = 0; sweep < 8; sweep++) {
+        await coordinated.reconcileActive();
+      }
+      const completed = measurement("complete");
+      {
+        const sampleAt = performance.now() + 60_000;
+        using sampleClock = vi.spyOn(performance, "now");
+        sampleClock.mockReturnValue(sampleAt);
+        spawnDiagnostics.emitChildProcessSpawnSample();
+      }
+      console.info(JSON.stringify({ ...completed, byOperation: Object.fromEntries(byOperation) }));
+      expect(inventoryRoots().toSorted()).toEqual(roots.toSorted());
+      // One inventory per checkout plus the orphan's ref-queue lookup and deletion.
+      expect(gitSpawns()).toHaveLength(66);
+      expect(Object.fromEntries(byOperation)).toEqual({ "workspace.result-cleanup": 66 });
+      expect(await git(orphanRoot, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+    } finally {
+      stopDiagnostics();
+      setDiagnosticsEnabledForProcess(false);
+      spawnDiagnostics.emitChildProcessSpawnSample();
+      resetDiagnosticEventsForTest();
+    }
   });
 
   it("retries orphan cleanup on the next full sweep when a sharing session was busy", async () => {
@@ -327,7 +520,7 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "idle",
       sessionKey: "agent:main:idle",
     });
-    placements.fail({
+    await placements.fail({
       sessionId: idle.sessionId,
       expectedGeneration: idle.generation,
       recoveryError: "finished fixture",
@@ -367,14 +560,14 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "cloud",
       sessionKey: "agent:main:cloud",
     });
-    const provisioning = placements.transition({
+    const provisioning = await placements.transition({
       sessionId: "cloud",
       from: "requested",
       to: "provisioning",
       expectedGeneration: requested.generation,
       patch: { environmentId: "cloud-environment" },
     });
-    placements.fail({
+    await placements.fail({
       sessionId: "cloud",
       expectedGeneration: provisioning.generation,
       recoveryError: "provider teardown required",

@@ -15,7 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -205,7 +208,8 @@ it.each([
           return;
         }
         expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
         expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
           status: "killed",
           abortedLastRun: true,

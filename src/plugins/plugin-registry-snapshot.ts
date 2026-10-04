@@ -1,4 +1,3 @@
-// Builds stable snapshots of plugin registry contributions.
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -79,7 +78,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-// Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
 ): T {

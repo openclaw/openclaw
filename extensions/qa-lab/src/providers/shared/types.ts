@@ -21,10 +21,24 @@ export type QaMockRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
+/** Provider observation only; Gateway run/receipt identity must be collected separately. */
+export type QaMockContinuationCheckpoint = Readonly<{
+  cursor: number;
+  sessionId: string;
+  toolOutputCallId: string;
+}>;
+
+export type QaMockContinuationHold = {
+  reached: Promise<QaMockContinuationCheckpoint>;
+  release(): void;
+  cancel(): void;
+};
+
 export type QaMockProviderServer = {
   baseUrl: string;
   sessionObserverUrl?: string;
   terminalRequesters?: QaTerminalRequesterSettlement;
+  holdNextContinuation?: (sessionId: string, signal: AbortSignal) => QaMockContinuationHold;
   stop(): Promise<void>;
 };
 
@@ -41,13 +55,7 @@ type QaProviderGatewayModelsInput = {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 
-type QaProviderDefaultImageInput = {
-  modelProviderIds: readonly string[];
-};
-
 type QaProviderTurnTimeoutInput = {
-  primaryModel: string;
-  alternateModel: string;
   modelRef: string;
   fallbackMs: number;
 };
@@ -61,8 +69,6 @@ export type QaProviderDefinition = {
     serverLabel: string;
   };
   defaultModel(options?: { alternate?: boolean; preferredLiveModel?: string }): string;
-  defaultImageGenerationProviderIds: readonly string[];
-  defaultImageGenerationModel(input: QaProviderDefaultImageInput): string | null;
   usesFastModeByDefault(modelRef: string): boolean;
   resolveModelParams(input: QaProviderModelParamsInput): Record<string, unknown>;
   resolveTurnTimeoutMs(input: QaProviderTurnTimeoutInput): number;
@@ -71,7 +77,4 @@ export type QaProviderDefinition = {
     providers: Record<string, ModelProviderConfig>;
   } | null;
   mockAuthProviders?: readonly string[];
-  usesModelProviderPlugins: boolean;
-  scrubsLiveProviderEnv: boolean;
-  appliesLiveEnvAliases: boolean;
 };

@@ -1,5 +1,4 @@
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
@@ -136,7 +135,6 @@ export async function prepareGatewayPluginBootstrap(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.

@@ -55,6 +55,7 @@ type GatewayProtocolConnectDecision = {
   closeReason: string;
   reconnectDelayMs?: number;
   stop?: boolean;
+  keepOpen?: boolean;
   error?: Error;
 };
 type GatewayProtocolCloseDecision = {
@@ -109,6 +110,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   onConnectError?: (error: Error) => void;
   onSocketFactoryError?: (error: Error) => void;
   onReconnectStopped?: (error: Error) => void;
+  onReconnectScheduled?: (delayMs: number, signal: AbortSignal) => void;
   onParseError?: (error: unknown) => void;
   onEvent?: (event: EventFrame) => void;
   onGap?: (info: { expected: number; received: number }) => void;

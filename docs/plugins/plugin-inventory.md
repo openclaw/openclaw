@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-64 plugins
+65 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -77,6 +77,8 @@ Each entry lists the package, distribution route, and description.
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Presents hosted widget documents on paired macOS panels.
 
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
+
+- **[cloudflare](/plugins/reference/cloudflare)** (`@openclaw/cloudflare`) - included in OpenClaw, and also from npm or ClawHub: `clawhub:@openclaw/cloudflare`. Cloudflare R2 storage for named OpenClaw storage locations.
 
 - **[code-mode-quickjs](/plugins/reference/code-mode-quickjs)** (`@openclaw/code-mode-quickjs`) - included in OpenClaw. Hardened JavaScript execution for Code Mode using QuickJS in WebAssembly.
 
@@ -182,7 +184,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-95 plugins
+96 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -325,6 +327,8 @@ Each entry lists the package, distribution route, and description.
 - **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - npm or ClawHub: `clawhub:@openclaw/signal`. OpenClaw Signal channel plugin.
 
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm or ClawHub: `clawhub:@openclaw/slack`. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
+
+- **[slack-huddles](/plugins/reference/slack-huddles)** (`@openclaw/slack-huddles`) - npm or ClawHub: `clawhub:@openclaw/slack-huddles`. Join Slack huddles through a dedicated Slack user in Chrome.
 
 - **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - npm or ClawHub: `clawhub:@openclaw/sms`. Twilio SMS/MMS channel plugin for OpenClaw messages.
 

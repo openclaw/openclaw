@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -61,6 +62,7 @@ export {
   type SessionsPatchParams,
 } from "./sessions-patch.js";
 export {
+  SessionConversationLinkSchema,
   SessionAncestorRefSchema,
   SessionCreatedActorSchema,
   SessionEventAncestorsSchema,
@@ -70,6 +72,7 @@ export {
   SessionToolOverridesSchema,
   type SessionAncestorRef,
   type SessionCreatedActor,
+  type SessionConversationLink,
   type SessionEventAncestors,
   type SessionOwner,
   type SessionPermissionMode,
@@ -142,6 +145,9 @@ export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
+  selectionContext: Type.Optional(
+    Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
+  ),
   attachments: Type.Optional(ChatAttachmentsSchema),
 });
 
@@ -163,10 +169,9 @@ export const SessionsCompanionStateResultSchema = closedObject({
 });
 
 /** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-});
+export const SessionsCompanionResetParamsSchema = closedObject(
+  SessionsCompanionStateParamsSchema.properties,
+);
 
 /** Acknowledges clearing one companion thread. */
 export const SessionsCompanionResetResultSchema = closedObject({
@@ -289,21 +294,49 @@ export const SessionsFilesGetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
+export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
+const sessionFileAssetRefSchema = Type.String({ minLength: 1, maxLength: 4096 });
+
+/** Reads relative HTML resources under the session's current file-read authority. */
+export const SessionsFilesAssetsParamsSchema = closedObject({
+  ...SessionsFilesGetParamsSchema.properties,
+  refs: Type.Array(sessionFileAssetRefSchema, { maxItems: SESSIONS_FILES_ASSETS_MAX_REFS }),
+});
+
+export const SessionsFilesAssetsResultSchema = closedObject({
+  assets: Type.Array(
+    Type.Union([
+      closedObject({
+        ref: sessionFileAssetRefSchema,
+        mimeType: NonEmptyString,
+        content: Type.String(),
+      }),
+      closedObject({
+        ref: sessionFileAssetRefSchema,
+        error: Type.Union([
+          Type.Literal("not_found"),
+          Type.Literal("too_large"),
+          Type.Literal("outside_session_boundary"),
+          Type.Literal("unsupported"),
+        ]),
+      }),
+    ]),
+    { maxItems: SESSIONS_FILES_ASSETS_MAX_REFS },
+  ),
+});
+
 /** Overwrites one existing session workspace file with hash-based CAS. */
 export const SessionsFilesSetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  path: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+  ...SessionsFilesGetParamsSchema.properties,
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });
 
 /** Result for overwriting one session workspace file. */
-export const SessionsFilesSetResultSchema = closedObject({
-  sessionKey: NonEmptyString,
-  root: Type.Optional(NonEmptyString),
-  file: SessionFileEntrySchema,
-});
+export const SessionsFilesSetResultSchema = closedObject(SessionsFilesGetResultSchema.properties);
 
 /** Opens a session workspace on the Gateway host without accepting a client path. */
 export const SessionsFilesRevealParamsSchema = closedObject({
@@ -616,11 +649,7 @@ export const SessionsRewindParamsSchema = closedObject({
 });
 
 /** Creates a new session from the active-path state before one persisted user message. */
-export const SessionsForkParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  entryId: NonEmptyString,
-});
+export const SessionsForkParamsSchema = closedObject(SessionsRewindParamsSchema.properties);
 
 const SessionEditorAttachmentSchema = closedObject({
   mimeType: Type.String(),
@@ -790,6 +819,8 @@ export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchem
 export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
 export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>;
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
+export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
+export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
 export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;

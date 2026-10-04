@@ -45,6 +45,8 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  PAIRING_REJECTED: "PAIRING_REJECTED",
+  PAIRING_EXPIRED: "PAIRING_EXPIRED",
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
@@ -52,23 +54,17 @@ type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
 /** Pairing-specific reasons clients can display and use for reconnect policy. */
-const ConnectPairingRequiredReasons = {
-  NOT_PAIRED: "not-paired",
-  ROLE_UPGRADE: "role-upgrade",
-  SCOPE_UPGRADE: "scope-upgrade",
-  METADATA_UPGRADE: "metadata-upgrade",
-} as const;
-
-export type ConnectPairingRequiredReason =
-  (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
+export type ConnectPairingRequiredReason = keyof typeof PAIRING_CONNECT_REASON_METADATA;
 
 /** Suggested client-side recovery action for structured connect errors. */
-type ConnectRecoveryNextStep =
-  | "retry_with_device_token"
-  | "update_auth_configuration"
-  | "update_auth_credentials"
-  | "wait_then_retry"
-  | "review_auth_configuration";
+const CONNECT_RECOVERY_NEXT_STEP_VALUES = [
+  "retry_with_device_token",
+  "update_auth_configuration",
+  "update_auth_credentials",
+  "wait_then_retry",
+  "review_auth_configuration",
+] as const;
+type ConnectRecoveryNextStep = (typeof CONNECT_RECOVERY_NEXT_STEP_VALUES)[number];
 
 /** Optional retry guidance extracted from gateway connect-error details. */
 type ConnectErrorRecoveryAdvice = {
@@ -85,6 +81,7 @@ type PairingConnectErrorDetails = {
   recommendedNextStep?: ConnectRecoveryNextStep;
   retryable?: boolean;
   pauseReconnect?: boolean;
+  waitForResolution?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -98,62 +95,61 @@ export type ConnectPairingRequiredDetails = Pick<
   "reason" | "requestId"
 >;
 
-const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
-  "retry_with_device_token",
-  "update_auth_configuration",
-  "update_auth_credentials",
-  "wait_then_retry",
-  "review_auth_configuration",
-]);
-
-const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set([
-  "not-paired",
-  "role-upgrade",
-  "scope-upgrade",
-  "metadata-upgrade",
-]);
 const PAIRING_CONNECT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-const PAIRING_CONNECT_REASON_METADATA: Readonly<
-  Record<
-    ConnectPairingRequiredReason,
-    {
-      requirement: string;
-      remediationHint: string;
-      recoveryTitle: string;
-    }
-  >
-> = {
+const PAIRING_CONNECT_REASON_METADATA = {
   "not-paired": {
+    message: "device pairing required",
     requirement: "device is not approved yet",
     remediationHint: "Approve this device from the pending pairing requests.",
     recoveryTitle: "Gateway pairing approval required.",
   },
   "role-upgrade": {
+    message: "role upgrade pending approval",
     requirement: "device is asking for a higher role than currently approved",
     remediationHint: "Review the requested role upgrade, then approve the pending request.",
     recoveryTitle: "Gateway role upgrade approval required.",
   },
   "scope-upgrade": {
+    message: "scope upgrade pending approval",
     requirement: "device is asking for more scopes than currently approved",
     remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     recoveryTitle: "Gateway scope upgrade approval required.",
   },
   "metadata-upgrade": {
+    message: "device metadata change pending approval",
     requirement: "device identity changed and must be re-approved",
     remediationHint: "Review the refreshed device details, then approve the pending request.",
     recoveryTitle: "Gateway device refresh approval required.",
   },
-};
+} as const;
 
-const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
-  Record<ConnectPairingRequiredReason, string>
-> = {
-  "not-paired": "device pairing required",
-  "role-upgrade": "role upgrade pending approval",
-  "scope-upgrade": "scope upgrade pending approval",
-  "metadata-upgrade": "device metadata change pending approval",
-};
+const AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
+  ["token_missing", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING],
+  ["token_mismatch", ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH],
+  ["token_missing_config", ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED],
+  ["password_missing", ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING],
+  ["password_mismatch", ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH],
+  ["password_missing_config", ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED],
+  ["bootstrap_token_invalid", ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID],
+  ["tailscale_user_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING],
+  ["tailscale_proxy_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING],
+  ["tailscale_whois_failed", ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED],
+  ["tailscale_user_mismatch", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH],
+  ["rate_limited", ConnectErrorDetailCodes.AUTH_RATE_LIMITED],
+  ["device_token_mismatch", ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH],
+  ["scope_mismatch", ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH],
+  [undefined, ConnectErrorDetailCodes.AUTH_REQUIRED],
+]);
+
+const DEVICE_AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
+  ["device-id-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH],
+  ["device-signature-stale", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED],
+  ["device-nonce-missing", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED],
+  ["device-nonce-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH],
+  ["device-signature", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID],
+  ["device-public-key", ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID],
+]);
 
 /** Maps internal auth failure reasons to public connect-error detail codes. */
 export function resolveAuthConnectErrorDetailCode(
@@ -162,62 +158,14 @@ export function resolveAuthConnectErrorDetailCode(
   if (reason?.startsWith("trusted_proxy_missing_header_")) {
     return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
   }
-  switch (reason) {
-    case "token_missing":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_MISSING;
-    case "token_mismatch":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
-    case "token_missing_config":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED;
-    case "password_missing":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING;
-    case "password_mismatch":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH;
-    case "password_missing_config":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED;
-    case "bootstrap_token_invalid":
-      return ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID;
-    case "tailscale_user_missing":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING;
-    case "tailscale_proxy_missing":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING;
-    case "tailscale_whois_failed":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED;
-    case "tailscale_user_mismatch":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH;
-    case "rate_limited":
-      return ConnectErrorDetailCodes.AUTH_RATE_LIMITED;
-    case "device_token_mismatch":
-      return ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH;
-    case "scope_mismatch":
-      return ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH;
-    case undefined:
-      return ConnectErrorDetailCodes.AUTH_REQUIRED;
-    default:
-      return ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
-  }
+  return AUTH_CONNECT_ERROR_CODES.get(reason) ?? ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
 }
 
 /** Maps device-auth verifier reasons to public connect-error detail codes. */
 export function resolveDeviceAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
-  switch (reason) {
-    case "device-id-mismatch":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH;
-    case "device-signature-stale":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED;
-    case "device-nonce-missing":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED;
-    case "device-nonce-mismatch":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH;
-    case "device-signature":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID;
-    case "device-public-key":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID;
-    default:
-      return ConnectErrorDetailCodes.DEVICE_AUTH_INVALID;
-  }
+  return DEVICE_AUTH_CONNECT_ERROR_CODES.get(reason) ?? ConnectErrorDetailCodes.DEVICE_AUTH_INVALID;
 }
 
 /** Reads a non-empty detail code from an untrusted error details payload. */
@@ -225,8 +173,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   if (!isProtocolRecord(details)) {
     return null;
   }
-  const code = details.code;
-  return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
+  return normalizeOptionalProtocolString(details.code) ?? null;
 }
 
 /** Read the exact target artifact from an untrusted reload-required rejection. */
@@ -255,21 +202,20 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
     typeof details.canRetryWithDeviceToken === "boolean"
       ? details.canRetryWithDeviceToken
       : undefined;
-  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
-  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
-    normalizedNextStep as ConnectRecoveryNextStep,
-  )
-    ? (normalizedNextStep as ConnectRecoveryNextStep)
-    : undefined;
   return {
     canRetryWithDeviceToken,
-    recommendedNextStep,
+    recommendedNextStep: normalizeConnectRecoveryNextStep(details.recommendedNextStep),
   };
+}
+
+function normalizeConnectRecoveryNextStep(value: unknown): ConnectRecoveryNextStep | undefined {
+  const normalized = normalizeOptionalProtocolString(value) ?? "";
+  return CONNECT_RECOVERY_NEXT_STEP_VALUES.find((candidate) => candidate === normalized);
 }
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
   const normalized = normalizeOptionalProtocolString(value) ?? "";
-  return CONNECT_PAIRING_REQUIRED_REASON_VALUES.has(normalized as ConnectPairingRequiredReason)
+  return Object.hasOwn(PAIRING_CONNECT_REASON_METADATA, normalized)
     ? (normalized as ConnectPairingRequiredReason)
     : undefined;
 }
@@ -291,6 +237,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -317,14 +266,6 @@ export function buildPairingConnectErrorMessage(
     : "pairing required";
 }
 
-function buildPairingConnectRemediationHint(
-  reason: ConnectPairingRequiredReason | undefined,
-): string {
-  return reason
-    ? PAIRING_CONNECT_REASON_METADATA[reason].remediationHint
-    : "Approve the pending device request before retrying.";
-}
-
 /** Short user-facing recovery title for pairing-required connect failures. */
 export function buildPairingConnectRecoveryTitle(
   reason: ConnectPairingRequiredReason | undefined,
@@ -340,28 +281,33 @@ export function buildPairingConnectErrorDetails(
     reason: ConnectPairingRequiredReason | undefined;
   },
 ): PairingConnectErrorDetails {
-  const requestId = normalizePairingConnectRequestId(params.requestId);
-  const remediationHint =
-    normalizeOptionalProtocolString(params.remediationHint) ??
-    buildPairingConnectRemediationHint(params.reason);
-  const deviceId = normalizeOptionalProtocolString(params.deviceId);
-  const requestedRole = normalizeOptionalProtocolString(params.requestedRole);
-  const requestedScopes = normalizeOptionalTrimmedStringList(params.requestedScopes);
-  const approvedRoles = normalizeOptionalTrimmedStringList(params.approvedRoles);
-  const approvedScopes = normalizeOptionalTrimmedStringList(params.approvedScopes);
   return createPairingConnectErrorDetails({
+    ...normalizePairingConnectMetadata(params, params.reason),
     reason: params.reason,
-    requestId,
-    remediationHint,
     recommendedNextStep: params.recommendedNextStep,
     retryable: params.retryable,
     pauseReconnect: params.pauseReconnect,
-    deviceId,
-    requestedRole,
-    requestedScopes,
-    approvedRoles,
-    approvedScopes,
+    waitForResolution: params.waitForResolution,
   });
+}
+
+function normalizePairingConnectMetadata(
+  details: Record<string, unknown>,
+  reason: ConnectPairingRequiredReason | undefined,
+) {
+  return {
+    requestId: normalizePairingConnectRequestId(details.requestId),
+    remediationHint:
+      normalizeOptionalProtocolString(details.remediationHint) ??
+      (reason
+        ? PAIRING_CONNECT_REASON_METADATA[reason].remediationHint
+        : "Approve the pending device request before retrying."),
+    deviceId: normalizeOptionalProtocolString(details.deviceId),
+    requestedRole: normalizeOptionalProtocolString(details.requestedRole),
+    requestedScopes: normalizeOptionalTrimmedStringList(details.requestedScopes),
+    approvedRoles: normalizeOptionalTrimmedStringList(details.approvedRoles),
+    approvedScopes: normalizeOptionalTrimmedStringList(details.approvedScopes),
+  };
 }
 
 /** Builds a sanitized close reason string for WebSocket pairing rejections. */
@@ -385,34 +331,15 @@ export function readPairingConnectErrorDetails(
     return null;
   }
   const reason = normalizePairingConnectReason(details.reason);
-  const requestId = normalizePairingConnectRequestId(details.requestId);
-  const remediationHint =
-    normalizeOptionalProtocolString(details.remediationHint) ??
-    buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
-  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
-    normalizedNextStep as ConnectRecoveryNextStep,
-  )
-    ? (normalizedNextStep as ConnectRecoveryNextStep)
-    : undefined;
-  const deviceId = normalizeOptionalProtocolString(details.deviceId);
-  const requestedRole = normalizeOptionalProtocolString(details.requestedRole);
-  const requestedScopes = normalizeOptionalTrimmedStringList(details.requestedScopes);
-  const approvedRoles = normalizeOptionalTrimmedStringList(details.approvedRoles);
-  const approvedScopes = normalizeOptionalTrimmedStringList(details.approvedScopes);
   return createPairingConnectErrorDetails({
+    ...normalizePairingConnectMetadata(details, reason),
     reason,
-    requestId,
-    remediationHint,
-    recommendedNextStep,
+    recommendedNextStep: normalizeConnectRecoveryNextStep(details.recommendedNextStep),
     retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
     pauseReconnect:
       typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
-    deviceId,
-    requestedRole,
-    requestedScopes,
-    approvedRoles,
-    approvedScopes,
+    waitForResolution:
+      typeof details.waitForResolution === "boolean" ? details.waitForResolution : undefined,
   });
 }
 
@@ -426,16 +353,16 @@ export function readConnectPairingRequiredMessage(
   }
   const normalized = normalizedMessage.trim().toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
-  for (const [candidate, prefix] of Object.entries(
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON,
-  ) as Array<[ConnectPairingRequiredReason, string]>) {
-    if (normalized.includes(prefix)) {
+  for (const [candidate, metadata] of Object.entries(PAIRING_CONNECT_REASON_METADATA) as Array<
+    [ConnectPairingRequiredReason, { message: string }]
+  >) {
+    if (normalized.includes(metadata.message)) {
       reason = candidate;
       break;
     }
   }
   if (!reason && normalized.includes("pairing required")) {
-    reason = ConnectPairingRequiredReasons.NOT_PAIRED;
+    reason = "not-paired";
   }
   if (!reason) {
     return null;
@@ -482,15 +409,10 @@ function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boole
     return null;
   }
   const location = normalizeOptionalProtocolString(details.location);
-  if (!location) {
-    return { cloudflareAccess: false };
-  }
-  try {
-    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
-    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
-  } catch {
-    return { cloudflareAccess: false };
-  }
+  const hostname = URL.parse(location ?? "")
+    ?.hostname.toLowerCase()
+    .replace(/\.+$/u, "");
+  return { cloudflareAccess: hostname?.endsWith(".cloudflareaccess.com") ?? false };
 }
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
@@ -582,10 +504,7 @@ export function classifyGatewayConnectFailure(input: {
 /** Formats pairing-required details into the canonical user-facing message. */
 export function formatConnectPairingRequiredMessage(details: unknown): string {
   const pairing = readPairingConnectErrorDetails(details);
-  const base =
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON[
-      pairing?.reason ?? ConnectPairingRequiredReasons.NOT_PAIRED
-    ];
+  const base = PAIRING_CONNECT_REASON_METADATA[pairing?.reason ?? "not-paired"].message;
   return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
 }
 

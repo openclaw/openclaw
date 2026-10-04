@@ -4,65 +4,36 @@ import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 const hookCtx = { agentId: "main", sessionId: "session-1" };
 const baseEvent = { runId: "run-1", sessionId: "session-1", provider: "openai", model: "gpt-5" };
 
-describe("llm hook runner methods", () => {
-  it("runModelCallStarted invokes registered model_call_started hooks", async () => {
-    const handler = vi.fn();
-    const { runner } = createHookRunnerWithRegistry([{ hookName: "model_call_started", handler }]);
-    const event = { ...baseEvent, callId: "call-1", api: "openai-responses", transport: "http" };
-
-    await runner.runModelCallStarted(event, hookCtx);
-
-    expect(handler).toHaveBeenCalledWith(event, hookCtx);
-  });
-
-  it("runModelCallEnded invokes registered model_call_ended hooks", async () => {
-    const handler = vi.fn();
-    const { runner } = createHookRunnerWithRegistry([{ hookName: "model_call_ended", handler }]);
-    const event = {
-      ...baseEvent,
-      callId: "call-1",
-      durationMs: 42,
-      outcome: "error" as const,
-      errorCategory: "TimeoutError",
-      upstreamRequestIdHash: "sha256:abcdef123456",
-    };
-
-    await runner.runModelCallEnded(event, hookCtx);
-
-    expect(handler).toHaveBeenCalledWith(event, hookCtx);
-  });
-
-  it("runLlmInput invokes registered llm_input hooks", async () => {
-    const handler = vi.fn();
-    const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
-    const event = {
+it.each([
+  {
+    hookName: "llm_input" as const,
+    event: {
       ...baseEvent,
       systemPrompt: "be helpful",
       prompt: "hello",
       historyMessages: [],
       imagesCount: 0,
       tools: [],
-    };
-
-    await runner.runLlmInput({ ...event, historyMessages: [...event.historyMessages] }, hookCtx);
-
-    expect(handler).toHaveBeenCalledWith(event, hookCtx);
-  });
-
-  it("runLlmOutput invokes registered llm_output hooks", async () => {
-    const handler = vi.fn();
-    const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_output", handler }]);
-    const event = {
+    },
+  },
+  {
+    hookName: "llm_output" as const,
+    event: {
       ...baseEvent,
       assistantTexts: ["hi"],
       lastAssistant: { role: "assistant", content: "hi" },
       usage: { input: 10, output: 20, total: 30 },
-    };
-
+    },
+  },
+])("delivers $hookName content for ordinary sessions", async ({ hookName, event }) => {
+  const handler = vi.fn();
+  const { runner } = createHookRunnerWithRegistry([{ hookName, handler }]);
+  if (hookName === "llm_input") {
+    await runner.runLlmInput({ ...event, historyMessages: [...event.historyMessages] }, hookCtx);
+  } else {
     await runner.runLlmOutput({ ...event, assistantTexts: [...event.assistantTexts] }, hookCtx);
-
-    expect(handler).toHaveBeenCalledWith(event, hookCtx);
-  });
+  }
+  expect(handler).toHaveBeenCalledWith(event, hookCtx);
 });
 
 describe("Incognito observation hooks", () => {
@@ -82,17 +53,11 @@ describe("Incognito observation hooks", () => {
         sessionKey: `agent:main:${kind}:incognito-test`,
         runId: "run-1",
       };
-      const identity = {
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "openai",
-        model: "gpt-5",
-      };
       await runner.runLlmInput(
-        { ...identity, prompt: "PRIVATE_INPUT", historyMessages: [], imagesCount: 0 },
+        { ...baseEvent, prompt: "PRIVATE_INPUT", historyMessages: [], imagesCount: 0 },
         context,
       );
-      await runner.runLlmOutput({ ...identity, assistantTexts: ["PRIVATE_OUTPUT"] }, context);
+      await runner.runLlmOutput({ ...baseEvent, assistantTexts: ["PRIVATE_OUTPUT"] }, context);
       const readMessages = vi.fn(() => [{ role: "user", content: "PRIVATE_INPUT" }]);
       const readError = vi.fn(() => "PRIVATE_ERROR");
       await runner.runAgentEnd(

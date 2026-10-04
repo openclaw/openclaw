@@ -1,8 +1,3 @@
-/**
- * Sandbox configuration resolver.
- *
- * Merges global and agent settings into normalized Docker, SSH, browser, prune, scope, and tool-policy config.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,7 +46,7 @@ function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
   globalDocker?: Partial<SandboxDockerConfig>,
 ): DangerousSandboxDockerBooleans {
-  const resolved = {} as DangerousSandboxDockerBooleans;
+  const resolved: DangerousSandboxDockerBooleans = {};
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
     resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
   }
@@ -76,7 +71,7 @@ export function resolveSandboxBrowserDockerCreateConfig(params: {
 
 export { resolveSandboxScope } from "./config-contract.js";
 
-export function resolveSandboxDockerConfig(params: {
+function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
   globalDocker?: Partial<SandboxDockerConfig>;
   agentDocker?: Partial<SandboxDockerConfig>;
@@ -125,7 +120,7 @@ export function resolveSandboxDockerConfig(params: {
   };
 }
 
-export function resolveSandboxBrowserConfig(params: {
+function resolveSandboxBrowserConfig(params: {
   scope: SandboxScope;
   globalBrowser?: Partial<SandboxBrowserConfig>;
   agentBrowser?: Partial<SandboxBrowserConfig>;
@@ -160,7 +155,7 @@ export function resolveSandboxBrowserConfig(params: {
   };
 }
 
-export function resolveSandboxPruneConfig(params: {
+function resolveSandboxPruneConfig(params: {
   scope: SandboxScope;
   globalPrune?: Partial<SandboxPruneConfig>;
   agentPrune?: Partial<SandboxPruneConfig>;
@@ -182,7 +177,7 @@ function normalizeRemoteRoot(value: string | undefined, fallback: string): strin
   return posix.replace(/\/+$/g, "") || "/";
 }
 
-export function resolveSandboxSshConfig(params: {
+function resolveSandboxSshConfig(params: {
   scope: SandboxScope;
   globalSsh?: Partial<SandboxSshSettings>;
   agentSsh?: Partial<SandboxSshSettings>;
@@ -228,7 +223,10 @@ export function resolveSandboxConfigForAgent(
     scope: agentSandbox?.scope ?? agent?.scope,
   });
 
-  const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
+  const { sources: _toolPolicySources, ...toolPolicy } = resolveSandboxToolPolicyForAgent(
+    cfg,
+    agentId,
+  );
   const scopedAgentDocker = scope === "shared" ? undefined : agentSandbox?.docker;
 
   return {
@@ -257,10 +255,7 @@ export function resolveSandboxConfigForAgent(
       globalBrowser: agent?.browser,
       agentBrowser: agentSandbox?.browser,
     }),
-    tools: {
-      allow: toolPolicy.allow,
-      deny: toolPolicy.deny,
-    },
+    tools: toolPolicy,
     prune: resolveSandboxPruneConfig({
       scope,
       globalPrune: agent?.prune,

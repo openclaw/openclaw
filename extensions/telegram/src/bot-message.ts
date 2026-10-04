@@ -402,18 +402,17 @@ export const createTelegramMessageProcessor = (
                   adoptedResult.kind === "failed-retryable"
                     ? adoptedResult.error
                     : new Error("telegram spooled turn adoption was not completed");
-                throw adoptedResult.kind === "failed-retryable"
-                  ? adoptedResult.error
-                  : new Error("telegram spooled turn adoption was not completed");
+                throw adoptionFinalizationError;
               }
               await drainLifecycle?.onAdopted();
             },
             onDeferred: () => {
               deferred = true;
               drainLifecycle?.onDeferred();
+              turnContext.onTurnDeferred?.();
             },
-            onDeferredHeartbeat: () => drainLifecycle?.onDeferredHeartbeat?.(),
-            deferredHeartbeatIntervalMs: drainLifecycle?.deferredHeartbeatIntervalMs,
+            onDeferredHeartbeat: () => participant.heartbeat(),
+            deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
             onAbandoned: () => {
               if (!adopted) {
                 void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");

@@ -41,7 +41,7 @@ function collectLinkInsertions(
 }
 
 function collectAssistantTranscriptRoleInsertions(
-  text: string,
+  source: string | MarkdownIR,
   options: StripMarkdownOptions,
 ): PlainTextInsertion[] {
   if (options.assistantTranscriptRoleHeaders !== true) {
@@ -51,26 +51,13 @@ function collectAssistantTranscriptRoleInsertions(
   if (!prefix) {
     return [];
   }
-  return findAssistantTranscriptRoleHeaderSpans(text).map((span) => ({
-    position: span.start,
-    text: prefix,
-  }));
-}
-
-function collectParsedAssistantTranscriptRoleInsertions(
-  ir: MarkdownIR,
-  options: StripMarkdownOptions,
-): PlainTextInsertion[] {
-  if (options.assistantTranscriptRoleHeaders !== true) {
-    return [];
-  }
-  const prefix = options.assistantTranscriptRolePrefix ?? "[assistant-authored transcript] ";
-  if (!prefix) {
-    return [];
-  }
-  return (ir.annotations ?? [])
-    .filter((annotation) => annotation.type === "assistant_transcript_role")
-    .map((annotation) => ({ position: annotation.start, text: prefix }));
+  const spans =
+    typeof source === "string"
+      ? findAssistantTranscriptRoleHeaderSpans(source)
+      : (source.annotations ?? []).filter(
+          (annotation) => annotation.type === "assistant_transcript_role",
+        );
+  return spans.map((span) => ({ position: span.start, text: prefix }));
 }
 
 function applyPlainTextInsertions(text: string, insertions: PlainTextInsertion[]): string {
@@ -140,7 +127,7 @@ export function stripMarkdown(
   const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
   const plainText = applyPlainTextInsertions(projectedIr.text, [
     ...collectLinkInsertions(projectedIr, options),
-    ...collectParsedAssistantTranscriptRoleInsertions(projectedIr, options),
+    ...collectAssistantTranscriptRoleInsertions(projectedIr, options),
   ]).trim();
   const projected = applyPlainTextInsertions(
     plainText,

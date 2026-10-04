@@ -7,10 +7,10 @@
  */
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 
-export const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
+const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
 
-export type RealtimeVoiceActivationNameEdge = "leading" | "trailing";
-export type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
+type RealtimeVoiceActivationNameEdge = "leading" | "trailing";
+type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
 
 export type RealtimeVoiceActivationNameTranscriptResult =
   | {
@@ -36,16 +36,6 @@ type PreparedActivationName = {
   compact: string;
 };
 
-export function realtimeVoiceActivationNameWordCount(value: string): number {
-  return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
-}
-
-/** Normalize configured activation names while preserving word boundaries. */
-export function normalizeRealtimeVoiceActivationName(value: string): string | undefined {
-  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
 /** Extract the supported leading activation-name prefix from a longer phrase. */
 export function normalizeRealtimeVoiceActivationNamePrefix(
   value: string,
@@ -62,7 +52,7 @@ export function isSupportedRealtimeVoiceActivationName(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
 ): boolean {
-  const wordCount = realtimeVoiceActivationNameWordCount(value);
+  const wordCount = Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
   return wordCount >= 1 && wordCount <= maxWords;
 }
 
@@ -73,7 +63,7 @@ export function normalizeSupportedRealtimeVoiceActivationName(
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = normalizeRealtimeVoiceActivationName(value);
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim() || undefined;
   return normalized && isSupportedRealtimeVoiceActivationName(normalized, maxWords)
     ? normalized
     : undefined;

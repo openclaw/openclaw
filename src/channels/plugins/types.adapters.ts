@@ -12,6 +12,7 @@ import type {
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "../../infra/system-agent-approvals.js";
+import type { PluginServiceSchedulerV1 } from "../../plugins/service-scheduler.types.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
@@ -191,6 +192,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
+  /** Account-owned timed work; required by the version 2 Gateway adapter. */
+  scheduler?: PluginServiceSchedulerV1;
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
@@ -204,6 +207,9 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    */
   channelRuntime?: ChannelRuntimeSurface;
 };
+
+export type ChannelGatewayContextV2<ResolvedAccount = unknown> =
+  ChannelGatewayContext<ResolvedAccount> & { scheduler: PluginServiceSchedulerV1 };
 
 type ChannelLogoutResult = {
   cleared: boolean;
@@ -233,6 +239,7 @@ type ChannelLogoutContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
+  apiVersion?: 1;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */
@@ -250,6 +257,15 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
+};
+
+export type ChannelGatewayAdapterV2<ResolvedAccount = unknown> = Omit<
+  ChannelGatewayAdapter<ResolvedAccount>,
+  "apiVersion" | "startAccount" | "stopAccount"
+> & {
+  apiVersion: 2;
+  startAccount?: (ctx: ChannelGatewayContextV2<ResolvedAccount>) => Promise<unknown>;
+  stopAccount?: (ctx: ChannelGatewayContextV2<ResolvedAccount>) => Promise<void>;
 };
 
 export type ChannelAuthAdapter = {
@@ -385,6 +401,8 @@ export type ChannelDoctorConfigMutation = {
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
+  /** null defers environment-dependent eligibility; an undefined account ID selects the root. */
+  historicalWebhookAccountIds?: readonly (string | undefined)[] | null;
 };
 
 export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
@@ -474,14 +492,18 @@ export type ChannelLifecycleAdapter = {
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
+type ChannelApprovalForwardingFallbackParams = {
+  cfg: OpenClawConfig;
+  approvalKind: ChannelApprovalKind;
+  target: ChannelApprovalForwardTarget;
+  request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+};
+
 type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
-  shouldSuppressForwardingFallback?: (params: {
-    cfg: OpenClawConfig;
-    approvalKind: ChannelApprovalKind;
-    target: ChannelApprovalForwardTarget;
-    request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-  }) => boolean;
+  /** Deny a fallback that cannot satisfy this request's reviewer policy, even without a native handler. */
+  shouldBlockForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
+  shouldSuppressForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
 };
 type ChannelApproveCommandBehavior =
   | { kind: "allow" }
@@ -527,21 +549,32 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  /** Confirms that this channel enforces configured plugin reviewer lists for routing and decisions. */
+  supportsScopedPluginApprovalApprovers?: true;
   authorizeActorAction?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     senderId?: string | null;
     action: "approve";
     approvalKind: ChannelApprovalKind;
+    request?: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
   }) => {
     authorized: boolean;
     reason?: string;
   };
+  resolveReviewerSenderId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    spaceId?: string | null;
+  }) => string | undefined;
   getActionAvailabilityState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     action: "approve";
     approvalKind?: ChannelApprovalKind;
+    /** Exact pending plugin request when route availability depends on its selected tool. */
+    request?: PluginApprovalRequest;
   }) => ChannelActionAvailabilityState;
   /** Exec-native client availability for the initiating surface; distinct from same-chat auth. */
   getExecInitiatingSurfaceState?: (params: {

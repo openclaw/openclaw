@@ -1,4 +1,3 @@
-// Gateway event payload constants shared by server broadcasts and UI clients.
 import type {
   UpdateAvailable,
   UpdateScheduleState,

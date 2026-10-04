@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { seedSessionStore } from "./embedded-agent-subscribe.compaction-test-helpers.js";
 import {
   createStubSessionHarness,
@@ -20,6 +20,8 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import type { AgentMessage } from "./runtime/index.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-handler-");
 
 function createCompactionContext(messages: AgentMessage[] = []): EmbeddedAgentSubscribeContext {
   const ctx = createContext(undefined);
@@ -69,10 +71,10 @@ const usage = (messages: AgentMessage[]) =>
   messages.filter((message) => message.role === "assistant").map((message) => message.usage);
 
 describe("compaction handlers", () => {
-  it("normalizes unknown compaction starts and reports successful completion", () => {
+  it("normalizes unknown compaction starts and reports successful completion", async () => {
     const ctx = createCompactionContext();
     handleCompactionStart(ctx, { type: "compaction_start" });
-    handleCompactionEnd(ctx, completedCompactionEnd());
+    await handleCompactionEnd(ctx, completedCompactionEnd());
     expect(vi.mocked(ctx.log.info).mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_compaction_start",
       reason: "threshold",
@@ -86,10 +88,10 @@ describe("compaction handlers", () => {
     });
   });
 
-  it("logs a benign manual skip at info", () => {
+  it("logs a benign manual skip at info", async () => {
     const ctx = createCompactionContext();
     handleCompactionStart(ctx, { type: "compaction_start", reason: "manual" });
-    handleCompactionEnd(ctx, {
+    await handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "manual",
       outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
@@ -102,12 +104,12 @@ describe("compaction handlers", () => {
     });
   });
 
-  it("bounds unknown failure diagnostics while preserving live usage", () => {
+  it("bounds unknown failure diagnostics while preserving live usage", async () => {
     const messages = [assistant(1_000)];
     const before = usage(messages);
     const ctx = createCompactionContext(messages);
     const reason = `Provider unavailable: ${"provider detail ".repeat(100)}`;
-    handleCompactionEnd(ctx, {
+    await handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "overflow",
       outcome: { status: "failed", reason },
@@ -144,69 +146,75 @@ describe("compaction handlers", () => {
   ] as const)(
     "preserves local compaction facts under $name",
     async ({ options, expectedCount, expectedEventCount }) => {
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
+      const tmp = sessionDirs.make();
       const storePath = path.join(tmp, "sessions.json");
       const agentId = "test-agent";
       const runId = `run-compaction-owner-${randomUUID()}`;
       const sessionKey = `agent:${agentId}:${runId}`;
+      await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
+      const before = structuredClone(
+        loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+      );
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        ...options,
+        runId,
+        sessionId: "session-1",
+        sessionKey,
+        agentId,
+        config: { session: { store: storePath } },
+        sessionExtras: { messages: [] },
+        onAgentEvent,
+      });
+      const sql =
+        "compactionCountOwner" in options && options.compactionCountOwner === "caller"
+          ? observeMainThreadSql()
+          : undefined;
       try {
-        await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
-        const before = structuredClone(
-          loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-        );
-        const onAgentEvent = vi.fn();
-        const { emit, subscription } = createSubscribedSessionHarness({
-          ...options,
-          runId,
-          sessionId: "session-1",
+        sql?.calibrate();
+        emit(completedCompactionEnd());
+        emit(completedCompactionEnd());
+        await subscription.waitForPendingEvents();
+        if (sql) {
+          expect(sql.count()).toBe(0);
+          sql.restore();
+        }
+        await vi.dynamicImportSettled();
+        // Join the writer queue without advancing the seeded floor.
+        await reconcileSessionStoreCompactionCountAfterSuccess({
           sessionKey,
           agentId,
-          config: { session: { store: storePath } },
-          sessionExtras: { messages: [] },
-          onAgentEvent,
+          configStore: storePath,
+          observedCompactionCount: 1,
         });
-        try {
-          emit(completedCompactionEnd());
-          emit(completedCompactionEnd());
-          await subscription.waitForPendingEvents();
-          await vi.dynamicImportSettled();
-          // Join the writer queue without advancing the seeded floor.
-          await reconcileSessionStoreCompactionCountAfterSuccess({
-            sessionKey,
-            agentId,
-            configStore: storePath,
-            observedCompactionCount: 1,
-          });
-          expect(subscription.getCompactionCount()).toBe(2);
-          expect(subscription.getLastCompactionTokensAfter()).toBe(50);
-          expect(onAgentEvent).toHaveBeenCalledTimes(2);
-          expect(onAgentEvent).toHaveBeenCalledWith({
-            stream: "compaction",
-            data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
-          });
-          const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
-            (event) => event.runId === runId,
-          );
-          expect(events).toHaveLength(expectedEventCount);
-          expect(events.every((event) => event.kind === "compacted")).toBe(true);
-          const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-          expect(after?.compactionCount).toBe(expectedCount);
-          if (expectedCount === 1) {
-            expect(after).toEqual(before);
-          }
-        } finally {
-          subscription.unsubscribe();
+        expect(subscription.getCompactionCount()).toBe(2);
+        expect(subscription.getLastCompactionTokensAfter()).toBe(50);
+        expect(onAgentEvent).toHaveBeenCalledTimes(2);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
+        });
+        const events = (await listSessionStateEventsSince(sessionKey, agentId, 0)).events.filter(
+          (event) => event.runId === runId,
+        );
+        expect(events).toHaveLength(expectedEventCount);
+        expect(events.every((event) => event.kind === "compacted")).toBe(true);
+        const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+        expect(after?.compactionCount).toBe(expectedCount);
+        if (expectedCount === 1) {
+          expect(after).toEqual(before);
         }
       } finally {
-        await fs.rm(tmp, { recursive: true, force: true });
+        sql?.restore();
+        subscription.unsubscribe();
       }
     },
   );
 
-  it("preserves live usage when compaction is aborted", () => {
+  it("preserves live usage when compaction is aborted", async () => {
     const messages = [assistant(1_000)];
     const before = usage(messages);
-    handleCompactionEnd(createCompactionContext(messages), {
+    await handleCompactionEnd(createCompactionContext(messages), {
       type: "compaction_end",
       reason: "threshold",
       outcome: { status: "aborted" },
@@ -232,9 +240,9 @@ describe("compaction handlers", () => {
     },
   ] satisfies Array<{ name: string; messages: AgentMessage[]; stale: boolean[] }>)(
     "$name",
-    ({ messages, stale }) => {
+    async ({ messages, stale }) => {
       const before = usage(messages);
-      handleCompactionEnd(createCompactionContext(messages), completedCompactionEnd());
+      await handleCompactionEnd(createCompactionContext(messages), completedCompactionEnd());
       expect(usage(messages)).toEqual(
         stale.map((isStale, index) => (isStale ? makeZeroUsageSnapshot() : before[index])),
       );

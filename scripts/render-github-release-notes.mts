@@ -2,6 +2,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
 import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
@@ -36,9 +37,11 @@ type ReleaseNotesTarget = {
   repository: unknown;
   regularStableVersion?: unknown;
   contributionRecordPath?: string;
+  validationManifest?: unknown;
 };
 
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
+const ADVISORY_LINE_PREFIX = "- Advisory job (";
 const SHIPPED_BASELINE_EXCLUSIONS_PREFIX = "Shipped baseline exclusions:";
 const MONTH_NAMES = [
   "January",
@@ -80,6 +83,18 @@ function joinBody(notes: string, tail: string | undefined) {
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
 }
 
+function normalizeVerification(verification: string, manifest: unknown) {
+  if (manifest === undefined) {
+    return normalizeTail(verification);
+  }
+  validateReleaseManifestAdvisoryJobs(manifest);
+  return normalizeTail(verification)
+    .split("\n")
+    .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))
+    .join("\n")
+    .trimEnd();
+}
+
 function extendedStableReleaseNotice({
   version,
   repository,
@@ -102,7 +117,7 @@ function extendedStableReleaseNotice({
   if (!month) {
     fail(`unsupported extended-stable release month: ${release.month}`);
   }
-  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The current latest version of OpenClaw is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
+  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -386,6 +401,7 @@ export function renderGithubReleaseNotes({
   repository,
   regularStableVersion,
   contributionRecordPath,
+  validationManifest,
   verification = "",
 }: ReleaseNotesTarget & { verification?: string }) {
   assertString(repository, "repository");
@@ -421,7 +437,7 @@ export function renderGithubReleaseNotes({
       `compacted release notes are still too large for GitHub: ${size.characters} characters, ${size.bytes} bytes`,
     );
   }
-  const normalizedVerification = normalizeTail(verification);
+  const normalizedVerification = normalizeVerification(verification, validationManifest);
   const bodyWithVerification = joinBody(baseBody, normalizedVerification);
   const verificationIncluded =
     normalizedVerification !== "" && fitsGithubReleaseBody(bodyWithVerification);
@@ -441,19 +457,12 @@ export function verifyGithubReleaseNotes({
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
-  const base = renderGithubReleaseNotes(target);
-  if (normalizedBody === base.body) {
-    return {
-      ...base,
-      matches: true,
-      actualSize: githubReleaseBodySize(normalizedBody),
-    };
-  }
+  const base = renderGithubReleaseNotes({ ...target, validationManifest: undefined });
   const verificationPrefix = `${base.body}\n\n${RELEASE_VERIFICATION_HEADING}`;
   const verification = normalizedBody.startsWith(verificationPrefix)
     ? normalizedBody.slice(base.body.length + 2)
     : "";
-  const expected = verification ? renderGithubReleaseNotes({ ...target, verification }) : base;
+  const expected = renderGithubReleaseNotes({ ...target, verification });
   return {
     ...expected,
     matches: normalizedBody === expected.body,
@@ -467,7 +476,7 @@ function usage() {
     (--root <repository-path> [--ref <ref>] | --changelog <legacy-file>) \\
     --tag <tag> --repository <owner/repo> \\
     [--version <version>] [--regular-stable-version <version>] \\
-    [--verification-file <path>] [--output <path>] \\
+    [--verification-file <path>] [--validation-manifest <path>] [--output <path>] \\
     [--metadata-output <path>]
   Verification uses the same target arguments with --verify-body <path>.
 `;
@@ -483,6 +492,7 @@ function parseArgs(argv: string[]) {
     ["--repository", "repository"],
     ["--regular-stable-version", "regularStableVersion"],
     ["--verification-file", "verificationFile"],
+    ["--validation-manifest", "validationManifest"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
     ["--verify-body", "verifyBody"],
@@ -551,6 +561,9 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const validationManifest: unknown = options.validationManifest
+    ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+    : undefined;
   const target = {
     changelog,
     version,
@@ -558,6 +571,7 @@ function main() {
     repository,
     regularStableVersion: options.regularStableVersion,
     contributionRecordPath: source?.recordPath ?? undefined,
+    validationManifest,
   };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({

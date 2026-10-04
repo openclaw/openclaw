@@ -1,8 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  buildRuntimeProbeEnv,
+  resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
-  resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
@@ -68,9 +69,18 @@ vi.mock("../../../node-sqlite.mjs", async (original) => ({
     json: true,
   }),
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({
+vi.mock("../../daemon/runtime-paths.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/runtime-paths.js")>()),
+  resolveBunRuntimeInfo: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
-  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
+vi.mock("../../infra/package-update-activation-paths.js", async (original) => ({
+  ...(await original<typeof import("../../infra/package-update-activation-paths.js")>()),
+  capturePackageActivationRuntime: vi.fn((kind, executable) => ({
+    kind,
+    path: executable,
+    identity: `fixture:${executable}`,
+  })),
 }));
 vi.mock("./update-command-node-runtime-resolution.js", () => ({
   resolveTargetNodeRuntime: async () => undefined,
@@ -82,6 +92,15 @@ beforeEach(() => {
   state.manager = "npm";
   state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
+  vi.mocked(resolveBunRuntimeInfo)
+    .mockReset()
+    .mockResolvedValue({
+      status: "supported",
+      version: "1.4.3",
+      sqliteVersion: "3.53.4",
+      nodeSharedSqlite: false,
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
 });
 afterEach(() => vi.unstubAllGlobals());
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
@@ -117,13 +136,27 @@ async function resolve(servicePlan: {
   }
   return target;
 }
-it("keeps writable rebind target B without a recognized service Node instead of PATH npm A", async () => {
-  const selected = await resolve({ rootRedirect: null, serviceRoot: rootA });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootB);
-  expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(false);
-  expect(selected.packageUpdateNodeRunner).toBe(process.versions.bun ? undefined : "/current/node");
-});
+it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
+  "selects the package root for a %s",
+  async (kind) => {
+    const selected = await resolve({
+      rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
+      ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
+    });
+    expect(selected.packageInstallTarget?.packageRoot).toBe(
+      kind === "writable rebind" ? rootB : rootA,
+    );
+    if (kind !== "protected redirect") {
+      expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
+    }
+    if (kind === "writable rebind") {
+      expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
+      expect(selected.packageUpdateNodeRunner).toBe(
+        process.versions.bun ? undefined : "/current/node",
+      );
+    }
+  },
+);
 it("rejects a Bun-driven split-root update when the recorded service Node cannot run the target", async () => {
   vi.stubGlobal("process", {
     ...process,
@@ -170,18 +203,6 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
     "/old/node",
   ]);
 });
-it("preserves protected-definition redirect to A", async () => {
-  expect(
-    (await resolve({ rootRedirect: { root: rootA, previousRoot: rootB } })).packageInstallTarget
-      ?.packageRoot,
-  ).toBe(rootA);
-});
-it("does not reinterpret an unowned direct project as a selected global target", async () => {
-  const selected = await resolve({ rootRedirect: null });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootA);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(true);
-});
-
 it.each([
   { node: "24.16.0", sqliteText: true, admitted: false },
   { node: "26.1.0", sqliteText: false, admitted: false },
@@ -220,7 +241,13 @@ it.each([
     });
     expect(result).toMatchObject(
       admitted
-        ? { ok: true, value: { nodeRunner: bun } }
+        ? {
+            ok: true,
+            value: {
+              nodeRunner: bun,
+              activationRuntime: { kind: "bun", path: bun, identity: `fixture:${bun}` },
+            },
+          }
         : {
             ok: false,
             error: expect.stringContaining(
@@ -229,7 +256,11 @@ it.each([
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(bun, "bun", process.env);
+    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
+      bun,
+      undefined,
+      buildRuntimeProbeEnv(process.env),
+    );
     expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
   },
 );

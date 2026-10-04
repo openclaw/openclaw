@@ -376,7 +376,8 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lobster-pet--palette-nebula .lob-twinkle,
-.lobster-pet--palette-geode .lob-twinkle {
+.lobster-pet--palette-geode .lob-twinkle,
+.lobster-pet--palette-glass .lob-glass-glints {
   transform-box: fill-box;
   transform-origin: center;
   animation: lobster-pet-twinkle 2s ease-in-out infinite;
@@ -384,12 +385,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lobster-pet--palette-glass .lobster-pet__svg {
   opacity: 0.38;
-}
-
-.lobster-pet--palette-glass .lob-glass-glints {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: lobster-pet-twinkle 2s ease-in-out infinite;
 }
 
 /* Flicker owns opacity only. Breathe remains in the list because setting
@@ -499,7 +494,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lob-disco {
-  animation: lobster-pet-disco-sweep 6s linear infinite;
+  animation: lobster-pet-oilslick 6s linear infinite;
 }
 
 .lob-disco rect:nth-child(3n + 1) {
@@ -510,12 +505,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lob-disco rect:nth-child(3n + 4) {
   animation-delay: 0.8s;
-}
-
-@keyframes lobster-pet-disco-sweep {
-  to {
-    filter: hue-rotate(360deg);
-  }
 }
 
 :root[data-theme-mode="light"] .lob-lumen {
@@ -875,8 +864,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Acts ---- */
-
 .lobster-pet--act-wave .lob-claw--r {
   animation: lobster-pet-wave 1.4s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
@@ -929,11 +916,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 /* Petting: content closed eyes and a floating heart. */
-.lobster-pet--act-pet .lob-eye-open {
+.lobster-pet--act-pet .lob-eye-open,
+.lobster-pet--act-nap .lob-eye-open {
   opacity: 0;
 }
 
-.lobster-pet--act-pet .lob-eye-closed {
+.lobster-pet--act-pet .lob-eye-closed,
+.lobster-pet--act-nap .lob-eye-closed {
   opacity: 1;
 }
 
@@ -1017,14 +1006,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* ---- Nap: eyes shut, z's drift up ---- */
 
-.lobster-pet--act-nap .lob-eye-open {
-  opacity: 0;
-}
-
-.lobster-pet--act-nap .lob-eye-closed {
-  opacity: 1;
-}
-
 .lobster-pet__z {
   position: absolute;
   left: 58%;
@@ -1056,8 +1037,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   color: #ff5c8a;
 }
 
-/* ---- Bubbles ---- */
-
 .lobster-pet__bubble {
   position: absolute;
   left: 30%;
@@ -1074,8 +1053,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-bubble 1.6s ease-out;
   animation-delay: calc(var(--i, 0) * 0.42s);
 }
-
-/* ---- Keyframes ---- */
 
 @keyframes lobster-pet-breathe {
   0%,
@@ -1588,8 +1565,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
     transform: translateY(-6%) rotate(-4deg);
   }
 }
-
-/* ---- Lobsterdex (appearance settings gallery) ---- */
 
 .lobsterdex {
   display: flex;

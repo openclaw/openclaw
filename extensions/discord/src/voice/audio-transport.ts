@@ -149,10 +149,6 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.send({ type: "passthrough", reason, expirySeconds });
   }
 
-  stopPlayback(): void {
-    this.send({ type: "player-stop" });
-  }
-
   async play(input: string | Readable): Promise<void> {
     if (this.stopping || this.terminal) {
       throw new Error("Discord voice session stopped before playback.");
@@ -210,7 +206,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     try {
       await Promise.all([pump, complete]);
     } catch (error) {
-      this.stopPlayback();
+      this.send({ type: "player-stop" });
       throw error;
     } finally {
       abort.abort();

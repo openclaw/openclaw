@@ -8,7 +8,8 @@ import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
@@ -22,6 +23,7 @@ import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { registerInProcessGatewayDispatchPreparationTests } from "./server-plugin-in-process-dispatch.preparation.test-support.js";
 import {
   createContext,
   createOperatorClient,
@@ -149,6 +151,8 @@ describe("typed in-process agent authorization", () => {
       expect(waitForTurn).not.toHaveBeenCalled();
     },
   );
+
+  registerInProcessGatewayDispatchPreparationTests({ startTurn, waitForTurn });
 
   it.each([
     { actorKind: "operator", callerScope: "operator.read", requestedScope: "operator.read" },

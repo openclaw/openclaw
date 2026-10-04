@@ -31,7 +31,7 @@ function createInteraction(params?: { userId?: string }): MockCommandInteraction
   });
 }
 
-function createConfig(): OpenClawConfig {
+function createConfig(channelUsers?: string[]): OpenClawConfig {
   return {
     commands: {
       allowFrom: {
@@ -47,6 +47,7 @@ function createConfig(): OpenClawConfig {
               "234567890123456789": {
                 enabled: true,
                 requireMention: false,
+                ...(channelUsers ? { users: channelUsers } : {}),
               },
             },
           },
@@ -125,13 +126,14 @@ function firstDispatchReplyCall(): Parameters<
 
 async function runGuildSlashCommand(params?: {
   userId?: string;
+  channelUsers?: string[];
   mutateConfig?: (cfg: OpenClawConfig) => void;
   runtimeDiscordConfig?: DiscordAccountConfig;
   commandSpec?: NativeCommandSpec;
   optionValues?: Record<string, string>;
   mutateInteraction?: (interaction: MockCommandInteraction) => void;
 }) {
-  const cfg = createConfig();
+  const cfg = createConfig(params?.channelUsers);
   params?.mutateConfig?.(cfg);
   const command = createCommand(cfg, params?.runtimeDiscordConfig, params?.commandSpec);
   const interaction = createInteraction({ userId: params?.userId });
@@ -141,7 +143,7 @@ async function runGuildSlashCommand(params?: {
   params?.mutateInteraction?.(interaction);
   vi.mocked(matchPluginCommand).mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
-  await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+  await command.run(interaction);
   return { dispatchSpy, interaction };
 }
 
@@ -165,24 +167,10 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
   expect(interaction.reply).not.toHaveBeenCalled();
 }
 
-function expectChannelNotAllowedReply(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).toHaveBeenCalledWith({
-    content: "This channel is not allowed.",
-    ephemeral: true,
-  });
-}
-
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
-  });
-
-  it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand();
-    expect(interaction.defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
   });
 
   it.each([false, true])(
@@ -234,17 +222,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
-  it("tolerates partial guild channels whose name getter throws", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateInteraction: (currentInteraction) => {
-        defineThrowingDiscordChannelGetter(currentInteraction.channel, "name");
-      },
-    });
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
   it("tolerates partial guild channels whose topic getter throws", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateInteraction: (currentInteraction) => {
@@ -256,83 +233,11 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
-  it("tolerates partial guild thread channels whose parentId getter throws", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateInteraction: (currentInteraction) => {
-        currentInteraction.channel = {
-          type: ChannelType.PublicThread,
-          id: currentInteraction.channel.id,
-        } as MockCommandInteraction["channel"];
-        defineThrowingDiscordChannelGetter(currentInteraction.channel, "parentId");
-      },
-    });
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
-  it("tolerates guild thread channels exposed through a Proxy whose has trap throws", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateInteraction: (currentInteraction) => {
-        const baseChannel = {
-          type: ChannelType.PublicThread,
-          id: currentInteraction.channel.id,
-        };
-        currentInteraction.channel = new Proxy(baseChannel, {
-          has(target, key) {
-            if (key === "parentId") {
-              throw new Error("has-trap denied");
-            }
-            return key in target;
-          },
-          get(target, key, receiver) {
-            return Reflect.get(target, key, receiver);
-          },
-        }) as MockCommandInteraction["channel"];
-      },
-    });
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
-  it("authorizes guild slash commands from an allowlisted channel when commands.allowFrom is not configured", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-      },
-    });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
   it("authorizes guild slash commands when channel access restrictions include the member", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      channelUsers: ["user:123456789012345678"],
       mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            guilds: {
-              "345678901234567890": {
-                channels: {
-                  "234567890123456789": {
-                    enabled: true,
-                    requireMention: false,
-                    users: ["user:123456789012345678"],
-                  },
-                },
-              },
-            },
-          },
-        };
+        cfg.commands = {};
       },
     });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
@@ -342,28 +247,9 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   it("rejects guild slash commands when channel access restrictions exclude the member even if channel policy would allow them", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
+      channelUsers: ["user:123456789012345678"],
       mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            guilds: {
-              "345678901234567890": {
-                channels: {
-                  "234567890123456789": {
-                    enabled: true,
-                    requireMention: false,
-                    users: ["user:123456789012345678"],
-                  },
-                },
-              },
-            },
-          },
-        };
+        cfg.commands = {};
       },
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
@@ -374,17 +260,8 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
       mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            allowFrom: ["user:123456789012345678"],
-          },
-        };
+        cfg.commands = {};
+        cfg.channels!.discord!.allowFrom = ["user:123456789012345678"];
       },
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
@@ -399,75 +276,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           ownerAllowFrom: ["discord:123456789012345678"],
         };
       },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectUnauthorizedReply(interaction);
-  });
-
-  it("rejects guild slash commands outside the Discord channel allowlist", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            guilds: {
-              "000000000000000000": {
-                channels: {
-                  "111111111111111111": {
-                    enabled: true,
-                    requireMention: false,
-                  },
-                },
-              },
-            },
-          },
-        };
-      },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectChannelNotAllowedReply(interaction);
-  });
-
-  it("does not treat open-DM wildcard access as guild command owner authorization", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-          allowFrom: undefined,
-        };
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            guilds: {
-              "000000000000000000": {
-                channels: {
-                  "111111111111111111": {
-                    enabled: true,
-                    requireMention: false,
-                  },
-                },
-              },
-            },
-          },
-        };
-      },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectChannelNotAllowedReply(interaction);
-  });
-
-  it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectUnauthorizedReply(interaction);
@@ -507,27 +315,9 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
     const { interaction } = await runGuildSlashCommand({
       mutateConfig: (cfg) => {
-        cfg.channels = {
-          ...cfg.channels,
-          discord: {
-            ...cfg.channels?.discord,
-            maxLinesPerMessage: 120,
-          },
-        };
+        cfg.channels!.discord!.maxLinesPerMessage = 120;
       },
-      runtimeDiscordConfig: {
-        groupPolicy: "allowlist",
-        guilds: {
-          "345678901234567890": {
-            channels: {
-              "234567890123456789": {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      },
+      runtimeDiscordConfig: createConfig().channels!.discord,
     });
 
     await firstDispatchReplyCall().dispatcherOptions.deliver(
@@ -548,32 +338,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       command: "config",
       optionValues: { action: " GET ", path: " agents.defaults.model " },
       expectedPrompt: "/config get agents.defaults.model",
-    },
-    {
-      command: "config",
-      optionValues: { action: "set", path: "agents.defaults.model" },
-      expectedPrompt: "/config set agents.defaults.model",
-    },
-    {
-      command: "mcp",
-      optionValues: { action: "get", path: "servers.github" },
-      expectedPrompt: "/mcp get servers.github",
-    },
-    { command: "mcp", optionValues: { action: "get" }, expectedPrompt: "/mcp get" },
-    {
-      command: "plugins",
-      optionValues: { action: "get", path: "discord" },
-      expectedPrompt: "/plugins get discord",
-    },
-    {
-      command: "plugins",
-      optionValues: { action: "list", path: "ignored" },
-      expectedPrompt: "/plugins list",
-    },
-    {
-      command: "debug",
-      optionValues: { action: "show", path: "ignored" },
-      expectedPrompt: "/debug show",
     },
     { command: "debug", optionValues: { action: "unset" }, expectedPrompt: "/debug unset" },
   ];

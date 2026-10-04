@@ -69,10 +69,8 @@ describe("workspace fixture assertions", () => {
   it("prepares Open WebUI without retired workspace setup state", () => {
     const root = tempDirs.make("openclaw-fixture-workspace-");
     const workspaceDir = path.join(root, "workspace");
-    const nestedStatePath = path.join(workspaceDir, ".openclaw", "workspace-state.json");
     const rootStatePath = path.join(workspaceDir, "openclaw-workspace-state.json");
-    mkdirSync(path.dirname(nestedStatePath), { recursive: true });
-    writeFileSync(nestedStatePath, "{}\n");
+    mkdirSync(workspaceDir, { recursive: true });
     writeFileSync(rootStatePath, "{}\n");
     const result = runOpenWebUiWorkspace(workspaceDir);
 
@@ -80,7 +78,6 @@ describe("workspace fixture assertions", () => {
     expect(readFileSync(path.join(workspaceDir, "IDENTITY.md"), "utf8")).toContain(
       "Open WebUI Docker compatibility smoke test assistant.",
     );
-    expect(existsSync(nestedStatePath)).toBe(false);
     expect(existsSync(rootStatePath)).toBe(false);
   });
 

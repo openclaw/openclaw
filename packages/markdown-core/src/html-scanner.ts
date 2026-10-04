@@ -146,20 +146,12 @@ function isSelfClosingTagRaw(raw: string): boolean {
     return false;
   }
   const beforeSlash = trimmed.charAt(trimmed.length - 2);
-  const tagBody = trimmed.slice(0, -1);
-  let hasAttributeSeparator = false;
-  for (const ch of tagBody) {
-    if (isAsciiWhitespace(ch)) {
-      hasAttributeSeparator = true;
-      break;
-    }
-  }
   return (
     !beforeSlash ||
     isAsciiWhitespace(beforeSlash) ||
     beforeSlash === '"' ||
     beforeSlash === "'" ||
-    !hasAttributeSeparator
+    !/[ \n\r\t\f]/.test(trimmed.slice(0, -1))
   );
 }
 
@@ -196,31 +188,30 @@ export function readTagToken(
   }
 
   const raw = html.slice(start + 1, end);
-  const body = raw;
   let pos = 0;
-  const closing = body[pos] === "/";
+  const closing = raw[pos] === "/";
   if (closing) {
     pos += 1;
   }
-  if (!isTagNameStartChar(body[pos] ?? "")) {
+  if (!isTagNameStartChar(raw[pos] ?? "")) {
     return { token: null, next: end + 1 };
   }
 
   const nameStart = pos;
   while (
-    pos < body.length &&
-    !isAsciiWhitespace(body.charAt(pos)) &&
-    body[pos] !== "/" &&
-    body[pos] !== ">"
+    pos < raw.length &&
+    !isAsciiWhitespace(raw.charAt(pos)) &&
+    raw[pos] !== "/" &&
+    raw[pos] !== ">"
   ) {
     pos += 1;
   }
 
-  const attrs = closing ? "" : body.slice(pos);
+  const attrs = closing ? "" : raw.slice(pos);
   return {
     token: {
       closing,
-      name: body
+      name: raw
         .slice(nameStart, pos)
         .replace(/\0|[A-Z]/g, (ch) => (ch === "\0" ? "\uFFFD" : asciiLower(ch))),
       raw,

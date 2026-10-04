@@ -129,16 +129,14 @@ describe("runMessageAction core send routing", () => {
         message: { crossContext: { allowAcrossProviders: policy.global } },
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            ...(policy.agent === undefined
+        entries: {
+          main:
+            policy.agent === undefined
               ? {}
               : {
                   tools: { message: { crossContext: { allowAcrossProviders: policy.agent } } },
-                }),
-          },
-        ],
+                },
+        },
       },
     };
     const recovery = resolveAgentRestartRecoveryContext({

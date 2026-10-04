@@ -7,12 +7,8 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
-function supportsSpawnPolicy(storeKey: string): boolean {
-  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
-}
-
 function unsupportedField(field: string, storeKey: string): string | undefined {
-  return supportsSpawnPolicy(storeKey)
+  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey)
     ? undefined
     : `${field} is only supported for subagent:* or acp:* sessions`;
 }
@@ -67,9 +63,6 @@ export function applySessionsPatchSubagentPolicy(params: {
   }
 
   for (const field of ["inheritedToolDeny", "inheritedToolAllow"] as const) {
-    if (!(field in patch)) {
-      continue;
-    }
     const raw = patch[field];
     if (raw === null) {
       delete next[field];

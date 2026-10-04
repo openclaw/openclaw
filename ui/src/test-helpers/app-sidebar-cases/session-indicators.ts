@@ -216,8 +216,12 @@ describe("AppSidebar session indicators", () => {
 
     // A restored/replaced backing image arrives as a new route revision; the
     // mounted row must fetch the new URL instead of reusing the sticky 404.
-    row.channelAvatarUrl = restoredUrl;
-    sidebar.requestUpdate();
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: avatarKey,
+        channelAvatarUrl: restoredUrl,
+      }).result,
+    });
     await sidebar.updateComplete;
 
     await waitForFast(() => {
@@ -297,9 +301,11 @@ describe("AppSidebar session indicators", () => {
       );
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = workingKey;
-      sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
-      sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
-      sidebar.requestUpdate();
+      sidebar.storedOutboxes = {
+        total: 2,
+        attentionCountForSession: (sessionKey) => (sessionKey === mainKey ? 2 : 0),
+        hasSessionDraft: (sessionKey) => sessionKey === mainKey,
+      };
       await sidebar.updateComplete;
 
       const home = sidebar.querySelector(".nav-item--home");
@@ -439,6 +445,12 @@ describe("AppSidebar session indicators", () => {
       ],
     });
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sessions.publishList({
       result: {
@@ -575,6 +587,7 @@ describe("AppSidebar session indicators", () => {
     const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
       } as ApplicationGatewaySnapshot["hello"],
     });

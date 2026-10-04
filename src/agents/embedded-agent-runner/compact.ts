@@ -1,12 +1,10 @@
-/**
- * Public facade and fallback coordinator for embedded-agent compaction.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
@@ -55,15 +53,12 @@ import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-
-type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
-};
 
 function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
   return {
@@ -76,7 +71,7 @@ function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactRe
 
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
-  compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -184,10 +179,6 @@ export async function compactNativeCliSession(params: {
   };
 }
 
-function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
-}
-
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
@@ -201,12 +192,6 @@ function resolveCompactionFallbacksOverride(
       sessionKey: params.sessionKey,
     })
   );
-}
-
-function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessionParams): boolean {
-  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
 function classifyCompactionFallbackResult(
@@ -227,15 +212,6 @@ function classifyCompactionFallbackResult(
   });
   const failoverError = coerceToFailoverError(failureError, { provider, model });
   return failoverError ? { error: failoverError } : null;
-}
-
-function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
-  const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
-  return {
-    ok: false,
-    compacted: false,
-    reason,
-  };
 }
 
 /**
@@ -264,7 +240,7 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime,
   );
   const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
-  const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+  const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
     config: projectCodexHostTranscriptBytePreflightConfig(
       paramsBase.config,
@@ -327,6 +303,20 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
+  const sharedRuntimeWorkspace = resolveSharedPluginRuntimeWorkspace(
+    {
+      ...requestedParams,
+      workspaceDir: requestedWorkspaceDir,
+      agentId: requestedAgentIds.sessionAgentId,
+      isCanonicalWorkspace: requestedWorkspaceDir === canonicalWorkspaceDir,
+    },
+    () =>
+      loadPluginMetadataSnapshot({
+        config: requestedParams.config ?? {},
+        workspaceDir: requestedWorkspaceDir,
+        env: process.env,
+      }),
+  );
   const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
@@ -346,8 +336,9 @@ export async function compactEmbeddedAgentSessionDirect(
           config: requestedParams.config ?? {},
           agentId: requestedAgentIds.sessionAgentId,
           agentDir: requestedAgentDir,
-          workspaceDir: requestedWorkspaceDir,
-          preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+          workspaceDir: sharedRuntimeWorkspace?.workspaceDir ?? requestedWorkspaceDir,
+          preserveWorkspaceDirOnRefresh:
+            !sharedRuntimeWorkspace && requestedWorkspaceDir !== canonicalWorkspaceDir,
           ...(requestedParams.allowGatewaySubagentBinding
             ? { allowGatewaySubagentBinding: true }
             : {}),
@@ -414,8 +405,9 @@ export async function compactEmbeddedAgentSessionDirect(
           preparedModelRuntimeOwnerSnapshot.config,
           Boolean(transcriptBytePreflightAuthority),
         ) ?? preparedModelRuntimeOwnerSnapshot.config;
-      const preparedWorkspaceDir =
-        preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
+      const preparedWorkspaceDir = sharedRuntimeWorkspace
+        ? requestedWorkspaceDir
+        : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
       const repoRoot =
         resolveSystemPromptRepoRoot({
           config: preparedConfig,
@@ -446,6 +438,12 @@ export async function compactEmbeddedAgentSessionDirect(
         ...(transcriptBytePreflightClaim
           ? {
               transcriptBytePreflightAuthority: true as const,
+              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
+                ? {
+                    transcriptByteCompactionPersistenceAsync:
+                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
+                  }
+                : {}),
               ...(transcriptBytePreflightClaim.withCompactionPersistence
                 ? {
                     transcriptByteCompactionPersistence:
@@ -458,8 +456,11 @@ export async function compactEmbeddedAgentSessionDirect(
       const compactPrepared = async () => {
         if (
           transcriptBytePreflightAuthority ||
-          hasExplicitCompactionModel(params) ||
-          !hasCompactionModelFallbackCandidates(params)
+          params.config?.agents?.defaults?.compaction?.model?.trim() ||
+          (
+            resolveCompactionFallbacksOverride(params) ??
+            resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model)
+          ).length === 0
         ) {
           return await compactEmbeddedAgentSessionDirectOnce(params);
         }
@@ -557,7 +558,11 @@ export async function compactEmbeddedAgentSessionDirect(
         return compactPrepared();
       });
     } catch (err) {
-      return fallbackFailureToCompactionResult(err);
+      return {
+        ok: false,
+        compacted: false,
+        reason: isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
+      };
     }
   };
   // Logical completion reports promptly; actual attempt work retains this generation.

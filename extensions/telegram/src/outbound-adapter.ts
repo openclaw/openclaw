@@ -1,7 +1,6 @@
 import {
   resolveOutboundSendDep,
   sanitizeForPlainText,
-  type OutboundDeliveryFormattingOptions,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -62,26 +61,11 @@ async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<Tele
   );
 }
 
-async function resolveTelegramOutboundSendContext(params: {
-  to: string;
-  cfg: NonNullable<TelegramSendOpts>["cfg"];
-  deps?: OutboundSendDeps;
-  accountId?: string | null;
-  replyToId?: string | null;
-  replyToIdSource?: TelegramSendOpts["replyToIdSource"];
-  replyToMode?: TelegramSendOpts["replyToMode"];
-  threadId?: string | number | null;
-  formatting?: OutboundDeliveryFormattingOptions;
-  silent?: boolean;
-  signal?: AbortSignal;
-  gatewayClientScopes?: readonly string[];
-  onDeliveryResult?: Parameters<
-    NonNullable<ChannelOutboundAdapter["sendText"]>
-  >[0]["onDeliveryResult"];
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertDirectAdapterHandoff?: () => void;
-  resolveSend: ResolveTelegramSendFn;
-}) {
+async function resolveTelegramOutboundSendContext(
+  params: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0] & {
+    resolveSend: ResolveTelegramSendFn;
+  },
+) {
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
   const send = await params.resolveSend(params.deps);
   return {

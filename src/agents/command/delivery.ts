@@ -22,19 +22,16 @@ import {
 } from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
-import {
-  sendDurableMessageBatchCore,
-  serializeDurableMessagePayloadOutcomes,
-} from "../../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -61,6 +58,10 @@ import {
 } from "./delivery-authority.js";
 import {
   buildDeliveryResult,
+  deliveryStatusFromDurableSend,
+  selectSourceDeliverablePayloads,
+  noVisiblePayloadStatus,
+  preDeliveryFailureStatus,
   type AgentCommandDeliveryResult,
   type AgentCommandDeliveryStatus,
 } from "./delivery-result.js";
@@ -141,80 +142,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDeliveryStatus {
-  const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
-    includeHookEffect: true,
-  });
-  switch (send.status) {
-    case "sent":
-      return {
-        requested: true,
-        attempted: true,
-        status: "sent",
-        succeeded: true,
-        resultCount: send.results.length,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "suppressed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "suppressed",
-        succeeded: true,
-        reason: send.reason,
-        resultCount: 0,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "partial_failed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "partial_failed",
-        succeeded: "partial",
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        resultCount: send.results.length,
-        sentBeforeError: true,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "failed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "failed",
-        succeeded: false,
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        ...(send.stage ? { reason: send.stage } : {}),
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-  }
-  const exhaustive: never = send;
-  return exhaustive;
-}
-
-function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
-  return {
-    requested: true,
-    attempted: false,
-    status: "failed",
-    succeeded: false,
-    error: true,
-    reason,
-  };
-}
-
-function noVisiblePayloadStatus(reason?: NormalizeReplySkipReason): AgentCommandDeliveryStatus {
-  return {
-    requested: true,
-    attempted: false,
-    status: "suppressed",
-    succeeded: true,
-    reason: reason === "channel_transform" ? reason : "no_visible_payload",
-    resultCount: 0,
-  };
 }
 
 async function normalizeReplyMediaPathsForDelivery(params: {
@@ -429,7 +356,7 @@ export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
 ): Promise<AgentCommandDeliveryResult> {
   params.assertDeliveryCurrent?.();
-  const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
+  const { cfg, deps, runtime, opts, outboundSession, sessionEntry, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliveryAgentId =
     outboundSession?.agentId ??
@@ -438,7 +365,19 @@ export async function deliverAgentCommandResult(
       config: cfg,
     }) ??
     resolveDefaultAgentId(cfg);
-  const deliver = opts.deliver === true;
+  const deliveryRequested = opts.deliver === true;
+  const sourcePayloads =
+    deliveryRequested && params.payloads
+      ? selectSourceDeliverablePayloads(params.payloads, opts)
+      : params.payloads;
+  const suppressAutomaticDelivery =
+    deliveryRequested &&
+    opts.sourceReplyDeliveryMode === "message_tool_only" &&
+    !sourcePayloads?.length;
+  // Host-owned diagnostics/media retain their explicit source-suppression grant.
+  // A mixed result must not carry ordinary model text along with that grant.
+  const payloads = suppressAutomaticDelivery ? params.payloads : sourcePayloads;
+  const deliver = deliveryRequested && !suppressAutomaticDelivery;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
   const turnSourceTo = opts.runContext?.currentChannelId ?? opts.to;
@@ -475,51 +414,40 @@ export async function deliverAgentCommandResult(
         // Keep the internal channel marker; error handling below reports the failure.
       }
     }
-    const effectiveDeliveryPlan =
-      deliveryChannel === deliveryPlan.resolvedChannel
-        ? deliveryPlan
-        : {
-            ...deliveryPlan,
-            resolvedChannel: deliveryChannel,
-            plugin: preparedPlugin,
-          };
     // Bundled/setup channels may be dockable before they appear in the registered
     // deliverable-id list. Resolve only when upstream planning prepared no plugin.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? (effectiveDeliveryPlan.plugin ??
+        ? (preparedPlugin ??
           getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel))
         : undefined;
-    const pluginDeliveryPlan =
-      deliveryPlugin && deliveryPlugin !== effectiveDeliveryPlan.plugin
-        ? { ...effectiveDeliveryPlan, plugin: deliveryPlugin }
-        : effectiveDeliveryPlan;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
     const targetMode =
       opts.deliveryTargetMode ??
-      pluginDeliveryPlan.deliveryTargetMode ??
+      deliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
     const defaultAccountId =
-      !pluginDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+      !deliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
         ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
         : undefined;
-    const resolvedAccountId = pluginDeliveryPlan.resolvedAccountId ?? defaultAccountId;
-    const resolvedDeliveryPlan =
-      resolvedAccountId === pluginDeliveryPlan.resolvedAccountId
-        ? pluginDeliveryPlan
-        : { ...pluginDeliveryPlan, resolvedAccountId };
+    const resolvedAccountId = deliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
         ? resolveAgentOutboundTarget({
             cfg,
-            plan: resolvedDeliveryPlan,
+            plan: {
+              ...deliveryPlan,
+              resolvedChannel: deliveryChannel,
+              plugin: deliveryPlugin ?? preparedPlugin,
+              resolvedAccountId,
+            },
             targetMode,
             validateExplicitTarget: true,
           })
         : {
             resolvedTarget: null,
-            resolvedTo: effectiveDeliveryPlan.resolvedTo,
+            resolvedTo: deliveryPlan.resolvedTo,
             targetMode,
           };
     const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
@@ -752,7 +680,7 @@ export async function deliverAgentCommandResult(
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   if (deliveryPayloads.length === 0) {
-    deliveryStatus = deliver
+    deliveryStatus = deliveryRequested
       ? (deliveryStatus ??
         noVisiblePayloadStatus(
           replyNormalization.kind === "suppress" ? replyNormalization.reason : undefined,
@@ -780,7 +708,22 @@ export async function deliverAgentCommandResult(
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }
-    return completeDelivery();
+    // Retain the final in the transcript/result, but do not cross the transport
+    // boundary. This receipt distinguishes policy suppression from an empty or
+    // failed turn so completion owners do not generate another reply.
+    return deliveryRequested && suppressAutomaticDelivery
+      ? completeDelivery(
+          {
+            requested: true,
+            attempted: false,
+            status: "suppressed",
+            succeeded: true,
+            reason: "message_tool_only",
+            resultCount: 0,
+          },
+          true,
+        )
+      : completeDelivery();
   }
   if (deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {

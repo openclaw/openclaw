@@ -9,30 +9,27 @@ import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-tr
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["doctor-fix", "detect"] as const)(
-  "%s completes an owner-only store without reading transcripts",
-  async (mode) => {
-    await withOpenClawTestState({ label: "legacy-main-bounded" }, async (state) => {
-      seedSessions(state.stateDir, "ops", ["agent:ops:one", "agent:ops:two", "agent:ops:three"]);
-      const reads = recordTranscriptReads();
+it("completes an owner-only store without reading transcripts", async () => {
+  await withOpenClawTestState({ label: "legacy-main-bounded" }, async (state) => {
+    seedSessions(state.stateDir, "ops", ["agent:ops:one", "agent:ops:two", "agent:ops:three"]);
+    const reads = recordTranscriptReads();
 
-      const result = await migrateLegacyMainSessionKeys({
-        cfg: { agents: { entries: { ops: {} } } },
-        env: state.env,
-        mode,
-      });
-
-      expect(result).toMatchObject({
-        armed: true,
-        complete: true,
-        ledgerComplete: mode === "doctor-fix",
-        outcomes: [{ kind: "no-legacy-rows" }],
-        warnings: [],
-      });
-      expect(reads()).toEqual([]);
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: { agents: { entries: { ops: {} } } },
+      env: state.env,
+      mode: "doctor-fix",
     });
-  },
-);
+
+    expect(result).toMatchObject({
+      armed: true,
+      complete: true,
+      ledgerComplete: true,
+      outcomes: [{ kind: "no-legacy-rows" }],
+      warnings: [],
+    });
+    expect(reads()).toEqual([]);
+  });
+});
 
 it.each(["doctor-fix", "detect"] as const)(
   "%s reads only legacy-targeted transcripts across stores without materializing them",

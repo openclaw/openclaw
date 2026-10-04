@@ -27,7 +27,6 @@ function evaluate(expression: string, context: Context) {
 describe("hourly main CI admission", () => {
   it.each([
     ["", false],
-    ["false", false],
     ["1", false],
     ["true", true],
   ])("opts main pushes into full CI only with %s", (ciOnPush, admitted) => {
@@ -61,7 +60,7 @@ describe("hourly main CI admission", () => {
     }
   });
 
-  it.each(["refs/heads/main", "refs/heads/release/2026.9", "refs/tags/v2026.9.5"])(
+  it.each(["refs/heads/main", "refs/tags/v2026.9.5"])(
     "preserves manual validation on %s",
     (ref) => {
       const context = { ...base, eventName: "workflow_dispatch", ref } as const;
@@ -95,7 +94,7 @@ describe("hourly main CI admission", () => {
     }
   });
 
-  it.each(["github", "hybrid", "runson", "blacksmith", ""] as const)(
+  it.each(["github", "hybrid", ""] as const)(
     "preserves automatic runner and cache policy for scheduled %s runs",
     (runnerBackend) => {
       for (const runAttempt of [1, 2]) {

@@ -62,7 +62,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterResult?: unknown;
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
-  updaterNotification?: "published" | "consumed";
+  updaterNotification?: "published" | "consumed" | "consumed-before-exit";
   gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
   diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
@@ -408,11 +408,11 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
     if (state.restored && fault === "missing-restored-pid") {
-      process.stdout.write("state = running\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n}\\n");
     } else {
       const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
       const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
-      process.stdout.write("state = running\\npid = " + (state.restored ? restoredPid : currentPid) + "\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n}\\n");
     }
   }
 }
@@ -479,9 +479,10 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
           `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
           `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
-          ...(options?.updaterNotification === "consumed" &&
-          (updaterResult?.status === "ok" ||
-            (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
+          ...(options?.updaterNotification === "consumed-before-exit" ||
+          (options?.updaterNotification === "consumed" &&
+            (updaterResult?.status === "ok" ||
+              (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service)))
             ? [`{ ${consumeNotification} }`]
             : []),
         ]

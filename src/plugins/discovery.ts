@@ -25,12 +25,15 @@ import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
-import { inspectPluginLoadPath, pluginPathFailureDiagnostic } from "./discovery-availability.js";
+import {
+  inspectPluginLoadPath,
+  pluginPathFailureDiagnostic,
+  shouldSkipIncompatiblePackagePluginApi,
+} from "./discovery-availability.js";
 import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -38,15 +41,14 @@ import {
   loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
-  type OpenClawPackageManifest,
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensions,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { formatPosixMode, isPathInside } from "./path-safety.js";
 import {
   parsePluginCacheJson,
@@ -66,7 +68,6 @@ import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 
 export type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 
-const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   ".git",
   ".hg",
@@ -94,22 +95,7 @@ function currentUid(overrideUid?: number | null): number | null {
   return process.getuid();
 }
 
-type CandidateBlockReason =
-  | "source_escapes_root"
-  | "path_stat_failed"
-  | "path_world_writable"
-  | "path_suspicious_ownership";
-
-type CandidateBlockIssue = {
-  reason: CandidateBlockReason;
-  sourcePath: string;
-  targetPath: string;
-  sourceRealPath?: string;
-  rootRealPath?: string;
-  modeBits?: number;
-  foundUid?: number;
-  expectedUid?: number;
-};
+type CandidateBlockIssue = Pick<PluginDiagnostic, "source" | "message">;
 
 function checkSourceEscapesRoot(params: {
   source: string;
@@ -124,11 +110,8 @@ function checkSourceEscapesRoot(params: {
     return null;
   }
   return {
-    reason: "source_escapes_root",
-    sourcePath: params.source,
-    targetPath: params.source,
-    sourceRealPath,
-    rootRealPath,
+    source: params.source,
+    message: `blocked plugin candidate: source escapes plugin root (${params.source} -> ${sourceRealPath}; root=${rootRealPath})`,
   };
 }
 
@@ -152,9 +135,8 @@ function checkPathStatAndPermissions(params: {
     let stat = pluginCacheStatSync(targetPath);
     if (!stat) {
       return {
-        reason: "path_stat_failed",
-        sourcePath: params.source,
-        targetPath,
+        source: targetPath,
+        message: `blocked plugin candidate: cannot stat path (${targetPath})`,
       };
     }
     let modeBits = stat.mode & 0o777;
@@ -167,9 +149,8 @@ function checkPathStatAndPermissions(params: {
         const repairedStat = refreshPluginCacheStat(targetPath);
         if (!repairedStat) {
           return {
-            reason: "path_stat_failed",
-            sourcePath: params.source,
-            targetPath,
+            source: targetPath,
+            message: `blocked plugin candidate: cannot stat path (${targetPath})`,
           };
         }
         stat = repairedStat;
@@ -180,10 +161,8 @@ function checkPathStatAndPermissions(params: {
     }
     if ((modeBits & 0o002) !== 0) {
       return {
-        reason: "path_world_writable",
-        sourcePath: params.source,
-        targetPath,
-        modeBits,
+        source: targetPath,
+        message: `blocked plugin candidate: world-writable path (${targetPath}, mode=${formatPosixMode(modeBits)})`,
       };
     }
     if (
@@ -194,56 +173,17 @@ function checkPathStatAndPermissions(params: {
       stat.uid !== 0
     ) {
       return {
-        reason: "path_suspicious_ownership",
-        sourcePath: params.source,
-        targetPath,
-        foundUid: stat.uid,
-        expectedUid: params.uid,
+        source: targetPath,
+        message: `blocked plugin candidate: suspicious ownership (${targetPath}, uid=${stat.uid}, expected uid=${params.uid} or root)`,
       };
     }
   }
   return null;
 }
 
-function formatCandidateBlockMessage(issue: CandidateBlockIssue): string {
-  if (issue.reason === "source_escapes_root") {
-    return `blocked plugin candidate: source escapes plugin root (${issue.sourcePath} -> ${issue.sourceRealPath}; root=${issue.rootRealPath})`;
-  }
-  if (issue.reason === "path_stat_failed") {
-    return `blocked plugin candidate: cannot stat path (${issue.targetPath})`;
-  }
-  if (issue.reason === "path_world_writable") {
-    return `blocked plugin candidate: world-writable path (${issue.targetPath}, mode=${formatPosixMode(issue.modeBits ?? 0)})`;
-  }
-  return `blocked plugin candidate: suspicious ownership (${issue.targetPath}, uid=${issue.foundUid}, expected uid=${issue.expectedUid} or root)`;
-}
-
-function isUnsafePluginCandidate(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  pluginId?: string;
-  diagnostics: PluginDiagnostic[];
-  ownershipUid?: number | null;
-}): boolean {
-  const issue =
-    checkSourceEscapesRoot(params) ??
-    checkPathStatAndPermissions({ ...params, uid: currentUid(params.ownershipUid) });
-  if (!issue) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-    source: issue.targetPath,
-    message: formatCandidateBlockMessage(issue),
-  });
-  return true;
-}
-
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
-  if (!EXTENSION_EXTS.has(ext)) {
+  if (!PUBLIC_SURFACE_SOURCE_EXTENSIONS.some((extension) => extension === ext)) {
     return false;
   }
   if (/\.d\.[cm]?ts$/.test(filePath)) {
@@ -265,27 +205,8 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
 }
 
 function resolveScannedEntryType(entry: fs.Dirent, fullPath: string): "file" | "directory" | null {
-  if (entry.isFile()) {
-    return "file";
-  }
-  if (entry.isDirectory()) {
-    return "directory";
-  }
-  if (!entry.isSymbolicLink()) {
-    return null;
-  }
-
-  const stat = pluginCacheStatSync(fullPath);
-  if (!stat) {
-    return null;
-  }
-  if (stat.isFile()) {
-    return "file";
-  }
-  if (stat.isDirectory()) {
-    return "directory";
-  }
-  return null;
+  const type = entry.isSymbolicLink() ? pluginCacheStatSync(fullPath) : entry;
+  return type?.isFile() ? "file" : type?.isDirectory() ? "directory" : null;
 }
 
 function resolvesToSameDirectory(left: string | undefined, right: string | undefined): boolean {
@@ -447,9 +368,7 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   }
   // Scoped package names must normalize to their unscoped runtime owner so
   // diagnostics, config keys, and discovered plugin identities cannot diverge.
-  const unscoped = rawPackageName.includes("/")
-    ? (rawPackageName.split("/").pop() ?? rawPackageName)
-    : rawPackageName;
+  const unscoped = rawPackageName.slice(rawPackageName.lastIndexOf("/") + 1);
   for (const suffix of ["-provider", "-plugin"]) {
     if (unscoped.endsWith(suffix) && unscoped.length > suffix.length) {
       return unscoped.slice(0, -suffix.length);
@@ -509,61 +428,6 @@ function pushInvalidPackageExtensionDiagnostic(params: {
         ? params.resolution.error
         : "package.json openclaw.extensions is empty",
     ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-  });
-  return true;
-}
-
-function addLegacyNpmDeclarationDiagnostic(params: {
-  pluginDir: string;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    pluginId: declaration.pluginId,
-    source: declaration.source,
-    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
-  });
-  return true;
-}
-
-function shouldSkipIncompatiblePackagePluginApi(params: {
-  origin: PluginOrigin;
-  packageManifest: OpenClawPackageManifest | undefined;
-  pluginId: string;
-  packageDir: string;
-  env: NodeJS.ProcessEnv;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  if (params.origin === "bundled") {
-    return false;
-  }
-  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.packageManifest);
-  if (!packagePluginApiRangeCheck.ok) {
-    params.diagnostics.push({
-      level: "warn",
-      source: path.join(params.packageDir, "package.json"),
-      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
-      pluginId: params.pluginId,
-    });
-    return true;
-  }
-  const packagePluginApiRange = packagePluginApiRangeCheck.range;
-  if (!packagePluginApiRange) {
-    return false;
-  }
-  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
-  if (satisfiesPluginApiRange(compatibilityHostVersion, packagePluginApiRange)) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    source: path.join(params.packageDir, "package.json"),
-    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
-    pluginId: params.pluginId,
   });
   return true;
 }
@@ -694,16 +558,20 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       return;
     }
     const resolvedRoot = pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
-    if (
-      isUnsafePluginCandidate({
+    const issue =
+      checkSourceEscapesRoot({ source: resolved, rootDir: resolvedRoot }) ??
+      checkPathStatAndPermissions({
         source: resolved,
         rootDir: resolvedRoot,
         origin: params.origin,
-        pluginId: params.idHint,
-        diagnostics,
-        ownershipUid,
-      })
-    ) {
+        uid: currentUid(ownershipUid),
+      });
+    if (issue) {
+      diagnostics.push({
+        level: "warn",
+        ...(params.idHint ? { pluginId: params.idHint } : {}),
+        ...issue,
+      });
       attemptedSources.set(resolved, undefined);
       return;
     }
@@ -758,10 +626,10 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     installOwner?: string;
     installOwnerAmbiguous?: true;
     manifest?: PackageManifest | null;
-  }): "added" | "invalid" | "none" {
+  }): boolean {
     const bundleFormat = detectBundleManifestFormat(params.rootDir);
     if (!bundleFormat) {
-      return "none";
+      return false;
     }
     const rootRealPath = pluginCacheRealpathSync(params.rootDir) ?? undefined;
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -781,7 +649,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         message: bundleManifest.error,
         source: bundleManifest.manifestPath,
       });
-      return "invalid";
+      return false;
     }
     addCandidate({
       idHint: bundleManifest.manifest.id,
@@ -798,7 +666,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       bundledManifestId: bundleManifest.manifest.id,
       bundledManifestPath: bundleManifest.manifestPath,
     });
-    return "added";
+    return true;
   }
 
   function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolean {
@@ -917,7 +785,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
         ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
         manifest,
-      }) === "added"
+      })
     ) {
       return true;
     }
@@ -929,7 +797,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       addPackageCandidate(indexFile, manifestId ?? path.basename(dir));
       return true;
     }
-    return addLegacyNpmDeclarationDiagnostic({ pluginDir: dir, diagnostics });
+    return false;
   }
 
   function discoverInDirectory(

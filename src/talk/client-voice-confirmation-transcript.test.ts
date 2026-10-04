@@ -28,17 +28,60 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     },
   };
 });
-async function seedSession(sessionKey: string): Promise<void> {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey },
-    { sessionId: "confirmation-transcript", updatedAt: Date.now() },
-  );
-}
 describe("voice confirmation transcript admission", () => {
   let state: OpenClawTestState;
+  const sessionKey = "agent:main:main";
+  let scope: { agentId: string; voiceSessionId: string };
+  const append = (
+    entryId: string,
+    text: string,
+    role: "user" | "assistant" = "user",
+    timestamp?: number,
+  ) =>
+    appendClientVoiceTranscript({
+      ...scope,
+      sessionKey,
+      sessionTarget: { sessionKey },
+      entryId,
+      text,
+      role,
+      timestamp,
+    });
+  const block = (runId: string) =>
+    checkClientVoiceToolConfirmationPolicy({
+      ...scope,
+      runId,
+      toolName: "message",
+      toolParams: { action: "send", message: runId },
+      now: Date.now() - 1,
+    });
+  async function holdWrite() {
+    const entered = createDeferred();
+    const release = createDeferred();
+    mocks.beforeAppend.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const blocker = append("assistant", "Please confirm", "assistant");
+    await entered.promise;
+    return { blocker, release };
+  }
+
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "confirmation-transcript", applyEnv: true });
     mocks.beforeAppend.mockReset().mockResolvedValue(undefined);
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId: "confirmation-transcript", updatedAt: Date.now() },
+    );
+    scope = {
+      agentId: "main",
+      voiceSessionId: createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey,
+        origin: "client",
+      }),
+    };
   });
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
@@ -46,145 +89,39 @@ describe("voice confirmation transcript admission", () => {
     await state.cleanup();
   });
   it("captures direct transcript approval before waiting behind another durable write", async () => {
-    const sessionKey = "agent:main:main";
-    await seedSession(sessionKey);
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    const scope = { agentId: "main", voiceSessionId };
-    const target = { ...scope, sessionKey, sessionTarget: { sessionKey } };
-    checkClientVoiceToolConfirmationPolicy({
-      ...scope,
-      runId: "A",
-      toolName: "message",
-      toolParams: { action: "send", message: "A" },
-      now: Date.now() - 1,
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
-    mocks.beforeAppend.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const blocker = appendClientVoiceTranscript({
-      ...target,
-      entryId: "assistant",
-      role: "assistant",
-      text: "Please confirm",
-    });
-    await entered.promise;
-    const affirmative = appendClientVoiceTranscript({
-      ...target,
-      entryId: "yes-A",
-      role: "user",
-      text: "yes",
-      timestamp: Date.now() + 60_000,
-    });
-    checkClientVoiceToolConfirmationPolicy({
-      ...scope,
-      runId: "B",
-      toolName: "message",
-      toolParams: { action: "send", message: "B" },
-      now: Date.now() - 1,
-    });
+    block("A");
+    const { blocker, release } = await holdWrite();
+    const affirmative = append("yes-A", "yes", "user", Date.now() + 60_000);
+    block("B");
     release.resolve();
     await Promise.all([blocker, affirmative]);
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeUndefined();
-    await appendClientVoiceTranscript({ ...target, entryId: "yes-B", role: "user", text: "yes" });
+    await append("yes-B", "yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeDefined();
   });
 
   it("preserves a current transcript retry without using an old deduplicated yes for a new challenge", async () => {
-    const sessionKey = "agent:main:main";
-    await seedSession(sessionKey);
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    const scope = { agentId: "main", voiceSessionId };
-    const input = {
-      ...scope,
-      sessionKey,
-      sessionTarget: { sessionKey },
-      entryId: "yes-original",
-      role: "user" as const,
-      text: "yes",
-    };
-    checkClientVoiceToolConfirmationPolicy({
-      ...scope,
-      runId: "A",
-      toolName: "message",
-      toolParams: { action: "send", message: "A" },
-      now: Date.now() - 1,
-    });
-    await appendClientVoiceTranscript(input);
-    await appendClientVoiceTranscript(input);
+    block("A");
+    await append("yes-original", "yes");
+    await append("yes-original", "yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeDefined();
-    checkClientVoiceToolConfirmationPolicy({
-      ...scope,
-      runId: "B",
-      toolName: "message",
-      toolParams: { action: "send", message: "B" },
-      now: Date.now() - 1,
-    });
-    await appendClientVoiceTranscript(input);
+    block("B");
+    await append("yes-original", "yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeUndefined();
-    await appendClientVoiceTranscript({ ...input, entryId: "yes-new" });
+    await append("yes-new", "yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeDefined();
   });
 
   it.each([false, true])(
     "keeps a queued refusal bound to its exact challenge, superseded=%s",
     async (superseded) => {
-      const sessionKey = "agent:main:main";
-      await seedSession(sessionKey);
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        origin: "client",
-      });
-      const scope = { agentId: "main", voiceSessionId };
-      const target = { ...scope, sessionKey, sessionTarget: { sessionKey } };
-      const block = (runId: string) =>
-        checkClientVoiceToolConfirmationPolicy({
-          ...scope,
-          runId,
-          toolName: "message",
-          toolParams: { action: "send", message: runId },
-          now: Date.now() - 1,
-        });
       block("A");
-      const entered = createDeferred();
-      const release = createDeferred();
-      mocks.beforeAppend.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      const blocker = appendClientVoiceTranscript({
-        ...target,
-        entryId: "assistant",
-        role: "assistant",
-        text: "Please confirm",
-      });
-      await entered.promise;
-      const refusal = appendClientVoiceTranscript({
-        ...target,
-        entryId: "no-A",
-        role: "user",
-        text: "no",
-      });
+      const { blocker, release } = await holdWrite();
+      const refusal = append("no-A", "no");
       if (superseded) {
         block("B");
       }
-      const affirmative = appendClientVoiceTranscript({
-        ...target,
-        entryId: "yes-later",
-        role: "user",
-        text: "yes",
-      });
+      const affirmative = append("yes-later", "yes");
       release.resolve();
       await Promise.all([blocker, refusal, affirmative]);
       if (superseded) {

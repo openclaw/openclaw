@@ -42,14 +42,22 @@ private struct OpenClawPickerTransferUnavailable: LocalizedError {
     }
 }
 #endif
+#endif
 
 @MainActor
-private struct OpenClawChatAttachmentCaptureOwner {
+struct OpenClawChatAttachmentCaptureOwner {
     let viewModel: OpenClawChatViewModel
     let session: OpenClawChatViewModel.SessionSnapshot
-}
 
-#endif
+    init(viewModel: OpenClawChatViewModel) {
+        self.viewModel = viewModel
+        self.session = viewModel.currentSessionSnapshot()
+    }
+
+    func addAttachments(urls: [URL]) {
+        self.viewModel.addAttachments(urls: urls, for: self.session)
+    }
+}
 
 private struct SlashPanelHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
@@ -88,9 +96,6 @@ struct OpenClawChatComposer: View {
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
     let userAccent: Color?
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let composerChrome: OpenClawChatView.ComposerChrome
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
@@ -448,26 +453,15 @@ struct OpenClawChatComposer: View {
     }
 
     #if !os(macOS)
-    private func attachmentCaptureOwner() -> OpenClawChatAttachmentCaptureOwner {
-        OpenClawChatAttachmentCaptureOwner(
-            viewModel: self.viewModel,
-            session: self.viewModel.currentSessionSnapshot())
-    }
-
     var photoPickerPresentation: Binding<Bool> {
         Binding(
             get: { self.showsPhotoPicker },
             set: { isPresented in
                 if isPresented {
-                    self.photoPickerOwner = self.attachmentCaptureOwner()
+                    self.photoPickerOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsPhotoPicker = isPresented
             })
-    }
-
-    private func presentPhotoPicker() {
-        self.photoPickerOwner = self.attachmentCaptureOwner()
-        self.showsPhotoPicker = true
     }
 
     var fileImporterPresentation: Binding<Bool> {
@@ -475,7 +469,7 @@ struct OpenClawChatComposer: View {
             get: { self.showsFileImporter },
             set: { isPresented in
                 if isPresented {
-                    self.fileImporterOwner = self.attachmentCaptureOwner()
+                    self.fileImporterOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsFileImporter = isPresented
             })
@@ -487,7 +481,7 @@ struct OpenClawChatComposer: View {
             set: { isPresented in
                 #if canImport(UIKit)
                 if isPresented {
-                    self.cameraCaptureOwner = self.attachmentCaptureOwner()
+                    self.cameraCaptureOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 #endif
                 self.showsCameraPicker = isPresented
@@ -575,7 +569,6 @@ struct OpenClawChatComposer: View {
                 if let voiceNoteControl, !voiceNoteControl.isTalkActive {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
-                        compact: false,
                         isComposerEnabled: self.isComposerEnabled,
                         isAttachmentInputEnabled: self.isAttachmentInputEnabled)
                 }
@@ -608,7 +601,7 @@ struct OpenClawChatComposer: View {
             #if os(macOS)
             self.pickFilesMac()
             #else
-            self.presentPhotoPicker()
+            self.photoPickerPresentation.wrappedValue = true
             #endif
         } label: {
             Image(systemName: "paperclip")
@@ -700,34 +693,26 @@ struct OpenClawChatComposer: View {
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             if self.style == .standard, !self.viewModel.attachments.isEmpty {
-                #if os(iOS)
                 self.attachmentsStrip
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                    .padding(.top, CleanChatComposerMetrics.footerBlockInset)
-                #else
-                self.attachmentsStrip
-                #endif
+                    #if os(iOS)
+                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                        .padding(.top, CleanChatComposerMetrics.footerBlockInset)
+                    #endif
             }
 
-            #if os(iOS)
             self.composerContextRows
-                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-            #else
-            self.composerContextRows
-            #endif
+                #if os(iOS)
+                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                #endif
 
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
-                #if os(iOS)
                 OpenClawVoiceNoteRecordingRow(
                     recorder: voiceNoteControl.recorder,
                     embedded: true)
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                    .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
-                #else
-                OpenClawVoiceNoteRecordingRow(
-                    recorder: voiceNoteControl.recorder,
-                    embedded: true)
-                #endif
+                    #if os(iOS)
+                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                        .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
+                    #endif
             } else {
                 self.editor
             }
@@ -903,7 +888,10 @@ struct OpenClawChatComposer: View {
                 onHistoryUp: {
                     !self.isSlashPopoverPresented && self.inputModel?.recallPreviousInput(caretOnFirstLine: $0) == true
                 },
-                onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true })
+                onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true },
+                onPasteImageAttachment: self.isAttachmentInputEnabled
+                    ? { self.viewModel.addImageAttachment(data: $0, fileName: $1, mimeType: $2) }
+                    : nil)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .onChange(of: self.viewModel.input) { _, _ in
@@ -1272,7 +1260,7 @@ extension OpenClawChatComposer {
                     .strokeBorder(Color.white.opacity(self.sendButtonBorderOpacity), lineWidth: 1)
                     .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
             .contentShape(Rectangle())
-            .accessibilityLabel(self.sendButtonAccessibilityLabel)
+            .accessibilityLabel(Text(verbatim: "Send message"))
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
         }
@@ -1422,9 +1410,10 @@ extension OpenClawChatComposer {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
         panel.begin { resp in
             guard resp == .OK else { return }
-            self.viewModel.addAttachments(urls: panel.urls)
+            owner.addAttachments(urls: panel.urls)
         }
     }
 
@@ -1432,13 +1421,14 @@ extension OpenClawChatComposer {
         guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
         for item in fileProviders {
             item.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                 guard let data = item as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil)
                 else { return }
                 Task { @MainActor in
-                    self.viewModel.addAttachments(urls: [url])
+                    owner.addAttachments(urls: [url])
                 }
             }
         }
@@ -1456,7 +1446,7 @@ extension OpenClawChatComposer {
         else { return }
         switch result {
         case let .success(urls):
-            owner.viewModel.addAttachments(urls: urls, for: owner.session)
+            owner.addAttachments(urls: urls)
         case let .failure(error):
             if !(error is CancellationError) {
                 owner.viewModel.errorText = error.localizedDescription
@@ -1525,11 +1515,8 @@ extension OpenClawChatComposer {
         _ items: [PhotosPickerItem],
         owner: OpenClawChatAttachmentCaptureOwner?)
     {
-        guard self.isAttachmentInputEnabled else {
-            self.pickerItems = []
-            return
-        }
-        guard let owner,
+        guard self.isAttachmentInputEnabled,
+              let owner,
               self.viewModel === owner.viewModel,
               owner.viewModel.isCurrentSession(owner.session)
         else {

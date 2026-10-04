@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
+import OpenClawKit
 
 private let appOnboardingVersion = 7
 
@@ -169,121 +167,80 @@ func configureRemote(
     }
     opts.token = try readMacControlSecret(opts.tokenSource) ?? opts.token
     opts.password = try readMacControlSecret(opts.passwordSource) ?? opts.password
-    if let directUrlRaw = opts.directUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !directUrlRaw.isEmpty
-    {
-        return try configureDirectRemote(
-            opts,
-            directUrlRaw: directUrlRaw,
-            configURL: configURL,
-            defaultsSuites: defaultsSuites)
-    }
-    return try configureSSHRemote(opts, configURL: configURL, defaultsSuites: defaultsSuites)
-}
-
-private func configureSSHRemote(
-    _ opts: ConfigureRemoteOptions,
-    configURL: URL,
-    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
-{
-    let target = opts.sshTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard isValidSSHTarget(target) else {
-        throw NSError(
-            domain: "ConfigureRemote",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
+    let directUrlRaw = opts.directUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let directURL: URL?
+    let target: String
+    if !directUrlRaw.isEmpty {
+        guard let url = normalizeDirectURL(directUrlRaw) else {
+            throw NSError(
+                domain: "ConfigureRemote",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey: """
+                    Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts
+                    """,
+                ])
+        }
+        directURL = url
+        target = ""
+    } else {
+        directURL = nil
+        target = opts.sshTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard isValidSSHTarget(target) else {
+            throw NSError(
+                domain: "ConfigureRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
+        }
     }
 
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
-    let localURL = "ws://127.0.0.1:\(opts.localPort)"
-    let existingTarget = (remote["sshTarget"] as? String)?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-
+    let url = directURL?.absoluteString ?? "ws://127.0.0.1:\(opts.localPort)"
+    let transport = directURL == nil ? "ssh" : "direct"
+    let targetChanged: Bool
+    let sshHostKeyPolicy: String?
+    if directURL != nil {
+        targetChanged = remote["transport"] as? String != "direct" || remote["url"] as? String != url
+        sshHostKeyPolicy = nil
+        for key in ["remotePort", "sshTarget", "sshIdentity", "sshHostKeyPolicy"] {
+            remote.removeValue(forKey: key)
+        }
+    } else {
+        let existingTarget = (remote["sshTarget"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        targetChanged = existingTarget != target
+        let policy = opts.sshHostKeyPolicy.map { normalizedSSHHostKeyPolicy($0) ?? "strict" }
+            ?? (targetChanged ? nil : normalizedSSHHostKeyPolicy(remote["sshHostKeyPolicy"] as? String))
+            ?? "strict"
+        sshHostKeyPolicy = policy
+        remote["remotePort"] = opts.remotePort
+        remote["sshTarget"] = target
+        remote["sshHostKeyPolicy"] = policy
+        updateStringIfProvided(&remote, key: "sshIdentity", value: opts.identity)
+    }
     gateway["mode"] = "remote"
-    remote["transport"] = "ssh"
-    remote["url"] = localURL
-    remote["remotePort"] = opts.remotePort
-    remote["sshTarget"] = target
-    let requestedHostKeyPolicy = opts.sshHostKeyPolicy.map { normalizedSSHHostKeyPolicy($0) ?? "strict" }
-    let existingHostKeyPolicy = existingTarget == target
-        ? normalizedSSHHostKeyPolicy(remote["sshHostKeyPolicy"] as? String)
-        : nil
-    let sshHostKeyPolicy = requestedHostKeyPolicy
-        ?? existingHostKeyPolicy
-        ?? "strict"
-    remote["sshHostKeyPolicy"] = sshHostKeyPolicy
-    updateStringIfProvided(&remote, key: "sshIdentity", value: opts.identity)
+    remote["transport"] = transport
+    remote["url"] = url
     updateStringIfProvided(&remote, key: "token", value: opts.token)
     updateStringIfProvided(&remote, key: "password", value: opts.password)
     gateway["remote"] = remote
     root["gateway"] = gateway
 
     try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: target, targetChanged: existingTarget != target, suites: defaultsSuites)
+    writeAppDefaults(opts: opts, target: target, targetChanged: targetChanged, suites: defaultsSuites)
 
     return ConfigureRemoteOutput(
         status: "ok",
         configPath: configURL.path,
         mode: "remote",
-        transport: "ssh",
-        sshTarget: target,
-        localUrl: localURL,
-        remoteUrl: localURL,
-        remotePort: opts.remotePort,
+        transport: transport,
+        sshTarget: directURL == nil ? target : nil,
+        localUrl: directURL == nil ? url : nil,
+        remoteUrl: url,
+        remotePort: directURL.flatMap(defaultPort) ?? opts.remotePort,
         sshHostKeyPolicy: sshHostKeyPolicy,
-        onboardingSkipped: true)
-}
-
-private func configureDirectRemote(
-    _ opts: ConfigureRemoteOptions,
-    directUrlRaw: String,
-    configURL: URL,
-    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
-{
-    guard let directURL = normalizeDirectURL(directUrlRaw) else {
-        throw NSError(
-            domain: "ConfigureRemote",
-            code: 2,
-            userInfo: [
-                NSLocalizedDescriptionKey: """
-                Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts
-                """,
-            ])
-    }
-
-    var root = try loadConfigRoot(from: configURL)
-    var gateway = root["gateway"] as? [String: Any] ?? [:]
-    var remote = gateway["remote"] as? [String: Any] ?? [:]
-
-    let targetChanged = remote["transport"] as? String != "direct"
-        || remote["url"] as? String != directURL.absoluteString
-    gateway["mode"] = "remote"
-    remote["transport"] = "direct"
-    remote["url"] = directURL.absoluteString
-    remote.removeValue(forKey: "remotePort")
-    remote.removeValue(forKey: "sshTarget")
-    remote.removeValue(forKey: "sshIdentity")
-    remote.removeValue(forKey: "sshHostKeyPolicy")
-    updateStringIfProvided(&remote, key: "token", value: opts.token)
-    updateStringIfProvided(&remote, key: "password", value: opts.password)
-    gateway["remote"] = remote
-    root["gateway"] = gateway
-
-    try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: "", targetChanged: targetChanged, suites: defaultsSuites)
-
-    return ConfigureRemoteOutput(
-        status: "ok",
-        configPath: configURL.path,
-        mode: "remote",
-        transport: "direct",
-        sshTarget: nil,
-        localUrl: nil,
-        remoteUrl: directURL.absoluteString,
-        remotePort: defaultPort(for: directURL) ?? opts.remotePort,
-        sshHostKeyPolicy: nil,
         onboardingSkipped: true)
 }
 
@@ -312,9 +269,9 @@ private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, targ
         setDefaultString(defaults, key: "openclaw.remoteTarget", value: target)
         defaults.set(true, forKey: "openclaw.onboardingSeen")
         defaults.set(appOnboardingVersion, forKey: "openclaw.onboardingVersion")
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteIdentity", value: opts.identity)
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteProjectRoot", value: opts.projectRoot)
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteCliPath", value: opts.cliPath)
+        setDefaultString(defaults, key: "openclaw.remoteIdentity", value: opts.identity)
+        setDefaultString(defaults, key: "openclaw.remoteProjectRoot", value: opts.projectRoot)
+        setDefaultString(defaults, key: "openclaw.remoteCliPath", value: opts.cliPath)
         defaults.synchronize()
     }
 }
@@ -365,73 +322,24 @@ private func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
     if lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
         return true
     }
-    if isPrivateIPv6Literal(lower) {
+    if LoopbackHost.isPrivateIPv6Literal(lower) {
         return true
     }
-    guard let parts = ipv4Parts(lower) else { return false }
-    switch (parts[0], parts[1]) {
-    case (10, _), (192, 168), (169, 254):
-        return true
-    case (172, 16...31), (100, 64...127):
-        return true
-    default:
-        return false
-    }
+    return LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
 }
 
-private func ipv4Parts(_ value: String) -> [Int]? {
-    let labels = value.split(separator: ".", omittingEmptySubsequences: false)
-    guard labels.count == 4 else { return nil }
-    var parts: [Int] = []
-    parts.reserveCapacity(4)
-    for label in labels {
-        guard !label.isEmpty,
-              label.allSatisfy(\.isNumber),
-              let part = Int(label),
-              part >= 0,
-              part <= 255
-        else {
-            return nil
-        }
-        parts.append(part)
-    }
-    return parts
-}
-
-private func isPrivateIPv6Literal(_ value: String) -> Bool {
-    #if canImport(Darwin)
-    var addr = in6_addr()
-    guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
-        return false
-    }
-    return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
-    #else
-    return false
-    #endif
-}
-
-private func setDefaultStringIfProvided(_ defaults: UserDefaults, key: String, value: String?) {
+private func setDefaultString(_ defaults: UserDefaults, key: String, value: String?) {
     guard let value else { return }
-    setDefaultString(defaults, key: key, value: value)
-}
-
-private func setDefaultString(_ defaults: UserDefaults, key: String, value: String) {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        defaults.removeObject(forKey: key)
-    } else {
+    if let trimmed = value.trimmedNonEmpty {
         defaults.set(trimmed, forKey: key)
+    } else {
+        defaults.removeObject(forKey: key)
     }
 }
 
 private func updateStringIfProvided(_ dictionary: inout [String: Any], key: String, value: String?) {
     guard let value else { return }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        dictionary.removeValue(forKey: key)
-    } else {
-        dictionary[key] = trimmed
-    }
+    dictionary[key] = value.trimmedNonEmpty
 }
 
 private func parsePort(_ raw: String) -> Int? {
@@ -493,13 +401,7 @@ private func isValidSSHTarget(_ raw: String) -> Bool {
 
 private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        }
+        printCLIJSON(output)
         return
     }
     print("OpenClaw macOS Remote Config")
@@ -522,15 +424,5 @@ private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: B
 }
 
 private func printJSONError(_ message: String) {
-    let payload = [
-        "status": "error",
-        "error": message,
-    ]
-    if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
-       let text = String(data: data, encoding: .utf8)
-    {
-        print(text)
-    } else {
-        print("{\"status\":\"error\"}")
-    }
+    printCLIJSON(["status": "error", "error": message], fallback: "{\"status\":\"error\"}")
 }

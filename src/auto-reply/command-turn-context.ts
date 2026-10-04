@@ -61,11 +61,6 @@ function normalizeCommandTurnSource(value: unknown): CommandTurnSource | undefin
   return value === "native" || value === "text" || value === "message" ? value : undefined;
 }
 
-/** Maps source metadata back to the closed turn kind used by command checks. */
-function commandTurnSourceToKind(source: CommandTurnSource): CommandTurnKind {
-  return source === "native" ? "native" : source === "text" ? "text-slash" : "normal";
-}
-
 /** Builds a normalized command-turn context and forces normal messages to unauthorized. */
 export function createCommandTurnContext(
   source: CommandTurnSource,
@@ -75,28 +70,14 @@ export function createCommandTurnContext(
     body?: string;
   },
 ): CommandTurnContext {
-  if (source === "native") {
-    return {
-      kind: "native",
-      source: "native",
-      authorized: input.authorized,
-      commandName: input.commandName,
-      body: input.body,
-    };
-  }
-  if (source === "text") {
-    return {
-      kind: "text-slash",
-      source: "text",
-      authorized: input.authorized,
-      commandName: input.commandName,
-      body: input.body,
-    };
-  }
+  const identity: CommandTurnContext =
+    source === "native"
+      ? { kind: "native", source: "native", authorized: input.authorized }
+      : source === "text"
+        ? { kind: "text-slash", source: "text", authorized: input.authorized }
+        : { kind: "normal", source: "message", authorized: false };
   return {
-    kind: "normal",
-    source: "message",
-    authorized: false,
+    ...identity,
     commandName: input.commandName,
     body: input.body,
   };
@@ -113,22 +94,17 @@ function normalizeExplicitCommandTurn(
   const kind = normalizeCommandTurnKind(record.kind);
   const source =
     normalizeCommandTurnSource(record.source) ?? (kind ? commandTurnKindToSource(kind) : undefined);
-  const resolvedKind = kind ?? (source ? commandTurnSourceToKind(source) : undefined);
   // Explicit metadata must describe one turn source; mixed kind/source pairs are ignored.
   if (kind && source && commandTurnKindToSource(kind) !== source) {
     return undefined;
   }
-  if (!resolvedKind || !source) {
+  if (!source) {
     return undefined;
   }
   const body = normalizeOptionalString(record.body) ?? resolveCommandBody(input);
   return createCommandTurnContext(source, {
     authorized:
-      resolvedKind === "normal"
-        ? false
-        : typeof record.authorized === "boolean"
-          ? record.authorized
-          : input.CommandAuthorized === true,
+      typeof record.authorized === "boolean" ? record.authorized : input.CommandAuthorized === true,
     commandName: normalizeOptionalString(record.commandName) ?? parseCommandName(body),
     body,
   });

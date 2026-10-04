@@ -22,7 +22,6 @@ import {
 } from "./bot-message-dispatch-draft.js";
 import {
   applyQuoteReplyTarget,
-  applyTextToPayload,
   projectPayloadForDelivery,
   usesNativeTelegramQuote,
 } from "./bot-message-dispatch-payload.js";
@@ -47,6 +46,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { failPromptContextSequence, mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { prepareTelegramFinalDeliveryConfig } from "./final-delivery-config.js";
 import {
+  applyTextToPayload,
   copyTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
 } from "./interactive-fallback.js";
@@ -56,6 +56,7 @@ import {
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
+  type TelegramSendPayloadOptions,
 } from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -72,19 +73,6 @@ import { resolveTelegramTargetChatType } from "./targets.js";
 
 type TelegramDeliveryConfig = TurnConfig & {
   lanes: Record<LaneName, DraftLaneState>;
-};
-
-type TelegramSendPayloadOptions = {
-  afterAcceptedDraft?: boolean;
-  durable?: boolean;
-  silent?: boolean;
-  mirrorTranscript?: boolean;
-  promptContextSequence?: TelegramPromptContextProjectionSequence;
-  textMode?: "html";
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertPlatformSendAuthorized?: () => void;
-  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 };
 
 const promptContextDeliverySignature = (payload: ReplyPayload): string | undefined => {
@@ -305,8 +293,7 @@ export async function sendPayload(
     const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
-      transcriptMirror:
-        options?.durable && options?.mirrorTranscript !== false ? transcriptMirror : undefined,
+      transcriptMirror: options?.durable ? transcriptMirror : undefined,
       replies: [effectivePayload],
       onMediaAccepted: options?.onMediaAccepted,
       onVoiceRecording: turn.context.sendRecordVoice,
@@ -650,11 +637,7 @@ export function createDeliveryState(
   const deliveryState = createLaneDeliveryStateTracker();
   const deliverLaneText = createLaneTextDeliverer({
     lanes: config.lanes,
-    applyTextToPayload,
     sendPayload: async (payload, options) => await sendPayload(getTurn(), payload, options),
-    flushDraftLane: async (lane) => await lane.stream?.flush(),
-    stopDraftLane: async (lane) => await lane.stream?.stop(),
-    clearDraftLane: async (lane) => await lane.stream?.clear(),
     editStreamMessage: async ({ messageId, text, textMode, buttons }) => {
       const turn = getTurn();
       if (!turn.isSuperseded()) {

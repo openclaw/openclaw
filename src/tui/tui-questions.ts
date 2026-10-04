@@ -24,7 +24,7 @@ type TuiQuestionControllerDeps = {
   getAgentId: () => string;
   getSessionKey: () => string;
   openOverlay: TUI["showOverlay"];
-  closeOverlay: (handle?: OverlayHandle) => void;
+  closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
   onPendingChange: (text: string) => void;
 };

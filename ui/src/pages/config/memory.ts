@@ -308,16 +308,14 @@ function renderDisabledEngineRow(props: MemoryViewProps, engineId: string | null
 // Only `enabled` is a positive claim; the other three are deliberately muted so
 // an unread catalog never looks like a decided "off".
 function renderAddonStatus(state: MemoryPluginState) {
-  switch (state) {
-    case "enabled":
-      return renderSettingsStatus({ kind: "ok", label: t("common.enabled") });
-    case "disabled":
-      return renderSettingsStatus({ kind: "muted", label: t("common.disabled") });
-    case "loading":
-      return renderSettingsStatus({ kind: "muted", label: t("common.loading") });
-    default:
-      return renderSettingsStatus({ kind: "muted", label: t("memoryPage.addons.stateUnknown") });
-  }
+  return renderSettingsStatus({
+    kind: state === "enabled" ? "ok" : "muted",
+    label: t(
+      state === "enabled" || state === "disabled" || state === "loading"
+        ? `common.${state}`
+        : "memoryPage.addons.stateUnknown",
+    ),
+  });
 }
 
 function renderAddonsSection(props: MemoryViewProps) {

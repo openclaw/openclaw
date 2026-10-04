@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {
@@ -17,27 +18,42 @@ type GitHubPublicationPullRequest = {
   baseRef: string;
 };
 
-function githubPublicationPullRequestLookupArgs(params: {
+type GitHubPublicationPullRequestLookup = {
   repository: string;
-  owner: string;
+  pushOwner: string;
   branch: string;
   baseBranch: string;
   marker: string;
-}): string[] {
+  host?: string;
+  refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
+  assertCurrent: () => void;
+};
+
+async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+  const identity = await params.refreshIdentity();
+  params.assertCurrent();
   const marker = JSON.stringify(params.marker);
-  return [
-    ...githubPublicationApiArgs(`repos/${params.repository}/pulls`),
-    "-f",
-    `head=${params.owner}:${params.branch}`,
-    "-f",
-    `base=${params.baseBranch}`,
-    "-f",
-    "state=all",
-    "--paginate",
-    "--jq",
-    // Compact pages remain independently parseable; only the request marker is needed from prose.
-    `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
-  ];
+  const raw = await requirePublicationCommand(
+    [
+      ...githubPublicationApiArgs(
+        `repos/${params.repository}/pulls`,
+        "GET",
+        identity.host ?? params.host ?? resolveGitHubHost(),
+      ),
+      "-f",
+      `head=${params.pushOwner}:${params.branch}`,
+      "-f",
+      `base=${params.baseBranch}`,
+      "-f",
+      "state=all",
+      "--paginate",
+      "--jq",
+      // Compact pages remain independently parseable; only the request marker is needed from prose.
+      `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
+    ],
+    { env: identity.env },
+  );
+  return { identity, candidates: parseGitHubPublicationPullRequests(raw) };
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
@@ -85,63 +101,25 @@ function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullR
   });
 }
 
-function resolveGitHubPublicationPullRequest(
-  candidates: readonly GitHubPublicationPullRequest[],
-  params: {
-    accountId: number;
+export async function findGitHubPublicationPullRequest(
+  params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
-    branch: string;
-    baseBranch: string;
-    marker: string;
+    recordObserved?: (url: string) => void;
   },
-): GitHubPublicationPullRequest | undefined {
+): Promise<string | undefined> {
+  const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
   const exact = candidates.filter(
     (candidate) =>
-      candidate.userId === params.accountId &&
+      candidate.userId === identity.account.accountId &&
       candidate.headSha === params.headCommit &&
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
-  const open = exact.find((candidate) => candidate.state === "open");
-  return (
-    open ??
+  const found =
+    exact.find((candidate) => candidate.state === "open") ??
     exact.find(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
-    )
-  );
-}
-
-export async function findGitHubPublicationPullRequest(params: {
-  repository: string;
-  pushOwner: string;
-  branch: string;
-  baseBranch: string;
-  headCommit: string;
-  marker: string;
-  refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
-  recordObserved?: (url: string) => void;
-  assertCurrent: () => void;
-}): Promise<string | undefined> {
-  const identity = await params.refreshIdentity();
-  params.assertCurrent();
-  const raw = await requirePublicationCommand(
-    githubPublicationPullRequestLookupArgs({
-      repository: params.repository,
-      owner: params.pushOwner,
-      branch: params.branch,
-      baseBranch: params.baseBranch,
-      marker: params.marker,
-    }),
-    { env: identity.env },
-  );
-  const candidates = parseGitHubPublicationPullRequests(raw);
-  const found = resolveGitHubPublicationPullRequest(candidates, {
-    accountId: identity.account.accountId,
-    headCommit: params.headCommit,
-    branch: params.branch,
-    baseBranch: params.baseBranch,
-    marker: params.marker,
-  });
+    );
   if (found) {
     params.recordObserved?.(found.url);
     if (found.state === "closed") {
@@ -191,7 +169,11 @@ export async function reconcileGitHubPublicationPullRequest(
   const identity = await params.refreshIdentity();
   params.assertCurrent();
   const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(`repos/${params.pushRepository}/git/commits/${params.headCommit}`),
+    githubPublicationApiArgs(
+      `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
+      "GET",
+      identity.host ?? params.host ?? resolveGitHubHost(),
+    ),
     { env: identity.env },
   );
   params.assertCurrent();
@@ -236,6 +218,8 @@ export async function reconcileGitHubPublicationPullRequest(
         [
           ...githubPublicationApiArgs(
             `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+            "GET",
+            currentIdentity.host ?? params.host ?? resolveGitHubHost(),
           ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
@@ -252,20 +236,7 @@ export async function reconcileGitHubPublicationPullRequest(
     }
     return comparison.sha === params.headCommit;
   };
-  const lookupIdentity = await params.refreshIdentity();
-  params.assertCurrent();
-  const candidates = parseGitHubPublicationPullRequests(
-    await requirePublicationCommand(
-      githubPublicationPullRequestLookupArgs({
-        repository: params.repository,
-        owner: params.pushOwner,
-        branch: params.branch,
-        baseBranch: params.baseBranch,
-        marker: params.marker,
-      }),
-      { env: lookupIdentity.env },
-    ),
-  );
+  const { identity: lookupIdentity, candidates } = await loadGitHubPublicationPullRequests(params);
   let unrelated = false;
   for (const candidate of candidates) {
     if (
@@ -296,6 +267,8 @@ export async function reconcileGitHubPublicationPullRequest(
     await requirePublicationCommand(
       githubPublicationApiArgs(
         `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
+        "GET",
+        refIdentity.host ?? params.host ?? resolveGitHubHost(),
       ),
       { env: refIdentity.env },
     ),

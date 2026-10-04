@@ -232,6 +232,32 @@ describe("sidebar attention refresh ownership", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("dismisses for a plain outside frame without restoring trigger focus", async () => {
+    const { element, trigger } = await mountAttention();
+    const frame = document.body.appendChild(document.createElement("iframe"));
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+
+    // jsdom can focus the frame but does not emit the browsing-context blur.
+    frame.focus();
+    window.dispatchEvent(new Event("blur"));
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it("keeps Inbox open when the window loses focus without entering an outside frame", async () => {
+    const { element, trigger } = await mountAttention();
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+
+    window.dispatchEvent(new Event("blur"));
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
+  });
+
   it("updates cross-agent mentions and opens them through shell navigation", async () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const responses: Record<string, unknown> = {

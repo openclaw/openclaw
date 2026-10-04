@@ -2,7 +2,7 @@
 // wrapper API and manual dismissal; Web Awesome owns positioning and rendering.
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { css, html, type TemplateResult } from "lit";
-import { property, query } from "lit/decorators.js";
+import { property, query, state } from "lit/decorators.js";
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { showToast } from "../lib/toast.ts";
@@ -21,10 +21,7 @@ const SKIP_DELAY = 300;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 
 let nextTooltipId = 0;
-
-function createTooltipId() {
-  return `openclaw-tooltip-${++nextTooltipId}`;
-}
+const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
 
 class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
@@ -161,6 +158,8 @@ class Tooltip extends OpenClawLitElement {
 
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
+  @state() private materialized = false;
+
   #triggerElement: HTMLElement | SVGElement | null = null;
   #pinned = false;
   #describedElement: Element | null = null;
@@ -266,14 +265,10 @@ class Tooltip extends OpenClawLitElement {
   protected override updated() {
     this.#attachTrigger();
     this.#syncDescription();
-    this.#syncWebAwesomeTooltip();
+    void this.#syncWebAwesomeTooltip();
     // Closed tooltips check redundancy in show(); measuring their triggers here
     // forces layout while a new transcript is still rendering.
-    if (
-      this.disabled ||
-      !this.#tooltipText ||
-      (this.webAwesomeTooltip?.open && this.#isRedundant())
-    ) {
+    if (this.disabled || !this.#tooltipText || (this.hasAttribute("open") && this.#isRedundant())) {
       this.#close();
     }
   }
@@ -320,7 +315,7 @@ class Tooltip extends OpenClawLitElement {
     trigger.addEventListener("click", this.#handleClick, true);
     this.#observeRichContent();
     this.#syncDescription();
-    this.#syncWebAwesomeTooltip();
+    void this.#syncWebAwesomeTooltip();
   }
 
   #detachTrigger() {
@@ -356,7 +351,7 @@ class Tooltip extends OpenClawLitElement {
     });
   }
 
-  #syncWebAwesomeTooltip() {
+  async #syncWebAwesomeTooltip() {
     const tooltip = this.webAwesomeTooltip;
     if (!tooltip) {
       return;
@@ -370,18 +365,21 @@ class Tooltip extends OpenClawLitElement {
     }
     // WaTooltip's initial `for` watcher clears a directly assigned anchor.
     // Reapply it after that update or an open tooltip has no popup geometry.
-    void tooltip.updateComplete.then(() => {
-      if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
-        tooltip.anchor = trigger;
-        if (this.autoSize) {
-          tooltip.popup.setAttribute("auto-size", "vertical");
-        } else {
-          tooltip.popup.removeAttribute("auto-size");
-        }
-        tooltip.popup.autoSizePadding = this.autoSize ? 8 : 0;
-        tooltip.popup.shiftPadding = this.autoSize ? 8 : 0;
+    await tooltip.updateComplete;
+    if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
+      tooltip.anchor = trigger;
+      const popup = tooltip.popup;
+      if (!popup) {
+        return;
       }
-    });
+      if (this.autoSize) {
+        popup.setAttribute("auto-size", "vertical");
+      } else {
+        popup.removeAttribute("auto-size");
+      }
+      popup.autoSizePadding = this.autoSize ? 8 : 0;
+      popup.shiftPadding = this.autoSize ? 8 : 0;
+    }
   }
 
   readonly #handlePointerEnter = (event: Event) => {
@@ -458,14 +456,14 @@ class Tooltip extends OpenClawLitElement {
   readonly #handleClick = () => {
     if (this.openOnClick && !this.#pinned) {
       this.#show();
-      this.#pinned = this.webAwesomeTooltip?.open === true;
+      this.#pinned = this.hasAttribute("open");
       return;
     }
     this.#close();
   };
 
   #scheduleOpen() {
-    if (this.disabled || this.webAwesomeTooltip?.open || this.#openTimer !== null) {
+    if (this.disabled || this.hasAttribute("open") || this.#openTimer !== null) {
       return;
     }
     const provider = this.#tooltipProvider;
@@ -480,34 +478,35 @@ class Tooltip extends OpenClawLitElement {
   }
 
   #show() {
-    const tooltip = this.webAwesomeTooltip;
-    if (
-      this.disabled ||
-      !tooltip ||
-      !this.#triggerElement ||
-      !this.#tooltipText ||
-      this.#isRedundant()
-    ) {
+    if (this.disabled || !this.#triggerElement || !this.#tooltipText || this.#isRedundant()) {
       return;
     }
-    // Descriptions and dismissal stay synchronous. Lit preserves these pending
-    // properties when the optional popup upgrades, including a close during loading.
+    this.materialized = true;
+    // Intent and dismissal stay synchronous while the popup renders and upgrades.
     void ensureCustomElementDefined(
       "wa-tooltip",
       () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
-    ).then(
-      () => {
-        if (this.isConnected) {
-          this.#syncWebAwesomeTooltip();
+    )
+      .then(async () => {
+        await this.updateComplete;
+        await this.#syncWebAwesomeTooltip();
+        const tooltip = this.webAwesomeTooltip;
+        if (
+          tooltip &&
+          this.isConnected &&
+          Tooltip.#activeByDocument.get(this.ownerDocument) === this
+        ) {
+          // Side cards flip vertically on narrow viewports.
+          tooltip.placement = this.#resolvedPlacement();
+          tooltip.open = true;
         }
-      },
-      (error: unknown) => {
+      })
+      .catch((error: unknown) => {
         if (Tooltip.#activeByDocument.get(this.ownerDocument) === this) {
           this.#close();
           showToast({ message: formatUiError(error) });
         }
-      },
-    );
+      });
     this.#clearTimers(false);
     const active = Tooltip.#activeByDocument.get(this.ownerDocument);
     if (active && active !== this) {
@@ -518,12 +517,9 @@ class Tooltip extends OpenClawLitElement {
     Tooltip.#activeByDocument.set(this.ownerDocument, this);
     this.#tooltipProvider?.openTooltip();
     this.#syncDescription();
-    // Side cards cannot fit beside a menu on narrow viewports; let WA flip
-    // vertically and shift within the viewport instead.
-    tooltip.placement = this.#resolvedPlacement();
-    tooltip.open = true;
     // Light-DOM owners can retain a revealed trigger without another popup lifecycle.
     this.setAttribute("open", "");
+    this.renderRoot.querySelector(".tooltip-rich-content")?.removeAttribute("inert");
     this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentDismiss, true);
     this.ownerDocument.addEventListener("focusin", this.#handleDocumentDismiss, true);
     if (this.hoverDismissDelay !== undefined) {
@@ -566,6 +562,8 @@ class Tooltip extends OpenClawLitElement {
   #close() {
     this.#pinned = false;
     this.removeAttribute("open");
+    // Hide transitions may keep the popup painted, but its actions must leave Tab order now.
+    this.renderRoot.querySelector(".tooltip-rich-content")?.setAttribute("inert", "");
     this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentDismiss, true);
     this.ownerDocument.removeEventListener("focusin", this.#handleDocumentDismiss, true);
     this.ownerDocument.removeEventListener("pointermove", this.#handleDocumentPointerMove, true);
@@ -749,25 +747,31 @@ class Tooltip extends OpenClawLitElement {
   }
 
   override render() {
+    // The hidden content slot keeps rich descriptions available before the popup exists.
     return html`
       <slot @slotchange=${() => this.#attachTrigger()}></slot>
-      <wa-tooltip
-        id=${this.#tooltipId}
-        placement=${this.#resolvedPlacement()}
-        trigger="manual"
-        @wa-hide=${() => this.#close()}
-      >
-        <span class="tooltip-content">${this.contentTemplate ?? this.content}</span>
-        <span
-          class="tooltip-rich-content"
-          @pointerenter=${this.#handleContentPointerEnter}
-          @pointerleave=${this.#handleContentPointerLeave}
-          @focusin=${this.#handleFocusIn}
-          @focusout=${this.#handleFocusOut}
-        >
-          <slot name="content" @slotchange=${this.#handleContentSlotChange}></slot>
-        </span>
-      </wa-tooltip>
+      ${
+        this.materialized
+          ? html`<wa-tooltip
+              id=${this.#tooltipId}
+              placement=${this.#resolvedPlacement()}
+              trigger="manual"
+              @wa-hide=${() => this.#close()}
+            >
+              <span class="tooltip-content">${this.contentTemplate ?? this.content}</span>
+              <span
+                class="tooltip-rich-content"
+                ?inert=${!this.hasAttribute("open")}
+                @pointerenter=${this.#handleContentPointerEnter}
+                @pointerleave=${this.#handleContentPointerLeave}
+                @focusin=${this.#handleFocusIn}
+                @focusout=${this.#handleFocusOut}
+              >
+                <slot name="content" @slotchange=${this.#handleContentSlotChange}></slot>
+              </span>
+            </wa-tooltip>`
+          : html` <slot name="content" hidden @slotchange=${this.#handleContentSlotChange}></slot> `
+      }
     `;
   }
 

@@ -106,8 +106,6 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = ParsedSectionLine;
-
 type SectionSummary = {
   title: string;
   text: string;
@@ -130,8 +128,7 @@ function stripMarkdown(text: string): string {
     text
       .replace(/!\[[^\]]*]\([^)]*\)/g, "")
       .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-      .replace(/[`*_~>#]/g, "")
-      .replace(/\s+/g, " "),
+      .replace(/[`*_~>#]/g, ""),
   );
 }
 
@@ -155,12 +152,9 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
     if (!current) {
       return;
     }
-    const meaningfulLines = current.lines.filter(
-      (entry) => normalizeWhitespace(entry.text).length > 0,
-    );
-    if (meaningfulLines.length > 0) {
-      const endLine = meaningfulLines[meaningfulLines.length - 1]?.line ?? current.endLine;
-      sections.push({ ...current, endLine, lines: meaningfulLines });
+    if (current.lines.length > 0) {
+      const endLine = current.lines[current.lines.length - 1]?.line ?? current.endLine;
+      sections.push({ ...current, endLine });
     }
     current = null;
   };
@@ -206,14 +200,11 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
   return sections;
 }
 
-function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
-  const snippets: SectionSnippet[] = [];
+function sectionToSnippets(section: ParsedMarkdownSection): ParsedSectionLine[] {
+  const snippets: ParsedSectionLine[] = [];
   const seen = new Set<string>();
   for (const entry of section.lines) {
     const trimmed = entry.text.trim();
-    if (!trimmed) {
-      continue;
-    }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
     const text = stripMarkdown(candidateText);
@@ -230,7 +221,7 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
   return snippets;
 }
 
-function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
+function scoreSection(section: ParsedMarkdownSection, snippets: ParsedSectionLine[]) {
   const title = section.title;
   const score = (pattern: RegExp) =>
     snippets.filter((snippet) => pattern.test(snippet.text)).length + Number(pattern.test(title));
@@ -287,8 +278,8 @@ function scoreSignals(signals: readonly (readonly [boolean, number])[], initial 
 
 function chooseSummarySnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
+  snippets: ParsedSectionLine[],
+): ParsedSectionLine[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
   return snippets
     .toSorted((left, right) => {
@@ -316,7 +307,7 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
+  snippets: ParsedSectionLine[],
 ): SectionSummary | null {
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
@@ -405,10 +396,10 @@ function scoreCandidateSnippet(text: string, title: string): number {
 
 function chooseScoredSnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
+  snippets: ParsedSectionLine[],
   scoreFor: (text: string, title: string) => number,
   minimumScore: number,
-): SectionSnippet[] {
+): ParsedSectionLine[] {
   return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
@@ -517,10 +508,9 @@ function atomizeClaimText(text: string): string[] {
   if (!normalized) {
     return [];
   }
-  const atomic = splitTopLevelClauses(normalized, ";")
-    .flatMap((part) => splitSubjectLeadClaim(part))
-    .map((part) => normalizeWhitespace(part))
-    .filter(Boolean);
+  const atomic = splitTopLevelClauses(normalized, ";").flatMap((part) =>
+    splitSubjectLeadClaim(part),
+  );
   return uniqueStrings(atomic).slice(0, 3);
 }
 

@@ -1,4 +1,3 @@
-// Display-metadata mutations for sessions.patch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -19,9 +18,6 @@ export function applySessionsPatchDisplayMetadata(params: {
   const { patch, next } = params;
 
   for (const field of ["autoLabel", "label"] as const) {
-    if (!(field in patch)) {
-      continue;
-    }
     const raw = patch[field];
     if (raw === null) {
       delete next[field];
@@ -38,59 +34,48 @@ export function applySessionsPatchDisplayMetadata(params: {
     }
   }
 
-  if ("icon" in patch) {
-    const raw = patch.icon;
-    if (raw === null || raw === "") {
-      delete next.icon;
-    } else if (raw !== undefined) {
-      const icon = normalizeSessionIconValue(raw);
-      if (!icon) {
-        return `icon must be a single emoji, a named icon (${SESSION_ICON_GLYPH_IDS.join(", ")}), or self-contained SVG markup/data URL up to 16 KiB`;
-      }
-      next.icon = icon;
+  if (patch.icon === null || patch.icon === "") {
+    delete next.icon;
+  } else if (patch.icon !== undefined) {
+    const icon = normalizeSessionIconValue(patch.icon);
+    if (!icon) {
+      return `icon must be a single emoji, a named icon (${SESSION_ICON_GLYPH_IDS.join(", ")}), or self-contained SVG markup/data URL up to 16 KiB`;
     }
+    next.icon = icon;
   }
 
-  if ("color" in patch) {
-    const raw = patch.color;
-    if (raw === null || raw === "") {
-      delete next.color;
-    } else if (raw !== undefined) {
-      const color = normalizeSessionColorValue(raw);
-      if (!color) {
-        return `color must be one of: ${SESSION_COLOR_IDS.join(", ")}`;
-      }
-      next.color = color;
+  if (patch.color === null || patch.color === "") {
+    delete next.color;
+  } else if (patch.color !== undefined) {
+    const color = normalizeSessionColorValue(patch.color);
+    if (!color) {
+      return `color must be one of: ${SESSION_COLOR_IDS.join(", ")}`;
     }
+    next.color = color;
   }
 
-  if ("category" in patch) {
-    const raw = patch.category;
-    if (raw === null) {
-      delete next.category;
-    } else if (raw !== undefined) {
-      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return "invalid category: empty";
-      }
-      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
-        return `invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`;
-      }
-      next.category = trimmed;
+  if (patch.category === null) {
+    delete next.category;
+  } else if (patch.category !== undefined) {
+    // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+    const trimmed = normalizeOptionalString(patch.category) ?? "";
+    if (!trimmed) {
+      return "invalid category: empty";
     }
+    if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+      return `invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`;
+    }
+    next.category = trimmed;
   }
 
-  if ("boardFace" in patch && patch.boardFace !== undefined) {
+  if (patch.boardFace !== undefined) {
     next.boardFace = patch.boardFace;
   }
 
-  if ("boardPresentation" in patch) {
-    if (patch.boardPresentation === null) {
-      delete next.boardPresentation;
-    } else if (patch.boardPresentation !== undefined) {
-      next.boardPresentation = patch.boardPresentation;
-    }
+  if (patch.boardPresentation === null) {
+    delete next.boardPresentation;
+  } else if (patch.boardPresentation !== undefined) {
+    next.boardPresentation = patch.boardPresentation;
   }
 
   return undefined;

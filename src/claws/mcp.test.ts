@@ -60,7 +60,7 @@ async function fixture(agentId = "worker", root?: string) {
 }
 
 function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = {}) {
-  return { ok: true as const, path: "config", config: {}, mcpServers };
+  return { ok: true as const, path: "config", config: {}, mcpServers, runtimeConfig: {} };
 }
 
 describe("installClawMcpServers", () => {

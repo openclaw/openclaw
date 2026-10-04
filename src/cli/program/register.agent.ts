@@ -1,17 +1,11 @@
-// Agent and agents command registration with lazy command-module loading for startup speed.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
 type RuntimeModule = typeof import("../../runtime.js");
-
-const loadAgentsBindModule = createLazyRuntimeModule(
-  () => import("../../commands/agents.commands.bind.js"),
-);
 
 async function runAgentsCommandAction(
   action: (runtime: RuntimeModule["defaultRuntime"]) => Promise<void>,
@@ -23,7 +17,6 @@ async function runAgentsCommandAction(
   await runCommandWithRuntime(defaultRuntime, () => action(defaultRuntime));
 }
 
-/** Register `agents` management subcommands for config, bindings, identity, and deletion. */
 export function registerAgentsCommands(program: Command): void {
   const agents = program
     .command("agents")
@@ -43,14 +36,7 @@ export function registerAgentsCommands(program: Command): void {
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
         const { agentsListCommand } = await import("../../commands/agents.commands.list.js");
-        await agentsListCommand(
-          {
-            json: Boolean(opts.json),
-            bindings: Boolean(opts.bindings),
-            tree: Boolean(opts.tree),
-          },
-          runtime,
-        );
+        await agentsListCommand(opts, runtime);
       });
     });
 
@@ -61,14 +47,8 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON instead of text", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindingsCommand } = await loadAgentsBindModule();
-        await agentsBindingsCommand(
-          {
-            agent: opts.agent as string | undefined,
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        const { agentsBindingsCommand } = await import("../../commands/agents.commands.bind.js");
+        await agentsBindingsCommand(opts, runtime);
       });
     });
 
@@ -85,15 +65,8 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindCommand } = await loadAgentsBindModule();
-        await agentsBindCommand(
-          {
-            agent: opts.agent as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        const { agentsBindCommand } = await import("../../commands/agents.commands.bind.js");
+        await agentsBindCommand(opts, runtime);
       });
     });
 
@@ -106,16 +79,8 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsUnbindCommand } = await loadAgentsBindModule();
-        await agentsUnbindCommand(
-          {
-            agent: opts.agent as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
-            all: Boolean(opts.all),
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        const { agentsUnbindCommand } = await import("../../commands/agents.commands.bind.js");
+        await agentsUnbindCommand(opts, runtime);
       });
     });
 
@@ -143,20 +108,7 @@ export function registerAgentsCommands(program: Command): void {
           "nonInteractive",
         ]);
         const { agentsAddCommand } = await import("../../commands/agents.commands.add.js");
-        await agentsAddCommand(
-          {
-            name: typeof name === "string" ? name : undefined,
-            workspace: opts.workspace as string | undefined,
-            role: typeof opts.role === "string" ? opts.role : undefined,
-            model: opts.model as string | undefined,
-            agentDir: opts.agentDir as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
-            nonInteractive: Boolean(opts.nonInteractive),
-            json: Boolean(opts.json),
-          },
-          runtime,
-          { hasAutomationFlags },
-        );
+        await agentsAddCommand({ ...opts, name }, runtime, { hasAutomationFlags });
       });
     });
 
@@ -174,17 +126,7 @@ export function registerAgentsCommands(program: Command): void {
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
         const { agentsTeamCreateCommand } = await import("../../commands/agents.commands.team.js");
-        await agentsTeamCreateCommand(
-          {
-            preset: typeof opts.preset === "string" ? opts.preset : undefined,
-            coordinator: typeof opts.coordinator === "string" ? opts.coordinator : undefined,
-            prefix: typeof opts.prefix === "string" ? opts.prefix : undefined,
-            workspaceRoot: typeof opts.workspaceRoot === "string" ? opts.workspaceRoot : undefined,
-            nonInteractive: Boolean(opts.nonInteractive),
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        await agentsTeamCreateCommand(opts, runtime);
       });
     });
 
@@ -226,20 +168,7 @@ ${formatHelpExamples([
       await runAgentsCommandAction(async (runtime) => {
         const { agentsSetIdentityCommand } =
           await import("../../commands/agents.commands.identity.js");
-        await agentsSetIdentityCommand(
-          {
-            agent: opts.agent as string | undefined,
-            workspace: opts.workspace as string | undefined,
-            identityFile: opts.identityFile as string | undefined,
-            fromIdentity: Boolean(opts.fromIdentity),
-            name: opts.name as string | undefined,
-            theme: opts.theme as string | undefined,
-            emoji: opts.emoji as string | undefined,
-            avatar: opts.avatar as string | undefined,
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        await agentsSetIdentityCommand(opts, runtime);
       });
     });
 
@@ -251,14 +180,7 @@ ${formatHelpExamples([
     .action(async (id, opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
         const { agentsDeleteCommand } = await import("../../commands/agents.commands.delete.js");
-        await agentsDeleteCommand(
-          {
-            id: String(id),
-            force: Boolean(opts.force),
-            json: Boolean(opts.json),
-          },
-          runtime,
-        );
+        await agentsDeleteCommand({ ...opts, id }, runtime);
       });
     });
 

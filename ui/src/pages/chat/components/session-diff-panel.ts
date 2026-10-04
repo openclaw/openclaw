@@ -38,15 +38,11 @@ import { renderSessionSplitDiff } from "./session-diff-render.ts";
 
 export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
 export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
+export type SessionDiffOwner = { agentId: string; sessionKey: string };
 
 type FileView = {
   file: SessionDiffFile;
   parsed: ParsedFilePatch | null;
-};
-
-type SessionDiffTaskResult = {
-  result: SessionsDiffResult;
-  views: FileView[];
 };
 
 type SessionDiffPreferences = { split: boolean; wrap: boolean };
@@ -113,21 +109,8 @@ function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
-  return {
-    result,
-    views: result.files.map((file) => ({
-      file,
-      parsed: file.patch
-        ? parseSessionDiffPatch(file.patch, (count) =>
-            t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-          )
-        : null,
-    })),
-  };
-}
-
 class SessionDiffPanel extends OpenClawLightDomElement {
+  @property({ attribute: false }) owner: SessionDiffOwner | null = null;
   @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
@@ -152,20 +135,26 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   }
 
   private readonly diffTask = new Task(this, {
-    args: () =>
-      [
-        this.loader,
-        this.scope.scope,
-        this.scope.scope === "commit" ? this.scope.commit : null,
-      ] as const,
-    task: async ([loader, scope, commit]): Promise<SessionDiffTaskResult | null> => {
+    args: () => [this.loader, this.owner, this.scope] as const,
+    task: async ([loader, owner, scope]) => {
       if (!loader) {
         return null;
       }
-      const params: SessionDiffScope = scope === "commit" ? { scope, commit: commit! } : { scope };
-      const result = this.prefetchedDiffResult ?? (await loader(params));
+      const result = this.prefetchedDiffResult ?? (await loader(scope));
       this.prefetchedDiffResult = null;
-      return taskResult(result);
+      return {
+        owner,
+        scope,
+        result,
+        views: result.files.map((file) => ({
+          file,
+          parsed: file.patch
+            ? parseSessionDiffPatch(file.patch, (count) =>
+                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+              )
+            : null,
+        })),
+      };
     },
     onComplete: (value) => {
       const currentPaths = new Set(value?.views.map((view) => view.file.path) ?? []);
@@ -230,7 +219,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         savePreferences({ split: this.split, wrap: this.wrap });
         return;
       case "scope":
-        this.scope = action.value;
+        // Scope identity drives the Task, so reselecting the active scope must stay a no-op.
+        if (JSON.stringify(action.value) !== JSON.stringify(this.scope)) {
+          this.scope = action.value;
+        }
         return;
       case "open-file":
         this.openFile?.(action.path);
@@ -254,7 +246,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         : null;
     return html`
       <div class="session-diff__summary">
-        <span class="session-diff__branch" title=${result.root ?? ""}>
+        <span
+          class="session-diff__branch"
+          title=${[branchLabel, result.root].filter(Boolean).join("\n")}
+        >
           ${icons.gitBranch}
           <span class="session-diff__branch-label">${branchLabel}</span>
         </span>
@@ -574,10 +569,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       const error = this.diffTask.error;
       return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
-    if (this.loading) {
+    const value = this.diffTask.value;
+    if (this.loading && (!value || value.owner !== this.owner || value.scope !== this.scope)) {
       return renderPanelLoadingSkeleton("review", t("chat.sessionDiff.loading"));
     }
-    const value = this.diffTask.value;
     if (!value) {
       return nothing;
     }

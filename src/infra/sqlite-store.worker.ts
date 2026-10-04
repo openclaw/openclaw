@@ -3,6 +3,7 @@ import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
+import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import {
   encodeOpenClawStateWorkerError,
@@ -58,7 +59,6 @@ type StagedInput = {
   command: unknown;
 };
 let pendingInput: StagedInput | undefined;
-const actorPaths = new Map<number, string>();
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
@@ -333,6 +333,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
+          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -362,7 +363,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       // SAFETY: The validated backend and its typed client own the private command contract.
       actors.set(request.actor, backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>);
-      actorPaths.set(request.actor, request.databasePath);
     } else if (request.type === "close") {
       const backend = actors.get(request.actor);
       if (!backend) {
@@ -378,7 +378,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw error;
       }
       actors.delete(request.actor);
-      actorPaths.delete(request.actor);
       stateContexts.delete(request.actor);
     } else {
       await executeCommand(deserialize(request.input));
@@ -425,7 +424,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       request.stateContext ??
       (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
     const sharedState =
-      errorContext && !executed ? encodeOpenClawStateWorkerError(failure) : undefined;
+      errorContext && !executed
+        ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: true })
+        : undefined;
     reply = {
       id: request.id,
       ok: false,
@@ -447,6 +448,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   }
   if (request.type === "close" && reply.ok && actors.size === 0) {
     // The broker can terminate this worker as soon as the final close is acknowledged.
+    await flushLogger();
     await new Promise<void>((resolve) => {
       drainProcessOutput(resolve);
     });

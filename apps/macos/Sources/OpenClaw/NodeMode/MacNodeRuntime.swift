@@ -112,7 +112,7 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
-        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
     ])
     private let cameraCapture = CameraCaptureService()
@@ -149,7 +149,7 @@ actor MacNodeRuntime {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -221,7 +221,7 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.record.rawValue:
+            case OpenClawScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
@@ -356,7 +356,7 @@ actor MacNodeRuntime {
                         throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                     }
                     try Task.checkCancellation()
-                    response = req.command == MacNodeScreenCommand.snapshot.rawValue
+                    response = req.command == OpenClawScreenCommand.snapshot.rawValue
                         ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
                         : try await self.handleComputerActInvoke(req, desktopPermit: permit)
                 }
@@ -750,8 +750,8 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenRecordParams()
+        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
+            OpenClawScreenRecordParams()
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -943,7 +943,7 @@ extension MacNodeRuntime {
 
 extension MacNodeRuntime {
     private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
-        if req.command == MacNodeScreenCommand.snapshot.rawValue {
+        if req.command == OpenClawScreenCommand.snapshot.rawValue {
             return self.errorResponse(
                 req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
         }
@@ -960,13 +960,7 @@ extension MacNodeRuntime {
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
@@ -1009,10 +1003,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

@@ -7,17 +7,21 @@ import type {
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -26,6 +30,28 @@ import {
 } from "./workspace-conflicts.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+
+/** Wait without a placement claim: a claim would fail the refresh's authority check. */
+export async function waitForWorkerRuntimeRefresh(params: {
+  refresh: WorkerRuntimeRefreshInFlight;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  onProgress: () => void;
+}): Promise<void> {
+  const unsubscribe = params.refresh.onProgress(params.onProgress);
+  try {
+    await waitForTurnOperation({
+      start: () => params.refresh.settled,
+      signal: AbortSignal.any([
+        getGatewayRestartDrainSignal(),
+        ...(params.signal ? [params.signal] : []),
+      ]),
+      timeoutMs: params.timeoutMs,
+    });
+  } finally {
+    unsubscribe();
+  }
+}
 
 /** Wait for live reconciliation, or report a retained result that needs recovery. */
 export async function waitForPendingWorkerResult(params: {
@@ -41,11 +67,11 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
+  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
+  params.signal?.throwIfAborted();
   if (
     !params.placements.get(params.sessionId)?.turnClaim &&
-    params.placements
-      .listPendingWorkspaceResults(params.sessionId)
-      .some((pending) => pending.sessionId === params.sessionId)
+    pendingResults.some((pending) => pending.sessionId === params.sessionId)
   ) {
     throw new Error(
       "Workspace recovery is still pending after its turn ended. " +
@@ -107,14 +133,6 @@ export async function waitForInitialWorkerPlacement(params: {
     placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
     assertCurrent,
   };
-}
-
-function required(value: string | undefined, field: string): string {
-  const normalized = value?.trim();
-  if (!normalized) {
-    throw new Error(`Worker turn ${field} is required`);
-  }
-  return normalized;
 }
 
 export function latestDurableWorkspaceConflict(
@@ -189,7 +207,10 @@ function resolvePlacementIdentityField(
   persisted: string | undefined,
   field: string,
 ): string {
-  const resolved = supplied === undefined && persisted ? persisted : required(supplied, field);
+  const resolved = supplied === undefined && persisted ? persisted : supplied?.trim();
+  if (!resolved) {
+    throw new Error(`Worker turn ${field} is required`);
+  }
   if (persisted && resolved !== persisted) {
     throw new Error(`Worker turn ${field} does not match its placement`);
   }
@@ -200,15 +221,37 @@ export function resolvePlacementIdentity(
   claim: LocalTurnPlacementClaim,
   placement: WorkerSessionPlacementRecord | undefined,
 ) {
+  const sessionKey = claim.sessionKey?.trim();
+  // A detached cron root addresses its recorded exact run, but row checks must
+  // retain the caller's key. Remote placement identities stay exact.
+  const localCronAlias =
+    placement?.state === "local" &&
+    sessionKey &&
+    parseCronRunScopeSuffix(placement.sessionKey).baseSessionKey === sessionKey;
   return {
     sessionId: claim.sessionId,
     agentId: resolvePlacementIdentityField(claim.agentId, placement?.agentId, "agent id"),
-    sessionKey: resolvePlacementIdentityField(
-      claim.sessionKey,
-      placement?.sessionKey,
-      "session key",
-    ),
+    sessionKey: localCronAlias
+      ? sessionKey
+      : resolvePlacementIdentityField(claim.sessionKey, placement?.sessionKey, "session key"),
   };
+}
+
+export async function resolveWorkerPlacementRuntimeOverride(
+  placements: Pick<WorkerSessionPlacementStore, "readProjection">,
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+): Promise<string | undefined> {
+  // This is a runtime preference, not turn authority. Setup and the preceding
+  // turn may publish while it is read; execution still acquires a current claim.
+  const projection = await placements.readProjection([identity.sessionId], { current: true });
+  const placement = projection.placements.get(identity.sessionId);
+  return placement &&
+    placement.state !== "local" &&
+    placement.executionMode === "worker-turn" &&
+    (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+    (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+    ? "openclaw"
+    : undefined;
 }
 
 export function requireActivePlacement(
@@ -246,10 +289,11 @@ export async function executeLocalTurn<T>(params: {
   );
   params.assertCurrent?.();
   const identity = resolvePlacementIdentity(params.claim, current);
-  const sessionEntry = loadSessionEntryReadOnly({
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
     ...identity,
     storePath: resolveSessionStorePathForScope(identity),
   });
+  params.assertCurrent?.();
   if (sessionEntry?.repositoryWorkspaceId) {
     throw new Error(
       "This repository session needs a cloud worker. Choose a cloud environment and retry.",
@@ -258,6 +302,7 @@ export async function executeLocalTurn<T>(params: {
   const turnClaim = await params.placements.claimTurn(
     {
       ...identity,
+      sessionKey: current?.sessionKey ?? identity.sessionKey,
       claimId: randomUUID(),
       runId: params.claim.runId,
       owner: { kind: "local" },
@@ -330,20 +375,23 @@ export async function claimWorkerTurn(params: {
     if (!(error instanceof ActiveTurnClaimError)) {
       throw error;
     }
+    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
+      params.identity.sessionId,
+    );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const activePlacement = params.placements.get(params.identity.sessionId);
     const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
-    const resultIsReconciling = params.placements
-      .listPendingWorkspaceResults(params.identity.sessionId)
-      .some(
-        (pending) =>
-          activeClaim?.owner === "worker" &&
-          pending.sessionId === params.identity.sessionId &&
-          pending.claimId === activeClaim.claimId &&
-          pending.runId === activeClaim.runId,
-      );
+    const resultIsReconciling = pendingResults.some(
+      (pending) =>
+        activeClaim?.owner === "worker" &&
+        pending.sessionId === params.identity.sessionId &&
+        pending.claimId === activeClaim.claimId &&
+        pending.runId === activeClaim.runId,
+    );
     const cancelledClaim = activePlacement && projectWorkerSessionTurnClaim(activePlacement);
     if (resultIsReconciling) {
       await waitForPendingWorkerResult({

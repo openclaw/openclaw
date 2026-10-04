@@ -51,7 +51,9 @@ type RecordBase = RecordIdentity & {
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
   attachedSessionIds: string[];
   lastError: string | null;
-} & { createdAtMs: number; updatedAtMs: number; stateChangedAtMs: number } & {
+  createdAtMs: number;
+  updatedAtMs: number;
+  stateChangedAtMs: number;
   lastActivatedAtMs: number | null;
   idleSinceAtMs: number | null;
   destroyRequestedAtMs: number | null;

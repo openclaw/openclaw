@@ -1,6 +1,3 @@
-/**
- * Runtime SDK helpers for host-authorized agent harness completion delivery.
- */
 import {
   isAgentHarnessCompletionCustodyCurrent,
   runWithAgentHarnessCompletionCustody,
@@ -13,10 +10,7 @@ import {
   type AgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
-import {
-  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-  type AgentInternalEventStatus,
-} from "../agents/internal-event-contract.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../agents/internal-event-contract.js";
 import {
   formatAgentInternalEventsForPrompt,
   type AgentInternalEvent,
@@ -47,8 +41,6 @@ export type AgentHarnessCompletionStatus = "succeeded" | "failed" | "cancelled";
 export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
 > & { recoveryPending?: true; recoveryBlocked?: true };
-
-const AGENT_HARNESS_COMPLETION_SOURCE_TOOL = "agent_harness_completion";
 
 /** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessCompletion(params: {
@@ -81,7 +73,7 @@ export async function deliverAgentHarnessCompletion(params: {
   const taskLabel = params.taskLabel?.trim() || "Agent harness task";
   const announceType = params.announceType?.trim() || "Agent harness task";
   const statusLabel = params.statusLabel?.trim() || params.status;
-  const eventStatus = mapHarnessCompletionStatus(params.status);
+  const eventStatus = params.status === "succeeded" ? "ok" : "error";
   const expectedRequester = params.expectedRequester;
   const requester = loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
   const requesterSessionId = requester.entry?.sessionId;
@@ -103,10 +95,9 @@ export async function deliverAgentHarnessCompletion(params: {
   const isSourceSessionEffectsAllowed = () =>
     !signal?.aborted && isRequesterCurrent() && params.isSourceSessionAdmissionAllowed();
   const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
-  let directOrigin = scope.requesterOrigin;
-  if (!requesterIsSubagent) {
-    directOrigin = resolveAnnounceOrigin(requester.entry, scope.requesterOrigin);
-  }
+  const directOrigin = requesterIsSubagent
+    ? scope.requesterOrigin
+    : resolveAnnounceOrigin(requester.entry, scope.requesterOrigin);
   const completionDirectOrigin =
     requesterIsSubagent || !directOrigin
       ? directOrigin
@@ -145,13 +136,21 @@ export async function deliverAgentHarnessCompletion(params: {
       };
     }
     if (requester.agentId && requester.storePath) {
-      const custody = reconcileHarnessCompletionDelivery({
+      const custody = await reconcileHarnessCompletionDelivery({
         agentId: requester.agentId,
         storePath: requester.storePath,
         sessionKey: requester.canonicalKey,
         sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
         taskRunId: childSessionKey,
       });
+      if (!isRequesterCurrent()) {
+        return {
+          delivered: false,
+          path: "none",
+          recoveryBlocked: true,
+          error: "completion requester locator is missing or replaced",
+        };
+      }
       if (custody === "delivered") {
         return { delivered: true, path: "direct" };
       }
@@ -184,13 +183,12 @@ export async function deliverAgentHarnessCompletion(params: {
           requesterAgentId: scope.requesterAgentId,
           isSourceSessionEffectsAllowed,
           triggerMessage: prompt,
-          steerMessage: prompt,
           internalEvents,
           requesterSessionOrigin: scope.requesterOrigin,
           completionDirectOrigin: completionDirectOrigin ?? directOrigin,
           directOrigin,
           sourceSessionKey: childSessionKey,
-          sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
+          sourceTool: "agent_harness_completion",
           isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
           targetRequesterSessionKey: requesterSessionKey,
           requesterIsSubagent,
@@ -209,15 +207,6 @@ export async function deliverAgentHarnessCompletion(params: {
   return completionCustody
     ? await runWithAgentHarnessCompletionCustody(completionCustody, scope, deliverInGateway)
     : await deliverInGateway();
-}
-
-function mapHarnessCompletionStatus(
-  status: AgentHarnessCompletionStatus,
-): AgentInternalEventStatus {
-  if (status === "succeeded") {
-    return "ok";
-  }
-  return "error";
 }
 
 /** Returns true when completion delivery reached a persistent direct or steered path. */

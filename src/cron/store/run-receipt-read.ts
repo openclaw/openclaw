@@ -5,9 +5,15 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { projectCronReceiptAuthorityJobFacts } from "./receipt-authority-facts.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import type {
   CronRunReceipt,
+  CronRunReceiptCurrentFacts,
+  CronRunReceiptCurrentReadCommand,
   CronRunReceiptHandle,
   CronRunReceiptOwnerObservation,
   CronRunReceiptRecoveryCandidate,
@@ -59,6 +65,49 @@ export function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
     ownerStartTime: receipt.ownerStartTime,
     startedAtMs: receipt.startedAtMs,
   };
+}
+
+export function matchesCronRunReceiptOwner(
+  current: CronRunReceiptHandle | undefined,
+  expected: CronRunReceiptCurrentReadCommand["handle"],
+): boolean {
+  return (
+    current !== undefined &&
+    current.receiptId === expected.receiptId &&
+    current.ownerPid === expected.ownerPid &&
+    current.ownerStartTime === expected.ownerStartTime
+  );
+}
+
+/** Current receipt, definition and deletion facts share one native read snapshot. */
+export function readCronRunReceiptCurrentFactsInDatabase(
+  database: DatabaseSync,
+  command: CronRunReceiptCurrentReadCommand,
+): CronRunReceiptCurrentFacts {
+  return runSqliteDeferredTransactionSync(database, () => {
+    const { handle } = command;
+    const deletionBlocked =
+      command.includeAvailability &&
+      Boolean(readAgentDeletionJournalInDatabase({ db: database }, handle.agentId, "runtime"));
+    let receipt: CronRunReceiptHandle | undefined;
+    try {
+      receipt = readActiveCronRunReceiptsInDatabase(database, handle.storeKey, [handle.jobId])[0];
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
+        throw error;
+      }
+    }
+    const job =
+      command.includeJob && matchesCronRunReceiptOwner(receipt, handle)
+        ? loadedCronStoreFromRows(loadCronRows(database, handle.storeKey, new Set([handle.jobId])))
+            .store.jobs[0]
+        : undefined;
+    return {
+      receipt,
+      job: job ? projectCronReceiptAuthorityJobFacts(job) : undefined,
+      deletionBlocked,
+    };
+  });
 }
 
 /** Observe existing receipts without the writable owner's first-use initialization. */

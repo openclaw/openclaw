@@ -97,7 +97,17 @@ export function registerForegroundFailureRecoveryTests({
           readyz: true,
           settled: true,
         },
-        steps: [recoveryVerificationStep(undefined, root)],
+        steps: [
+          recoveryVerificationStep(undefined, root),
+          {
+            name: "update",
+            command: "openclaw update",
+            cwd: root,
+            durationMs: 0,
+            exitCode: null,
+            failureFacts: [{ check: "update", code: "update-failed" }],
+          },
+        ],
       });
       expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
@@ -107,6 +117,7 @@ export function registerForegroundFailureRecoveryTests({
 export function registerFailureSelectorTests({
   updateCommand,
   updateFinalizeCommand,
+  updateGitCheckout,
   readConfigFileSnapshot,
   profileStateDir,
   runUpdateFailureTriage,
@@ -114,6 +125,7 @@ export function registerFailureSelectorTests({
 }: {
   updateCommand: typeof UpdateCommand;
   updateFinalizeCommand: typeof UpdateFinalizeCommand;
+  updateGitCheckout: typeof import("../../infra/update-runner-git.js").updateGitCheckout;
   readConfigFileSnapshot: typeof ReadConfigFileSnapshot;
   profileStateDir: () => string;
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
@@ -125,8 +137,13 @@ export function registerFailureSelectorTests({
   ])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
-      const failure = new Error("Config snapshot failed");
-      vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
+      if (name === "update") {
+        // Target selection reads config before an admitted update installs failure triage.
+        vi.mocked(updateGitCheckout).mockRejectedValueOnce(failure);
+      } else {
+        vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      }
       const cwd = process.cwd();
       const selectors = {
         OPENCLAW_STATE_DIR: path.relative(cwd, profileStateDir()),
@@ -143,23 +160,42 @@ export function registerFailureSelectorTests({
           expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
         } else {
           expect(error).toBe(failure);
+          const failedStep = {
+            name: "update",
+            command: "openclaw update",
+            cwd,
+            durationMs: expect.any(Number),
+            exitCode: 1,
+            failureFacts: [
+              {
+                check: "update",
+                code: "Error",
+                errorName: "Error",
+                message: failure.message,
+                location: expect.any(String),
+              },
+            ],
+          };
           expect(triageCall?.failure).toEqual({
             error: failure.message,
             result: {
               status: "error",
               mode: "unknown",
               root: cwd,
+              reason: "update-failed",
               durationMs: expect.any(Number),
               recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
               rollbackOutcome: undefined,
               verification: {},
+              failedStep,
               steps: [
+                failedStep,
                 recoveryVerificationStep([
                   {
                     check: "gateway-recovery",
                     code: "gateway-probe-failed",
                     message:
-                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset o",
+                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENC",
                   },
                 ]),
               ],

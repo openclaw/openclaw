@@ -58,6 +58,7 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
     db,
     path: path.join(stateDir, "state", "openclaw.sqlite"),
     walMaintenance: {
+      stop: async () => {},
       checkpoint: () => true,
       close: () => true,
       reclaimFreePages: createSqliteWalReclamationResult,

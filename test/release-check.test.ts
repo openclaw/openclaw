@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { collectBundledExtensionManifestErrors } from "../scripts/lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
@@ -12,13 +12,13 @@ import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dis
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import { collectInstalledBundledRuntimeSidecarPaths } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
-  allowsLegacyGeneratedOwnershipForSourceRoot,
   collectAppcastSparkleVersionErrors,
   collectCriticalPluginSdkEntrypointSizeFindings,
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedBundledPluginActivationSmokeEnv,
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
@@ -29,13 +29,11 @@ import {
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   runReleaseCheckCommand,
+  writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
   const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
@@ -172,6 +170,45 @@ describe("packed CLI smoke", () => {
     });
 
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      {
+        HOME: "/tmp/operator-home",
+        OPENCLAW_STATE_DIR: "/tmp/operator-state",
+      },
+      "/tmp/release-check",
+    );
+
+    const homeDir = join("/tmp/release-check", "activation-home");
+    expect(env).toMatchObject({
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
+    });
+  });
+
+  it("keeps bundled plugin activation on the built-in runtime", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-release-activation-config-"));
+    try {
+      writePackedBundledPluginActivationConfig(homeDir);
+      const config = JSON.parse(
+        readFileSync(join(homeDir, ".openclaw", "openclaw.json"), "utf8"),
+      ) as Record<string, unknown>;
+
+      expect(config).toMatchObject({
+        agents: {
+          defaults: {
+            models: { "openai/*": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        channels: { telegram: { enabled: true } },
+        plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
+      });
+      expect(config).not.toHaveProperty("models");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("does not admit provider credentials through smoke overrides", () => {
@@ -522,20 +559,6 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("packed install verification", () => {
-  it("disables legacy ownership when the historical metadata producer exists", () => {
-    const sourceRoot = tempDirs.make("release-check-ownership-producer-");
-    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(true);
-
-    const producerPath = join(
-      sourceRoot,
-      "scripts/lib/runtime-dependency-ownership-build-plugin.mts",
-    );
-    mkdirSync(dirname(producerPath), { recursive: true });
-    writeFileSync(producerPath, "export {};\n", "utf8");
-
-    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(false);
-  });
-
   it("runs postpublish package integrity checks against the packed install before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-packed-install-"));
     try {
@@ -625,17 +648,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     } finally {
       rmSync(consumerDir, { recursive: true, force: true });
     }
-  });
-
-  it("limits setupSurface omission to the recorded frozen targets", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });
 
   it("writes a consumer project that imports representative public SDK subpaths", () => {

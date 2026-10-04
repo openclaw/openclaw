@@ -1,8 +1,10 @@
 import { format } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
@@ -27,6 +29,7 @@ vi.mock("../cli/runtime-cleanup-scope.js", () => ({
   withCliProcessScope: async (run: () => Promise<void>) => run(),
 }));
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
+  captureUpdateCommandExecutorAuthority: () => ({ installKey: "/synthetic" }),
   withDelegatedUpdateCommandExecutor: async (
     _executor: unknown,
     _runId: string,
@@ -82,8 +85,8 @@ vi.mock("./update-requester-authority.js", () => ({
 vi.mock("./update-run-ledger.js", () => ({
   adoptUpdateRun: vi.fn(),
   getUpdateRun: fixture.terminal,
-  recordUpdateRunStep: fixture.recordStep,
 }));
+vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
@@ -125,6 +128,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function runWorker(
+  input: unknown,
+  mode?: "--check" | "--doctor",
+  cleanup?: () => Promise<void>,
+) {
+  const settled = createDeferredCore();
+  fixture.close.mockImplementation(async () => {
+    await cleanup?.();
+    settled.resolve();
+  });
+  process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];
+  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+    yield JSON.stringify(input);
+    return undefined;
+  });
+  await import("./update-migrated-finalize.worker.js");
+  await settled.promise;
+}
+
 it.each(["json", "human", "check"] as const)(
   "preserves %s stdout through finalization and asynchronous cleanup",
   async (mode) => {
@@ -145,18 +167,8 @@ it.each(["json", "human", "check"] as const)(
       log.debug("terminal snapshot diagnostic");
       return { runId: "synthetic-run", status: "ok" };
     });
-    const settled = createDeferredCore();
-    fixture.close.mockImplementation(async () => {
-      await Promise.resolve();
-      log.debug("cleanup diagnostic");
-      settled.resolve();
-    });
-    process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
-    if (mode === "check") {
-      process.argv.push("--check");
-    }
-    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-      yield JSON.stringify({
+    await runWorker(
+      {
         executor: {},
         bufferedSteps: [],
         resultPath: "/synthetic/result.json",
@@ -167,12 +179,13 @@ it.each(["json", "human", "check"] as const)(
           preUpdatePluginInstallRecords: {},
           result,
         },
-      });
-      return undefined;
-    });
-
-    await import("./update-migrated-finalize.worker.js");
-    await settled.promise;
+      },
+      mode === "check" ? "--check" : undefined,
+      async () => {
+        await Promise.resolve();
+        log.debug("cleanup diagnostic");
+      },
+    );
 
     expect(process.exitCode).toBe(originalExitCode);
     if (mode === "human") {
@@ -213,27 +226,6 @@ it.each([false, true])(
           steps: [],
           durationMs: 0,
         },
-        mutationStarted: true,
-        installKindChanged: false,
-        configSnapshot: {
-          path: "/fixture/openclaw.json",
-          exists: false,
-          raw: null,
-          parsed: {},
-          sourceConfig: {},
-          resolved: {},
-          runtimeConfig: {},
-          config: {},
-          valid: true,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        },
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: false,
         opts: {
           json: true,
           run: {
@@ -245,17 +237,13 @@ it.each([false, true])(
               : {}),
           },
         },
-        controlPlaneUpdateSentinelMeta: null,
         preUpdatePluginInstallRecords: {},
-        startedAt: 1,
         updateStepTimeoutMs: 1_000,
         rollbackBlockedReason: "state-migrated-no-rollback",
       },
       bufferedSteps: [],
       resultPath: "/fixture/result.json",
     };
-    const completed = createDeferredCore();
-    fixture.close.mockImplementation(async () => completed.resolve());
     fixture.finish.mockImplementation(async (_params, options) => {
       if (restartPending) {
         options.onGatewayStartAttempted?.();
@@ -267,14 +255,7 @@ it.each([false, true])(
       status: restartPending ? "running" : "succeeded",
       phase: restartPending ? "restarting" : "finished",
     });
-    process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
-    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-      yield JSON.stringify(input);
-      return undefined;
-    });
-
-    await import("./update-migrated-finalize.worker.js");
-    await completed.promise;
+    await runWorker(input);
 
     expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(
       {
@@ -405,8 +386,6 @@ it.each([
       result: { ...result, runId: "synthetic-run" },
     },
   };
-  const settled = createDeferredCore();
-  fixture.close.mockImplementation(async () => settled.resolve());
   fixture.budget.mockResolvedValue(10_800_000);
   fixture.finish.mockResolvedValue(input.params.result);
   fixture.terminal.mockReturnValue({
@@ -414,14 +393,7 @@ it.each([
     status: row.restartPending ? "running" : "succeeded",
     ...(row.restartPending ? { phase: "restarting" } : {}),
   });
-  process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
-  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-    yield JSON.stringify(input);
-    return undefined;
-  });
-
-  await import("./update-migrated-finalize.worker.js");
-  await settled.promise;
+  await runWorker(input);
 
   expect(process.exitCode).toBe(originalExitCode);
   expect(fixture.activation).toHaveBeenCalledExactlyOnceWith(
@@ -453,72 +425,35 @@ it.each([
   }
 });
 
-it.each([
-  { name: "stops it", stopped: true },
-  { name: "keeps the transferred state when the candidate cannot stop it", stopped: false },
-  { name: "adopts the delegated Doctor's stop", stopped: false, doctorStopped: true },
-  {
-    name: "restarts a Gateway the Doctor stopped despite --no-restart",
-    stopped: false,
-    doctorStopped: true,
-    noRestart: true,
-  },
-  {
-    name: "restores an inspected --no-restart service the Doctor had to stop",
-    stopped: false,
-    doctorStopped: true,
-    noRestart: true,
-    parentInspected: true,
-  },
-  {
-    name: "refuses the Doctor's stop for a replaced running service",
-    stopped: false,
-    doctorStopped: true,
-    reassigned: true,
-  },
-])(
-  "finalizes a predecessor service from a legacy parent and $name",
-  async ({ stopped, doctorStopped, noRestart, reassigned, parentInspected }) => {
-    const transferred = parentInspected
-      ? {
-          stopped: false,
-          inspected: true,
-          runtimeInspected: true,
-          running: true,
-          servicePid: 631,
-          serviceEnv: {},
-          serviceManagerUid: 1000,
-          serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
-        }
-      : {
-          stopped: false,
-          inspected: false,
-          runtimeInspected: false,
-          running: false,
-          serviceMutationAllowed: false,
-          serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
-        };
-    const candidate = {
-      stopped,
-      inspected: true,
-      runtimeInspected: true,
-      running: !doctorStopped || Boolean(reassigned),
-      servicePid: 631,
-      serviceEnv: {},
-      serviceManagerUid: 1000,
-      serviceUpdateVerdict: {
-        kind: "unresolved",
-        root: "/synthetic",
-        fingerprint: reassigned ? "other" : "f",
-      },
-    };
+it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
+  "forwards the %s service owner to shared migrated finalization",
+  async (mode) => {
+    const transferred =
+      mode === "legacy-unavailable"
+        ? {
+            stopped: false,
+            inspected: false,
+            serviceMutationAllowed: false,
+            serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
+          }
+        : {
+            stopped: mode === "windows-suspended",
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            servicePid: 631,
+            serviceEnv: { OPENCLAW_PROFILE: "selected" },
+            serviceManagerUid: 1000,
+            serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+          };
     const input = {
       executor: {},
       bufferedSteps: [],
       resultPath: "/synthetic/result.json",
+      ...(mode === "windows-suspended" ? { windowsTaskAutoStartSuspended: true } : {}),
       params: {
         root: "/synthetic",
-        shouldRestart: !noRestart,
+        shouldRestart: false,
         updateStepTimeoutMs: 1_000,
         opts: { json: true, run: { runId: "synthetic-run", env: {}, activationTimeoutMs: 1_000 } },
         rollbackBlockedReason: "state-migrated-no-rollback",
@@ -527,64 +462,18 @@ it.each([
         result: { ...result, steps: [], runId: "synthetic-run" },
       },
     };
-    const settled = createDeferredCore();
-    fixture.close.mockImplementation(async () => settled.resolve());
-    fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
-      if (stopped) {
-        params.onStopped?.(candidate);
-      }
-      return candidate;
-    });
     fixture.finish.mockImplementation(async (params: { result: typeof result }) => params.result);
-    fixture.terminal.mockReturnValue({
-      runId: "synthetic-run",
-      status: "succeeded",
-      steps: doctorStopped
-        ? [{ step: "finalize:predecessor-stop:5:1000:631:f", status: "completed", endedAtMs: 5 }]
-        : [],
-    });
-    process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
-    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-      yield JSON.stringify(input);
-      return undefined;
-    });
+    fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "succeeded", steps: [] });
+    await runWorker(input);
 
-    await import("./update-migrated-finalize.worker.js");
-    await settled.promise;
-
-    // A recorded Doctor stop is verified without mutation; only the legacy
-    // uninspected transfer performs the candidate's own stop.
-    expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        updateInstallKind: "package",
-        root: "/synthetic",
-        shouldRestart: true,
-        phase: doctorStopped ? "inspect" : "prepare",
-        jsonMode: true,
-        timeoutMs: 1_000,
+        shouldRestart: false,
+        preManagedServiceStop: { ...transferred, windowsTaskAutoStartRecovery: undefined },
       }),
+      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
     );
-    const finished = fixture.finish.mock.calls[0]?.[0] as {
-      preManagedServiceStop?: typeof candidate;
-      shouldRestart: boolean;
-      result: { steps: Array<{ name: string; exitCode: number; advisory?: { message: string } }> };
-    };
-    const adopted = doctorStopped && !reassigned;
-    expect(finished.preManagedServiceStop).toEqual(
-      adopted
-        ? { ...candidate, stopped: true, stoppedAtMs: 5 }
-        : reassigned
-          ? transferred
-          : candidate,
-    );
-    expect(finished.result.steps.map((step) => step.name)).toEqual(
-      stopped || doctorStopped ? ["managed-service"] : [],
-    );
-    expect(finished.result.steps[0]?.exitCode ?? 0).toBe(reassigned ? 1 : 0);
-    expect(finished.shouldRestart).toBe(!(reassigned && noRestart));
-    expect(finished.result.steps[0]?.advisory?.message ?? "").toMatch(
-      reassigned ? /replaced after update Doctor/ : noRestart ? /despite --no-restart/ : /^$/,
-    );
+    expect(fixture.stopService).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
   },
 );
@@ -594,6 +483,13 @@ it.each([
     name: "stops a live supervised predecessor",
     owner: { state: "live", mode: "supervised" },
     stops: true,
+    uncertain: false,
+  },
+  {
+    name: "does not enter Doctor after an uncertain native stop",
+    owner: { state: "live", mode: "supervised" },
+    stops: true,
+    uncertain: true,
   },
   {
     name: "leaves a foreground owner to Doctor's own wait",
@@ -601,10 +497,15 @@ it.each([
     stops: false,
   },
   { name: "does nothing without an owner", owner: undefined, stops: false },
-])("delegated Doctor $name before entering maintenance", async ({ owner, stops }) => {
+])("delegated Doctor $name before entering maintenance", async ({ owner, stops, uncertain }) => {
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   fixture.ownerLease.mockReturnValue(owner);
+  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
+    runId,
+    status: "running",
+    steps: [step],
+  }));
   const stoppedState = {
     stopped: true,
     stoppedAtMs: 7,
@@ -617,51 +518,57 @@ it.each([
   };
   fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
     params.onStopped?.(stoppedState);
-    throw new Error("port still bound after bootout");
+    throw uncertain
+      ? new CommandProcessCleanupError()
+      : new Error("port still bound after bootout");
   });
-  const settled = createDeferredCore();
-  fixture.close.mockImplementation(async () => settled.resolve());
   process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
-  process.argv = [process.execPath, "update-migrated-finalize.worker.js", "--doctor"];
-  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-    yield JSON.stringify({
-      executor: {},
-      runId: "synthetic-run",
-      root: "/synthetic",
-      configInputHash: "hash",
-      repair: true,
-      databaseGenerations: { "/synthetic/agent.sqlite": null },
-    });
-    return undefined;
-  });
   try {
-    await import("./update-migrated-finalize.worker.js");
-    await settled.promise;
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        databaseGenerations: { "/synthetic/agent.sqlite": null },
+      },
+      "--doctor",
+    );
   } finally {
     delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
     vi.doUnmock("../flows/doctor-health.js");
   }
 
-  expect(doctor).toHaveBeenCalledOnce();
-  expect(doctor).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.anything(),
-    expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
-  );
+  if (uncertain) {
+    expect(doctor).not.toHaveBeenCalled();
+  } else {
+    expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
+    );
+  }
   if (stops) {
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
     );
     // The receipt is a retained `finalize:` step whose key carries the identity,
     // so published parents' detail compaction cannot erase it.
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
-      step: "finalize:predecessor-stop:7:1000:631:f",
-      status: "completed",
-      endedAtMs: 7,
-    });
-    expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
-      doctor.mock.invocationCallOrder[0] ?? 0,
+    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
+      "synthetic-run",
+      {
+        step: "finalize:predecessor-stop:7:1000:631:f",
+        status: "completed",
+        endedAtMs: 7,
+      },
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
+    if (!uncertain) {
+      expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
+        doctor.mock.invocationCallOrder[0] ?? 0,
+      );
+    }
   } else {
     expect(fixture.stopService).not.toHaveBeenCalled();
   }

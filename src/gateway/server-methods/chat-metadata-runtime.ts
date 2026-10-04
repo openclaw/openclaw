@@ -1,8 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -13,7 +16,10 @@ import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js"
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
-import { resolveChatAccountSelection } from "./chat-account-selection.js";
+import {
+  prepareChatAccountSelection,
+  resolveChatAccountSelection,
+} from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -27,9 +33,11 @@ import {
   type PreparedAgentFacts,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
+import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
 import {
   hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
+  prepareSessionAcpMeta,
   sessionProjectionKey,
   resolveSessionCatalogProfiles,
   projectChatSessionMetadata,
@@ -38,7 +46,10 @@ import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
-import type { GatewayModelCatalogContext } from "./models-list-context.js";
+import type {
+  GatewayModelCatalogContext,
+  PreparedModelsListRequest,
+} from "./models-list-context.js";
 
 type PreparedAgentMetadata = PreparedAgentFacts & {
   commands?: unknown[];
@@ -60,6 +71,7 @@ type AgentProjectionEntry =
 type PreparedMetadataGeneration = {
   epoch: number;
   facts: PreparedGenerationFacts;
+  modelLists: ReturnType<typeof createChatMetadataModelList>;
   agentsById: Map<string, Promise<PreparedAgentMetadata>>;
   neutralProjectionByAgentId: Map<string, AgentProjectionEntry>;
   sessionProjectionByKey: Map<string, AgentProjectionEntry>;
@@ -73,6 +85,8 @@ function readPreparedChatMetadata(
   projection: PreparedChatMetadataProjection,
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
+  acpMeta: SessionAcpMeta | null,
+  readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
   const { agent } = projection;
@@ -82,13 +96,15 @@ function readPreparedChatMetadata(
       ...projection.read(),
       ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
       swarmEnabled: agent.swarmEnabled,
-      accountSelection: resolveChatAccountSelection({
-        authStore: agent.authStore,
-        sessionEntry: readParams.sessionEntry,
-        requesterProfileId: readParams.requesterProfileId,
-      }),
+      accountSelection:
+        readAccountSelection?.() ??
+        resolveChatAccountSelection({
+          authStore: agent.authStore,
+          sessionEntry: readParams.sessionEntry,
+        }),
     },
     config,
+    acpMeta,
   );
 }
 
@@ -108,6 +124,7 @@ export function createGatewayChatMetadataRuntime(params: {
   refresh: (options?: ChatMetadataRefreshOptions) => Promise<void>;
   stop: () => Promise<void>;
   read: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readModelsList: (params: PreparedModelsListRequest) => Promise<ModelsListResult | undefined>;
   readStartup: (
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
@@ -127,6 +144,8 @@ export function createGatewayChatMetadataRuntime(params: {
     buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };
+  const requestedModelLists: Parameters<typeof createChatMetadataModelList>[0]["requested"] =
+    new Map();
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
@@ -311,14 +330,22 @@ export function createGatewayChatMetadataRuntime(params: {
       if (current && generationFactsMatch(current.facts, facts)) {
         return;
       }
-      // Publication carries owner facts only. Commands and model projections belong to reads.
+      // Commands and session-specific projections stay on demand within the published owner facts.
       current = {
         epoch: invalidationEpoch,
         facts,
+        modelLists: createChatMetadataModelList({
+          facts,
+          context: deps.getContext(),
+          requested: requestedModelLists,
+          maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
+        }),
         agentsById: new Map(),
         neutralProjectionByAgentId: new Map(),
         sessionProjectionByKey: new Map(),
       };
+      // Rebuild only variants clients already use, before the replacement becomes readable.
+      await Promise.allSettled([...requestedModelLists.values()].map(current.modelLists.prepare));
     } catch (error) {
       // Invalidation and stop revoke old preparation, including its failures.
       // Only the current refresh may settle the replacement's readers.
@@ -329,7 +356,8 @@ export function createGatewayChatMetadataRuntime(params: {
     }
   };
 
-  const refresh = (options: ChatMetadataRefreshOptions = {}): Promise<void> => {
+  // Publication callbacks can carry a temporary startup admission borrow.
+  const refresh = AsyncLocalStorage.bind((options: ChatMetadataRefreshOptions = {}) => {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
@@ -406,7 +434,7 @@ export function createGatewayChatMetadataRuntime(params: {
       },
     );
     return promise;
-  };
+  });
 
   const authStoresCurrent = (generation: PreparedMetadataGeneration) =>
     generation.facts.agents.every(
@@ -491,6 +519,16 @@ export function createGatewayChatMetadataRuntime(params: {
     }
   };
 
+  const readModelsList = async (
+    request: PreparedModelsListRequest,
+  ): Promise<ModelsListResult | undefined> => {
+    assertAgentDatabaseAdmitted(request.agentId);
+    return readCurrent(async (generation) => {
+      const prepared = await generation.modelLists.read(request);
+      return prepared ?? { isCurrent: () => true, read: () => undefined };
+    });
+  };
+
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
     assertAgentDatabaseAdmitted(readParams.agentId);
     const draft = readParams.draftAccountSelection;
@@ -526,6 +564,16 @@ export function createGatewayChatMetadataRuntime(params: {
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
       );
+      const readAccountSelection = await prepareChatAccountSelection({
+        authStore: agent.authStore,
+        sessionEntry,
+        requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
+      });
+      const acpMeta = await prepareSessionAcpMeta(
+        { ...readParams, sessionEntry },
+        deps.getConfig(),
+      );
+      readParams.assertCurrent?.();
       return {
         isCurrent: projection.isCurrent,
         read: () =>
@@ -537,6 +585,8 @@ export function createGatewayChatMetadataRuntime(params: {
               requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
             },
             deps.getConfig(),
+            acpMeta,
+            readAccountSelection,
           ),
       };
     });
@@ -555,6 +605,8 @@ export function createGatewayChatMetadataRuntime(params: {
     const assemble = (
       neutral: PreparedChatMetadataProjection,
       session: PreparedChatMetadataProjection,
+      acpMeta: SessionAcpMeta | null,
+      readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
     ): ChatStartupProjectionResult => ({
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
@@ -567,6 +619,8 @@ export function createGatewayChatMetadataRuntime(params: {
                 requesterProfileId: readParams.readRequesterProfileId?.(),
               },
               deps.getConfig(),
+              acpMeta,
+              readAccountSelection,
             ),
           }),
       sessionModelCatalog: session.modelCatalog,
@@ -591,9 +645,15 @@ export function createGatewayChatMetadataRuntime(params: {
             readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
+      const readAccountSelection = await prepareChatAccountSelection({
+        authStore: agent.authStore,
+        sessionEntry: readParams.sessionEntry,
+        readRequesterProfileId: readParams.readRequesterProfileId,
+      });
+      const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
       return {
         isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession),
+        read: () => assemble(readNeutral, readSession, acpMeta, readAccountSelection),
       };
     };
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
@@ -630,7 +690,20 @@ export function createGatewayChatMetadataRuntime(params: {
     ) {
       return undefined;
     }
-    return assemble(neutral.projection, session.projection);
+    if (readParams.readPolicy === "ready") {
+      return assemble(neutral.projection, session.projection, null);
+    }
+    const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
+    if (
+      replacement ||
+      pending ||
+      !isCurrentGeneration(generation) ||
+      !neutral.projection.isCurrent() ||
+      !session.projection.isCurrent()
+    ) {
+      return undefined;
+    }
+    return assemble(neutral.projection, session.projection, acpMeta);
   };
 
   const invalidate = (retainNotifiedFacts = false) => {
@@ -679,6 +752,7 @@ export function createGatewayChatMetadataRuntime(params: {
       );
       invalidationEpoch += 1;
       fail(stoppedError);
+      requestedModelLists.clear();
     }
     // Retain preparation and readers through shutdown, including evicted projections
     // and superseded refreshes no longer reachable from the current generation.
@@ -691,6 +765,7 @@ export function createGatewayChatMetadataRuntime(params: {
     fail,
     invalidate,
     read: (readParams) => trackWork(read(readParams)),
+    readModelsList: (request) => trackWork(readModelsList(request)),
     readStartup: (startupParams) => trackWork(readStartup(startupParams)),
     refresh: (options) => trackWork(refresh(options)),
     stop,

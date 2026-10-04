@@ -89,6 +89,15 @@ enum ChatTranscriptRow: Hashable, Identifiable {
         }
     }
 
+    var timestamp: Double? {
+        switch self {
+        case let .message(message): message.timestamp
+        case let .systemNotice(notice): notice.timestamp
+        case let .historyDivider(divider): divider.timestamp
+        case .completedWork: nil
+        }
+    }
+
     var startsTurn: Bool {
         switch self {
         case let .message(message):
@@ -188,7 +197,7 @@ extension ChatTranscriptRow {
             if Self(message)?.startsTurn == true || message.historyMarker != nil {
                 callIndexes.removeAll(keepingCapacity: true)
             }
-            guard ["toolresult", "tool_result"].contains(message.role.lowercased()),
+            guard message.isToolResult,
                   let toolCallId = message.toolCallId,
                   let index = callIndexes[toolCallId],
                   (message.workRunID != nil && message.workRunID == result[index].workRunID) ||
@@ -213,14 +222,8 @@ extension ChatTranscriptRow {
                 OpenClawChatMessageContent(
                     type: "tool_result",
                     text: toolText,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil,
                     details: message.details,
                     isError: message.isError))
 

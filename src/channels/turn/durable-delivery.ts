@@ -1,4 +1,3 @@
-// Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
@@ -10,9 +9,7 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
 import {
-  type DeliverOutboundPayloadsParams,
   type DurableFinalDeliveryRequirement,
-  type DurableFinalDeliveryRequirements,
   type OutboundDeliveryIntent,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
@@ -28,21 +25,17 @@ import {
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
 import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
-import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
+import type {
+  ChannelDeliveryInfo,
+  ChannelDeliveryResult,
+  ChannelTurnDurableDeliveryOptions,
+} from "./types.js";
 
-/** Options controlling durable final delivery for inbound channel replies. */
-export type DurableInboundReplyDeliveryOptions = Pick<
-  DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
-> & {
-  to?: string | null;
-  replyToId?: string | null;
-  requiredCapabilities?: DurableFinalDeliveryRequirements;
-  /** Validate the admitted sender and pin its resolved credential before a registry handoff. */
+export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions & {
+  /** Optional: validate the admitted sender and pin its resolved credential before a registry handoff. */
   prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
-/** Full context required to deliver one inbound final reply through durable message sending. */
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
   channel: string;
@@ -60,7 +53,6 @@ export type StructuredDurableInboundReplyDeliveryParams = Omit<
   "payload"
 > & { plan: OutboundPayloadPlan };
 
-/** Outcome of attempting durable final delivery for an inbound reply payload. */
 type DurableInboundReplyDeliveryResult =
   | { status: "not_applicable"; reason: "non_final" }
   | {
@@ -102,19 +94,6 @@ function resolveDurableInboundReplyToId(
   );
 }
 
-function resolveDurableInboundReplyThreadId(
-  params: DurableInboundReplyDeliveryParams,
-): string | number | null | undefined {
-  if ("threadId" in params) {
-    return params.threadId;
-  }
-  return params.ctxPayload.MessageThreadId;
-}
-
-function stringifyThreadId(value: string | number | null | undefined): string | undefined {
-  return value == null ? undefined : String(value);
-}
-
 function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult["deliveryIntent"] {
   return {
     id: intent.id,
@@ -136,7 +115,6 @@ function resolveDurableSuppression(
   };
 }
 
-/** Narrows durable delivery results that handled the payload without caller fallback. */
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
 ): result is Extract<
@@ -146,7 +124,6 @@ export function isDurableInboundReplyDeliveryHandled(
   return result.status === "handled_visible" || result.status === "handled_no_send";
 }
 
-/** Throws failed durable delivery results, preserving visible-send metadata when applicable. */
 export function throwIfDurableInboundReplyDeliveryFailed(
   result: DurableInboundReplyDeliveryResult,
 ): void {
@@ -165,7 +142,6 @@ function resolveAcceptedVisibleContent(
   return content || undefined;
 }
 
-/** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContextCore(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
@@ -226,7 +202,7 @@ async function deliverAdmittedInboundReply(
   }
 
   const replyToId = resolveDurableInboundReplyToId(params);
-  const threadId = resolveDurableInboundReplyThreadId(params);
+  const threadId = "threadId" in params ? params.threadId : params.ctxPayload.MessageThreadId;
   const requiredCapabilities =
     params.requiredCapabilities ??
     deriveDurableFinalDeliveryRequirements({
@@ -238,17 +214,12 @@ async function deliverAdmittedInboundReply(
   const durability =
     requiredCapabilities.reconcileUnknownSend === true ? "required" : "best_effort";
 
-  let support: Awaited<ReturnType<typeof resolveOutboundDurableFinalDeliverySupport>>;
-  try {
-    support = await resolveOutboundDurableFinalDeliverySupport({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel,
-      requirements: requiredCapabilities,
-    });
-  } catch (err: unknown) {
-    return { status: "failed", error: err };
-  }
+  const support = await resolveOutboundDurableFinalDeliverySupport({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel,
+    requirements: requiredCapabilities,
+  });
   if (!support.ok) {
     return {
       status: "unsupported",
@@ -307,7 +278,7 @@ async function deliverAdmittedInboundReply(
     send.status === "partial_failed" ? resolveAcceptedVisibleContent(send.results) : undefined;
   const receiptDelivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
-    threadId: stringifyThreadId(threadId),
+    threadId: threadId == null ? undefined : String(threadId),
     ...(replyToId ? { replyToId } : {}),
     visibleReplySent: send.status !== "suppressed",
     ...(content ? { content } : {}),
@@ -324,14 +295,12 @@ async function deliverAdmittedInboundReply(
     };
   }
 
-  const delivery: ChannelDeliveryResult =
-    send.status === "suppressed"
-      ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
-      : receiptDelivery;
   if (send.status === "suppressed") {
-    return delivery.visibleReplySent === true
-      ? { status: "handled_visible", delivery }
-      : { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return {
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: { ...receiptDelivery, suppression: resolveDurableSuppression(send) },
+    };
   }
-  return { status: "handled_visible", delivery };
+  return { status: "handled_visible", delivery: receiptDelivery };
 }

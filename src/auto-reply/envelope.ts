@@ -1,4 +1,3 @@
-/** Formats inbound message envelopes with sender, timing, and channel metadata for agent prompts. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -45,13 +44,6 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
-type NormalizedEnvelopeOptions = {
-  timezone: string;
-  includeTimestamp: boolean;
-  includeElapsed: boolean;
-  userTimezone?: string;
-};
-
 type ResolvedEnvelopeTimezone =
   | { mode: "utc" }
   | { mode: "local" }
@@ -60,12 +52,7 @@ type ResolvedEnvelopeTimezone =
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
-  return value
-    .replace(/\r\n|\r|\n/g, " ")
-    .replaceAll("[", "(")
-    .replaceAll("]", ")")
-    .replace(/\s+/g, " ")
-    .trim();
+  return value.replaceAll("[", "(").replaceAll("]", ")").replace(/\s+/g, " ").trim();
 }
 
 /** Resolves envelope formatting defaults from agent config. */
@@ -80,19 +67,8 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEnvelopeOptions {
-  const includeTimestamp = options?.includeTimestamp !== false;
-  const includeElapsed = options?.includeElapsed !== false;
-  return {
-    timezone: normalizeOptionalString(options?.timezone) || "local",
-    includeTimestamp,
-    includeElapsed,
-    userTimezone: options?.userTimezone,
-  };
-}
-
-function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
-  const trimmed = options.timezone?.trim();
+function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+  const trimmed = normalizeOptionalString(options?.timezone);
   if (!trimmed) {
     return { mode: "local" };
   }
@@ -104,7 +80,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
     return { mode: "local" };
   }
   if (lowered === "user") {
-    return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
+    return { mode: "iana", timeZone: resolveUserTimezone(options?.userTimezone) };
   }
   const explicit = resolveTimezone(trimmed);
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
@@ -122,18 +98,14 @@ export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (ts === undefined) {
-    return undefined;
-  }
-  const resolved = normalizeEnvelopeOptions(options);
-  if (!resolved.includeTimestamp) {
+  if (ts === undefined || options?.includeTimestamp === false) {
     return undefined;
   }
   const date = ts instanceof Date ? ts : new Date(ts);
   if (Number.isNaN(date.getTime())) {
     return undefined;
   }
-  const zone = resolveEnvelopeTimezone(resolved);
+  const zone = resolveEnvelopeTimezone(options);
   // Include the weekday so models do not need to derive it from the date.
   if (zone.mode !== "utc") {
     return formatZonedTimestamp(date, {
@@ -163,20 +135,16 @@ export function formatAgentEnvelopeTimestamp(
 function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
   const label = sanitizeEnvelopeHeaderPart(from || "");
   const idMarkerIndex = label.search(/\s+id:/i);
-  if (idMarkerIndex > 0) {
-    const displayLabel = label.slice(0, idMarkerIndex).trim();
-    return displayLabel.includes(":") ? "(sender)" : displayLabel;
-  }
-  return label.includes(":") ? "(sender)" : label;
+  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
+  return displayLabel.includes(":") ? "(sender)" : displayLabel;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
   const parts: string[] = [channel];
-  const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
-  if (resolved.includeElapsed && params.timestamp && params.previousTimestamp) {
+  if (params.envelope?.includeElapsed !== false && params.timestamp && params.previousTimestamp) {
     const currentMs =
       params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp;
     const previousMs =
@@ -196,15 +164,13 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
-  const host = normalizeOptionalString(params.host);
-  if (host) {
-    parts.push(sanitizeEnvelopeHeaderPart(host));
+  for (const value of [params.host, params.ip]) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      parts.push(sanitizeEnvelopeHeaderPart(normalized));
+    }
   }
-  const ip = normalizeOptionalString(params.ip);
-  if (ip) {
-    parts.push(sanitizeEnvelopeHeaderPart(ip));
-  }
-  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, params.envelope);
   if (ts) {
     parts.push(ts);
   }

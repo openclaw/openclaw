@@ -14,6 +14,7 @@ import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { updateCandidateExitEntrypoints } from "../cli-entrypoint.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -151,7 +152,9 @@ it("settles a failed candidate without inference repair and preserves its proces
     servicePid: mocks.servicePid,
     serviceEnv: env,
   });
+  const opts = { json: true, yes: true, run };
   const execution = await executeMutableUpdate({
+    executionGuards: createUpdateCommandExecutionGuards(opts, root),
     root,
     installKind: "package",
     updateInstallKind: "package",
@@ -171,7 +174,7 @@ it("settles a failed candidate without inference repair and preserves its proces
     packageInstallSpec: "openclaw@2026.9.4",
     packageTargetVersion: "2026.9.4",
     packageInstallTarget: target,
-    opts: { json: true, yes: true, run },
+    opts,
   });
   expect(execution).not.toBeNull();
   if (!execution) {

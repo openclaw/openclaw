@@ -10,6 +10,7 @@ import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -19,8 +20,6 @@ import {
 } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
-import * as registryState from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
@@ -39,12 +38,11 @@ vi.mock("../../runtime-plugins.js", async () => {
 });
 vi.mock("../announce/subagent-announce.js", { spy: true });
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
-vi.mock("./subagent-registry-state.js", { spy: true });
+vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
-// Fault callbacks must delegate to the real writer, never their own mocked export.
-export const { persistSubagentRunsToDiskOrThrow } = await vi.importActual<typeof registryState>(
-  "./subagent-registry-state.js",
-);
+// Fault gates delegate to the native worker; it owns admission, transactions, and receipts.
+export const { runOpenClawStateWorkerOperation: runSubagentStateWorkerOperation } =
+  await vi.importActual<typeof stateWorker>("../../../state/openclaw-state-worker-store.js");
 
 export function useSubagentControlFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
@@ -52,8 +50,7 @@ export function useSubagentControlFixture() {
   let settleRootWork: ReturnType<typeof observeRootWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
-  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
-  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
+  const worker = vi.mocked(stateWorker.runOpenClawStateWorkerOperation);
   const gateway = vi.mocked(callGateway);
   const announce = vi.mocked(runSubagentAnnounceFlow);
   const capture = vi.mocked(captureSubagentCompletionReply);
@@ -73,7 +70,7 @@ export function useSubagentControlFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
@@ -86,21 +83,7 @@ export function useSubagentControlFixture() {
     cleanup.mockReset().mockResolvedValue(undefined);
     pluginRuntime.mockReset();
     contextEngine.mockReset().mockImplementation(async () => new LegacyContextEngine());
-    persist.mockReset().mockImplementation(persistSubagentRunsToDiskOrThrow);
-    // Control fixtures inject their transaction faults through one persistence owner.
-    persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
-      const snapshot = structuredClone(runs);
-      await Promise.resolve();
-      let committed = false;
-      try {
-        options.assertCurrent?.();
-        persist(snapshot, ids);
-        committed = true;
-        options.onCommitted?.();
-      } catch (error) {
-        throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
-      }
-    });
+    worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
     settleRootWork = observeRootWork();
   });
   afterEach(async () => {
@@ -115,12 +98,11 @@ export function useSubagentControlFixture() {
     // Preserve stores and their environment if detached writers have not settled.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir });
         for (const mock of [
-          persist,
-          persistAsync,
+          worker,
           gateway,
           announce,
           capture,
@@ -154,7 +136,7 @@ export function useSubagentControlFixture() {
     get stateDir() {
       return stateDir;
     },
-    persist,
+    worker,
     gateway,
     announce,
     capture,

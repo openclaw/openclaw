@@ -1,4 +1,3 @@
-// Builds reset prompts that preserve session context and bootstrap mode.
 import { resolveBootstrapMode, type BootstrapMode } from "../../agents/bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -59,8 +58,8 @@ export async function resolveBareResetBootstrapFileAccess(params: {
     modelId: params.modelId,
   });
   try {
-    return acquired.run((runtimeModelContext) => {
-      const inventory = resolveEffectiveToolInventory({
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
         cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -107,28 +106,16 @@ export async function resolveBareSessionResetPromptState(params: {
   });
   return {
     bootstrapMode,
-    prompt: buildBareSessionResetPrompt(params.cfg, params.nowMs, bootstrapMode),
+    // Reset turns need today's date to select the daily memory files.
+    prompt: appendCronStyleCurrentTimeLine(
+      bootstrapMode === "full"
+        ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING
+        : bootstrapMode === "limited"
+          ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
+          : BARE_SESSION_RESET_PROMPT_BASE,
+      params.cfg ?? {},
+      params.nowMs ?? Date.now(),
+    ),
     shouldPrependStartupContext: bootstrapMode === "none",
   };
-}
-
-/**
- * Build the bare session reset prompt, appending the current date/time so agents
- * know which daily memory files to read during their Session Startup sequence.
- * Without this, agents on /new or /reset guess the date from their training cutoff.
- */
-function buildBareSessionResetPrompt(
-  cfg?: OpenClawConfig,
-  nowMs?: number,
-  bootstrapMode?: BootstrapMode,
-): string {
-  return appendCronStyleCurrentTimeLine(
-    bootstrapMode === "full"
-      ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING
-      : bootstrapMode === "limited"
-        ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
-        : BARE_SESSION_RESET_PROMPT_BASE,
-    cfg ?? {},
-    nowMs ?? Date.now(),
-  );
 }

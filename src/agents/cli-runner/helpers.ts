@@ -27,7 +27,7 @@ import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
-import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -41,11 +41,6 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-export {
-  buildCliSupervisorScopeKey,
-  resolveCliNoOutputTimeoutMs,
-  resolveCliRunTimeoutOverrideMs,
-} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -93,6 +88,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -152,6 +148,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
@@ -224,16 +221,9 @@ export function resolveSessionIdToSend(params: {
 }): { sessionId?: string; isNew: boolean } {
   const mode = params.backend.sessionMode ?? "always";
   const existing = params.cliSessionId?.trim();
-  if (mode === "none") {
-    return { sessionId: undefined, isNew: !existing };
-  }
-  if (mode === "existing") {
-    return { sessionId: existing, isNew: !existing };
-  }
-  if (existing) {
-    return { sessionId: existing, isNew: false };
-  }
-  return { sessionId: crypto.randomUUID(), isNew: true };
+  const sessionId =
+    mode === "none" ? undefined : mode === "existing" || existing ? existing : crypto.randomUUID();
+  return { sessionId, isNew: !existing };
 }
 
 export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
@@ -279,7 +269,7 @@ async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
-}): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+}): Promise<string[]> {
   const imageRoot =
     params.backend.imagePathScope === "workspace"
       ? path.join(params.workspaceDir, ".openclaw-cli-images")
@@ -296,7 +286,7 @@ async function writeCliImages(params: {
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
-  return { paths, cleanup: async () => {} };
+  return paths;
 }
 
 export async function writeCliSystemPromptFile(params: {
@@ -337,7 +327,6 @@ export async function prepareCliPromptImagePayload(params: {
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
-  cleanupImages?: () => Promise<void>;
 }> {
   let prompt = params.prompt;
   const imagePrompt = params.imagePrompt ?? prompt;
@@ -368,12 +357,11 @@ export async function prepareCliPromptImagePayload(params: {
   if (resolvedImages.length === 0) {
     return { prompt };
   }
-  const imagePayload = await writeCliImages({
+  const imagePaths = await writeCliImages({
     backend: params.backend,
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  const imagePaths = imagePayload.paths;
   if (
     !params.backend.imageArg ||
     params.backend.input === "stdin" ||
@@ -391,7 +379,6 @@ export async function prepareCliPromptImagePayload(params: {
   return {
     prompt,
     imagePaths,
-    cleanupImages: imagePayload.cleanup,
   };
 }
 

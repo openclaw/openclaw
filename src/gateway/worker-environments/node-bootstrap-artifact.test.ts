@@ -20,6 +20,12 @@ import {
   type OwnedRuntimeChunk,
 } from "./node-bootstrap-artifact.test-support.js";
 
+// Keep byte/race fault injection beside the real builder. The worker suite covers transport.
+vi.mock("./node-bootstrap-artifact-worker.js", async () => {
+  const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
+  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+});
+
 const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
 
 describe("node bootstrap distribution", () => {
@@ -172,6 +178,9 @@ describe("node bootstrap distribution", () => {
         ),
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker-artifacts/"))).toBe(
+        false,
+      );
       expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
       for (const [file, chunk] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);

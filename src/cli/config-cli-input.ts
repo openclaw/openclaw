@@ -3,7 +3,6 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import JSON5 from "json5";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -11,7 +10,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
-import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -36,6 +35,7 @@ import {
 import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
 import {
   parseBatchSource,
+  parseConfigMutationJson5,
   readConfigMutationFileSync,
   resolveConfigSetMode,
   type ConfigSetBatchEntry,
@@ -311,17 +311,8 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
       entry.path,
     );
     const path = pathTokens.map(String);
-    if (entry.ref !== undefined) {
-      return buildAssignmentOperation({
-        requestedPath: path,
-        pathTokens,
-        quotedNumericSegments,
-        value: parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
-        inputMode: "json",
-        validatedRef: true,
-      });
-    }
-    if (entry.provider !== undefined) {
+    const pathFields = { requestedPath: path, pathTokens, quotedNumericSegments };
+    if (entry.ref === undefined && entry.provider !== undefined) {
       validateProviderAliasPath(path);
       const validated = SecretProviderSchema.safeParse(entry.provider);
       if (!validated.success) {
@@ -332,20 +323,20 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
       }
       return {
         inputMode: "json",
-        requestedPath: path,
-        pathTokens,
-        quotedNumericSegments,
+        ...pathFields,
         setPath: path,
         value: validated.data,
         schemaValidated: true,
       };
     }
     return buildAssignmentOperation({
-      requestedPath: path,
-      pathTokens,
-      quotedNumericSegments,
-      value: entry.value,
+      ...pathFields,
+      value:
+        entry.ref === undefined
+          ? entry.value
+          : parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
       inputMode: "json",
+      validatedRef: entry.ref !== undefined,
     });
   });
 }
@@ -459,33 +450,6 @@ async function readStdinText(): Promise<string> {
   return bytes.toString("utf8");
 }
 
-async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
-  const file = readNonBlankString(opts.file);
-  const stdin = Boolean(opts.stdin);
-  if (Boolean(file) === stdin) {
-    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
-  }
-  const sourceLabel = stdin ? "--stdin" : "--file";
-  let raw: string;
-  if (stdin) {
-    raw = await readStdinText();
-  } else {
-    raw = readConfigMutationFileSync(file as string, "--file");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON5.parse(raw);
-  } catch (err) {
-    throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
-  }
-  rejectConfigNonFiniteNumbers(parsed);
-  return parsed;
-}
-
-function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
-  return { ...buildUnsetOperation(path), inputMode: "json" };
-}
-
 export function buildUnsetOperation(
   path: PathSegment[],
   pathTokens?: readonly ConcreteConfigPathSegment[],
@@ -500,78 +464,60 @@ export function buildUnsetOperation(
   };
 }
 
-function buildApplyValueOperation(params: {
-  path: PathSegment[];
-  value: unknown;
-  mutation?: ConfigSetOperation["mutation"];
-}): ConfigSetOperation {
-  const ref = isPlainRecord(params.value) ? coerceSecretRef(params.value) : null;
-  const operation = buildAssignmentOperation({
-    requestedPath: params.path,
-    value: ref
-      ? parseSecretRefFromUnknown(params.value, `patch.${toDotPath(params.path)}`)
-      : params.value,
-    inputMode: "json",
-    validatedRef: Boolean(ref),
-  });
-  return { ...operation, ...(params.mutation ? { mutation: params.mutation } : {}) };
-}
-
-function buildConfigPatchOperations(params: {
-  patch: unknown;
-  replacePaths: PathSegment[][];
-}): ConfigSetOperation[] {
-  if (!isPlainRecord(params.patch)) {
+export async function readConfigPatchOperations(
+  opts: ConfigPatchOptions,
+): Promise<ConfigSetOperation[]> {
+  const file = readNonBlankString(opts.file);
+  const stdin = Boolean(opts.stdin);
+  if (Boolean(file) === stdin) {
+    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
+  }
+  const sourceLabel = stdin ? "--stdin" : "--file";
+  const raw = file ? readConfigMutationFileSync(file, "--file") : await readStdinText();
+  const patch = parseConfigMutationJson5(raw, `${sourceLabel} as JSON5`);
+  const replacePaths = (opts.replacePath ?? []).map(parseConfigSetPath);
+  if (!isPlainRecord(patch)) {
     throw configPatchModeError("input must be a JSON5 object patch.");
   }
   const operations: ConfigSetOperation[] = [];
   const pathKey = (path: readonly PathSegment[]) => JSON.stringify(path);
-  const replacePathKeys = new Set(params.replacePaths.map(pathKey));
-  const replacePathLengths = new Set(params.replacePaths.map((path) => path.length));
+  const replacePathKeys = new Set(replacePaths.map(pathKey));
+  const replacePathLengths = new Set(replacePaths.map((path) => path.length));
   const matchedReplacePathKeys = new Set<string>();
-  visitConfigValueTree(params.patch, (value, path) => {
+  visitConfigValueTree(patch, (value, path) => {
     const segment = path.at(-1);
-    if (segment !== undefined) {
-      validatePathSegments([segment]);
-    }
-    const replacementKey = replacePathLengths.has(path.length) ? pathKey(path) : undefined;
-    if (path.length > 0 && replacementKey !== undefined && replacePathKeys.has(replacementKey)) {
-      matchedReplacePathKeys.add(replacementKey);
-      const operationPath = [...path];
-      operations.push(
-        value === null
-          ? buildDeleteOperation(operationPath)
-          : buildApplyValueOperation({
-              path: operationPath,
-              value,
-              mutation: "replace",
-            }),
-      );
-      return false;
-    }
-    if (path.length > 0 && value === null) {
-      operations.push(buildDeleteOperation([...path]));
-      return false;
-    }
-    if (path.length > 0 && isPlainRecord(value) && coerceSecretRef(value)) {
-      operations.push(buildApplyValueOperation({ path: [...path], value }));
-      return false;
-    }
-    if (isPlainRecord(value)) {
-      if (path.length > 0 && Object.keys(value).length === 0) {
-        operations.push(buildApplyValueOperation({ path: [...path], value, mutation: "merge" }));
-        return false;
-      }
+    if (segment === undefined) {
       return true;
     }
-    if (path.length === 0) {
-      throw configPatchModeError("input must contain at least one config key.");
+    validatePathSegments([segment]);
+    const replacementKey = replacePathLengths.has(path.length) ? pathKey(path) : undefined;
+    const replace = replacementKey !== undefined && replacePathKeys.has(replacementKey);
+    if (replace) {
+      matchedReplacePathKeys.add(replacementKey);
     }
-    operations.push(buildApplyValueOperation({ path: [...path], value }));
+    const ref = isPlainRecord(value) ? coerceSecretRef(value) : null;
+    const mergeObject = !replace && isPlainRecord(value) && !ref;
+    if (mergeObject && Object.keys(value).length > 0) {
+      return true;
+    }
+    if (value === null) {
+      operations.push({ ...buildUnsetOperation([...path]), inputMode: "json" });
+    } else {
+      const operation = buildAssignmentOperation({
+        requestedPath: [...path],
+        value: ref ? parseSecretRefFromUnknown(value, `patch.${toDotPath(path)}`) : value,
+        inputMode: "json",
+        validatedRef: Boolean(ref),
+      });
+      if (replace || mergeObject) {
+        operation.mutation = replace ? "replace" : "merge";
+      }
+      operations.push(operation);
+    }
     return false;
   });
 
-  const unusedReplacePath = params.replacePaths.find(
+  const unusedReplacePath = replacePaths.find(
     (replacePath) => !matchedReplacePathKeys.has(pathKey(replacePath)),
   );
   if (unusedReplacePath) {
@@ -585,15 +531,6 @@ function buildConfigPatchOperations(params: {
     throw configPatchModeError("input patch did not contain any config updates.");
   }
   return operations;
-}
-
-export async function readConfigPatchOperations(
-  opts: ConfigPatchOptions,
-): Promise<ConfigSetOperation[]> {
-  return buildConfigPatchOperations({
-    patch: await readConfigPatchInput(opts),
-    replacePaths: (opts.replacePath ?? []).map(parseConfigSetPath),
-  });
 }
 
 export function formatPluginInstallConfigSetError(): string {

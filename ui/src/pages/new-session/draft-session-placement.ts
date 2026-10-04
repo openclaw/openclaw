@@ -33,7 +33,7 @@ export function resolveDraftSessionPlacement(
   },
 ) {
   const { os, machineClass } = place.cloudSelection;
-  const target = pending.sessionKey
+  return pending.sessionKey
     ? pending.target
     : place.cloudProfileId
       ? {
@@ -47,7 +47,6 @@ export function resolveDraftSessionPlacement(
         : place.autoDevice
           ? { kind: "auto-device" as const }
           : null;
-  return { target };
 }
 
 export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementRecovery) {

@@ -216,24 +216,6 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
-/** Returns positional args after consuming options and their values. */
-export function positionalArgs(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string[] {
-  return parseShellOptions(words, from, optionsWithValue).positional;
-}
-
-/** Returns the first positional arg after skipping options and configured option values. */
-export function firstPositional(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string | undefined {
-  return positionalArgs(words, from, optionsWithValue)[0];
-}
-
 /** Removes leading `env` wrappers and VAR=value assignments from parsed words. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
@@ -284,7 +266,11 @@ type HeredocMarker = {
   operatorIndex: number;
 };
 
-function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+export function parseHeredocMarker(
+  command: string,
+  operatorIndex: number,
+  whitespace = /[ \t]/u,
+): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
     command[operatorIndex - 1] === "<" ||
@@ -296,7 +282,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 
   const stripLeadingTabs = command[operatorIndex + 2] === "-";
   let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
-  while (/[ \t]/u.test(command[index] ?? "")) {
+  while (whitespace.test(command[index] ?? "")) {
     index += 1;
   }
 
@@ -318,7 +304,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
       continue;
     }
 
-    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
       break;
     }
     if (char === "'" || char === '"') {

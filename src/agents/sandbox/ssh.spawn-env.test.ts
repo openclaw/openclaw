@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";

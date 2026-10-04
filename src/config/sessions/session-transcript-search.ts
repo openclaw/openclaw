@@ -39,11 +39,14 @@ const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
 
-function toFtsQuery(query: string): string {
+function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
     .trim()
     .split(/\s+/u)
-    .map((token) => `"${token.replaceAll('"', '""')}"`)
+    .map(
+      (token, index, tokens) =>
+        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
+    )
     .join(" AND ");
 }
 
@@ -118,105 +121,110 @@ export function searchSessionTranscriptsReadOnlySync(
           const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
-          const sessionFilterValues = params.sessionKeys ?? [
-            toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" }),
-          ];
-          const sessionKeySet = sqliteStringSet(sessionFilterValues);
           const db = getNodeSqliteKysely<DB>(database.db);
+          const selectedWindows = db
+            .selectFrom("session_windows")
+            .select(["session_id", "session_key"])
+            .where((eb) =>
+              params.sessionKeys === undefined
+                ? eb.or([
+                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
+                    sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
+                    eb("session_key", "in", ["global", "unknown"]),
+                  ])
+                : params.sessionKeys.length > 0
+                  ? eb("session_key", "in", sqliteStringSet(params.sessionKeys))
+                  : eb.and([]),
+            )
+            .$if(params.sessionId !== undefined, (builder) =>
+              builder.where("session_id", "=", params.sessionId!),
+            );
           const archivedTranscriptsExcluded =
             executeSqliteQueryTakeFirstSync(
               database.db,
               db
                 .selectFrom("session_transcript_cold_archives as cold")
-                .innerJoin("session_windows as window", "window.session_id", "cold.session_id")
-                .select((eb) => eb.fn.countAll<number>().as("count"))
-                .$if(params.sessionKeys === undefined, (builder) =>
-                  builder.where((eb) =>
-                    eb.or([
-                      /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                      sql<boolean>`${eb.ref("window.session_key")} GLOB ${sessionFilterValues[0]}`,
-                      eb("window.session_key", "in", ["global", "unknown"]),
-                    ]),
-                  ),
-                )
-                .$if(
-                  params.sessionKeys !== undefined && sessionFilterValues.length > 0,
-                  (builder) => builder.where("window.session_key", "in", sessionKeySet),
-                )
-                .$if(params.sessionId !== undefined, (builder) =>
-                  builder.where("window.session_id", "=", params.sessionId!),
-                ),
+                .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
+                .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
+          const match =
+            /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
+            sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`;
+          /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
+          const order =
+            params.order === "recent"
+              ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
+              : sql`rank asc, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
           // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
           // representation. session_key lives on the window row so key renames
           // never leave stale keys inside the index. Sessions flagged needs_rebuild
           // are excluded: their rows may still hold rewound-away branch text that
           // sessions_history no longer exposes, so they stay hidden until reconcile
           // rebuilds them (indexing=true tells the caller to retry).
+          const candidates = db
+            .selectFrom("session_transcript_fts")
+            // Keep MATCH outermost; the narrow map rejects excluded content before hydration.
+            .crossJoin("session_transcript_fts_rows as mapped")
+            .crossJoin(selectedWindows.as("window"))
+            .where(
+              "mapped.id",
+              "=",
+              /* kysely-allow-raw: FTS5 implicit rowid stays inside SQLite, including 64-bit identities. */
+              sql<number>`session_transcript_fts.rowid`,
+            )
+            .whereRef("window.session_id", "=", "mapped.session_id")
+            .where(match)
+            // Depend on the scoped window so SQLite cannot read role before excluding sessions.
+            .$if(Boolean(params.role), (builder) =>
+              builder.where((eb) =>
+                eb
+                  .case()
+                  .when("window.session_key", "is not", null)
+                  .then(eb("role", "=", params.role!))
+                  .else(false)
+                  .end(),
+              ),
+            )
+            .where(
+              "mapped.session_id",
+              "not in",
+              db
+                .selectFrom("session_transcript_index_state")
+                .select("session_id")
+                .where("needs_rebuild", "!=", 0),
+            )
+            .select([
+              "window.session_key",
+              /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
+              sql`session_transcript_fts.rowid`.as("fts_rowid"),
+              /* kysely-allow-raw: FTS5 ranking primitive. */
+              sql`bm25(session_transcript_fts)`.as("rank"),
+            ])
+            .orderBy(order)
+            .limit(limit + 1);
           const rows = executeSqliteQuerySync(
             database.db,
             db
-              .selectFrom("session_transcript_fts")
-              .innerJoin(
-                "session_windows",
-                "session_windows.session_id",
-                "session_transcript_fts.session_id",
+              .with(
+                (cte) => cte("hits").materialized(),
+                () => candidates,
               )
+              .selectFrom("hits")
+              .crossJoin("session_transcript_fts")
+              /* kysely-allow-raw: Bound FTS5 hydration only visits the retained candidate rowids. */
+              .where((eb) => eb(sql`session_transcript_fts.rowid`, "=", eb.ref("hits.fts_rowid")))
+              .where(match)
               .select([
-                "session_windows.session_key",
+                "hits.session_key",
                 "session_transcript_fts.session_id",
                 "message_id",
                 "role",
                 "timestamp",
-                /* kysely-allow-raw: FTS5 snippet primitive. */
+                "hits.rank as rank",
+                /* kysely-allow-raw: Materialization bounds snippet tokenization to limit + 1 rows. */
                 sql`snippet(session_transcript_fts, 0, '', '', ' … ', 48)`.as("snippet"),
-                /* kysely-allow-raw: FTS5 ranking primitive. */
-                sql`bm25(session_transcript_fts)`.as("rank"),
               ])
-              .where(
-                /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query)}`,
-              )
-              .$if(params.sessionKeys === undefined, (builder) =>
-                builder.where((eb) =>
-                  eb.or([
-                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                    sql<boolean>`${eb.ref("session_windows.session_key")} GLOB ${sessionFilterValues[0]}`,
-                    eb("session_windows.session_key", "in", ["global", "unknown"]),
-                  ]),
-                ),
-              )
-              .$if(params.sessionKeys !== undefined && sessionFilterValues.length > 0, (builder) =>
-                builder.where("session_windows.session_key", "in", sessionKeySet),
-              )
-              .$if(Boolean(params.sessionId), (builder) =>
-                builder.where("session_transcript_fts.session_id", "=", params.sessionId!),
-              )
-              .$if(Boolean(params.role), (builder) => builder.where("role", "=", params.role!))
-              .where(
-                "session_transcript_fts.session_id",
-                "not in",
-                db
-                  .selectFrom("session_transcript_index_state")
-                  .select("session_id")
-                  .where("needs_rebuild", "!=", 0)
-                  .$if(Boolean(params.sessionId), (builder) =>
-                    builder.where("session_id", "=", params.sessionId!),
-                  ),
-              )
-              .$if(params.order === "recent", (builder) =>
-                builder
-                  .orderBy("timestamp", "desc")
-                  /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
-                  .orderBy(sql`session_transcript_fts.rowid`, "desc"),
-              )
-              .$if(params.order !== "recent", (builder) =>
-                builder
-                  .orderBy("rank", "asc")
-                  .orderBy("timestamp", "desc")
-                  .orderBy("message_id", "asc"),
-              )
-              .limit(limit + 1),
+              .orderBy(order),
           ).rows;
           const hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
             if (

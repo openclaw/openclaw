@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
   return {
@@ -185,38 +189,155 @@ describe("scoreLexical", () => {
 });
 
 describe("untrusted schemas", () => {
-  it("never traverses parameters from a source the catalog treats as untrusted", async () => {
-    // compactToolSearchCatalogEntry already reports non-first-party parameters
-    // as "unknown"; indexing must respect the same boundary. A client can hand
-    // us a lazy object that throws on property access, and MCP-authored text
-    // must not become ranking input.
-    const hostile = entry({
-      source: "client",
-      name: "client_pick_file",
-      description: "Ask the client to pick a file",
-      parameters: {
-        type: "object",
-        properties: new Proxy(
-          {},
-          {
-            ownKeys: () => {
-              throw new Error("client properties must remain deferred");
+  it.each(["client", "mcp"] as const)(
+    "never traverses parameters from the untrusted %s source",
+    async (source) => {
+      // compactToolSearchCatalogEntry already reports non-first-party parameters
+      // as "unknown"; indexing must respect the same boundary. A client can hand
+      // us a lazy object that throws on property access, and MCP-authored text
+      // must not become ranking input.
+      const hostile = entry({
+        source,
+        name: "client_pick_file",
+        description: "Ask the client to pick a file",
+        parameters: {
+          type: "object",
+          properties: new Proxy(
+            {},
+            {
+              ownKeys: () => {
+                throw new Error("client properties must remain deferred");
+              },
             },
-          },
-        ),
-      },
-    });
-    const search = runtime([...CATALOG, hostile]);
+          ),
+        },
+      });
+      const search = runtime([...CATALOG, hostile]);
 
-    // Reaching the schema at all throws, so surviving the query is the proof.
-    await expect(search.search("pick a file")).resolves.toBeDefined();
-    expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
-      "client_pick_file",
-    );
-  });
+      // Reaching the schema at all throws, so surviving the query is the proof.
+      await expect(search.search("pick a file")).resolves.toBeDefined();
+      expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
+        "client_pick_file",
+      );
+    },
+  );
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "finds parameter metadata inside %s branches and refreshes it after edits",
+    async (keyword) => {
+      const branch = {
+        type: "object",
+        properties: { orchard: { type: "string", description: "Collect apples" } },
+      };
+      const search = runtime([
+        entry({
+          name: "indexed_resource",
+          parameters: { [keyword]: [{ description: "Measure asteroids" }, branch] },
+        }),
+      ]);
+
+      for (const query of ["asteroids", "orchard", "apples"]) {
+        expect((await search.search(query)).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      }
+      branch.properties.orchard.description = "Observe meteors";
+      expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      expect(await search.search("apples")).toEqual([]);
+      expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
+    },
+  );
+
+  it("finds metadata through composed property and array-item schemas", async () => {
+    const search = runtime([
+      entry({
+        name: "indexed_resource",
+        parameters: {
+          type: "object",
+          properties: {
+            resources: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "array",
+                  items: { allOf: [{ type: "string", description: "Observe meteors" }] },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+  });
+
+  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    for (const [query, expected] of [
+      ["repository", ["issue_create"]],
+      ["scheduling", ["cron_create"]],
+      ["read", ["read_file"]],
+    ] as const) {
+      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
+      const hits = await runtime(freshCatalog).search(query, {
+        allowedIds: new Set(catalog.map(({ id }) => id)),
+      });
+      expect(hits.map(({ name }) => name)).toEqual(expected);
+    }
+    expect(build).toHaveBeenCalledTimes(1);
+
+    catalog[0]!.description = "Observe asteroids";
+    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
+      "web_search",
+    ]);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    await runtime([...catalog]).search("repository");
+    expect(build).toHaveBeenCalledTimes(2);
+
+    const allowedIds = new Set([catalog[0]!.id]);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(build).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { encoding: "ASCII", padding: " ", suffix: "" },
+    { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
+    { encoding: "Unicode word", padding: "λ", suffix: "" },
+  ])(
+    "does not retain oversized $encoding source text through cached token slices",
+    async ({ padding, suffix }) => {
+      const catalog = [
+        entry({
+          name: "oversized_revision",
+          description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
+        }),
+      ];
+      const build = vi.spyOn(ranking, "buildLexicalIndex");
+      for (let turn = 0; turn < 2; turn++) {
+        expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+          "oversized_revision",
+        ]);
+      }
+      expect(build).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
+    const first = entry({ name: "shared_revision", description: "Measure quasars" });
+    await runtime([first]).search("quasars");
+    const current = entry({ ...first, source: "mcp", sourceName: "current-server" });
+    expect(await runtime([current]).search("quasars")).toEqual([
+      expect.objectContaining({ source: "mcp", sourceName: "current-server", input: "unknown" }),
+    ]);
+  });
+
   it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
     const search = runtime(
       ["listURL", "listUrl"].map((toolName) =>
@@ -337,5 +458,36 @@ describe("ToolSearchRuntime.search", () => {
     // The catalog is described in English, so this matches nothing. The old
     // scorer returned every tool in id order for exactly this input.
     expect(await runtime().search("価格を調べて")).toEqual([]);
+  });
+});
+
+describe("readParameterText", () => {
+  it("ignores boolean schemas and literal data while collecting composed metadata", () => {
+    expect(
+      readParameterText({
+        description: "visible",
+        const: { description: "literal" },
+        enum: [{ description: "literal" }],
+        anyOf: [true, false, { description: "branch" }],
+        oneOf: [],
+        allOf: [],
+      }),
+    ).toBe("visible branch");
+  });
+
+  it("reads metadata from tuple items", () => {
+    expect(
+      readParameterText({ items: [{ description: "first" }, { description: "second" }] }),
+    ).toBe("first second");
+  });
+
+  it("keeps cyclic composed schemas bounded", () => {
+    const schema: Record<string, unknown> = {
+      description: "visible",
+    };
+    schema.anyOf = [schema];
+
+    expect(readParameterText(schema).split(" ")).toEqual(Array(5).fill("visible"));
+    expect(readParameterText(schema, 5)).toBe("");
   });
 });

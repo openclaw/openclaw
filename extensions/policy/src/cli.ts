@@ -11,11 +11,13 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
+import { evaluatePolicy } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
-import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
   buildPolicyConformanceReport,
   type PolicyConformanceReport,
@@ -409,7 +411,7 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   if (!Number.isSafeInteger(raw) || raw < 250) {
     throw new Error("--interval-ms must be an integer >= 250.");
   }
-  return raw;
+  return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
 function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {

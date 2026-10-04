@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
@@ -46,11 +47,11 @@ describe("agent database admission", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-mixed-") };
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true }, worker: {} },
+        entries: { openclaw: {}, worker: {} },
         defaults: { systemAgent: { agentId: "worker" } },
       },
     };
-    const unavailablePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    const unavailablePath = openOpenClawAgentDatabase({ agentId: "openclaw", env }).path;
     const newerPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
@@ -76,7 +77,10 @@ describe("agent database admission", () => {
   it("keeps a secondary with malformed ownership isolated while required agents start", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-ownerless-") };
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, worker: {} } },
+      agents: {
+        entries: { main: {}, worker: {} },
+        defaults: { systemAgent: { agentId: "main" } },
+      },
     };
     openOpenClawAgentDatabase({ agentId: "main", env });
     const pathname = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
@@ -95,7 +99,7 @@ describe("agent database admission", () => {
         reason: expect.stringContaining("no agent owner"),
       });
       expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
-      expect(fs.readFileSync(pathname)).toEqual(before);
+      deepStrictEqual(fs.readFileSync(pathname), before);
     });
   });
 
@@ -181,7 +185,7 @@ describe("agent database admission", () => {
   it.each([
     { role: "secondary", agentId: "cleaner", isolate: true },
     { role: "registered secondary", agentId: "cleaner", isolate: true },
-    { role: "default", agentId: "cleaner", isolate: false },
+    { role: "sole", agentId: "cleaner", isolate: false },
     { role: "configured system", agentId: "cleaner", isolate: false },
     { role: "reserved system", agentId: "openclaw", isolate: false },
     { role: "reserved system", agentId: "crestodian", isolate: false },
@@ -194,9 +198,8 @@ describe("agent database admission", () => {
       const config: OpenClawConfig = {
         agents: {
           entries: {
-            main: { default: role !== "default" },
+            ...(role === "sole" ? {} : { main: {} }),
             [agentId]: {
-              default: role === "default",
               sandbox: { mode: "all", workspaceAccess: "none", scope: "session" },
             },
           },
@@ -240,7 +243,7 @@ describe("agent database admission", () => {
           code: "agent-database-ownership-mismatch",
         }),
       );
-      expect(fs.readFileSync(target)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(target), copyBytes);
       const startup = () =>
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
       if (!isolate) {
@@ -255,7 +258,7 @@ describe("agent database admission", () => {
           },
         });
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
-        expect(fs.readFileSync(target)).toEqual(copyBytes);
+        deepStrictEqual(fs.readFileSync(target), copyBytes);
         return;
       }
       await expect(startup()).resolves.toBeUndefined();
@@ -300,7 +303,7 @@ describe("agent database admission", () => {
         await import("../agents/workspace-state-dirs.js");
       await assertConfiguredWorkspaceStateReady({ cfg: config, env });
       await runStartupSessionMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
-      expect(fs.readFileSync(target)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(target), copyBytes);
       expect(() => openOpenClawAgentDatabase({ agentId, env })).toThrow(refusal?.reason);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
@@ -316,7 +319,7 @@ describe("agent database admission", () => {
         agentId,
       });
       expect(openOpenClawAgentDatabase({ agentId, env }).agentId).toBe(agentId);
-      expect(fs.readFileSync(`${target}.operator-backup`)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(`${target}.operator-backup`), copyBytes);
     },
   );
 });

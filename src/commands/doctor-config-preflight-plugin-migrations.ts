@@ -28,7 +28,6 @@ import {
   inspectPluginMigrationAvailability,
   type PluginMigrationInspection,
 } from "./doctor/shared/plugin-migration-availability.js";
-import { readShippedPluginInstallConfigImportRecords } from "./doctor/shared/plugin-registry-migration.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 /** One preflight retains unavailable owners until their migration reports completion. */
@@ -107,9 +106,6 @@ export function createDoctorPluginMigrationPreparation(params: {
       const availability = await inspectPluginMigrationAvailability({
         cfg: snapshot.sourceConfig,
         env: params.env(),
-        installRecords: readShippedPluginInstallConfigImportRecords(snapshot, {
-          env: params.env(),
-        }),
         retainedPluginIds: [...previousById.keys()],
         deferInstallation: shouldDeferConfiguredPluginInstallRepair(params.env()),
       });
@@ -187,7 +183,7 @@ export function createDoctorPluginMigrationPreparation(params: {
 
   return {
     deferred: () => deferred,
-    hasPending: () => previousById.size > 0,
+    retainedPluginIds: () => [...previousById.keys()],
     prepare,
     snapshotOptions: async () => {
       // Existing pending inputs must reach the first config read before backup selection.

@@ -1,6 +1,6 @@
 import { readExactSessionEntryRowValidated } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import { resolveGatewaySessionStoreReadResults } from "./session-utils-store-selection.js";

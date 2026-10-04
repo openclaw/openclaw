@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatToolDetail,
   isCommandBearingToolCall,
+  isShellToolDisplayName,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
 import { formatToolAggregate, formatToolAggregateParts } from "../auto-reply/tool-meta.js";
@@ -280,7 +281,6 @@ function buildNamedProgressLine(
     kind,
     text,
     label: display.label,
-    icon: display.emoji,
     ...(detail ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
@@ -611,9 +611,6 @@ export function createChannelProgressDraftGate(params: {
   const start = (): Promise<void> => {
     if (disposed || started) {
       return startPromise ?? Promise.resolve();
-    }
-    if (startPromise) {
-      return startPromise;
     }
     clearTimer();
     started = true;
@@ -982,15 +979,6 @@ export function compactChannelProgressDraftLine(line: string, maxChars: number):
     }
   }
 
-  const compactCommandPrefixMatch = normalized.match(/^🛠️\s+/u);
-  if (compactCommandPrefixMatch) {
-    const prefix = compactCommandPrefixMatch[0];
-    const compact = compactWithPrefix(prefix, normalized.slice(prefix.length));
-    if (compact) {
-      return compact;
-    }
-  }
-
   return repairCompactedProgressMarkdown(compactProgressText(normalized, maxChars, chars));
 }
 
@@ -1298,10 +1286,15 @@ function formatProgressDraftText(
                 : undefined;
         return text ? formatLine(compactChannelProgressDraftLine(text, maxLineChars)) : undefined;
       }
-      const text = compactChannelProgressDraftLine(
-        typeof line === "string" ? line : getProgressDraftLineText(line),
-        maxLineChars,
-      );
+      const lineText = typeof line === "string" ? line : getProgressDraftLineText(line);
+      const text =
+        typeof line !== "string" &&
+        isShellToolDisplayName(line.toolName) &&
+        lineText.indexOf(": ") <= 0
+          ? repairCompactedProgressMarkdown(
+              compactProgressLineDetail(lineText.replace(/\s+/g, " ").trim(), maxLineChars),
+            )
+          : compactChannelProgressDraftLine(lineText, maxLineChars);
       if (!text) {
         return undefined;
       }

@@ -19,6 +19,9 @@ import type {
   SandboxFsBridge,
 } from "openclaw/plugin-sdk/sandbox";
 import {
+  buildRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
+  buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
   prepareSshSandboxExec,
@@ -29,16 +32,13 @@ import {
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import {
-  buildValidatedExecRemoteCommand,
-  buildRemoteWorkdirValidationCommand,
-  buildRemoteCommand,
-  createOpenShellSshSession,
-  runOpenShellCli,
-  type OpenShellExecContext,
-} from "./cli.js";
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import { createOpenShellSshSession, runOpenShellCli, type OpenShellExecContext } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
@@ -164,11 +164,23 @@ const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
 ): SandboxBackendFactory {
-  return async (createParams) =>
-    await createOpenShellSandboxBackend({
-      ...params,
-      createParams,
+  return async (createParams) => {
+    if ((createParams.cfg.docker.binds?.length ?? 0) > 0) {
+      throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
+    }
+    const { sandboxName, legacyRuntimeAdopted } = resolveOpenShellSandboxName({
+      scopeKey: createParams.scopeKey,
+      registeredRuntimeIds: createParams.registeredRuntimeIds,
     });
+    const impl = new OpenShellSandboxBackendImpl({
+      createParams,
+      execContext: { config: params.pluginConfig, sandboxName },
+      legacyRuntimeAdopted,
+      remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
+      remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
+    });
+    return impl.asHandle();
+  };
 }
 
 export function createOpenShellSandboxBackendManager(params: {
@@ -205,33 +217,6 @@ export function createOpenShellSandboxBackendManager(params: {
       }
     },
   };
-}
-
-async function createOpenShellSandboxBackend(params: {
-  pluginConfig: ResolvedOpenShellPluginConfig;
-  createParams: CreateSandboxBackendParams;
-}): Promise<OpenShellSandboxBackend> {
-  if ((params.createParams.cfg.docker.binds?.length ?? 0) > 0) {
-    throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
-  }
-
-  const resolvedSandboxName = resolveOpenShellSandboxName({
-    scopeKey: params.createParams.scopeKey,
-    registeredRuntimeIds: params.createParams.registeredRuntimeIds,
-  });
-  const sandboxName = resolvedSandboxName.sandboxName;
-  const execContext: OpenShellExecContext = {
-    config: params.pluginConfig,
-    sandboxName,
-  };
-  const impl = new OpenShellSandboxBackendImpl({
-    createParams: params.createParams,
-    execContext,
-    legacyRuntimeAdopted: resolvedSandboxName.legacyRuntimeAdopted,
-    remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
-  });
-  return impl.asHandle();
 }
 
 class OpenShellSandboxBackendImpl {
@@ -1168,36 +1153,22 @@ function parseOpenShellSandboxPhasePage(
   stdout: string,
   sandboxName: string,
 ): { count: number; phase?: string } | undefined {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    for (const entry of parsed) {
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      if (record.name === sandboxName && typeof record.phase === "string") {
-        return { count: parsed.length, phase: record.phase };
-      }
-    }
-    return { count: parsed.length };
-  } catch {
+  const parsed = safeParseJson<unknown>(stdout);
+  if (!Array.isArray(parsed)) {
     return undefined;
   }
+  for (const entry of parsed) {
+    const record = asOptionalRecord(entry);
+    if (record?.name === sandboxName && typeof record.phase === "string") {
+      return { count: parsed.length, phase: record.phase };
+    }
+  }
+  return { count: parsed.length };
 }
 
 function parseOpenShellSandboxPhase(stdout: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (typeof parsed !== "object" || parsed === null || !("phase" in parsed)) {
-      return undefined;
-    }
-    return typeof parsed.phase === "string" ? parsed.phase : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = asOptionalRecord(safeParseJson<unknown>(stdout));
+  return typeof parsed?.phase === "string" ? parsed.phase : undefined;
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {

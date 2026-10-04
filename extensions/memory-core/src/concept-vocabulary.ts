@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -396,9 +397,7 @@ export function deriveConceptTags(params: {
   // project identities into promoted triggers instead of user-visible concepts.
   const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
   const source = `${path.basename(params.path)} ${visibleSnippet}`;
-  const limit = Number.isFinite(params.limit)
-    ? Math.max(0, Math.floor(params.limit as number))
-    : MAX_CONCEPT_TAGS;
+  const limit = resolveNonNegativeIntegerOption(params.limit, MAX_CONCEPT_TAGS);
   if (limit === 0) {
     return [];
   }

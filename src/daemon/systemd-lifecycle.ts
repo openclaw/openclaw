@@ -42,8 +42,8 @@ async function runSystemdServiceAction(
     reportMutation(`systemctl-${action}`);
     params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
   };
-  if (params.systemdIdentity && action !== "stop") {
-    if (params.systemdIdentity.scope === "user") {
+  if (params.systemdIdentity) {
+    if (params.systemdIdentity.scope === "user" && action !== "stop") {
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
       await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
     }
@@ -56,6 +56,9 @@ async function runSystemdServiceAction(
       identity: params.systemdIdentity,
       action,
       assertCurrent: params.assertCurrent,
+      beforeMutation: params.beforeMutation,
+      beforeEffect: params.beforeEffect,
+      prepareEffect: params.prepareEffect,
       warn:
         params.warn ??
         ((message) => {
@@ -140,20 +143,14 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
-    let exists = false;
-    try {
-      await fs.access(unitPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    let backupExists = false;
-    try {
-      await fs.access(`${unitPath}.bak`);
-      backupExists = true;
-    } catch {
-      // ignore
-    }
+    const exists = await fs.access(unitPath).then(
+      () => true,
+      () => false,
+    );
+    const backupExists = await fs.access(`${unitPath}.bak`).then(
+      () => true,
+      () => false,
+    );
     let enabled = false;
     if (systemctlAvailable) {
       const res = await execSystemctlUser(env, ["is-enabled", `${name}.service`]);

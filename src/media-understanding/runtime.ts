@@ -39,6 +39,7 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+import type { MediaUnderstandingCapability, MediaUnderstandingOutput } from "./types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -52,9 +53,6 @@ export type {
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 
-type MediaUnderstandingCapability = "image" | "audio" | "video";
-type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
-
 const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
   audio: "audio.transcription",
   image: "image.description",
@@ -65,7 +63,7 @@ function buildFileContext(params: {
   filePath: string;
   mediaUrl?: string;
   mime?: string;
-  capability?: MediaUnderstandingCapability;
+  capability: MediaUnderstandingCapability;
   scopeContext?: {
     sessionKey?: string;
     channel?: string;
@@ -88,18 +86,14 @@ function buildFileContext(params: {
   const extensionKind = kindFromMime(extensionMime);
   const mediaType =
     params.mime ??
-    (remoteRef && params.capability && extensionKind === params.capability
-      ? `${params.capability}/*`
-      : extensionMime) ??
-    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
-  if (remoteRef) {
-    return {
-      media: [{ url: remoteRef, contentType: mediaType }],
-      ...scopeFields,
-    };
-  }
+    (remoteRef && extensionKind === params.capability ? `${params.capability}/*` : extensionMime) ??
+    (remoteRef ? `${params.capability}/*` : undefined);
   return {
-    media: [{ path: params.filePath, contentType: mediaType }],
+    media: [
+      remoteRef
+        ? { url: remoteRef, contentType: mediaType }
+        : { path: params.filePath, contentType: mediaType },
+    ],
     ...scopeFields,
   };
 }
@@ -118,16 +112,6 @@ function concreteMime(mime: string | undefined): string | undefined {
 
 function resolveFileLocalRoots(filePath: string): string[] | undefined {
   return isRemoteMediaReference(filePath) ? undefined : [path.dirname(filePath)];
-}
-
-function basenameFromMediaReference(value: string): string {
-  if (isRemoteMediaReference(value)) {
-    try {
-      const url = new URL(value);
-      return path.basename(url.pathname) || "image";
-    } catch {}
-  }
-  return path.basename(value);
 }
 
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
@@ -248,10 +232,7 @@ export async function describeImageFile(
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const image = await readImageDescriptionInput({
-    filePath: params.filePath,
-    mediaUrl: params.mediaUrl,
-    mime: params.mime,
-    cfg: params.cfg,
+    ...params,
     timeoutMs,
   });
   const normalizedImage = await normalizeImageDescriptionInput({
@@ -334,7 +315,7 @@ async function readImageDescriptionInput(params: {
     });
     return {
       buffer: media.buffer,
-      fileName: media.fileName || basenameFromMediaReference(params.mediaUrl ?? params.filePath),
+      fileName: media.fileName,
       // The attachment cache has already resolved MIME from bytes, filename, and headers.
       // Keep the caller hint only as a fallback for cache implementations with no MIME result.
       mime: media.mime ?? concreteMime(params.mime),

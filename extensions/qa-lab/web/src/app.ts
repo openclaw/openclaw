@@ -308,9 +308,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (state.selectedCaptureSessionIds.length === 0) {
         state.selectedCaptureSessionIds = sessions.sessions[0]?.id ? [sessions.sessions[0].id] : [];
       }
-      const startupStatusResult = await Promise.allSettled([startupStatusPromise]);
-      state.captureStartupStatus =
-        startupStatusResult[0]?.status === "fulfilled" ? startupStatusResult[0].value.status : null;
+      state.captureStartupStatus = (
+        await startupStatusPromise.catch(() => ({ status: null }))
+      ).status;
       if (state.selectedCaptureSessionIds.length > 0) {
         const eventsPromises = state.selectedCaptureSessionIds.map((sessionId) =>
           getJson<CaptureEventsEnvelope>(
@@ -427,12 +427,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     render();
   }
 
-  async function runBusyAction(action: () => Promise<void>) {
+  async function runBusyAction(action: () => Promise<void>, onError?: (error: unknown) => void) {
     state.busy = true;
     render();
     try {
       await action();
     } catch (error) {
+      onError?.(error);
       state.error = formatErrorMessage(error);
       render();
     } finally {
@@ -512,50 +513,47 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   async function runSuite() {
-    if (!state.runnerDraft) {
+    const selection = state.runnerDraft;
+    if (!selection) {
       state.error = "Runner selection not ready yet.";
       render();
       return;
     }
-    state.busy = true;
     state.error = null;
-    render();
-    try {
-      const result = await postJson<{ runner: { selection: RunnerSelection } }>(
-        "/api/scenario/suite",
-        {
-          profile: state.runnerDraft.profile,
-          channel: state.runnerDraft.channel,
-          channelDriver: state.runnerDraft.channelDriver,
-          evidenceMode: state.runnerDraft.evidenceMode,
-          providerMode: state.runnerDraft.providerMode,
-          primaryModel: state.runnerDraft.primaryModel,
-          alternateModel: state.runnerDraft.alternateModel,
-          fastMode: state.runnerDraft.fastMode,
-          runtimePair: state.runnerDraft.runtimePair,
-          runtimePairLane: state.runnerDraft.runtimePairLane,
-          scenarioIds: state.runnerDraft.scenarioIds,
-        },
-      );
-      state.runnerDraft = cloneRunnerSelection(result.runner.selection);
-      state.runnerDraftDirty = false;
-      state.runnerPlanOverride = null;
-      state.activeTab = "chat";
-      await refresh();
-    } catch (error) {
-      if (error instanceof QaLabHttpError) {
-        const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
-        if (plan) {
-          state.runnerPlanOverride = plan;
-          state.sidebarPanel = "run";
+    await runBusyAction(
+      async () => {
+        const result = await postJson<{ runner: { selection: RunnerSelection } }>(
+          "/api/scenario/suite",
+          {
+            profile: selection.profile,
+            channel: selection.channel,
+            channelDriver: selection.channelDriver,
+            evidenceMode: selection.evidenceMode,
+            providerMode: selection.providerMode,
+            primaryModel: selection.primaryModel,
+            alternateModel: selection.alternateModel,
+            fastMode: selection.fastMode,
+            runtimePair: selection.runtimePair,
+            runtimePairLane: selection.runtimePairLane,
+            scenarioIds: selection.scenarioIds,
+          },
+        );
+        state.runnerDraft = cloneRunnerSelection(result.runner.selection);
+        state.runnerDraftDirty = false;
+        state.runnerPlanOverride = null;
+        state.activeTab = "chat";
+        await refresh();
+      },
+      (error) => {
+        if (error instanceof QaLabHttpError) {
+          const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
+          if (plan) {
+            state.runnerPlanOverride = plan;
+            state.sidebarPanel = "run";
+          }
         }
-      }
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+      },
+    );
   }
 
   async function loadEvidence(pathOverride?: string) {
@@ -692,13 +690,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
   }
 
-  function scrollChatToBottom(force?: boolean) {
+  function scrollChatToBottom() {
     const el = root.querySelector<HTMLElement>("#chat-messages");
     if (!el) {
       return;
     }
     const newCount = state.snapshot?.messages.length ?? 0;
-    if (force || (chatScrollLocked && newCount !== previousMessageCount)) {
+    if (chatScrollLocked && newCount !== previousMessageCount) {
       el.scrollTop = el.scrollHeight;
     }
     previousMessageCount = newCount;
@@ -876,20 +874,17 @@ export async function createQaLabApp(root: HTMLDivElement) {
         value === "core" || value === "extended" || value === "soak" ? value : null;
       updateRunnerDraft((draft) => ({ ...draft, runtimePairLane }));
     });
-    bindValue("#primary-model", "change", (primaryModel) => {
-      updateRunnerDraft((d) => ({
-        ...d,
-        primaryModel,
-        fastMode: isQaFastModeEnabled({ primaryModel, alternateModel: d.alternateModel }),
-      }));
-    });
-    bindValue("#alternate-model", "change", (alternateModel) => {
-      updateRunnerDraft((d) => ({
-        ...d,
-        alternateModel,
-        fastMode: isQaFastModeEnabled({ primaryModel: d.primaryModel, alternateModel }),
-      }));
-    });
+    for (const [selector, field] of [
+      ["#primary-model", "primaryModel"],
+      ["#alternate-model", "alternateModel"],
+    ] as const) {
+      bindValue(selector, "change", (value) => {
+        updateRunnerDraft((draft) => {
+          const models = { ...draft, [field]: value };
+          return { ...models, fastMode: isQaFastModeEnabled(models) };
+        });
+      });
+    }
 
     bindValue("#evidence-path", "input", (value) => {
       state.evidencePathDraft = value;
@@ -981,12 +976,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
         void refresh();
       });
     });
-    root
-      .querySelector<HTMLButtonElement>("#capture-toggle-selected-sessions")
-      ?.addEventListener("click", () => {
-        state.captureSelectedSessionsExpanded = !state.captureSelectedSessionsExpanded;
-        render();
-      });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
@@ -1195,18 +1184,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureEventKey = null;
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-summary-toggle")
-      ?.addEventListener("click", () => {
-        state.captureSummaryExpanded = !state.captureSummaryExpanded;
+    for (const [selector, field] of [
+      ["#capture-toggle-selected-sessions", "captureSelectedSessionsExpanded"],
+      ["#capture-summary-toggle", "captureSummaryExpanded"],
+      ["#capture-controls-toggle", "captureControlsExpanded"],
+    ] as const) {
+      root.querySelector<HTMLButtonElement>(selector)?.addEventListener("click", () => {
+        state[field] = !state[field];
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-controls-toggle")
-      ?.addEventListener("click", () => {
-        state.captureControlsExpanded = !state.captureControlsExpanded;
-        render();
-      });
+    }
     root
       .querySelector<HTMLButtonElement>("#capture-clear-filters")
       ?.addEventListener("click", () => {
@@ -1444,15 +1431,15 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.composer.conversationKind =
         selectedKind === "channel" || selectedKind === "group" ? selectedKind : "direct";
     });
-    bindValue("#conversation-id", "input", (value) => {
-      state.composer.conversationId = value;
-    });
-    bindValue("#sender-id", "input", (value) => {
-      state.composer.senderId = value;
-    });
-    bindValue("#sender-name", "input", (value) => {
-      state.composer.senderName = value;
-    });
+    for (const [selector, field] of [
+      ["#conversation-id", "conversationId"],
+      ["#sender-id", "senderId"],
+      ["#sender-name", "senderName"],
+    ] as const) {
+      bindValue(selector, "input", (value) => {
+        state.composer[field] = value;
+      });
+    }
 
     const textarea = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textarea) {

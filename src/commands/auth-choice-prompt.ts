@@ -93,7 +93,6 @@ export async function promptAuthChoiceGrouped(
     (group) => group.options.length > 0,
   );
   const availableGroups = [...availableBuiltInGroups, ...additionalGroups];
-  const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
   const isDetectedGroup = (group: AuthChoiceGroup) =>
     [...(params.detectedProviderIds ?? [])].some((provider) =>
       groupMatchesProvider(group, provider),
@@ -174,7 +173,7 @@ export async function promptAuthChoiceGrouped(
       showingMore = true;
       continue;
     }
-    const group = groupById.get(selection);
+    const group = availableGroups.findLast((candidate) => candidate.value === selection);
     if (!group || group.options.length === 0) {
       if (!showingMore) {
         await params.prompter.note(

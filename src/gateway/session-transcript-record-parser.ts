@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -21,10 +22,6 @@ const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
-export function isOversizedTranscriptLine(line: string): boolean {
-  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
-}
-
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
     const char = source.charAt(index);
@@ -36,40 +33,25 @@ function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   return true;
 }
 
-function extractJsonStringFieldWindow(
-  source: string,
-  field: string,
-  startIndex = 0,
-  endIndex = source.length,
-): string | undefined {
+function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
   const fieldToken = JSON.stringify(field);
-  let searchIndex = startIndex;
-  while (searchIndex < endIndex) {
+  let searchIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
+  while (searchIndex < source.length) {
     const tokenIndex = source.indexOf(fieldToken, searchIndex);
-    if (tokenIndex < 0 || tokenIndex >= endIndex) {
+    if (tokenIndex < 0) {
       return undefined;
     }
     searchIndex = tokenIndex + fieldToken.length;
     if (!isJsonObjectFieldToken(source, tokenIndex)) {
       continue;
     }
-    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex, endIndex));
+    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex));
     if (!match) {
       continue;
     }
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankString(decoded);
-    } catch {
-      return undefined;
-    }
+    return readNonBlankString(safeParseJson(`"${match[1]}"`));
   }
   return undefined;
-}
-
-function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
-  const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
-  return extractJsonStringFieldWindow(source, field, startIndex);
 }
 
 function recoverOversizedMultimodalTranscriptRecord(

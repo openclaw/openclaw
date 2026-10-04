@@ -18,6 +18,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -41,7 +42,7 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
+  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -76,9 +77,14 @@ export function chatSendHoldReason(
   host: ChatHost,
   sessionKey: string,
   initialTurnPending = false,
+  agentId?: string,
 ): string | null {
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
+  }
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
   }
   return chatSendPendingReason(host, sessionKey, initialTurnPending);
 }
@@ -154,7 +160,7 @@ export function retireDeliveredQueuedUserTurn(
   const owner = client ?? host;
   const submissions = host.chatSubmissions;
   const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
-  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (options?.inputConsumed && runId) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
     if (remembered) {
@@ -181,7 +187,7 @@ export function retireDeliveredQueuedUserTurn(
     host.connected === connected &&
     host.connectionEpoch === connectionEpoch &&
     payloadOwnerIsCurrent();
-  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope);
   const commit = (
     message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
   ): DeliveredTurnRetirement => {

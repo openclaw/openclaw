@@ -5,9 +5,6 @@
 
 import { readFile } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { saveMediaBuffer as SaveMediaBufferFn } from "openclaw/plugin-sdk/media-runtime";
-import type { describeImageFile as DescribeImageFileFn } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { normalizeBrowserScreenshot as NormalizeBrowserScreenshotFn } from "./screenshot.js";
 
 /** Default prompt for turning browser screenshots into text-only page context. */
 const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
@@ -34,13 +31,6 @@ type BrowserScreenshotDescriptionContext = {
   };
 };
 
-/** Dependencies injected so Browser tests can avoid loading media runtimes. */
-type BrowserScreenshotDescriptionDeps = {
-  describeImageFile: typeof DescribeImageFileFn;
-  normalizeBrowserScreenshot: typeof NormalizeBrowserScreenshotFn;
-  saveMediaBuffer: typeof SaveMediaBufferFn;
-};
-
 /** Result returned from browser screenshot description. */
 type BrowserScreenshotDescriptionResult = {
   text: string;
@@ -62,21 +52,22 @@ function normalizeActiveModel(
 
 async function resolveImageUnderstandingFilePath(
   ctx: BrowserScreenshotDescriptionContext,
-  deps: BrowserScreenshotDescriptionDeps,
 ): Promise<string> {
   const maxDimensionPx = ctx.imageSanitization?.maxDimensionPx;
   if (typeof maxDimensionPx !== "number" || !Number.isFinite(maxDimensionPx)) {
     return ctx.filePath;
   }
 
+  const { normalizeBrowserScreenshot } = await import("./screenshot.js");
   const source = await readFile(ctx.filePath);
-  const normalized = await deps.normalizeBrowserScreenshot(source, {
+  const normalized = await normalizeBrowserScreenshot(source, {
     maxSide: Math.max(1, Math.floor(maxDimensionPx)),
   });
   if (normalized.buffer === source) {
     return ctx.filePath;
   }
-  const saved = await deps.saveMediaBuffer(
+  const { saveMediaBuffer } = await import("openclaw/plugin-sdk/media-runtime");
+  const saved = await saveMediaBuffer(
     normalized.buffer,
     normalized.contentType ?? "image/jpeg",
     "browser",
@@ -87,9 +78,8 @@ async function resolveImageUnderstandingFilePath(
 /** Produces a text description for a browser screenshot, or null when no text was produced. */
 export async function describeBrowserScreenshot(
   ctx: BrowserScreenshotDescriptionContext,
-  deps: BrowserScreenshotDescriptionDeps,
 ): Promise<BrowserScreenshotDescriptionResult | null> {
-  const filePath = await resolveImageUnderstandingFilePath(ctx, deps);
+  const filePath = await resolveImageUnderstandingFilePath(ctx);
   const agentId = ctx.agentDir
     ? undefined
     : (await import("openclaw/plugin-sdk/agent-scope-runtime")).resolveSessionAgentIdStrict({
@@ -97,7 +87,8 @@ export async function describeBrowserScreenshot(
         sessionKey: ctx.mediaScope?.sessionKey,
         config: ctx.cfg,
       });
-  const described = await deps.describeImageFile({
+  const { describeImageFile } = await import("openclaw/plugin-sdk/media-understanding-runtime");
+  const described = await describeImageFile({
     filePath,
     cfg: ctx.cfg,
     prompt: DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
@@ -124,15 +115,6 @@ export function neutralizeMediaDirectives(text: string): string {
   if (!text || !/media:/i.test(text)) {
     return text;
   }
-  const lines = text.split("\n");
-  let changed = false;
-  for (const [i, line] of lines.entries()) {
-    const leading = line.length - line.trimStart().length;
-    const rest = line.slice(leading);
-    if (/^MEDIA:/i.test(rest)) {
-      lines[i] = `${line.slice(0, leading)}[neutralized] ${rest}`;
-      changed = true;
-    }
-  }
-  return changed ? lines.join("\n") : text;
+  // Only LF separates reply lines; multiline anchors also split CR and Unicode separators.
+  return text.replace(/(^|\n)([^\S\n]*)(MEDIA:)/gi, "$1$2[neutralized] $3");
 }

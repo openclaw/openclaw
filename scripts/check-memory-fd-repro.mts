@@ -315,7 +315,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }: ConfigOption
       },
       entries: {
         main: {
-          default: true,
           tools: { allow: ["memory_search"] },
         },
       },
@@ -379,7 +378,7 @@ export function updateGatewayReadyOutputState(
 ) {
   const combined = `${state.tail ?? ""}${chunk}`;
   return {
-    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    tail: formatTail(combined, maxChars),
     readySeen: state.readySeen || combined.includes("[gateway] ready"),
   };
 }
@@ -523,19 +522,21 @@ export function classifyMemorySearchInvokeResponse({
   status,
   bodyText,
 }: InvokeResponseOptions) {
-  const parsedBody = safeParseJson(bodyText);
-  const body = asRecord(parsedBody);
-  if (!httpOk) {
+  const body = asRecord(safeParseJson(bodyText));
+  const gatewayOk = body?.ok === true ? true : body?.ok === false ? false : undefined;
+  if (!httpOk || gatewayOk === false) {
     const errorRecord = asRecord(body?.error);
     return {
       ok: false,
       httpOk,
       status,
-      gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
+      gatewayOk,
       error:
         readNonBlankString(errorRecord?.message) ??
         readNonBlankString(body?.error) ??
-        `memory_search HTTP request failed with status ${status}`,
+        (!httpOk
+          ? `memory_search HTTP request failed with status ${status}`
+          : "memory_search gateway invocation failed"),
     };
   }
   if (!body) {
@@ -544,21 +545,6 @@ export function classifyMemorySearchInvokeResponse({
       httpOk,
       status,
       error: "memory_search response was not JSON",
-    };
-  }
-
-  const gatewayOk = body.ok === true ? true : body.ok === false ? false : undefined;
-  if (gatewayOk === false) {
-    const errorRecord = asRecord(body.error);
-    return {
-      ok: false,
-      httpOk,
-      status,
-      gatewayOk,
-      error:
-        readNonBlankString(errorRecord?.message) ??
-        readNonBlankString(body.error) ??
-        "memory_search gateway invocation failed",
     };
   }
 

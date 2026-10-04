@@ -482,10 +482,9 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
     }
 
     private static func currentRoute(deviceID: AudioObjectID) -> MacRealtimeTalkOutputRoute? {
-        guard let transportType = uint32Property(
+        guard let transportType = AudioPropertyValue.uint32(
             objectID: deviceID,
-            selector: kAudioDevicePropertyTransportType,
-            scope: kAudioObjectPropertyScopeGlobal)
+            selector: kAudioDevicePropertyTransportType)
         else { return nil }
 
         let terminalTypes = self.outputTerminalTypes(deviceID: deviceID)
@@ -496,10 +495,9 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
     }
 
     private static func defaultOutputDeviceID() -> AudioObjectID? {
-        guard let deviceID = self.uint32Property(
+        guard let deviceID = AudioPropertyValue.uint32(
             objectID: AudioObjectID(kAudioObjectSystemObject),
-            selector: kAudioHardwarePropertyDefaultOutputDevice,
-            scope: kAudioObjectPropertyScopeGlobal),
+            selector: kAudioHardwarePropertyDefaultOutputDevice),
             deviceID != 0
         else { return nil }
         return deviceID
@@ -514,10 +512,9 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
         var terminalTypes: [UInt32] = []
         terminalTypes.reserveCapacity(streamIDs.count)
         for streamID in streamIDs {
-            guard let terminalType = self.uint32Property(
+            guard let terminalType = AudioPropertyValue.uint32(
                 objectID: streamID,
-                selector: kAudioStreamPropertyTerminalType,
-                scope: kAudioObjectPropertyScopeGlobal)
+                selector: kAudioStreamPropertyTerminalType)
             else { return [] }
             terminalTypes.append(terminalType)
         }
@@ -599,27 +596,6 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
             }
         }
         return status == noErr ? output : nil
-    }
-
-    private static func uint32Property(
-        objectID: AudioObjectID,
-        selector: AudioObjectPropertySelector,
-        scope: AudioObjectPropertyScope) -> UInt32?
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: scope,
-            mElement: kAudioObjectPropertyElementMain)
-        var value: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        let status = AudioObjectGetPropertyData(
-            objectID,
-            &address,
-            0,
-            nil,
-            &size,
-            &value)
-        return status == noErr ? value : nil
     }
 
     private func reportWarningOnce(_ reason: String) {

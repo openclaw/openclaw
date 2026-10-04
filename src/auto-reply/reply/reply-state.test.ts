@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
@@ -32,6 +33,7 @@ import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compact-");
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -59,8 +61,7 @@ async function loadStoredEntry(storePath: string, sessionKey: string): Promise<S
 }
 
 async function createCompactionSessionFixture(entry: SessionEntry) {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-  tempDirs.push(tmp);
+  const tmp = sessionDirs.make();
   const storePath = path.join(tmp, "sessions.json");
   const sessionKey = "main";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };

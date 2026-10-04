@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { raceWithTimeout } from "./timeouts.js";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
 
@@ -83,11 +83,12 @@ export async function probeDiscordAcpBindingHealth(params: {
     .then((status) => ({ kind: "status" as const, status }))
     .catch((error: unknown) => ({ kind: "error" as const, error }));
 
-  const result = await raceWithTimeout({
-    promise: statusPromise,
-    timeoutMs: DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
-    onTimeout: () => ({ kind: "timeout" as const }),
-  });
+  const result = await raceWithTimeout(
+    statusPromise,
+    DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
+    () => ({ kind: "timeout" as const }),
+    { ref: false },
+  );
   if (result.kind === "timeout") {
     statusProbeAbortController.abort();
   }

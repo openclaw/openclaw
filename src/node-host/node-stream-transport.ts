@@ -1,8 +1,6 @@
-import { createRequire } from "node:module";
+import { once } from "node:events";
 import net from "node:net";
-import path from "node:path";
 import type { Duplex } from "node:stream";
-import { pathToFileURL } from "node:url";
 import type { ClientOptions, RawData, WebSocket } from "ws";
 import {
   buildCloudflareAccessHeaders,
@@ -12,15 +10,12 @@ import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/w
 import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 
-const require = createRequire(import.meta.url);
-let webSocketConstructor: Promise<typeof WebSocket> | undefined;
-function loadWebSocketConstructor(): Promise<typeof WebSocket> {
-  // Pin validation needs ws's real ClientRequest/TLSSocket, not Bun's built-in adapter.
-  return (webSocketConstructor ??= import(
-    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
-  ).then((module: typeof import("ws")) => module.default));
-}
+const loadWebSocketConstructor = createLazyRuntimeNamedExport(
+  () => import("../../packages/gateway-client/src/websocket.js"),
+  "WebSocket",
+);
 
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
@@ -83,20 +78,6 @@ function websocketOptions(
     applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
   return options;
-}
-
-async function waitForSocketConnect(socket: net.Socket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
-  });
-}
-
-async function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
 }
 
 async function sendAttachMetadata(
@@ -262,14 +243,14 @@ export async function runNodeStreamTransport(params: {
         closeCode,
       });
     });
-    await Promise.race([waitForWebSocketOpen(ws), abort]);
+    await Promise.race([once(ws, "open"), abort]);
     if (aborted) {
       return;
     }
     if ("port" in params.target && socket instanceof net.Socket) {
       // Portals attach first so a refused target closes the claimed ticket.
       socket.connect(createLoopbackConnectOptions(params.target.port));
-      await Promise.race([waitForSocketConnect(socket), abort]);
+      await Promise.race([once(socket, "connect"), abort]);
     }
     if (aborted) {
       return;

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
-import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { telegramPythonArgs } from "./telegram-runtime.mjs";
+import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
@@ -22,7 +23,12 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
-import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
+import {
+  currentTelegramRun,
+  withTelegramRun,
+  runTelegramCli,
+  fetchWithLease,
+} from "./telegram-run-scope.mjs";
 const CHILD_ENV_DENIED_PREFIXES = [
   "BWS_",
   "CLAWSWEEPER_",
@@ -121,6 +127,8 @@ function parseArgs(argv) {
     scenarioPath: "",
     scenario: null,
     sourceGateway: false,
+    gatewayReadyTimeoutMs: undefined,
+    recorderReadyTimeoutMs: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -155,7 +163,19 @@ function parseArgs(argv) {
     else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
-    else if (arg === "--help" || arg === "-h") {
+    else if (arg === "--gateway-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
+      }
+      args.gatewayReadyTimeoutMs = value;
+    } else if (arg === "--recorder-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--recorder-ready-timeout-ms takes a positive integer.");
+      }
+      args.recorderReadyTimeoutMs = value;
+    } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     } else {
@@ -186,6 +206,9 @@ function parseArgs(argv) {
       throw new Error("Use --scenario instead of --text/--photo for the driven turn.");
     }
     args.scenario = readScenarioFile(resolve(args.scenarioPath));
+    if (!args.dm && args.scenario.actions.some((action) => action.type === "forwardBurst")) {
+      throw new Error("Scenario forwardBurst actions require --dm.");
+    }
   }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
@@ -213,12 +236,20 @@ function printHelp() {
   Add health.intervalMs to sample Gateway liveness during the timeline.
 
 Runtime:
-  --source-gateway     run the exact TypeScript checkout without building dist
+  --source-gateway     run core and the Telegram plugin from TypeScript source; other
+                       plugins use built output when present (rebuild to refresh)
+  --gateway-ready-timeout-ms N
+                       Gateway startup budget (default 45000 built, 900000 source);
+                       raise it on a heavily loaded host
+  --recorder-ready-timeout-ms N
+                       Recorder readiness budget (default 30000);
+                       raise it on a heavily loaded host
 
 Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
   Scenario send actions accept forumTopicId for a specific forum topic.
+  Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
 Backends:
   --backend mock          (default) basic deterministic mock-openai
@@ -305,11 +336,15 @@ export async function applyScenarioConfigPatch({
 async function readTester(driverEnv, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    result = await runCommand("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
-      cwd: repoRoot,
-      env: driverEnv,
-      timeoutMs: 30_000,
-    });
+    result = await runCommand(
+      "uv",
+      telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "status", "--json"),
+      {
+        cwd: repoRoot,
+        env: driverEnv,
+        timeoutMs: 30_000,
+      },
+    );
     if (result.status === 0) break;
     if (attempt < 3) {
       // A restored TDLib archive reported unauthorized once, then became ready
@@ -351,7 +386,9 @@ export function assertSutMatchesLease(sut, credential) {
 const PROVIDER_API = process.env.E2E_TELEGRAM_PROVIDER_API || "openai-responses";
 
 export function writeConfig(params) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-user-mock-sut-"));
+  const root = fs.mkdtempSync(
+    path.join(params.driverEnv?.TMPDIR || os.tmpdir(), "openclaw-tg-user-mock-sut-"),
+  );
   currentTelegramRun().ownScratch(root, removeRunnerScratch);
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
@@ -422,6 +459,11 @@ export function writeConfig(params) {
       enabled: true,
       allow: usesClaudeCli ? ["telegram", "anthropic"] : ["telegram", "openai"],
       entries: pluginEntries,
+      // Gateways run built bundled plugins when dist exists. Selecting the bundled
+      // source entry keeps its trust and runs the checkout's Telegram plugin instead.
+      ...(params.sourceGateway
+        ? { load: { paths: [path.join(params.repoRoot, "extensions", "telegram")] } }
+        : {}),
     },
     channels: {
       telegram: {
@@ -455,31 +497,9 @@ export function writeConfig(params) {
   return { root, stateDir, workspace, configPath };
 }
 
-export async function fetchWithLease(
-  url,
-  init,
-  lease,
-  fetchImpl = fetch,
-  consume = (response) => response.json(),
-) {
-  const scope = currentTelegramRun();
-  scope.assertActive();
-  lease.assertHealthy();
-  const work = (async () => {
-    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
-    const response = await fetchImpl(url, { ...init, signal });
-    scope.assertActive();
-    const payload = await consume(response);
-    scope.assertActive();
-    lease.assertHealthy();
-    return { response, payload };
-  })();
-  return await scope.trackIo(work);
-}
-
-async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
-  const { response, payload } = await fetchWithLease(
-    `https://api.telegram.org/bot${token}/test/${method}`,
+export async function requestTelegramTestApi(token, method, body, lease, fetchImpl = fetch) {
+  return await fetchWithLease(
+    `https://api.telegram.org${telegramTestApiPath(`/bot${token}/${method}`)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -488,6 +508,10 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     lease,
     fetchImpl,
   );
+}
+
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  const { response, payload } = await requestTelegramTestApi(token, method, body, lease, fetchImpl);
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);
@@ -587,15 +611,16 @@ export async function runCommand(command, args, options) {
     const finish = (status) => {
       if (settled) return;
       settled = true;
-      resolveRun({ status, stdout, stderr, timedOut: false });
+      resolveRun({ status: child.spawnError ? null : status, stdout, stderr, timedOut: false });
     };
-    child.once("exit", finish);
+    // Exit may precede the last stderr bytes. Readiness evidence must include
+    // everything drained from the child's pipes before cleanup removes state.
+    child.once("close", finish);
     child.once("error", (error) => {
       child.spawnError = error;
       stderr = `${stderr}${error instanceof Error ? error.message : String(error)}`.slice(
         -1024 * 1024,
       );
-      finish(null);
     });
   });
   let timeout;
@@ -785,19 +810,19 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-function processGroupExists(child) {
-  if (!child.pid) return false;
+function processGroupState(child) {
+  if (!child.pid) return "gone";
   try {
     process.kill(-child.pid, 0);
-    return true;
+    return "alive";
   } catch (error) {
-    if (error.code === "ESRCH") return false;
-    // macOS answers EPERM for a signal-0 probe of a group that holds a process we do not own;
-    // the group inventory decides instead of aborting cleanup (2026-09-14, lease left unreleased).
-    if (error.code !== "EPERM" || process.platform !== "darwin") throw error;
-    const groups = execFileSync("ps", ["-axo", "pgid="], { encoding: "utf8" }).trim().split(/\s+/u);
-    if (groups.some((group) => !/^\d+$/u.test(group))) throw error;
-    return groups.includes(String(child.pid));
+    if (error.code === "ESRCH") return "gone";
+    // macOS can report EPERM while an exiting group awaits reap. Keep waiting
+    // for ESRCH; EPERM never confirms cleanup, and setuid ps cannot run confined.
+    if (error.code === "EPERM") {
+      return "unconfirmed";
+    }
+    throw error;
   }
 }
 
@@ -817,20 +842,24 @@ export function watchChildCompletion(child) {
   });
 }
 
-function waitForProcessGroupExit(child, timeoutMs) {
+function waitForProcessGroupExit(child, timeoutMs, acceptedTimeoutMs = timeoutMs) {
   return new Promise((resolveWait, reject) => {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    let accepted = false;
     const poll = () => {
+      let state;
       try {
-        if (!processGroupExists(child)) {
-          resolveWait(true);
-          return;
-        }
+        state = processGroupState(child);
       } catch (error) {
         reject(error);
         return;
       }
-      if (Date.now() >= deadline) {
+      if (state === "gone") {
+        resolveWait(true);
+        return;
+      }
+      accepted ||= state === "alive";
+      if (Date.now() - startedAt >= (accepted ? acceptedTimeoutMs : timeoutMs)) {
         resolveWait(false);
         return;
       }
@@ -852,6 +881,11 @@ async function stopChild(child, graceMs) {
   return await currentTelegramRun().stopChild(child, graceMs);
 }
 
+// The kernel delivers SIGKILL only when an uninterruptible syscall returns; loaded
+// macOS hosts held APFS rename() for 15-194 s (2026-10). A member that answers a
+// probe after SIGKILL has it pending, so a later EPERM means exiting, not unkillable.
+const KILLED_GROUP_EXIT_MS = 300_000;
+
 async function stopChildProcess(child, graceMs = 5_000) {
   if (!child) return;
   signalChild(child, "SIGTERM");
@@ -861,11 +895,12 @@ async function stopChildProcess(child, graceMs = 5_000) {
   ]);
   if (childExited && groupExited) return;
   signalChild(child, "SIGKILL");
-  const stopped = await Promise.all([
-    waitForExit(child, 2_000),
-    waitForProcessGroupExit(child, 2_000),
-  ]);
-  if (stopped.some((value) => !value))
+  // A group that only ever answers EPERM cannot be confirmed: fail closed quickly.
+  // A gone group means the child was reaped, so its exit wait returns at once.
+  if (
+    !(await waitForProcessGroupExit(child, 2_000, KILLED_GROUP_EXIT_MS)) ||
+    !(await waitForExit(child, 2_000))
+  )
     throw new Error(`Telegram process group did not stop: ${child.pid}`);
 }
 
@@ -981,6 +1016,12 @@ export async function runTelegramTestScenario({
       { signal },
     );
   } finally {
+    if (args?.output && credential?.readinessDiagnostic) {
+      writePrivateJson(
+        path.join(dirname(resolve(args.output)), "readiness.json"),
+        credential.readinessDiagnostic,
+      );
+    }
     if (args?.output && credential?.testGroup) {
       const evidenceDir = dirname(resolve(args.output));
       fs.mkdirSync(evidenceDir, { recursive: true });
@@ -1029,6 +1070,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     mockPort: args.mockPort,
     backend: args.backend,
     sourceGateway: args.sourceGateway,
+    repoRoot,
     telegramApiRoot: creds.telegramApiRoot,
     gatewayLog: evidenceDir ? path.join(evidenceDir, "gateway.log") : "",
   });
@@ -1048,6 +1090,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     fs.mkdirSync(scenarioBarrierDir, { recursive: true, mode: 0o700 });
   }
   // Fence scenario mutations, not the lease: the recorder must keep observing.
+  // Read its durable failure receipt at each admission check. fs.watch needs
+  // shared ancestor metadata on macOS even when this directory is runner-owned.
   const actionFailurePath = args.scenario
     ? path.join(scenarioBarrierDir, "action-failure.json")
     : "";
@@ -1060,16 +1104,14 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   };
   const assertScenarioActionsActive = () => {
     if (readActionFailure()) {
-      throw new Error(`Scenario actions stopped after uncertain send: ${actionFailure.error}`);
+      throw new Error(`Scenario actions stopped after recorder failure: ${actionFailure.error}`);
     }
   };
 
   let mock;
   let gateway;
-  let scenarioWatcher;
   try {
     leaseHealth.assertHealthy();
-    if (args.scenario) scenarioWatcher = fs.watch(scenarioBarrierDir, readActionFailure);
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(
@@ -1110,7 +1152,12 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       await waitForOutput(mock, /QA mock OpenAI:/u, "QA mock OpenAI", 30_000);
     }
 
+    const runtimeEnv = {
+      ...driverEnv,
+      ...(args.backend === "claude-cli" ? { HOME: process.env.HOME } : {}),
+    };
     const gatewayEnv = createGatewayEnvironment({
+      baseEnv: runtimeEnv,
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
@@ -1144,10 +1191,12 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       gatewayEnv.TELEGRAM_E2E_FOLLOWUP_CONTROL_STATUS = followupControlStatusPath;
     }
     if (args.sourceGateway) {
+      // Built plugins still load dist core modules; pin their bundled root to the
+      // same source tree so the configured Telegram alias merges everywhere.
       gatewayEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(repoRoot, "extensions");
-      gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
     const controlEnv = createControlEnvironment({
+      baseEnv: runtimeEnv,
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
@@ -1171,7 +1220,12 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
+        // Source startup transforms the Telegram plugin; loaded hosts took 4-9+ minutes.
+        await waitForGatewayReady(
+          child,
+          args.gatewayPort,
+          args.gatewayReadyTimeoutMs ?? (args.sourceGateway ? 900_000 : 45_000),
+        );
         return child;
       } catch (error) {
         await stopChild(child);
@@ -1183,11 +1237,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
 
     for (const text of args.preSend) {
       leaseHealth.assertHealthy();
-      const sent = await runCommand("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
-        cwd: repoRoot,
-        env: driverEnv,
-        timeoutMs: args.timeoutMs,
-      });
+      const sent = await runCommand(
+        "uv",
+        telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "send", "--text", text),
+        {
+          cwd: repoRoot,
+          env: driverEnv,
+          timeoutMs: args.timeoutMs,
+        },
+      );
       if (sent.status !== 0 || sent.timedOut) {
         throw new Error(`pre-send failed: ${sent.stderr || sent.stdout}`);
       }
@@ -1197,7 +1255,9 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     const recording = Boolean(args.record);
     leaseHealth.assertHealthy();
     const recorderReadyPath = path.join(temp.root, "recorder-ready.json");
-    const probeArgs = recording ? ["run", USER_RECORD_PATH] : ["run", USER_DRIVER_PATH, "probe"];
+    const probeArgs = recording
+      ? telegramPythonArgs(driverEnv, USER_RECORD_PATH)
+      : telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "probe");
     if (recording) {
       if (args.scenario) {
         probeArgs.push(
@@ -1278,7 +1338,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     currentTelegramRun().preserveEvidence(persistRecorderLogs);
     let recorderReady;
     if (args.scenario) {
-      const readiness = waitForRecorderReady(recorderReadyPath, probe);
+      const readiness = waitForRecorderReady(recorderReadyPath, probe, args.recorderReadyTimeoutMs);
       try {
         recorderReady = await readiness;
         leaseHealth.assertHealthy();
@@ -1343,6 +1403,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
             !(await waitForScenarioOffset(scenarioStartedAt, action.atMs, scenarioActionsStopped))
           ) {
             break;
+          }
+          // The recorder owns native reply attribution. Timed controls must not
+          // overtake a send whose visible reply has not crossed that boundary.
+          const replyBarriers = args.scenario.actions
+            .slice(0, index)
+            .flatMap((prior, priorIndex) =>
+              prior.awaitReply ? [path.join(scenarioBarrierDir, String(priorIndex))] : [],
+            );
+          while (!scenarioActionsStopped() && replyBarriers.some((file) => !fs.existsSync(file))) {
+            await currentTelegramRun().sleep(50);
           }
           const beganAt = Date.now();
           leaseHealth.assertHealthy();
@@ -1534,7 +1604,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         scratchRemovedAfterExit: true,
         mockRequests: requestRows,
         ...(actionFailure
-          ? { actionFailure: { ...actionFailure, error: redactRunnerText(actionFailure.error) } }
+          ? {
+              actionFailure: {
+                actionType: actionFailure.actionType,
+                actionIndex: actionFailure.actionIndex,
+                status: actionFailure.status,
+                ...(actionFailure.sendOutcome ? { sendOutcome: actionFailure.sendOutcome } : {}),
+                error: redactRunnerText(actionFailure.error),
+              },
+            }
           : {}),
         gatewayActions: gatewayActions.map((action) => ({
           type: action.type,
@@ -1548,7 +1626,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       },
     };
   } finally {
-    scenarioWatcher?.close();
     await stopChild(gateway);
     await stopChild(mock);
   }

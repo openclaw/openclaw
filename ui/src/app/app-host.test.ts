@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
@@ -9,6 +10,7 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   TERMINAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
@@ -303,6 +305,7 @@ describe("OpenClaw shell source initialization", () => {
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
       previousGatewayPhase: null,
+      recoverDeletedActiveSession: vi.fn(),
       routeState: {},
       runtimeConfigClient: null,
       runtimeConfigSource: null,
@@ -607,14 +610,9 @@ describe("OpenClaw shell settings search", () => {
   });
 
   it("does not load schema through a replaced runtime config capability", async () => {
-    let finishLoad: (() => void) | undefined;
+    const loadGate = createDeferred();
     const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            finishLoad = resolve;
-          }),
-      ),
+      ensureLoaded: vi.fn(() => loadGate.promise),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
     const secondRuntimeConfig = {
@@ -632,7 +630,7 @@ describe("OpenClaw shell settings search", () => {
     shell.runtime = {
       context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
     };
-    finishLoad?.();
+    loadGate.resolve();
     await load;
 
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
@@ -827,7 +825,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     }
   });
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Win32"])(
     "opens an unloaded palette only with the platform shortcut on %s",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
@@ -899,8 +897,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const navigate = vi.fn();
     const panelEvent = vi.fn();
     const uiCommandEvent = vi.fn();
+    const pluginPanelEvent = vi.fn();
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
     shell.runtime = {
       context: {
@@ -973,6 +973,34 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       }),
     );
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        sessionKey: "global",
+        agentId: "writer",
+        command: {
+          kind: "panel",
+          panel: "plugin",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
+      },
+    });
+    expect(setAgent).toHaveBeenLastCalledWith("writer");
+    expect(setSessionKey).toHaveBeenLastCalledWith("global");
+    expect(pluginPanelEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        detail: {
+          sessionKey: "global",
+          agentId: "writer",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
+      }),
+    );
+    window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });

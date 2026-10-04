@@ -5,6 +5,7 @@ import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
@@ -13,7 +14,7 @@ import type {
   GatewayWsBrowserOrigin,
   PreparedSessionProfile,
 } from "../server/client-identity-types.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
     Gateway CLI tracking only covers runs nobody else records, so a marked run
@@ -39,6 +40,7 @@ export type GatewayNodeInvokeStream = {
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  authPolicy?: GatewayAuthPolicy;
   /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
   invalidated?: boolean;
   /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
@@ -106,6 +108,8 @@ export type GatewayClient = {
     internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
     internalDeliverySuppressText?: boolean;
+    /** Host-owned: deliver only authored output, never runtime error payloads. */
+    internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     /** Host-owned exact tool cap for a tracked plugin subagent run. */

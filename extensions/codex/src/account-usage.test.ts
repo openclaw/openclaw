@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -36,7 +37,7 @@ describe("codex.accountUsage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    config = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    config = { agents: { entries: { main: {}, work: {} } } };
     currentAuthority = true;
     store = {
       version: 1,

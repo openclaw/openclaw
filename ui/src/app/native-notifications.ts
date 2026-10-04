@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
@@ -45,13 +46,10 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (!isNativeNotificationsPermission(value.permission)) {
     return null;
   }
-  if (!("test" in value)) {
+  if (!("test" in value) || value.test === null) {
     return { permission: value.permission, test: null };
   }
   const test = value.test;
-  if (test === null) {
-    return { permission: value.permission, test: null };
-  }
   if (typeof test !== "object" || test === null || !("state" in test)) {
     return null;
   }
@@ -64,13 +62,9 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   return null;
 }
 
-function getNativeNotificationsPoster() {
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
-  return handler?.postMessage.bind(handler);
-}
-
 export function createNativeNotificationsCapability(): NativeNotificationsCapability | null {
-  const postMessage = getNativeNotificationsPoster();
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
+  const postMessage = handler?.postMessage.bind(handler);
   if (!postMessage) {
     return null;
   }
@@ -105,10 +99,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     requestPermission() {
       postMessage({ type: "request-permission" });
     },

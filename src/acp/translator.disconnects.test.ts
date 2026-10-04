@@ -92,70 +92,12 @@ function messageChunks(harness: Awaited<ReturnType<typeof createReconnectHarness
 }
 
 describe("acp translator reconnect settlement", () => {
-  it.each([
-    {
-      name: "full reply",
-      result: {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "final answer" },
-      } satisfies AcpAgentWaitResult,
-      streamed: undefined,
-      recovered: "final answer",
-      historyText: undefined,
-    },
-    {
-      name: "sticky timeout suffix",
-      result: {
-        status: "timeout",
-        terminalReply: { disposition: "visible", text: "final answer" },
-      } satisfies AcpAgentWaitResult,
-      streamed: "final",
-      recovered: " answer",
-      historyText: undefined,
-    },
-    {
-      name: "indented suffix",
-      result: {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "final answer" },
-      } satisfies AcpAgentWaitResult,
-      streamed: "    final",
-      recovered: " answer\n",
-      historyText: "    final answer\n",
-    },
-  ])(
-    "recovers the $name before resolving",
-    async ({ result, streamed, recovered, historyText }) => {
-      const harness = await createReconnectHarness(result, historyText);
-      if (streamed) {
-        await streamText(harness, streamed);
-      }
-
-      reconnect(harness);
-
-      await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-      expect(messageChunks(harness).filter((text) => text === recovered)).toHaveLength(1);
-      const replay = await harness.eventLedger.readReplay({
-        sessionId: harness.sessionId,
-        sessionKey: harness.sessionKey,
-      });
-      expect(
-        replay.events.some(
-          (event) =>
-            event.update.sessionUpdate === "agent_message_chunk" &&
-            event.update.content.type === "text" &&
-            event.update.content.text === recovered,
-        ),
-      ).toBe(true);
-    },
-  );
-
-  it("recovers the full reply after a disconnect beyond the terminal summary cap", async () => {
-    const prefix = "A".repeat(5_000);
-    const full = prefix + "B".repeat(1_000);
+  it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
+    const prefix = "    " + "A".repeat(5_000);
+    const full = prefix + "B".repeat(1_000) + "\n";
     const harness = await createReconnectHarness(
       {
-        status: "ok",
+        status: "timeout",
         terminalReply: { disposition: "visible", text: full.slice(0, 4_096) },
       },
       full,
@@ -164,6 +106,16 @@ describe("acp translator reconnect settlement", () => {
     reconnect(harness);
     await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
     expect(messageChunks(harness).join("")).toBe(full);
+    const replay = await harness.eventLedger.readReplay(harness);
+    expect(
+      replay.events
+        .flatMap(({ update }) =>
+          update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+            ? [update.content.text]
+            : [],
+        )
+        .join(""),
+    ).toBe(full);
   });
 
   it("reports missing authoritative history instead of settling with the terminal summary", async () => {

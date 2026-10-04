@@ -17,8 +17,6 @@ import type { DeepInfraSurfaceModel } from "./media-models.js";
 const DEEPINFRA_IMAGE_SIZES = ["512x512", "1024x1024", "1024x1792", "1792x1024"] as const;
 const MAX_DEEPINFRA_INPUT_IMAGES = 1;
 
-// First entry of imageGenModels is the default; rest fill the allowlist.
-// No catalog supplied -> DEEPINFRA_IMAGE_FALLBACK_MODELS.
 export function buildDeepInfraImageGenerationProvider(options?: {
   imageGenModels?: readonly DeepInfraSurfaceModel[];
 }): ImageGenerationProvider {
@@ -26,7 +24,7 @@ export function buildDeepInfraImageGenerationProvider(options?: {
     options?.imageGenModels && options.imageGenModels.length > 0
       ? options.imageGenModels.map((model) => model.id)
       : [...DEEPINFRA_IMAGE_FALLBACK_MODELS];
-  const defaultModel = ids[0] ?? DEEPINFRA_IMAGE_FALLBACK_MODELS[0];
+  const defaultModel = ids[0]!;
   return createOpenAiCompatibleImageGenerationProvider({
     id: "deepinfra",
     label: "DeepInfra",

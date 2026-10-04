@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { clearWarmBootState } from "../../app/bootstrap-warm-boot.ts";
+import * as cacheDatabase from "./session-roster-cache-database.ts";
 import {
   clearCachedBootState,
   flushSessionRosters,
@@ -86,9 +89,75 @@ afterEach(async () => {
 });
 
 describe("persistent session roster", () => {
+  it.each(["persisted", "pending", "lazy", "in-flight"])(
+    "retires only a legacy roster with %s work",
+    async (stage) => {
+      const scope = "ws://legacy-gateway.test";
+      const peerScope = 'account:["ws://legacy-gateway.test","peer-account"]';
+      const unrelatedScope = "ws://other-gateway.test";
+      sessionRosterCache.write(record(scope));
+      sessionRosterCache.write(record(peerScope));
+      sessionRosterCache.write(record(unrelatedScope));
+      await vi.dynamicImportSettled();
+      await flushSessionRosters();
+      const replacement = [{ key: "agent:main:replacement", kind: "direct" as const }];
+      if (stage !== "persisted") {
+        sessionRosterCache.write(record(scope, replacement));
+        sessionRosterCache.write(record(peerScope, replacement));
+        if (stage !== "lazy") {
+          await vi.dynamicImportSettled();
+        }
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      let writing: Promise<void> | undefined;
+      if (stage === "in-flight") {
+        const open = cacheDatabase.openSessionRosterDatabase;
+        vi.spyOn(cacheDatabase, "openSessionRosterDatabase").mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return open();
+        });
+        writing = flushSessionRosters();
+        await entered.promise;
+      }
+      const readingPeer = sessionRosterCache.read(peerScope, expected);
+      const clearing = clearWarmBootState(scope, {
+        authMethod: "token",
+        credential: "legacy-fingerprint",
+      });
+      release.resolve();
+      await Promise.all([writing, clearing]);
+      await vi.dynamicImportSettled();
+      await flushSessionRosters();
+      expect(await sessionRosterCache.read(scope, expected)).toBeNull();
+      expect(await readingPeer).not.toBeNull();
+      expect((await sessionRosterCache.read(peerScope, expected))?.result.sessions).toEqual(
+        stage === "persisted" ? record().result.sessions : replacement,
+      );
+      expect((await sessionRosterCache.read(unrelatedScope, expected))?.result.sessions).toEqual(
+        record().result.sessions,
+      );
+    },
+  );
+
+  it("keeps an unrelated owner's scheduled publication after exact retirement", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    persist(record("retired"));
+    persist(record("surviving"));
+    await clearCachedBootState("retired");
+    expect(await sessionRosterCache.read("surviving", expected)).toBeNull();
+    await vi.advanceTimersByTimeAsync(500);
+    // Observe the normal scheduled write; an explicit flush would conceal a lost timer.
+    await vi.waitFor(async () => {
+      expect(await sessionRosterCache.read("surviving", expected)).not.toBeNull();
+    });
+    expect(await sessionRosterCache.read("retired", expected)).toBeNull();
+  });
+
   it("round-trips durable sidebar fields while excluding live run state and avatars", async () => {
     const writes = vi.spyOn(IDBObjectStore.prototype, "put");
-    const row: GatewaySessionRow = {
+    const durable: GatewaySessionRow = {
       key: "agent:main:one",
       kind: "direct",
       sessionId: "session-one",
@@ -101,11 +170,15 @@ describe("persistent session roster", () => {
       category: "Work",
       boardFace: "chat",
       thinkingLevel: "high",
+      model: "primary",
+      modelProvider: "example",
+      owner: { actor: { type: "human", id: "profile-one" } },
+    };
+    const row: GatewaySessionRow = {
+      ...durable,
       owner: { actor: { type: "human", id: "profile-one", avatarUrl: "/avatar" } },
       hasActiveRun: true,
       activeRunIds: ["run"],
-      model: "primary",
-      modelProvider: "example",
       activeModel: "fallback",
       activeModelProvider: "example",
       status: "running",
@@ -124,34 +197,19 @@ describe("persistent session roster", () => {
       channelAvatarUrl: "/channel-avatar",
     };
     const source = record("gateway-one", [row]);
+    source.query = { agentId: "main", source: "sidebar", rowMode: "compact" };
     persist(source);
     await flushSessionRosters();
     expect(writes).toHaveBeenCalledOnce();
     expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel|snapshotAt/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
+    expect(saved?.query).not.toHaveProperty("source");
+    expect(saved?.query).not.toHaveProperty("rowMode");
     expect(saved).toMatchObject({
       groups: ["Work"],
       groupSettings: source.groupSettings,
       sectionOrder: source.sectionOrder,
-      result: {
-        sessions: [
-          {
-            key: row.key,
-            derivedTitle: row.derivedTitle,
-            lastMessagePreview: row.lastMessagePreview,
-            updatedAt: 42,
-            unread: true,
-            archived: false,
-            pinned: true,
-            category: "Work",
-            boardFace: "chat",
-            thinkingLevel: "high",
-            model: "primary",
-            modelProvider: "example",
-            owner: { actor: { type: "human", id: "profile-one" } },
-          },
-        ],
-      },
+      result: { sessions: [durable] },
     });
     expect(JSON.stringify(saved)).not.toMatch(
       /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|snapshotAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
@@ -159,8 +217,11 @@ describe("persistent session roster", () => {
     expect(row.hasActiveRun).toBe(true);
     expect(row.snapshotAt).toBe(50);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
-    await putRaw(source);
-    const oldWriter = await sessionRosterCache.read(source.scope, expected);
+    await putRaw({ ...source, query: {} });
+    const oldWriter = await sessionRosterCache.read(source.scope, {
+      ...expected,
+      query: source.query,
+    });
     expect(oldWriter?.result.sessions[0]).toMatchObject({
       model: "primary",
       modelProvider: "example",
@@ -191,21 +252,20 @@ describe("persistent session roster", () => {
   });
 
   it.each([
-    ["profile", { ...expected, profileId: "profile-two" }],
-    ["agent", { ...expected, agentId: "other" }],
-    ["query", { ...expected, query: { search: "different" } }],
-  ])("rejects a different %s without losing the valid record", async (_name, mismatch) => {
+    ["profile", { ...expected, profileId: "profile-two" }, false],
+    ["agent", { ...expected, agentId: "other" }, false],
+    ["query", { ...expected, query: { search: "different" } }, false],
+    ["saved query agent", expected, true],
+  ])("rejects a different %s", async (_name, mismatch, changeStoredQuery) => {
     persist(record());
     await flushSessionRosters();
+    if (changeStoredQuery) {
+      await putRaw({ ...record(), query: { agentId: "other" } });
+    }
     expect(await sessionRosterCache.read("gateway-one", mismatch)).toBeNull();
-    expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
-  });
-
-  it("rejects a roster whose saved query belongs to another agent", async () => {
-    persist(record());
-    await flushSessionRosters();
-    await putRaw({ ...record(), query: { agentId: "other" } });
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
+    if (!changeStoredQuery) {
+      expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
+    }
   });
 
   it.each(["rows", "bytes"] as const)(
@@ -246,11 +306,15 @@ describe("persistent session roster", () => {
     }
   });
 
-  it("resets malformed stored shapes instead of publishing partial state", async () => {
+  it.each(["malformed", "expired"])("resets a %s stored roster and recovers", async (invalid) => {
     persist(record());
     persist(record("other"));
     await flushSessionRosters();
-    await putRaw({ ...record(), result: { sessions: [{ key: 7 }] } });
+    if (invalid === "malformed") {
+      await putRaw({ ...record(), result: { sessions: [{ key: 7 }] } });
+    } else {
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + SESSION_ROSTER_MAX_AGE_MS + 1);
+    }
     expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
     expect(await sessionRosterCache.read("other", expected)).toBeNull();
     persist(record());
@@ -316,27 +380,6 @@ describe("persistent session roster", () => {
     },
   );
 
-  it("ignores a record that ages out after it was written", async () => {
-    persist(record());
-    await flushSessionRosters();
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + SESSION_ROSTER_MAX_AGE_MS + 1);
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
-    vi.restoreAllMocks();
-  });
-
-  it("debounces writes and flushes them when the page is hidden", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    persist(record());
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
-    await vi.advanceTimersByTimeAsync(500);
-    await flushSessionRosters();
-    expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
-    persist(record("pagehide"));
-    window.dispatchEvent(new Event("pagehide"));
-    await flushSessionRosters();
-    expect(await sessionRosterCache.read("pagehide", expected)).not.toBeNull();
-  });
-
   it.each([
     ["before", false],
     ["after", true],
@@ -359,15 +402,41 @@ describe("persistent session roster", () => {
     },
   );
 
-  it("clears both boot stores and fences writes still waiting for the runtime import", async () => {
+  it("joins cache clearing before admitting a successor write", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const reset = cacheDatabase.resetSessionRosterDatabase;
+    vi.spyOn(cacheDatabase, "resetSessionRosterDatabase").mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      await reset();
+    });
+    const opened = vi.spyOn(cacheDatabase, "openSessionRosterDatabase");
+    const clearing = clearCachedBootState();
+    await entered.promise;
+    persist(record("successor"));
+    const writing = flushSessionRosters();
+    try {
+      await vi.dynamicImportSettled();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await clearing;
+      await writing;
+    }
+    expect(await sessionRosterCache.read("successor", expected)).not.toBeNull();
+  });
+
+  it("clears roster writes awaiting the runtime import without retiring boot admission", async () => {
     localStorage.setItem(`${BOOT_RECORD_PREFIX}gateway-one`, "cached");
     persist(record());
     await flushSessionRosters();
     sessionRosterCache.write(record("pending"));
     await clearCachedBootState();
     await flushSessionRosters();
-    expect(localStorage.getItem(`${BOOT_RECORD_PREFIX}gateway-one`)).toBeNull();
+    expect(localStorage.getItem(`${BOOT_RECORD_PREFIX}gateway-one`)).toBe("cached");
     expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
     expect(await sessionRosterCache.read("pending", expected)).toBeNull();
+    localStorage.removeItem(`${BOOT_RECORD_PREFIX}gateway-one`);
   });
 });

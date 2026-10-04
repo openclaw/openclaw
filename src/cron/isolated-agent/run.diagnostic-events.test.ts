@@ -5,12 +5,21 @@ import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
-const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
+const hasAnyAuthProfileStoreSourceAsyncMock = vi.hoisted(() => vi.fn(() => false));
+// mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
+  hasAnyAuthProfileStoreSourceAsync: hasAnyAuthProfileStoreSourceAsyncMock,
 }));
 
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -27,6 +36,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function makeParams(cfg: OpenClawConfig = {}) {
   return {
+    deliveryAttemptFence: null,
     cfg,
     deps: {} as never,
     job: {
@@ -56,11 +66,13 @@ function fallbackResult(agentMeta: Record<string, unknown>, text = "test output"
 async function runWithEvents(
   params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
   subscribe: typeof onDiagnosticEvent = onInternalDiagnosticEvent,
+  events: DiagnosticEventPayload[] = [],
 ) {
-  const events: DiagnosticEventPayload[] = [];
   const unsubscribe = subscribe((event) => events.push(event));
   try {
-    return { result: await runCronIsolatedAgentTurn(params), events };
+    const result = await runCronIsolatedAgentTurn(params);
+    await waitForDiagnosticEventsDrained();
+    return { result, events };
   } finally {
     unsubscribe();
   }
@@ -71,6 +83,82 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   beforeEach(() => {
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
+  });
+
+  it.each(["completed", "error"] as const)(
+    "anchors cron execution to a message lifecycle trace on %s",
+    async (outcome) => {
+      const observedEvents: DiagnosticEventPayload[] = [];
+      let dispatchStartedBeforeExecution = false;
+      let executionTrace: DiagnosticTraceContext | undefined;
+      let harnessTrace: DiagnosticTraceContext | undefined;
+      runWithModelFallbackMock.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        dispatchStartedBeforeExecution = observedEvents.some(
+          (event) => event.type === "message.dispatch.started",
+        );
+        executionTrace = getActiveDiagnosticTraceContext();
+        harnessTrace = createDiagnosticTraceContextFromActiveScope();
+        if (outcome === "error") {
+          throw new Error("cron model failed");
+        }
+        const fallback = fallbackResult({ usage: { input: 10, output: 20 } });
+        return {
+          ...fallback,
+          result: {
+            result: { ...fallback.result.result, diagnosticTrace: harnessTrace },
+          },
+        };
+      });
+
+      const { result, events } = await runWithEvents(
+        makeParams(),
+        onInternalDiagnosticEvent,
+        observedEvents,
+      );
+      expect(result.status).toBe(outcome === "error" ? "error" : "ok");
+      const starts = events.filter((event) => event.type === "message.dispatch.started");
+      const completions = events.filter((event) => event.type === "message.processed");
+      expect(starts).toHaveLength(1);
+      expect(completions).toHaveLength(1);
+      expect(dispatchStartedBeforeExecution).toBe(true);
+      const messageTrace = starts[0]?.trace;
+      expect(messageTrace?.spanId).toBeTruthy();
+      expect(executionTrace).toEqual(messageTrace);
+      expect(harnessTrace).toMatchObject({
+        traceId: messageTrace?.traceId,
+        parentSpanId: messageTrace?.spanId,
+      });
+      expect(completions[0]).toMatchObject({ outcome, trace: messageTrace });
+      expect(starts[0]).toMatchObject({ channel: "cron", source: "cron-isolated" });
+      expect(events.filter((event) => event.type === "message.dispatch.completed")).toMatchObject([
+        { outcome, trace: messageTrace },
+      ]);
+      if (outcome === "completed") {
+        const usage = events.find((event) => event.type === "model.usage");
+        expect(usage?.trace).toMatchObject({
+          traceId: messageTrace?.traceId,
+          parentSpanId: harnessTrace?.spanId,
+        });
+      } else {
+        expect(result.error).toBe("cron model failed");
+      }
+      expect(getActiveDiagnosticTraceContext()).toBeUndefined();
+    },
+  );
+
+  it("creates a child message scope and restores the ambient parent after completion", async () => {
+    const parent = createDiagnosticTraceContext();
+    const { result, events } = await runWithDiagnosticTraceContext(parent, async () => {
+      const run = await runWithEvents();
+      expect(getActiveDiagnosticTraceContext()).toEqual(parent);
+      return run;
+    });
+    const messageTrace = events.find((event) => event.type === "message.dispatch.started")?.trace;
+    expect(result.status).toBe("ok");
+    expect(messageTrace).toMatchObject({ traceId: parent.traceId, parentSpanId: parent.spanId });
+    expect(messageTrace?.spanId).not.toBe(parent.spanId);
+    expect(getActiveDiagnosticTraceContext()).toBeUndefined();
   });
 
   it("emits final lifecycle events under the adopted run session id", async () => {
@@ -174,7 +262,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   it("skips auth-profile override resolution when no sources exist", async () => {
     const result = await runCronIsolatedAgentTurn(makeParams());
     expect(result.status).toBe("ok");
-    expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
+    expect(hasAnyAuthProfileStoreSourceAsyncMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { NostrProfile as NostrProfileType } from "../../api/types.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 
 export interface NostrProfileFormState {
@@ -50,11 +50,10 @@ export function renderNostrProfileForm(params: {
     opts: {
       type?: "text" | "url" | "textarea";
       placeholder?: string;
-      maxLength?: number;
       help?: string;
     } = {},
   ) => {
-    const { type = "text", placeholder, maxLength, help } = opts;
+    const { type = "text", placeholder, help } = opts;
     const value = state.values[field] ?? "";
     const error = state.fieldErrors[field];
 
@@ -70,7 +69,7 @@ export function renderNostrProfileForm(params: {
               class="settings-input"
               .value=${value}
               placeholder=${placeholder ?? ""}
-              maxlength=${maxLength ?? 2000}
+              maxlength="2000"
               rows="3"
               aria-describedby=${descriptionIds || nothing}
               aria-invalid=${error ? "true" : nothing}
@@ -88,7 +87,7 @@ export function renderNostrProfileForm(params: {
               type=${type}
               .value=${value}
               placeholder=${placeholder ?? ""}
-              maxlength=${maxLength ?? 256}
+              maxlength="256"
               aria-describedby=${descriptionIds || nothing}
               aria-invalid=${error ? "true" : nothing}
               @input=${(e: InputEvent) => {
@@ -123,50 +122,36 @@ export function renderNostrProfileForm(params: {
       return nothing;
     }
 
-    return html`
-      <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("channels.nostr.profilePicturePreview")}</span>
-        </div>
-        <div class="settings-row__control">
-          <img
-            src=${picture}
-            alt=${t("channels.nostr.profilePicturePreview")}
-            style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
-            @error=${(e: Event) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = "none";
-            }}
-            @load=${(e: Event) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = "block";
-            }}
-          />
-        </div>
-      </div>
-    `;
+    return renderSettingsRow({
+      title: t("channels.nostr.profilePicturePreview"),
+      control: html`<img
+        src=${picture}
+        alt=${t("channels.nostr.profilePicturePreview")}
+        style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
+        @error=${(e: Event) => {
+          const img = e.target as HTMLImageElement;
+          img.style.display = "none";
+        }}
+        @load=${(e: Event) => {
+          const img = e.target as HTMLImageElement;
+          img.style.display = "block";
+        }}
+      />`,
+    });
   };
 
   return html`
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title">${t("channels.nostr.editProfile")}</span>
-        <span class="settings-row__desc">${t("channels.nostr.account")}: ${accountId}</span>
-      </div>
-    </div>
-
+    ${renderSettingsRow({
+      title: t("channels.nostr.editProfile"),
+      description: html`${t("channels.nostr.account")}: ${accountId}`,
+    })}
     ${
       state.error
-        ? html`
-            <div class="settings-row" role="alert">
-              <div class="settings-row__text">
-                <span class="settings-row__title"
-                  >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
-                >
-                <span class="settings-row__desc">${state.error}</span>
-              </div>
-            </div>
-          `
+        ? renderSettingsRow({
+            role: "alert",
+            title: renderSettingsStatus({ kind: "danger", label: t("channels.lastError") }),
+            description: state.error,
+          })
         : nothing
     }
     ${
@@ -183,18 +168,15 @@ export function renderNostrProfileForm(params: {
     ${renderPicturePreview()}
     ${renderField("name", t("channels.nostr.username"), {
       placeholder: t("channels.nostr.placeholders.username"),
-      maxLength: 256,
       help: t("channels.nostr.usernameHelp"),
     })}
     ${renderField("displayName", t("channels.nostr.displayName"), {
       placeholder: t("channels.nostr.placeholders.displayName"),
-      maxLength: 256,
       help: t("channels.nostr.displayNameHelp"),
     })}
     ${renderField("about", t("channels.nostr.bio"), {
       type: "textarea",
       placeholder: t("channels.nostr.bioPlaceholder"),
-      maxLength: 2000,
       help: t("channels.nostr.bioHelp"),
     })}
     ${renderField("picture", t("channels.nostr.avatarUrl"), {
@@ -205,12 +187,7 @@ export function renderNostrProfileForm(params: {
     ${
       state.showAdvanced
         ? html`
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__title">${t("channels.nostr.advanced")}</span>
-              </div>
-            </div>
-
+            ${renderSettingsRow({ title: t("channels.nostr.advanced") })}
             ${renderField("banner", t("channels.nostr.bannerUrl"), {
               type: "url",
               placeholder: t("channels.nostr.placeholders.bannerUrl"),

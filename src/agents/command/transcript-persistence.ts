@@ -24,16 +24,12 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import type { ContextUsage } from "../usage.js";
+import type { NormalizedUsage } from "../usage.js";
 
-type TranscriptUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-  contextUsage?: ContextUsage;
-};
+type TranscriptUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
+>;
 
 type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
@@ -148,23 +144,25 @@ async function persistTextTurnTranscript(
       // Early persistence already owns this row, even when the input has no message key.
       eventId: params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
       idempotencyLookup: "scan" as const,
-      prepareMessageAfterIdempotencyCheck: (message: unknown) => {
-        const prepared = preparePersistedUserTurnMessageForTranscriptWrite(
-          // SAFETY: This per-entry callback receives the typed user row attached above.
-          message as PersistedUserTurnMessage,
-          {
-            agentId: params.sessionAgentId,
-            sessionKey: params.sessionKey,
-            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-          },
-        );
-        return prepared
-          ? projectAgentHarnessTranscriptMessageForDisplay({
-              hidden: false,
-              inputProvenance,
-              message: prepared,
-            })
-          : undefined;
+      workerPreparation: {
+        prepareMessageAfterIdempotencyCheck: (message: unknown) => {
+          const prepared = preparePersistedUserTurnMessageForTranscriptWrite(
+            // SAFETY: This per-entry callback receives the typed user row attached above.
+            message as PersistedUserTurnMessage,
+            {
+              agentId: params.sessionAgentId,
+              sessionKey: params.sessionKey,
+              beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+            },
+          );
+          return prepared
+            ? projectAgentHarnessTranscriptMessageForDisplay({
+                hidden: false,
+                inputProvenance,
+                message: prepared,
+              })
+            : undefined;
+        },
       },
     });
   }
@@ -186,16 +184,18 @@ async function persistTextTurnTranscript(
         stopReason: params.assistant.stopReason,
         timestamp: Date.now(),
       },
-      prepareMessageAfterIdempotencyCheck: (message: unknown) => {
-        // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
-        const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
-        return projectAgentHarnessTranscriptMessageForDisplay({
-          hidden: false,
-          inputProvenance,
-          message: prepareAssistantTranscriptMessage
-            ? prepareAssistantTranscriptMessage(assistant, replyText)
-            : assistant,
-        });
+      workerPreparation: {
+        prepareMessageAfterIdempotencyCheck: (message: unknown) => {
+          // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
+          const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
+          return projectAgentHarnessTranscriptMessageForDisplay({
+            hidden: false,
+            inputProvenance,
+            message: prepareAssistantTranscriptMessage
+              ? prepareAssistantTranscriptMessage(assistant, replyText)
+              : assistant,
+          });
+        },
       },
     });
   }

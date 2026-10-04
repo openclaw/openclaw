@@ -5,14 +5,12 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DiscordApiError, requestDiscord } from "@openclaw/discord/api.js";
 import type { QaChannelE2eDriver, QaChannelE2eMessage } from "../shared/channel-e2e.types.js";
-import {
-  inspectDiscordE2eReadiness,
-  type DiscordE2eChannel,
-  type DiscordE2eRuntimeEnv,
-} from "./channel-e2e-doctor.js";
+import { inspectDiscordE2eReadiness, type DiscordE2eChannel } from "./channel-e2e-doctor.js";
 import { createDiscordE2eRecorder, type DiscordE2eNativeMessage } from "./channel-e2e-recorder.js";
+import type { DiscordQaRuntimeEnv } from "./discord-live.runtime.js";
 
 type OwnedMessage = { id: string; channelId: string; actor: "driver" | "sut" };
+type ReplyWait = { channelId: string; trigger: string; textIncludes?: string };
 export type DiscordChannelE2eSession = {
   driver: QaChannelE2eDriver;
   assertHealthy(): void;
@@ -21,7 +19,7 @@ export type DiscordChannelE2eSession = {
 };
 
 export function createDiscordChannelE2eSession(params: {
-  runtimeEnv: DiscordE2eRuntimeEnv;
+  runtimeEnv: DiscordQaRuntimeEnv;
   driverId: string;
   sutId: string;
   outputDir: string;
@@ -43,6 +41,7 @@ export function createDiscordChannelE2eSession(params: {
       { mode: 0o600 },
     );
   const owned = new Map<string, OwnedMessage>();
+  const replyWaits: ReplyWait[] = [];
   const threads = new Set<string>();
   const reactions = new Map<string, { messageId: string; channelId: string; emoji: string }>();
   const unresolved = new Set<string>();
@@ -105,6 +104,25 @@ export function createDiscordChannelE2eSession(params: {
         url: attachment.url,
       })),
     };
+  }
+  function matchesReply(message: DiscordE2eNativeMessage & { deleted?: boolean }, wait: ReplyWait) {
+    if (
+      message.deleted ||
+      message.channel_id !== wait.channelId ||
+      message.author?.id !== params.sutId ||
+      BigInt(message.id) <= BigInt(wait.trigger)
+    ) {
+      return false;
+    }
+    const replyTo = message.message_reference?.message_id;
+    if (replyTo && replyTo !== wait.trigger) {
+      return false;
+    }
+    // A bare newer SUT message is insufficient: require a native reference or a caller's unique marker.
+    return (
+      Boolean(replyTo || wait.textIncludes) &&
+      (!wait.textIncludes || (message.content ?? "").includes(wait.textIncludes))
+    );
   }
   function remember(message: DiscordE2eNativeMessage, channelId: string) {
     if (
@@ -378,27 +396,14 @@ export function createDiscordChannelE2eSession(params: {
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new Error("Discord reply timeout must be positive");
       }
+      const wait = { channelId, trigger, textIncludes: input.textIncludes };
+      // Keep validated intent for cleanup if observation fails before the reply is accepted.
+      replyWaits.push(wait);
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         assertActive();
         for (const message of recorder.messages()) {
-          if (
-            message.deleted ||
-            message.channel_id !== channelId ||
-            message.author?.id !== params.sutId ||
-            BigInt(message.id) <= BigInt(trigger)
-          ) {
-            continue;
-          }
-          const replyTo = message.message_reference?.message_id;
-          if (replyTo && replyTo !== trigger) {
-            continue;
-          }
-          // A bare newer SUT message is insufficient: require a native reference or a caller's unique marker.
-          if (!replyTo && !input.textIncludes) {
-            continue;
-          }
-          if (input.textIncludes && !(message.content ?? "").includes(input.textIncludes)) {
+          if (!matchesReply(message, wait)) {
             continue;
           }
           owned.set(message.id, { id: message.id, channelId, actor: "sut" });
@@ -429,14 +434,17 @@ export function createDiscordChannelE2eSession(params: {
       for (const message of recorder.messages()) {
         const trigger = message.message_reference?.message_id;
         const source = trigger ? owned.get(trigger) : undefined;
-        if (
-          !message.deleted &&
-          message.author?.id === params.sutId &&
-          source?.actor === "driver" &&
-          source.channelId === message.channel_id &&
-          BigInt(message.id) > BigInt(source.id)
-        ) {
+        const referenceWait =
+          source?.actor === "driver"
+            ? { channelId: source.channelId, trigger: source.id }
+            : undefined;
+        const wait =
+          referenceWait && matchesReply(message, referenceWait)
+            ? referenceWait
+            : replyWaits.find((candidate) => matchesReply(message, candidate));
+        if (wait) {
           owned.set(message.id, { id: message.id, channelId: message.channel_id, actor: "sut" });
+          recorder.correlateReply(message.id, wait.trigger);
         }
       }
       const remove = async (route: string, method: string, body?: unknown, token?: string) => {

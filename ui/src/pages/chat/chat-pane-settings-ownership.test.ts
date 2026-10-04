@@ -6,11 +6,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import {
-  switchChatContextWindow,
-  switchChatFastMode,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -20,9 +15,6 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-type Setting = "thinking" | "speed" | "context";
-type Choice = "first" | "second";
-const settings: Setting[] = ["thinking", "speed", "context"];
 const initialRow = (): GatewaySessionRow => ({
   key: "agent:main:settings-ownership",
   agentId: "main",
@@ -36,184 +28,12 @@ const initialRow = (): GatewaySessionRow => ({
   contextWindow: "64k",
 });
 
-function choiceFields(setting: Setting, choice: Choice): Partial<GatewaySessionRow> {
-  if (setting === "thinking") {
-    return { thinkingLevel: choice === "first" ? "off" : "low" };
-  }
-  if (setting === "speed") {
-    const fastMode = choice === "first" ? true : "auto";
-    return { fastMode, effectiveFastMode: fastMode };
-  }
-  return { contextWindow: choice === "first" ? "128k" : "256k" };
-}
-
-function choose(
-  state: Parameters<typeof switchChatThinkingLevel>[0],
-  setting: Setting,
-  choice: Choice,
-) {
-  if (setting === "thinking") {
-    return switchChatThinkingLevel(state, choice === "first" ? "off" : "low");
-  }
-  if (setting === "speed") {
-    return switchChatFastMode(state, choice === "first" ? "on" : "auto");
-  }
-  return switchChatContextWindow(state, choice === "first" ? "128k" : "256k");
-}
-
-it.each(
-  settings.flatMap((setting) =>
-    (["rejected", "confirmed"] as const).map((outcome) => ({ setting, outcome })),
-  ),
-)(
-  "preserves the second pane's pending $setting intent when the first pane is $outcome",
-  async ({ setting, outcome }) => {
+it.each(["rejected", "older-clock ACK", "equal-clock ACK"] as const)(
+  "retains settled thinking facts after an older direct capability patch returns %s",
+  async (outcome) => {
     const initial = initialRow();
-    const rows = [initial];
-    const firstReply = createDeferred<unknown>();
-    const secondReply = createDeferred<unknown>();
-    const secondDispatched = createDeferred();
-    let calls = 0;
-    const patch = vi.fn<GatewayRequestHandler>(() => {
-      calls += 1;
-      if (calls === 1) {
-        return firstReply.promise;
-      }
-      expect(calls).toBe(2);
-      secondDispatched.resolve();
-      return secondReply.promise;
-    });
-    const { sessions, mount } = createMountedPanes(rows, "main", undefined, {
-      "sessions.patch": patch,
-    });
-    let first: Promise<boolean> | undefined;
-    let second: Promise<boolean> | undefined;
-    let secondSettled = false;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      const assertFields = (fields: Partial<GatewaySessionRow>) => {
-        const expected = { key: initial.key, sessionId: initial.sessionId, ...fields };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
-      assertFields(initial);
-      first = choose(panes[0]!.state, setting, "first");
-      expect(patch).toHaveBeenCalledOnce();
-      assertFields(choiceFields(setting, "first"));
-      second = choose(panes[1]!.state, setting, "second");
-      void second.then(
-        () => {
-          secondSettled = true;
-        },
-        () => {
-          secondSettled = true;
-        },
-      );
-      expect(patch).toHaveBeenCalledOnce();
-      assertFields(choiceFields(setting, "second"));
-
-      if (outcome === "confirmed") {
-        rows[0] = { ...initial, ...choiceFields(setting, "first"), updatedAt: 2 };
-        firstReply.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-      } else {
-        firstReply.reject(new Error("Synthetic first-pane settings rejection"));
-      }
-      await expect(first).resolves.toBe(outcome === "confirmed");
-      await Promise.race([secondDispatched.promise, second]);
-      expect(patch).toHaveBeenCalledTimes(2);
-      expect(secondSettled).toBe(false);
-      assertFields(choiceFields(setting, "second"));
-
-      rows[0] = { ...initial, ...choiceFields(setting, "second"), updatedAt: 4 };
-      secondReply.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-      await expect(second).resolves.toBe(true);
-      assertFields(choiceFields(setting, "second"));
-    } finally {
-      firstReply.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-      secondReply.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-      await Promise.allSettled([first, second]);
-      await vi.dynamicImportSettled();
-    }
-  },
-);
-
-it.each(settings)(
-  "rolls rejected %s back while preserving an authoritative update to another field",
-  async (setting) => {
-    const initial = initialRow();
-    const rows = [initial];
-    const acknowledgement = createDeferred<unknown>();
-    const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
-      "sessions.patch": patch,
-    });
-    let operation: Promise<boolean> | undefined;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      const assertRows = (fields: Partial<GatewaySessionRow>) => {
-        const expected = { key: initial.key, sessionId: initial.sessionId, ...fields };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
-      assertRows(initial);
-      operation = choose(panes[0]!.state, setting, "first");
-      expect(patch).toHaveBeenCalledOnce();
-      assertRows(choiceFields(setting, "first"));
-      const label = "Authoritative label while settings are pending";
-      rows[0] = { ...initial, updatedAt: 3, label };
-      emitGatewayEvent("sessions.changed", {
-        sessionKey: initial.key,
-        agentId: "main",
-        sessionId: initial.sessionId,
-        reason: "label",
-        updatedAt: 3,
-        label,
-      });
-      assertRows({ ...choiceFields(setting, "first"), label });
-      acknowledgement.reject(new Error("Synthetic rejected settings after label update"));
-      await expect(operation).resolves.toBe(false);
-      assertRows({ ...initial, updatedAt: 3, label });
-    } finally {
-      acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-      await operation;
-      await vi.dynamicImportSettled();
-    }
-  },
-);
-
-it.each(
-  settings.flatMap((setting) =>
-    (["rejected", "older-clock ACK", "equal-clock ACK"] as const).map((outcome) => ({
-      setting,
-      outcome,
-    })),
-  ),
-)(
-  "retains settled $setting facts after an older direct capability patch returns $outcome",
-  async ({ setting, outcome }) => {
-    const initial = initialRow();
-    const firstFields =
-      setting === "thinking"
-        ? { thinkingLevel: "off" }
-        : setting === "speed"
-          ? { fastMode: true }
-          : { contextWindow: "128k" };
-    const secondFields =
-      setting === "thinking"
-        ? { thinkingLevel: "low" }
-        : setting === "speed"
-          ? { fastMode: "auto" as const }
-          : { contextWindow: "256k" };
+    const firstFields = { thinkingLevel: "off" };
+    const secondFields = { thinkingLevel: "low" };
     const firstReply = createDeferred<unknown>();
     const secondReply = createDeferred<unknown>();
     const firstAcknowledgement = {

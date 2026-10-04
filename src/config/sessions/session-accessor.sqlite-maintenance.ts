@@ -27,10 +27,10 @@ import {
   emptySessionEntryMaintenancePlan,
   readSessionTranscriptJsonlBytesInDatabase,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createSessionMaintenanceFinalizationOperation,
   createSessionMaintenanceStatisticsOperation,
-  runSqliteSessionReclamation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
 import {
@@ -351,15 +351,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
   const emptyResult = () => ({ archivedTranscripts: [], ...committedCounts });
   if (!isCurrent()) {
     return emptyResult();
-  }
-  const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
-  if (archivedWorktrees.length) {
-    const { cleanUpAutomaticallyArchivedWorktrees } =
-      await import("../../sessions/session-worktree-lifecycle.js");
-    if (!isCurrent()) {
-      return emptyResult();
-    }
-    await cleanUpAutomaticallyArchivedWorktrees(scope, archivedWorktrees);
   }
   const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
   const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);

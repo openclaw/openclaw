@@ -8,8 +8,14 @@ import {
   normalizeOpenAIStrictCompatSchema,
   stripUnsupportedSchemaKeywords,
 } from "@openclaw/ai/internal/tool-schema";
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
 import type { TSchema } from "typebox";
+import {
+  mergeLiteralSchemas,
+  readLiteralSchemaValues,
+  schemaAnnotationsOnly,
+} from "../shared/json-schema-literals.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -47,12 +53,8 @@ export function findUnsupportedSchemaKeywords(
   }
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+  if (isSchemaRecord(record.properties)) {
+    for (const [key, value] of Object.entries(record.properties)) {
       violations.push(
         ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
@@ -281,21 +283,14 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
       return literals === undefined || literals.includes(null);
     });
 
-  // Preserve string-const unions as a flat string enum so DeepSeek tool
-  // callers still see every allowed literal. Without this, a Typebox
-  // `Type.Union([Type.Literal("a"), Type.Literal("b"), ...])` collapses to
-  // only the first const and the model can never pick any other value.
+  // Keep every string literal selectable when flattening the unsupported union.
   if (nonNullVariants.length > 1 && nonNullVariants.every(isStringConstVariant)) {
-    const enumValues = nonNullVariants.map((entry) => entry.const);
-    const merged: Record<string, unknown> = {
+    return {
       ...normalized,
       type: "string",
-      enum: enumValues,
+      enum: nonNullVariants.map((entry) => entry.const),
+      ...(hasNullVariant ? { nullable: true } : {}),
     };
-    if (hasNullVariant) {
-      merged.nullable = true;
-    }
-    return merged;
   }
 
   // Selecting the first object would make valid later branches fail local validation.
@@ -343,36 +338,8 @@ function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown>
   );
 }
 
-/**
- * Keys that only document a schema. Everything else is a constraint, so this is
- * what survives when a property has to stay unconstrained.
- */
-const SCHEMA_ANNOTATION_KEYS = new Set([
-  "$comment",
-  "default",
-  "deprecated",
-  "description",
-  "example",
-  "examples",
-  "readOnly",
-  "title",
-  "writeOnly",
-]);
-
-/**
- * Flattens a union of object schemas into one object schema, keeping every
- * branch expressible: the union of the variants' properties, and the
- * intersection of their `required` lists.
- *
- * A property that discriminates the variants differs only by its literals
- * (`type: { enum: ["page_id"] }` in one variant, `["database_id"]` in another),
- * so its values are pooled into a single enum. Without that pooling the
- * flattened schema would still pin the discriminator to the first variant and
- * the tool would stay unusable for the others.
- *
- * Missing property maps retain the previous single-variant selection.
- * Conflicting property constraints retain their first definition.
- */
+// Union properties and intersect required keys so every branch remains expressible.
+// Pool discriminating literals; retain the first conflicting non-literal constraint.
 function flattenObjectVariants(
   variants: Record<string, unknown>[],
 ): Record<string, unknown> | undefined {
@@ -381,17 +348,11 @@ function flattenObjectVariants(
   let required: string[] | undefined;
   for (const variant of variants) {
     const variantProperties = variant.properties;
-    if (
-      !variantProperties ||
-      typeof variantProperties !== "object" ||
-      Array.isArray(variantProperties)
-    ) {
+    if (!isSchemaRecord(variantProperties)) {
       return undefined;
     }
     for (const [key, value] of Object.entries(variantProperties)) {
-      // Own-property membership, not a prototype-chain read: a key named
-      // `constructor` or `toString` would otherwise look already present and
-      // its real definition would be dropped.
+      // Schema properties may be named `constructor` or `toString`.
       if (!Object.hasOwn(properties, key)) {
         properties[key] = value;
         continue;
@@ -400,7 +361,10 @@ function flattenObjectVariants(
       if (isDeepStrictEqual(existing, value)) {
         continue;
       }
-      const pooled = poolLiteralEnum(existing, value);
+      const pooled =
+        isSchemaRecord(existing) && isSchemaRecord(value)
+          ? mergeLiteralSchemas(existing, value)
+          : undefined;
       if (pooled) {
         properties[key] = pooled;
       }
@@ -415,10 +379,7 @@ function flattenObjectVariants(
         ? variantRequired
         : required.filter((key) => variantRequired.includes(key));
   }
-  // A variant that does not declare a key can still accept it, either by
-  // allowing additional properties or through a `patternProperties` pattern.
-  // Constraining such a key would reject calls the variant accepted, so keep
-  // what documents it and drop what constrains it.
+  // Undeclared keys accepted by another branch must retain annotations without constraints.
   for (const key of Object.keys(properties)) {
     if (variants.some((variant) => acceptsUndeclaredKey(variant, key))) {
       properties[key] = schemaAnnotationsOnly(properties[key]);
@@ -431,14 +392,7 @@ function flattenObjectVariants(
   return flattened;
 }
 
-/**
- * Whether a variant accepts a key it does not declare.
- *
- * `additionalProperties` only constrains keys that no `properties` entry and no
- * `patternProperties` pattern covers, so a pattern match widens acceptance even
- * when `additionalProperties` is false. Ignoring that would copy another
- * variant's constraint onto a key this variant accepted.
- */
+// Pattern properties can accept an undeclared key even with additionalProperties: false.
 function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): boolean {
   const declared = variant.properties;
   if (isSchemaRecord(declared) && Object.hasOwn(declared, key)) {
@@ -447,11 +401,7 @@ function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): bo
   if (variant.additionalProperties !== false) {
     return true;
   }
-  return matchesPatternProperty(variant.patternProperties, key);
-}
-
-/** Whether a variant's `patternProperties` covers the key. */
-function matchesPatternProperty(patternProperties: unknown, key: string): boolean {
+  const patternProperties = variant.patternProperties;
   if (!isSchemaRecord(patternProperties)) {
     return false;
   }
@@ -464,65 +414,6 @@ function matchesPatternProperty(patternProperties: unknown, key: string): boolea
       return false;
     }
   });
-}
-
-/** Keeps only the keys that document a property, dropping every constraint. */
-function schemaAnnotationsOnly(schema: unknown): Record<string, unknown> {
-  if (!isSchemaRecord(schema)) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(schema).filter(([key]) => SCHEMA_ANNOTATION_KEYS.has(key)),
-  );
-}
-
-function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
-  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
-  if (Object.hasOwn(schema, "const")) {
-    if (!enumValues) {
-      return [schema.const];
-    }
-    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
-  }
-  return enumValues;
-}
-
-/** Pools the values of two property schemas that differ only by their literals. */
-function poolLiteralEnum(left: unknown, right: unknown): Record<string, unknown> | undefined {
-  if (!isSchemaRecord(left) || !isSchemaRecord(right)) {
-    return undefined;
-  }
-  const leftValues = readLiteralSchemaValues(left);
-  const rightValues = readLiteralSchemaValues(right);
-  if (!leftValues || !rightValues) {
-    return undefined;
-  }
-  if (!isDeepStrictEqual(literalValidationConstraints(left), literalValidationConstraints(right))) {
-    return undefined;
-  }
-  const combined = [...leftValues, ...rightValues];
-  const values = combined.filter(
-    (value, index) =>
-      combined.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
-  );
-  if (values.length === 0) {
-    return undefined;
-  }
-  const merged: Record<string, unknown> = { ...left, enum: values };
-  delete merged.const;
-  return merged;
-}
-
-function isSchemaRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function literalValidationConstraints(schema: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(schema).filter(
-      ([key]) => key !== "const" && key !== "enum" && !SCHEMA_ANNOTATION_KEYS.has(key),
-    ),
-  );
 }
 
 /**

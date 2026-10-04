@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { parseWorkerLaunchPlan } from "./launch-descriptor.js";
 import {
@@ -51,6 +51,9 @@ const LaunchInput = workerProtocolObject({
     error: "INVALID_REQUEST: node worker environment lifetime support required",
   }),
   sessionKey: identifier("sessionKey", 1_024).optional(),
+  idleRetention: z
+    .literal(true, { error: "INVALID_REQUEST: idleRetention must be true" })
+    .optional(),
   launchId: IdentityShape.launchId,
   gatewayNamespace: WorkerGatewayNamespace,
   expectedBundleHash: z.custom<string>(isPlanHash, {
@@ -174,20 +177,24 @@ export function parseNodeWorkerEnvironmentStopInput(
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration" | "sessionKey"
+    | "descriptor"
+    | "expectedBundleHash"
+    | "gatewayNamespace"
+    | "placementGeneration"
+    | "sessionKey"
+    | "idleRetention"
   >,
 ): string {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        expectedBundleHash: input.expectedBundleHash,
-        descriptor: input.descriptor,
-        gatewayNamespace: input.gatewayNamespace,
-        placementGeneration: input.placementGeneration,
-        ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    stableStringify({
+      expectedBundleHash: input.expectedBundleHash,
+      descriptor: input.descriptor,
+      gatewayNamespace: input.gatewayNamespace,
+      placementGeneration: input.placementGeneration,
+      ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
+      ...(input.idleRetention ? { idleRetention: true } : {}),
+    }),
+  );
 }
 
 function isBoundedResultJson(value: unknown): value is string {
@@ -198,11 +205,7 @@ function isBoundedResultJson(value: unknown): value is string {
   ) {
     return false;
   }
-  try {
-    return isRecord(JSON.parse(value) as unknown);
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isBoundedErrorText(value: unknown): value is string {

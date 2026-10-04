@@ -8,8 +8,9 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "./user-profiles-avatar.js";
-import { ensureProfileForEmail, setAvatar, setDisplayName } from "./user-profiles.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const paths: string[] = [];
 const releases: (() => void)[] = [];
@@ -32,7 +33,7 @@ function fixture() {
   return { path };
 }
 
-it("evicts the least recently used avatar at the byte budget before the entry limit", async () => {
+it("evicts the least recently used avatar at the byte budget while preserving unrelated cached bytes", async () => {
   const options = fixture();
   const bytes = new Uint8Array(512 * 1024).fill(7);
   const profiles = Array.from({ length: 33 }, (_, index) => {
@@ -53,7 +54,12 @@ it("evicts the least recently used avatar at the byte budget before the entry li
   await load(0);
   await load(32);
 
+  const other = ensureProfileForEmail("other@example.test", options);
+  setDisplayName(other.id, "Changed name", options);
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const prepared = await createProfileAvatarReader(profiles[0]!.id, options).inspect();
+  expect(prepared.isCurrent()).toBe(true);
+  expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
   expect(Buffer.from((await load(0))?.bytes ?? []).equals(bytes)).toBe(true);
   expect(read).not.toHaveBeenCalled();
   expect(Buffer.from((await load(1))?.bytes ?? []).equals(bytes)).toBe(true);
@@ -102,20 +108,3 @@ it.each(["catalog release", "database close and reopen", "avatar replacement"] a
     ]);
   },
 );
-
-it("preserves cached avatar bytes when another profile commits an edit", async () => {
-  const options = fixture();
-  const portrait = ensureProfileForEmail("portrait@example.test", options);
-  const other = ensureProfileForEmail("other@example.test", options);
-  const bytes = new Uint8Array([4, 5, 6]);
-  expect(setAvatar(portrait.id, bytes, "image/png", options).ok).toBe(true);
-  releases.push(retainUserProfileCatalog(options));
-  await (await createProfileAvatarReader(portrait.id, options).inspect()).loadBytes();
-
-  setDisplayName(other.id, "Changed name", options);
-  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  const prepared = await createProfileAvatarReader(portrait.id, options).inspect();
-  expect(prepared.isCurrent()).toBe(true);
-  expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
-  expect(read).not.toHaveBeenCalled();
-});

@@ -3,7 +3,6 @@ import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { registerNextcloudTalkWebhook } from "./monitor.js";
@@ -20,11 +19,7 @@ import {
 } from "./webhook-spool.js";
 
 function normalizeOrigin(value: string): string | null {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
-  } catch {
-    return null;
-  }
+  return URL.parse(value)?.origin.toLowerCase() ?? null;
 }
 
 type NextcloudTalkMonitorOptions = {
@@ -154,7 +149,7 @@ export async function monitorNextcloudTalkProvider(
   if (routeConflict && legacyListener) {
     logger.warn(
       `[nextcloud-talk:${account.accountId}] ${routeConflict} ` +
-        `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before setting legacyWebhook: false.`,
+        `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before removing the legacyWebhook pin.`,
     );
     return { stop };
   }
@@ -165,7 +160,7 @@ export async function monitorNextcloudTalkProvider(
   if (legacyListener) {
     logger.info(
       `[nextcloud-talk:${account.accountId}] legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. ` +
-        "After verifying the callback or proxy upstream uses the Gateway port, set legacyWebhook: false to disable this account's legacy forwarding.",
+        "After verifying the callback or proxy upstream uses the Gateway port, remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.",
     );
   }
 

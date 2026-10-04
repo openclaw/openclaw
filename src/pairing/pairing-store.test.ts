@@ -7,10 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 
 const pairingMocks = vi.hoisted(() => ({
   getPairingAdapter: vi.fn<
@@ -46,14 +44,13 @@ type PairingTestDatabase = Pick<
 
 let fixtureRoot = "";
 let caseId = 0;
-type RandomIntSync = (minOrMax: number, max?: number) => number;
 
 beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
 });
 
-afterAll(() => {
-  closeOpenClawStateDatabaseForTest();
+afterAll(async () => {
+  await closeStateDatabaseForTest();
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -63,10 +60,10 @@ beforeEach(() => {
   pairingMocks.getPairingAdapter.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 function createTestEnv(): { stateDir: string; env: NodeJS.ProcessEnv } {
@@ -86,31 +83,6 @@ function requireFirstPairingRequest(
   return request;
 }
 
-async function withMockRandomInt(params: {
-  initialValue?: number;
-  sequence?: number[];
-  fallbackValue?: number;
-  run: () => Promise<void>;
-}) {
-  const spy = vi.spyOn(crypto, "randomInt") as unknown as {
-    mockImplementation: (impl: RandomIntSync) => void;
-    mockReturnValue: (value: number) => void;
-    mockRestore: () => void;
-  };
-  try {
-    if (params.initialValue !== undefined) {
-      spy.mockReturnValue(params.initialValue);
-    }
-    if (params.sequence) {
-      let index = 0;
-      spy.mockImplementation(() => params.sequence?.[index++] ?? params.fallbackValue ?? 1);
-    }
-    await params.run();
-  } finally {
-    spy.mockRestore();
-  }
-}
-
 function writeAllowFromFixture(params: {
   env: NodeJS.ProcessEnv;
   channel: string;
@@ -124,6 +96,56 @@ function writeAllowFromFixture(params: {
 }
 
 describe("pairing store", () => {
+  it.each(["list", "approve"] as const)(
+    "rolls back %s when owner authority is revoked before commit",
+    async (operation) => {
+      const { env } = createTestEnv();
+      const createdAt =
+        operation === "list" ? "2020-01-01T00:00:00.000Z" : new Date().toISOString();
+      writeChannelPairingStateSnapshot(
+        "telegram",
+        {
+          version: 1,
+          requests: [
+            {
+              id: "123",
+              code: "ABCDEFGH",
+              createdAt,
+              lastSeenAt: createdAt,
+              meta: { accountId: "default" },
+            },
+          ],
+          allowFrom: {},
+        },
+        env,
+      );
+      const before = readChannelPairingStateSnapshot("telegram", env);
+      const { db } = openOpenClawStateDatabase({ env });
+      let admitted = false;
+      const assertCurrent = () => {
+        if (!db.isTransaction) {
+          return;
+        }
+        if (admitted) {
+          throw new Error("owner authority revoked");
+        }
+        admitted = true;
+      };
+
+      await expect(
+        operation === "list"
+          ? listChannelPairingRequests("telegram", env, undefined, assertCurrent)
+          : approveChannelPairingCode({
+              channel: "telegram",
+              code: "ABCDEFGH",
+              env,
+              assertCurrent,
+            }),
+      ).rejects.toThrow("owner authority revoked");
+      expect(readChannelPairingStateSnapshot("telegram", env)).toEqual(before);
+    },
+  );
+
   it("normalizes allowlist entries through channel pairing adapters", async () => {
     const { env } = createTestEnv();
     pairingMocks.getPairingAdapter.mockReturnValue({
@@ -334,56 +356,23 @@ describe("pairing store", () => {
 
   it("regenerates colliding codes and reports exhaustion without leaking codes", async () => {
     const { env } = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        const first = await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env,
-        });
-        expect(first.code).toBe("AAAAAAAA");
+    const request = { channel: "telegram", accountId: DEFAULT_ACCOUNT_ID, env };
+    const randomInt = vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
+    const first = await upsertChannelPairingRequest({ ...request, id: "123" });
+    expect(first.code).toBe("AAAAAAAA");
 
-        await withMockRandomInt({
-          sequence: Array(8).fill(0).concat(Array(8).fill(1)),
-          fallbackValue: 1,
-          run: async () => {
-            await expect(
-              upsertChannelPairingRequest({
-                channel: "telegram",
-                id: "456",
-                accountId: DEFAULT_ACCOUNT_ID,
-                env,
-              }),
-            ).resolves.toMatchObject({ code: "BBBBBBBB" });
-          },
-        });
-      },
+    let draws = 0;
+    randomInt.mockImplementation(() => (draws++ < 8 ? 0 : 1));
+    await expect(upsertChannelPairingRequest({ ...request, id: "456" })).resolves.toMatchObject({
+      code: "BBBBBBBB",
     });
 
-    const second = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env: second.env,
-        });
-        await expect(
-          upsertChannelPairingRequest({
-            channel: "telegram",
-            id: "456",
-            accountId: DEFAULT_ACCOUNT_ID,
-            env: second.env,
-          }),
-        ).rejects.toThrow(
-          "failed to generate unique pairing code after 500 attempts; existing code count: 1",
-        );
-      },
-    });
+    const second = { ...request, env: createTestEnv().env };
+    randomInt.mockImplementation(() => 0);
+    await upsertChannelPairingRequest({ ...second, id: "123" });
+    await expect(upsertChannelPairingRequest({ ...second, id: "456" })).rejects.toThrow(
+      "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+    );
   });
 
   it("keeps allowFrom and pending requests isolated by account", async () => {

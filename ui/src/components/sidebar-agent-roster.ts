@@ -30,7 +30,8 @@ registerAgentsHomeEnglish();
 type RosterHost = AppSidebarRenderHost & SessionListHost;
 
 class SidebarAgentRoster extends AgentRosterElement {
-  @property({ attribute: false }) host!: RosterHost;
+  // Selection, menus, drag state, and presence belong to the mutable host, not the row projection.
+  @property({ attribute: false, hasChanged: () => true }) host!: RosterHost;
   @property({ attribute: false }) sections: SidebarVisibleSections["sections"] = [];
   @property({ attribute: false }) involvingMe = false;
   @property({ attribute: false }) empty = false;
@@ -272,7 +273,6 @@ customElements.define("openclaw-sidebar-agent-roster", SidebarAgentRoster);
 
 class SidebarNewSessionMenu extends AgentRosterElement {
   @property({ attribute: false }) host!: RosterHost;
-  @property({ attribute: false }) triggerClass = "";
 
   override render() {
     return this.avatars.withActiveRoutes(() => {
@@ -303,7 +303,7 @@ class SidebarNewSessionMenu extends AgentRosterElement {
         <button
           slot="trigger"
           type="button"
-          class=${this.triggerClass}
+          class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread"
           aria-label=${t("agentChip.newConversation")}
           title=${access.allowed ? t("agentChip.newConversation") : access.reason}
           ?disabled=${!access.allowed || cards.length === 0}
@@ -337,11 +337,10 @@ class SidebarNewSessionMenu extends AgentRosterElement {
 
 customElements.define("openclaw-sidebar-new-session-menu", SidebarNewSessionMenu);
 
-export function renderSidebarNewSessionMenu(host: RosterHost, triggerClass: string) {
+export function renderSidebarNewSessionMenu(host: RosterHost) {
   return html`<openclaw-sidebar-new-session-menu
     .host=${host}
     .active=${host.navigationVisible}
-    .triggerClass=${triggerClass}
   ></openclaw-sidebar-new-session-menu>`;
 }
 

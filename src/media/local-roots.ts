@@ -1,4 +1,3 @@
-// Local media root helpers normalize and match allowed local media roots.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -18,23 +17,14 @@ function resolveCanonicalRoot(root: string): string {
   return resolvePathViaExistingAncestorSync(path.resolve(root));
 }
 
-function resolveCachedPreferredTmpDir(): string {
-  if (!cachedPreferredTmpDir) {
-    // Temp-root discovery can hit platform/env state; keep one process-local
-    // snapshot so media root lists stay stable during a run.
-    cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
-  }
-  return cachedPreferredTmpDir;
-}
-
-/** Builds the baseline local media root allowlist from state/config directories. */
 function buildMediaLocalRoots(stateDir: string, configDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedConfigDir = path.resolve(configDir);
-  const preferredTmpDir = resolveCachedPreferredTmpDir();
+  // Keep platform/env temp-root discovery stable for the lifetime of the process.
+  cachedPreferredTmpDir ||= resolvePreferredOpenClawTmpDir();
   return Array.from(
     new Set([
-      preferredTmpDir,
+      cachedPreferredTmpDir,
       path.join(resolvedConfigDir, "media"),
       path.join(resolvedStateDir, "media"),
       // Queue-owned copies of undelivered attachments. Recovery replays in a
@@ -71,22 +61,20 @@ function filterSharedMediaLocalRoots(
   const sessionWorkspaceDir = context.sessionWorkspaceDir
     ? resolveCanonicalRoot(context.sessionWorkspaceDir)
     : undefined;
-  const isInsideOrEqual = (parent: string, child: string): boolean =>
-    child === parent || isPathInside(parent, child);
   // The shared sandboxes parent itself (or any ancestor of it) is never a valid session workspace:
   // passing it must not re-admit the shared sandbox tree.
   const validSessionWorkspaceDir =
-    sessionWorkspaceDir !== undefined && !isInsideOrEqual(sessionWorkspaceDir, sandboxesDir)
+    sessionWorkspaceDir !== undefined && !isPathInside(sessionWorkspaceDir, sandboxesDir)
       ? sessionWorkspaceDir
       : undefined;
   const overlaps = (sharedDir: string, root: string): boolean =>
-    isInsideOrEqual(sharedDir, root) || isInsideOrEqual(root, sharedDir);
+    isPathInside(sharedDir, root) || isPathInside(root, sharedDir);
   const filtered: string[] = [];
   for (const root of roots) {
     const resolvedRoot = resolveCanonicalRoot(root);
     const withinSessionWorkspace =
       validSessionWorkspaceDir !== undefined &&
-      isInsideOrEqual(validSessionWorkspaceDir, resolvedRoot);
+      isPathInside(validSessionWorkspaceDir, resolvedRoot);
     if (overlaps(sandboxesDir, resolvedRoot) && !withinSessionWorkspace) {
       continue;
     }

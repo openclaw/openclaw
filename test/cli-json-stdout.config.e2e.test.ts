@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

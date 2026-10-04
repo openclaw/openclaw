@@ -38,8 +38,6 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-    }
-    if (shouldNotify) {
       notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {
@@ -63,6 +61,7 @@ export async function settleExecProcessExit({
       delete session.agentId;
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
+      delete session.notifyFromConversationTurn;
       delete session.notifyOnExit;
       delete session.notifyOnExitEmptySuccess;
       settleExecSessionFinalization(session);

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -44,6 +44,7 @@ const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference:
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendTranscriptReset: vi.fn(),
   appendTranscriptTurn: vi.fn(),
+  appendTranscriptTurnAsync: vi.fn(),
   readTranscriptTail: vi.fn(() => []),
 }));
 
@@ -440,6 +441,14 @@ describe("Full Access delegated chat", () => {
       }
       const applyStarted = createDeferred();
       const releaseApply = createDeferred();
+      const historyStarted = createDeferred();
+      const releaseHistory = createDeferred();
+      if (outcome === "allow") {
+        transcriptStoreMocks.appendTranscriptTurnAsync.mockImplementation(async () => {
+          historyStarted.resolve();
+          await releaseHistory.promise;
+        });
+      }
       const execution = await setupInferenceMocks.resolvePersistentApplyInference();
       if (outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
         setupInferenceMocks.resolvePersistentApplyInference.mockImplementationOnce(async () => {
@@ -543,6 +552,15 @@ describe("Full Access delegated chat", () => {
             await queued;
           }
         }
+        if (outcome === "allow") {
+          await awaitGateBeforeSettlement(
+            historyStarted.promise,
+            pending,
+            "approval completed before history persistence",
+          );
+          expect(settled).toBe(false);
+          releaseHistory.resolve();
+        }
         const result = await pending;
         if (sameOwner) {
           expect((await sameOwner).payload).toEqual(result.payload);
@@ -578,7 +596,7 @@ describe("Full Access delegated chat", () => {
         );
         if (outcome === "allow" || outcome === "afterDecision-failed") {
           expect(
-            transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(([turn]) =>
+            transcriptStoreMocks.appendTranscriptTurnAsync.mock.calls.filter(([turn]) =>
               turn.text.includes(
                 outcome === "allow" ? "[openclaw] done: config.set" : "failed to complete",
               ),
@@ -586,6 +604,7 @@ describe("Full Access delegated chat", () => {
           ).toHaveLength(1);
         }
       } finally {
+        releaseHistory.resolve();
         releaseApply.resolve();
         controller.abort();
         for (const record of await manager.listPendingRecords()) {

@@ -123,8 +123,14 @@ function createNativeFixture(root: string, declared = root) {
   return { native, write, compile };
 }
 
-it.each(
-  (["all", "declarations"] as const).flatMap((diagnostics) => [
+it.each<{
+  diagnostics: "all" | "declarations";
+  kind: string;
+  source: string;
+  error: RegExp;
+  corrected?: string;
+}>([
+  ...(["all", "declarations"] as const).flatMap((diagnostics) => [
     {
       diagnostics,
       kind: "declaration transform",
@@ -138,9 +144,16 @@ it.each(
       error: /TS2318: Cannot find global type 'IterableIterator'/u,
     },
   ]),
-)(
+  {
+    diagnostics: "all",
+    kind: "semantic",
+    source: 'export const count: number = "wrong";',
+    error: /TS2322: Type 'string' is not assignable/u,
+    corrected: "export const count: number = 42;",
+  },
+])(
   "rejects $kind errors in $diagnostics diagnostic mode",
-  async ({ diagnostics, source, error }) => {
+  async ({ diagnostics, source, error, corrected }) => {
     const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
     const fixture = createNativeFixture(root);
     fixture.write("src/index.ts", source);
@@ -152,24 +165,40 @@ it.each(
         configFile: path.join(root, "tsconfig.json"),
         roots: [path.join(root, "src/index.ts")],
         diagnostics,
-        compilerOptions: { lib: ["es5"] },
+        compilerOptions: corrected ? undefined : { lib: ["es5"] },
         assertInput: (file) => boundary.assert(file),
       }),
     ).rejects.toThrow(error);
+    if (corrected) {
+      fixture.write("src/index.ts", corrected);
+      const emitted = await fixture.compile();
+      expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
+        "export declare const count: number;",
+      );
+    }
   },
 );
 
-it("rejects semantic errors before returning valid native declarations", async () => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-semantics-"));
+it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
+  const root = fs.realpathSync.native(roots.make("native-declaration-determinism-"));
   const fixture = createNativeFixture(root);
-  fixture.write("src/index.ts", 'export const count: number = "wrong";');
-  await expect(fixture.compile()).rejects.toThrow(/TS2322: Type 'string' is not assignable/u);
-
-  fixture.write("src/index.ts", "export const count: number = 42;");
-  const emitted = await fixture.compile();
-  expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
-    "export declare const count: number;",
-  );
+  const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  fixture.write("src/index.ts", modules.map((name) => `export * from "./${name}.js";`).join("\n"));
+  for (const [index, name] of modules.entries()) {
+    const result =
+      index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
+    fixture.write(
+      `src/${name}.ts`,
+      `export function result${index}<T>(ready: boolean, value: T) {
+        return ready ? ${result} : { kind: "unavailable" as const };
+      }`,
+    );
+  }
+  const first = await fixture.compile();
+  const second = await fixture.compile();
+  expect(first.declarations.size).toBe(modules.length + 1);
+  expect(second.declarations).toEqual(first.declarations);
+  expect(second.inputs).toEqual(first.inputs);
 });
 
 it("bounds optional SDK relative imports and manifest probes to the checkout", async () => {

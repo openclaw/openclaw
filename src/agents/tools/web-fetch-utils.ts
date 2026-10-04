@@ -146,6 +146,8 @@ function closeContext(
     return;
   }
   switch (context.kind) {
+    case "root":
+      return;
     case "anchor":
       parent.parts.push(
         context.href && label ? `[${label}](${context.href})` : label || context.href || "",
@@ -164,9 +166,6 @@ function closeContext(
         parent.hasText ||= Boolean(label);
       }
       parent.parts.push(`\n- ${label}`);
-      return;
-    case "root":
-      parent.parts.push(label);
   }
 }
 
@@ -335,34 +334,47 @@ export function normalizeWhitespace(value: string): string {
 }
 
 export function markdownToText(markdown: string): string {
-  let text = markdown;
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
-  let unfenced = "";
+  const codeBlocks: string[] = [];
+  let text = "";
   let pos = 0;
-  while (pos < text.length) {
-    const open = text.indexOf("```", pos);
+  while (pos < markdown.length) {
+    const open = markdown.indexOf("```", pos);
     if (open === -1) {
-      unfenced += text.slice(pos);
+      text += markdown.slice(pos).replaceAll("\0", "\0\0");
       break;
     }
-    unfenced += text.slice(pos, open);
+    text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
     const afterOpen = open + 3;
-    const close = text.indexOf("```", afterOpen);
+    const close = markdown.indexOf("```", afterOpen);
     if (close === -1) {
-      unfenced += text.slice(open);
+      text += markdown.slice(open).replaceAll("\0", "\0\0");
       break;
     }
-    const firstLineEnd = text.indexOf("\n", afterOpen);
+    const firstLineEnd = markdown.indexOf("\n", afterOpen);
     const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    unfenced += text.slice(contentStart, close);
+    const code = markdown.slice(contentStart, close);
+    // Keep the surrounding prose connected without interpreting the code as Markdown.
+    // Preserve its final line boundary for heading/list markers after the closing fence.
+    const lineEnd = /[\r\n\u2028\u2029]$/.test(code) ? code.slice(-1) : "";
+    const literal = code.slice(0, code.length - lineEnd.length);
+    if (literal) {
+      text += `\0${codeBlocks.length}\0`;
+      codeBlocks.push(literal);
+    }
+    text += lineEnd;
     pos = close + 3;
   }
-  text = unfenced;
+  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
+  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
-  text = text.replace(/^\s*[-*+]\s+/gm, "");
-  text = text.replace(/^\s*\d+\.\s+/gm, "");
+  text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
+  text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
+  // Escaped input NUL pairs stay paired through prose formatting, so only our
+  // single-NUL markers can restore code. Replacement output is not rescanned.
+  text = text.replace(/\0(?:\0|(\d+)\0)/g, (_match, index: string | undefined) =>
+    index === undefined ? "\0" : codeBlocks[Number(index)]!,
+  );
   return normalizeWhitespace(text);
 }
 

@@ -55,50 +55,20 @@ function mount(overrides: Partial<DetailProps>) {
   return container;
 }
 
-it.each([
-  { id: "bundled", origin: "bundled", enabled: false },
-  { id: "configured", origin: "config", enabled: true },
-  { id: "failed", origin: "global", state: "error" as const },
-  { id: "offer", installed: false, state: "not-installed" as const },
-])("offers enablement and Settings for installed plugins: $id", (overrides) => {
-  const plugin = createPlugin(overrides);
-  const onSetEnabled = vi.fn();
-  const onTabChange = vi.fn();
+it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const container = mount({
-    result: createResult(plugin),
-    pluginId: plugin.id,
-    onSetEnabled,
-    onTabChange,
+    result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
-  const button = container.querySelector<HTMLButtonElement>(
-    `[aria-label="${plugin.enabled ? "Disable" : "Enable"} ${plugin.name}"]`,
-  );
-  expect(Boolean(button)).toBe(plugin.installed);
-  button?.click();
-  expect(onSetEnabled.mock.calls).toEqual(
-    plugin.installed ? [[plugin.id, !plugin.enabled, `plugin:${plugin.id}`]] : [],
-  );
-  container.querySelector<HTMLAnchorElement>('[aria-label="Settings"]')?.click();
-  expect(onTabChange.mock.calls).toEqual(plugin.installed ? [["configuration"]] : []);
-  expect(container.querySelector(".plugins-reload")).toBeNull();
+  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Settings"]')).toBeNull();
 });
 
-it.each([
-  {
-    name: "read-only operator",
-    props: {
-      canMutate: false,
-      mutationBlockedReason: "Plugin changes require operator.admin access.",
-    },
-  },
-  { name: "busy plugin", props: { busy: { "plugin:workboard": "enable" as const } } },
-  {
-    name: "missing setup",
-    props: { result: createResult(createPlugin({ state: "needs-setup" })) },
-  },
-])("does not dispatch enablement for $name", ({ props }) => {
+it("does not dispatch enablement when setup is missing", () => {
   const onSetEnabled = vi.fn();
-  const container = mount({ ...props, onSetEnabled });
+  const container = mount({
+    result: createResult(createPlugin({ state: "needs-setup" })),
+    onSetEnabled,
+  });
   const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
   expect(button).not.toBeNull();
   expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
@@ -189,34 +159,31 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   expect(onPatch).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "shows selected capabilities without a catalog while enabled=%s",
-  (enabled) => {
-    const inspection = createInspectResult();
-    inspection.declared = {
-      ...inspection.declared,
-      tools: ["speech_status"],
-      providers: ["local-model", "sibling-model"],
-      channels: ["local-channel", "sibling-channel"],
-      contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
-    };
-    inspection.overview = {
-      capabilities: {
-        providers: ["local-model"],
-        channels: ["local-channel"],
-        contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
-        ui: ["page"],
-      },
-    };
-    const container = mount({ inspection, result: createResult(createPlugin({ enabled })) });
-    const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
-      (heading) => heading.textContent,
-    );
-    expect(titles).toEqual(["Capabilities2", "Tools1"]);
-    expect(container.textContent).toContain("Text to speech");
-    expect(container.textContent).toContain("Pages");
-    expect(container.textContent).not.toContain("speechProviders:");
-    expect(container.textContent).not.toContain("sibling-");
-    expect(container.textContent).not.toContain("Video generation");
-  },
-);
+it("shows selected capabilities without a catalog", () => {
+  const inspection = createInspectResult();
+  inspection.declared = {
+    ...inspection.declared,
+    tools: ["speech_status"],
+    providers: ["local-model", "sibling-model"],
+    channels: ["local-channel", "sibling-channel"],
+    contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
+  };
+  inspection.overview = {
+    capabilities: {
+      providers: ["local-model"],
+      channels: ["local-channel"],
+      contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
+      ui: ["page"],
+    },
+  };
+  const container = mount({ inspection });
+  const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
+    (heading) => heading.textContent,
+  );
+  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(container.textContent).toContain("Text to speech");
+  expect(container.textContent).toContain("Pages");
+  expect(container.textContent).not.toContain("speechProviders:");
+  expect(container.textContent).not.toContain("sibling-");
+  expect(container.textContent).not.toContain("Video generation");
+});

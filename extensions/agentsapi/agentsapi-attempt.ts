@@ -12,16 +12,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   agentHarnessAttemptTerminal,
-  awaitAgentEndSideEffects,
-  buildAgentHookContextChannelFields,
-  buildEmbeddedForegroundPromptContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   formatErrorMessage,
-  resolveAgentDir,
   resolveAgentHarnessBeforePromptBuildResult,
-  runAgentEndSideEffects,
-  runAgentHarnessLlmOutputHook,
+  resolveAgentExecutorController,
   sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
@@ -29,25 +24,37 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAgentsApiAttemptHooks } from "./agentsapi-attempt-hooks.js";
+import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
+import { ensureAgentsApiEnvironment } from "./agentsapi-environment.js";
+import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
+import * as files from "./agentsapi-files.js";
+import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
+import {
+  buildAgentsApiInstructions,
+  buildAgentsApiTurnInput,
+  HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK,
+} from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
-import { resolveAgentsApiEnvironment } from "./config.js";
+import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
-  binding: import("./agentsapi-bindings.js").AgentsApiBinding | undefined,
-  bind: (binding: import("./agentsapi-bindings.js").AgentsApiBinding) => Promise<void>,
+  binding: AgentsApiBinding | undefined,
+  bind: (binding: AgentsApiBinding) => Promise<void>,
   assertOwnerCurrent: () => void,
   assertHarnessCurrent: () => void,
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
   readPluginConfig: () => unknown,
+  promptHistories: AgentsApiPromptHistories,
+  prepareNativeCleanup?: (binding: AgentsApiBinding, apiKey: string) => void,
+  onTerminalSessionFailure?: (binding: AgentsApiBinding) => Promise<void>,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -126,27 +133,21 @@ export async function runAgentsApiAttempt(
     state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
     emitEvent,
   });
-  const contextWindow = {
-    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-    contextWindowSource: params.contextWindowInfo?.source,
-    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
-  };
-  const hookContext = {
-    runId: params.runId,
-    agentId: target.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    modelProviderId: params.provider,
-    modelId: params.model.id,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-    channelContext: params.channelContext,
-    ...contextWindow,
-  };
+  const hooks = createAgentsApiAttemptHooks(params, target.agentId, startedAtMs);
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
+  const logFailure = (message: string, error: unknown) =>
+    embeddedAgentLog.warn(message, {
+      error: formatErrorMessage(error),
+      runId: params.runId,
+      sessionId: params.sessionId,
+      nativeSessionId: remoteSessionId,
+    });
+  let activeBinding = binding;
+  const saveBinding = async (next: AgentsApiBinding) => {
+    await bind(next);
+    activeBinding = next;
+  };
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
   let reply: AgentsApiMessageProjection["reply"] | undefined;
   let projection: AgentsApiMessageProjection | undefined;
@@ -169,7 +170,7 @@ export async function runAgentsApiAttempt(
   );
   let terminalTurnId: string | undefined;
   const toolCleanups: Array<(reason: string) => Promise<void>> = [];
-  let toolSurface: ReturnType<typeof buildAgentsApiToolSurface> | undefined;
+  let toolSurface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>> | undefined;
   let outputMedia: string[] | undefined;
   let startedToolCount = 0;
   let completedToolCount = 0;
@@ -186,8 +187,9 @@ export async function runAgentsApiAttempt(
       if (!native?.isAvailable()) {
         throw new Error("Agents API turn is not ready for steering");
       }
-      if (options?.images?.length) {
-        throw new Error("Agents API MVP accepts text steering only");
+      if (options?.images?.length || options?.media?.length) {
+        // The queued followup owns attachment preparation; steering can carry only text.
+        throw new Error("Agents API attachments require a separate turn");
       }
       await native.queueMessage(
         buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
@@ -214,40 +216,65 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
-    const surface = buildAgentsApiToolSurface(
+    if (binding?.executor) {
+      // Even rejected configuration changes must leave authenticated cleanup available.
+      prepareNativeCleanup?.(binding, params.resolvedApiKey!);
+    }
+    const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
+    if (
+      binding &&
+      binding.executorControllerPluginId !==
+        (environment.type === "self_hosted" ? pluginConfig.executorController : undefined)
+    ) {
+      throw new Error(
+        "Agents API executor controller changed; reset the OpenClaw session before continuing",
+      );
+    }
+    const controllerPluginId = pluginConfig.executorController;
+    const executorController =
+      environment.type === "self_hosted" && controllerPluginId
+        ? resolveAgentExecutorController(controllerPluginId)
+        : undefined;
+    if (environment.type === "self_hosted" && executorController) {
+      // Executor paths are independent of the Gateway's tool workspace.
+      environment.workspace_directory = executorController.workspaceDirectory;
+    }
+    const surface = await buildAgentsApiToolSurface(
       runParams,
       controller.signal,
       assertCurrent,
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
+    const mcpTools = await buildAgentsApiMcpTools(params);
+    assertCurrent();
     const sessionIdentity = [
       params.model.id,
-      params.resolvedApiKey,
-      // Hosted settings preserve the identity of existing saved sessions.
-      ...(environment.type === "self_hosted" ? [environment] : []),
+      // Preserve existing hosted identities only when no network policy is configured.
+      ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
+      ...(mcpTools.length ? [mcpTools] : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
-    if (binding && binding.authFingerprint !== fingerprint) {
-      // Normalize bindings created by the unmerged tools implementation.
-      const toolsFingerprint = createHash("sha256")
-        .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
-        .digest("hex");
-      if (environment.type !== "openai_hosted" || binding.authFingerprint !== toolsFingerprint) {
-        throw new Error(
-          "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
-        );
-      }
-      await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
+    if (binding && binding.configFingerprint !== fingerprint) {
+      throw new Error(
+        "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+      );
     }
-    if (environment.type === "self_hosted" && params.media?.length) {
-      throw new Error("Agents API file transfers require an OpenAI-hosted environment");
-    }
+    const inputMedia =
+      environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
+        ? await params.hostCapabilities.resolveInputAttachmentMedia()
+        : params.media;
+    assertCurrent();
     const inputs =
       environment.type === "openai_hosted"
-        ? await prepareInputs(params.media, params.workspaceDir, assertCurrent, controller.signal)
-        : { files: [], mappingText: "" };
+        ? await files.prepareInputs(
+            inputMedia,
+            params.workspaceDir,
+            assertCurrent,
+            controller.signal,
+          )
+        : await files.prepareSelfHostedInputs(params, assertCurrent, controller.signal);
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
@@ -255,10 +282,22 @@ export async function runAgentsApiAttempt(
       ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
-    const admittedMessage =
-      params.userTurnTranscriptRecorder?.message ??
-      (await params.userTurnTranscriptRecorder?.resolveMessage());
+    const recorder = params.userTurnTranscriptRecorder;
+    const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
     assertCurrent();
+    const historyLimits = resolveAgentHarnessHistoryLimits(
+      params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
+    );
+    const historyScope = JSON.stringify([
+      params.runId,
+      target.agentId,
+      target.sessionId,
+      target.sessionKey,
+      target.storePath,
+      params.workspaceDir,
+      historyLimits,
+    ]);
+    let preparedHistory: AgentsApiPromptHistory["messages"] | undefined;
     const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: params.prompt,
       currentInboundContext: params.currentInboundContext,
@@ -267,18 +306,24 @@ export async function runAgentsApiAttempt(
       developerInstructions: instructions,
       messages: async () => {
         assertCurrent();
+        const retained = recorder && promptHistories.get(recorder);
+        if (retained?.scope === historyScope && retained.nativeSessionId === remoteSessionId) {
+          return retained.messages;
+        }
+        if (recorder) {
+          promptHistories.delete(recorder);
+        }
         const history = await SessionManager.openModelContextAsync(target, {
           cwd: params.workspaceDir,
-          admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+          admission: recorder?.getAdmissionReceipt(),
           signal: controller.signal,
-          limits: resolveAgentHarnessHistoryLimits(
-            params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-          ),
+          limits: historyLimits,
         });
         assertCurrent();
-        return history.buildSessionContext().messages;
+        preparedHistory = history.buildSessionContext().messages;
+        return preparedHistory;
       },
-      ctx: hookContext,
+      ctx: hooks.hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
         fingerprint: params.toolAuthorityFingerprint,
@@ -294,7 +339,9 @@ export async function runAgentsApiAttempt(
         promptBuild.developerInstructions,
         params.model.id,
         {
+          nativeTools: pluginConfig.nativeTools,
           functions: surface.declarations,
+          mcpTools,
           files: inputs.files,
           environment,
           reasoning: {
@@ -306,13 +353,66 @@ export async function runAgentsApiAttempt(
         },
       );
       assertCurrent();
-      await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
+      await saveBinding({
+        sessionId: remoteSessionId,
+        configFingerprint: fingerprint,
+        ...(executorController ? { executorControllerPluginId: controllerPluginId } : {}),
+      });
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
-      assertCurrent();
+    }
+    assertCurrent();
+    let connectEnvironment: ((environmentId: string) => Promise<void>) | undefined;
+    if (environment.type === "self_hosted" && executorController) {
+      const workspaceDirectory = environment.workspace_directory;
+      const selfHostedBinding = activeBinding;
+      if (!selfHostedBinding) {
+        throw new Error("Agents API self-hosted session is missing its canonical binding");
+      }
+      prepareNativeCleanup?.(selfHostedBinding, params.resolvedApiKey!);
+      connectEnvironment = async (environmentId) => {
+        const currentBinding = activeBinding;
+        if (!currentBinding) {
+          throw new Error("Agents API self-hosted session is missing its canonical binding");
+        }
+        await ensureAgentsApiEnvironment({
+          controller: executorController,
+          client,
+          binding: currentBinding,
+          bind: saveBinding,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          workspaceDirectory,
+          environmentId,
+          signal: controller.signal,
+          assertCurrent,
+        });
+      };
+    }
+    if (recorder && preparedHistory) {
+      // A retry keeps this run's already-validated, detached hook context. The
+      // hook runner isolates each dispatch; live authority is checked separately.
+      promptHistories.set(recorder, {
+        scope: historyScope,
+        nativeSessionId: remoteSessionId,
+        messages: preparedHistory,
+      });
     }
     if (!creatingSession && inputs.files.length) {
-      await uploadInputs(client, remoteSessionId, inputs.files, assertCurrent, controller.signal);
+      const uploaded = await files.uploadInputs(
+        client,
+        remoteSessionId,
+        inputs.files,
+        assertCurrent,
+        controller.signal,
+      );
+      if (uploaded.status === "unavailable") {
+        // Native recovery can replace the workspace, including earlier files in this batch.
+        inputs.mappingText = "";
+        inputs.feedbackText = [inputs.feedbackText, HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK]
+          .filter(Boolean)
+          .join("\n");
+      }
     }
     projection = new AgentsApiMessageProjection(
       projectionSettlement.params,
@@ -327,7 +427,7 @@ export async function runAgentsApiAttempt(
     reply = projection.reply;
     native = createAgentsApiSession({
       client,
-      // Admitted hosted work must still be retired when host run authority closes.
+      // Admitted native work must still be retired when host run authority closes.
       cleanupClient: new AgentsApiClient(params.resolvedApiKey!, assertHarnessCurrent),
       sessionId: remoteSessionId,
       signal: controller.signal,
@@ -335,8 +435,7 @@ export async function runAgentsApiAttempt(
       onSettled: beginSettlement,
       onReconcile: (turn, items) =>
         projection!.reconcile(turn, items, { presentation: !finalizingProjection }),
-      onUsageError: (error) =>
-        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
+      onUsageError: (error) => logFailure("Agents API token accounting unavailable", error),
       onTranscriptOrderingGap: () => projection!.reportTranscriptOrderingGap(),
       onReconcileHistory: async (entries) => {
         for (const { turn, items } of entries) {
@@ -353,6 +452,12 @@ export async function runAgentsApiAttempt(
             );
             assertProjectionCurrent();
           }
+        }
+      },
+      connectEnvironment,
+      onSessionFailed: async () => {
+        if (activeBinding) {
+          await onTerminalSessionFailure?.(activeBinding);
         }
       },
       executeFunction: async (call) => {
@@ -400,14 +505,18 @@ export async function runAgentsApiAttempt(
       },
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
+    const turnInput = await buildAgentsApiTurnInput(
+      params,
+      surface.declarations,
+      promptBuild.prompt,
+      inputs.mappingText,
+      environment.type,
+      assertCurrent,
+      inputs.feedbackText,
+    );
+    assertCurrent();
     const result = await native.run(
-      [
-        buildAgentsApiTurnContext(params, surface.declarations),
-        promptBuild.prompt,
-        inputs.mappingText,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
+      turnInput,
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },
@@ -430,7 +539,7 @@ export async function runAgentsApiAttempt(
       assertCurrent();
       try {
         if (environment.type === "openai_hosted") {
-          outputMedia = await collectOutputs(
+          outputMedia = await files.collectOutputs(
             client,
             remoteSessionId,
             result.turn.id,
@@ -455,7 +564,7 @@ export async function runAgentsApiAttempt(
           ? { kind: "aborted", source: "runtime" }
           : { kind: "failed", source: "prompt", error };
     if (terminal.kind === "failed") {
-      embeddedAgentLog.warn("Agents API session failed", { error });
+      logFailure("Agents API session failed", error);
     }
   } finally {
     beginSettlement();
@@ -474,6 +583,7 @@ export async function runAgentsApiAttempt(
       // work settles under its API timeouts; early release could cancel a successor.
       await native?.close();
     } catch (error) {
+      logFailure("Agents API native cleanup failed", error);
       terminal = { kind: "failed", source: "prompt", error };
     }
     try {
@@ -483,6 +593,7 @@ export async function runAgentsApiAttempt(
         projection.recordUsage(params.model, turns);
       }
     } catch (error) {
+      logFailure("Agents API usage recording failed", error);
       terminal = { kind: "failed", source: "prompt", error };
     }
     if ((controller.signal.aborted || terminal.kind !== "ok") && native && projection) {
@@ -499,7 +610,7 @@ export async function runAgentsApiAttempt(
         try {
           await native.reconcileAfterClose(cleanupSignal);
         } catch (error) {
-          embeddedAgentLog.warn("Agents API terminal history reconciliation failed", { error });
+          logFailure("Agents API terminal history reconciliation failed", error);
         } finally {
           finalizingProjection = false;
           finalizingProjectionSignal = undefined;
@@ -509,6 +620,7 @@ export async function runAgentsApiAttempt(
     try {
       await racePromiseWithAbortSignal(projectionSettlement.drain(), cleanupSignal);
     } catch (error) {
+      logFailure("Agents API projection settlement failed", error);
       if (!controller.signal.aborted) {
         terminal = { kind: "failed", source: "prompt", error };
       }
@@ -527,19 +639,26 @@ export async function runAgentsApiAttempt(
       try {
         await cleanup("Agents API attempt settled");
       } catch (error) {
-        embeddedAgentLog.warn("Agents API tool cleanup failed", { error });
+        logFailure("Agents API tool cleanup failed", error);
       }
     }
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
+  }
+  if (terminal.kind === "failed") {
+    terminal = {
+      ...terminal,
+      error: resolveAgentsApiSessionAccessError(terminal.error, remoteSessionId),
+    };
   }
   const result: EmbeddedRunAttemptResult = {
     terminal,
     sessionIdUsed: params.sessionId,
     sessionFileUsed: params.sessionFile,
     agentHarnessId: "agentsapi",
-    messagesSnapshot: SessionManager.open(target, params.workspaceDir).buildSessionContext()
-      .messages,
+    messagesSnapshot: (
+      await SessionManager.openAsync(target, params.workspaceDir)
+    ).buildSessionContext().messages,
     assistantTexts:
       reply?.lastAssistant?.content
         .filter((part) => part.type === "text")
@@ -587,45 +706,18 @@ export async function runAgentsApiAttempt(
     },
   };
   assertHarnessCurrent();
-  runAgentHarnessLlmOutputHook({
-    event: {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      provider: params.provider,
-      model: params.model.id,
-      resolvedRef: `${params.provider}/${params.model.id}`,
-      harnessId: "agentsapi",
-      prompt: params.prompt,
-      ...contextWindow,
-      assistantTexts: result.assistantTexts,
-      lastAssistant: result.lastAssistant,
-      usage: result.attemptUsage,
-    },
-    ctx: hookContext,
-  });
-  const agentEnd = {
-    event: {
-      runId: params.runId,
-      messages: result.messagesSnapshot,
-      success: terminal.kind === "ok",
-      error: terminal.kind === "failed" ? formatErrorMessage(terminal.error) : undefined,
-      durationMs: Date.now() - startedAtMs,
-    },
-    ctx: {
-      ...hookContext,
-      config: params.config,
-      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-        { ...params, agentId: target.agentId },
-        params.agentDir ?? resolveAgentDir(params.config ?? {}, target.agentId),
-      ),
-      skillWorkshopAvailable: false,
-      compacted: false,
-    },
-  };
-  if (!params.messageChannel && !params.messageProvider) {
-    await awaitAgentEndSideEffects(agentEnd);
-  } else {
-    runAgentEndSideEffects(agentEnd);
-  }
+  await hooks.complete(result);
   return result;
 }
+
+type AgentsApiPromptHistory = {
+  scope: string;
+  nativeSessionId: string;
+  messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+};
+
+/** One bounded snapshot per original recorder, owned by the harness lifetime. */
+export type AgentsApiPromptHistories = WeakMap<
+  NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]>,
+  AgentsApiPromptHistory
+>;

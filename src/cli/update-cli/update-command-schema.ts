@@ -3,7 +3,8 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { checkGlobalPackageUpdatePermissions } from "../../infra/package-update-manager-preflight.js";
+import { readPackageName } from "../../infra/package-json.js";
+import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -29,6 +30,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import {
+  DEFAULT_PACKAGE_NAME,
   resolveGitInstallDir,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -40,11 +42,11 @@ import {
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type {
   ManagedServiceRootRedirect,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
-import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 /** Render prepared preview facts without initializing runtime state. */
@@ -82,14 +84,21 @@ export async function previewUpdateCommand(params: {
       !target.packageAlreadyCurrent &&
       preflight.preflightFailures.length === 0
     ) {
-      const permissions = await checkGlobalPackageUpdatePermissions(target.packageInstallTarget);
-      if (permissions?.stderrTail) {
+      const admission = await checkGlobalPackageUpdateAdmission(
+        target.packageInstallTarget,
+        (await readPackageName(target.packageInstallTarget.packageRoot ?? target.root)) ??
+          DEFAULT_PACKAGE_NAME,
+      );
+      if (admission?.stderrTail) {
         preflight.preflightFailures.push({
-          reason: UPDATE_GLOBAL_PERMISSION_REASON,
-          message: permissions.stderrTail,
-          failureFacts: permissions.failureFacts,
+          reason:
+            admission.name === "package-permissions"
+              ? UPDATE_GLOBAL_PERMISSION_REASON
+              : admission.name,
+          message: admission.stderrTail,
+          failureFacts: admission.failureFacts,
         });
-        preflight.preflightNotes.push(`Would refuse update: ${permissions.stderrTail}`);
+        preflight.preflightNotes.push(`Would refuse update: ${admission.stderrTail}`);
       }
     }
     await printUpdateDryRun({
@@ -117,6 +126,7 @@ export async function preflightUpdateCommandSchemas(params: {
   updateStepTimeoutMs: number;
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
+  callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;
   channel: UpdateChannel;
@@ -185,6 +195,7 @@ export async function preflightUpdateCommandSchemas(params: {
         managedServiceRootRedirect,
         managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
+        callerLegacyConfigPlan: params.callerLegacyConfigPlan,
         candidateAdmissionChecks,
         expectedForeground:
           params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,

@@ -27,12 +27,7 @@ import {
 } from "./registry.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
-import {
-  IDLE_GC_MS,
-  SNAPSHOT_RETENTION_MS,
-  ManagedWorktreeService,
-  managedWorktrees,
-} from "./service.js";
+import { IDLE_GC_MS, SNAPSHOT_RETENTION_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
@@ -45,6 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     cleanup();
   });
 });
@@ -82,10 +78,11 @@ it
       names: ["unreadable"],
     });
     const service = new ManagedWorktreeService({ env, now: () => now });
+    const gc = service.gc.bind(service);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setRuntimeConfigSnapshot({}, {});
-    vi.spyOn(managedWorktrees, "gc").mockImplementation(() =>
-      service.gc({ limits: { maxCount: 0 } }),
-    );
+    const gcSpy = vi.spyOn(ManagedWorktreeService.prototype, "gc").mockImplementation(gc);
+    await closeOpenClawStateDatabaseAsync();
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
@@ -144,6 +141,7 @@ it
       }
       expect(getRegistryWorktree(env, record!.id)?.removedAt).toBeUndefined();
     } finally {
+      gcSpy.mockRestore();
       await fs.chmod(locked, 0o755);
       logs.cleanup();
       setLoggerOverride(null);
@@ -210,16 +208,19 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     { env },
   );
   const service = new ManagedWorktreeService({ env, now: () => now });
+  const gc = service.gc.bind(service);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setRuntimeConfigSnapshot({}, {});
   let collected: ManagedWorktreeGcResult | undefined;
-  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params) => {
-    collected = await service.gc({
+  vi.spyOn(ManagedWorktreeService.prototype, "gc").mockImplementation(async (params) => {
+    collected = await gc({
       ...params,
       shouldProtectOwner: (_kind, id) => id === "active-owner",
       shouldRemoveOwner: () => false,
     });
     return collected;
   });
+  await closeOpenClawStateDatabaseAsync();
   const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   const program = new Command().name("openclaw");
   registerWorktreesCli(program);
@@ -239,11 +240,10 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
       removed: idle.map((record) => record.id),
       orphansRetired: 1,
       retiredCheckoutPaths: [orphan!.path],
-      protectedCount: 595,
+      protectedCount: 591,
       protectionReasons: {
         "owner is active": 390,
         "run lease is active": 200,
-        "manual worktrees require explicit removal": 4,
         "branch-moved": 1,
       },
     }),
@@ -287,7 +287,6 @@ it("preserves a recent orphan when its owner becomes live during cleanup", async
   await fs.rm(gitdir, { recursive: true });
   const service = new ManagedWorktreeService({ env, now: () => now });
   const result = await service.gc({
-    limits: {},
     shouldProtectOwner: () => false,
     shouldRemoveOwner: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
   });
@@ -330,7 +329,7 @@ it.each([
         },
       );
     }
-    const result = await new ManagedWorktreeService({ env, now: () => now }).gc({ limits: {} });
+    const result = await new ManagedWorktreeService({ env, now: () => now }).gc();
     expect(result).toMatchObject({ orphansRetired: 0, outcome });
     expect(getRegistryWorktree(env, record!.id)?.removedAt).toBeUndefined();
     expect(await fs.readFile(path.join(record!.path, "README.md"), "utf8")).toBe("base\n");

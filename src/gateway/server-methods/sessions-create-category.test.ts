@@ -9,6 +9,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { readSessionGroupCatalog } from "../session-group-catalog.js";
 import * as groups from "../session-groups.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import {
@@ -84,7 +85,7 @@ test.each(["create", "patch"] as const)(
     expect(
       loadSessionEntry({ agentId: "main", storePath, sessionKey: key })?.category,
     ).toBeUndefined();
-    expect(groups.listSessionGroups().map(({ name }) => name)).not.toContain("Race");
+    expect(readSessionGroupCatalog().groups.map(({ name }) => name)).not.toContain("Race");
   },
 );
 afterEach(async () => {
@@ -99,7 +100,7 @@ test("creates and patches first-use groups before publishing their invalidation"
     getSessionEventSubscriberConnIds: () => new Set(["group-observer"]),
     broadcastToConnIds: (_event: string, payload: { reason?: string }) => {
       if (payload.reason === "groups") {
-        observedGroups.push(groups.listSessionGroups().map(({ name }) => name));
+        observedGroups.push(readSessionGroupCatalog().groups.map(({ name }) => name));
       }
     },
   };
@@ -181,7 +182,7 @@ test("joins rejected post-commit group registration before reporting durable cre
   );
   vi.mocked(groups.ensureSessionGroupRegistered).mockRestore();
   expect((await directSessionReq("sessions.patch", { key, category: "Retained" })).ok).toBe(true);
-  expect(groups.listSessionGroups().map(({ name }) => name)).toContain("Retained");
+  expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Retained");
 });
 
 test("does not register an unapplied category on the reset-main creation path", async () => {
@@ -234,5 +235,5 @@ test("registers committed patchMany categories across physical stores", async ()
       })?.category,
     ).toBe("Shared category");
   }
-  expect(groups.listSessionGroups().map(({ name }) => name)).toContain("Shared category");
+  expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Shared category");
 });

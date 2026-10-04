@@ -14,8 +14,10 @@ const suite = createControlUiE2eSuite({
 
 async function choose(page: Page, kind: string) {
   await page.getByRole("button", { name: "Add attachment", exact: true }).press("Enter");
+  const item = page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`);
+  await item.waitFor({ state: "visible" });
   const pending = page.waitForEvent("filechooser");
-  await page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`).press("Enter");
+  await item.press("Enter");
   return pending;
 }
 
@@ -23,6 +25,7 @@ suite.define(() => {
   it.each([
     { route: "chat", availability: "insecure" },
     { route: "new", availability: "unsupported" },
+    { route: "chat", availability: "permission-denied" },
   ])(
     "offers explicit native capture in $route when preview is $availability",
     async ({ route, availability }) => {
@@ -30,6 +33,10 @@ suite.define(() => {
         await page.addInitScript((kind) => {
           if (kind === "insecure") {
             Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
+          } else if (kind === "permission-denied") {
+            navigator.mediaDevices.getUserMedia = async () => {
+              throw new DOMException("Preview permission denied", "NotAllowedError");
+            };
           } else {
             Object.defineProperty(navigator, "mediaDevices", {
               configurable: true,
@@ -111,85 +118,84 @@ suite.define(() => {
     },
   );
 
-  for (const route of ["chat", "new"]) {
-    it.each(attachmentBrowserFixtures)(
-      `preserves $name picker semantics in ${route} across widths`,
-      async (fixture) => {
-        await suite.withPage(
-          {
-            userAgent: fixture.userAgent,
-            hasTouch: fixture.touch > 0,
-            viewport: { width: 390, height: 844 },
-          },
-          async ({ page }) => {
-            await installAttachmentBrowserIdentity(page, fixture);
-            await installMockGateway(page, { historyMessages: [] });
-            await page.goto(suite.server.baseUrl + route);
-            const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
-            const items = page.locator(".agent-chat__attach-menu-option:visible");
-            for (const [width, height] of [
-              [390, 844],
-              [1024, 768],
-              [820, 1180],
-              [932, 430],
-            ] as const) {
-              await page.setViewportSize({ width, height });
-              await trigger.press("Enter");
-              await page
-                .locator('.agent-chat__attach-menu-option[value="file"]')
-                .waitFor({ state: "visible" });
-              expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-                fixture.single ? ["Take photo", "Attach…"] : ["Take photo", "Photo", "File"],
-              );
-              for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
-                expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(
-                  true,
-                );
-              }
-              await page.keyboard.press("Escape");
-            }
-            for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {
-              const chooser = await choose(page, kind);
-              expect(await chooser.element().getAttribute("class")).toBe(
-                `agent-chat__${kind}-input`,
-              );
-              expect(chooser.isMultiple()).toBe(true);
-              expect(await chooser.element().getAttribute("capture")).toBeNull();
-              const accept = await chooser.element().getAttribute("accept");
-              if (kind === "file") {
-                for (const type of [
-                  "image/*",
-                  "video/*",
-                  "audio/*",
-                  "application/pdf",
-                  ".docx",
-                  ".zip",
-                ]) {
-                  expect(accept).toContain(type);
-                }
-              } else {
-                expect(accept).toBe("image/*");
-              }
-              // Boundary-only cancellation: Playwright does not exercise OS dialogs.
-              await chooser.setFiles([]);
-              expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
-            }
-          },
-        );
-      },
-    );
-
-    it(`multiselects and reselects through Attach in ${route}`, async () => {
-      const [fixture] = attachmentBrowserFixtures;
+  it.each(
+    [
+      ["iPhone Safari", "chat"],
+      ["iPad desktop Safari", "new"],
+      ["Android Chrome", "chat"],
+      ["macOS Safari", "new"],
+      ["iOS unknown engine", "chat"],
+      ["iOS in-app", "new"],
+      ["iOS native", "chat"],
+      ["iOS web chrome", "new"],
+    ].map(([name, route]) => {
+      const fixture = attachmentBrowserFixtures.find((candidate) => candidate.name === name);
       if (!fixture) {
-        throw new Error("Missing iPhone attachment fixture");
+        throw new Error(`Missing attachment fixture: ${name}`);
       }
-      await suite.withPage(
-        { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
-        async ({ page }) => {
-          await installAttachmentBrowserIdentity(page, fixture);
-          await installMockGateway(page, { historyMessages: [] });
-          await page.goto(suite.server.baseUrl + route);
+      return Object.assign({}, fixture, { route });
+    }),
+  )("preserves $name picker semantics in $route across widths", async (fixture) => {
+    await suite.withPage(
+      {
+        userAgent: fixture.userAgent,
+        hasTouch: fixture.touch > 0,
+        viewport: { width: 390, height: 844 },
+      },
+      async ({ page }) => {
+        await installAttachmentBrowserIdentity(page, fixture);
+        await installMockGateway(page, { historyMessages: [] });
+        await page.goto(suite.server.baseUrl + fixture.route);
+        const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+        const items = page.locator(".agent-chat__attach-menu-option:visible");
+        for (const [width, height] of [
+          [390, 844],
+          [1024, 768],
+          [820, 1180],
+          [932, 430],
+        ] as const) {
+          await page.setViewportSize({ width, height });
+          await trigger.press("Enter");
+          await page
+            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .waitFor({ state: "visible" });
+          expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
+            fixture.single ? ["Take photo", "Attach…"] : ["Take photo", "Photo", "File"],
+          );
+          for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
+            expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);
+          }
+          await page.keyboard.press("Escape");
+          await page
+            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .waitFor({ state: "hidden" });
+        }
+        for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {
+          const chooser = await choose(page, kind);
+          expect(await chooser.element().getAttribute("class")).toBe(`agent-chat__${kind}-input`);
+          expect(chooser.isMultiple()).toBe(true);
+          expect(await chooser.element().getAttribute("capture")).toBeNull();
+          const accept = await chooser.element().getAttribute("accept");
+          if (kind === "file") {
+            for (const type of [
+              "image/*",
+              "video/*",
+              "audio/*",
+              "application/pdf",
+              ".docx",
+              ".zip",
+            ]) {
+              expect(accept).toContain(type);
+            }
+          } else {
+            expect(accept).toBe("image/*");
+          }
+          // Boundary-only cancellation: Playwright does not exercise OS dialogs.
+          await chooser.setFiles([]);
+          expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+        }
+        if (fixture.single) {
+          await page.setViewportSize({ width: 390, height: 844 });
           const file = {
             name: "note.txt",
             mimeType: "text/plain",
@@ -202,8 +208,8 @@ suite.define(() => {
           await (await choose(page, "file")).setFiles(file);
           await expect.poll(() => ready.count()).toBe(2);
           expect(await page.locator(".agent-chat__file-input").inputValue()).toBe("");
-        },
-      );
-    });
-  }
+        }
+      },
+    );
+  });
 });

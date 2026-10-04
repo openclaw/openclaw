@@ -14,15 +14,13 @@ import {
   isUserProfileMutationPublication,
   type UserProfileMutationPublication,
 } from "./user-profile-mutation.js";
-import type {
-  UserProfileWriteOperations,
-  UserProfileWriteResult,
-} from "./user-profile-writes.worker.js";
+import type { UserProfileWriteResult } from "./user-profile-writes.worker.js";
 import {
   UserProfileMergeError,
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
+import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -201,6 +199,21 @@ export async function setCanonicalUserProfileRole(
     }),
   );
 }
+export async function setCanonicalUserProfileDisplayName(
+  profileId: string,
+  name: string | null,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.setDisplayName", { profileId, name }, options));
+}
+export async function setCanonicalUserProfileAvatar(
+  profileId: string,
+  bytes: Uint8Array,
+  mime: string,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.setAvatar", { profileId, bytes, mime }, options));
+}
 export async function linkCanonicalUserProfileEmail(
   email: string,
   targetProfileId: string,
@@ -228,9 +241,12 @@ export async function mergeCanonicalUserProfiles(
 }
 export async function ensureCanonicalUserProfileForEmail(
   email: string,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { expectedGitHubAccountId?: number } = {},
 ) {
-  return unwrap(await write("userProfiles.ensureEmail", { email }, options));
+  const { expectedGitHubAccountId, ...writeOptions } = options;
+  return unwrap(
+    await write("userProfiles.ensureEmail", { email, expectedGitHubAccountId }, writeOptions),
+  );
 }
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],

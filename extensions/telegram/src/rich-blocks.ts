@@ -14,8 +14,11 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inputRichBlocksToPlainText,
+  MAX_RICH_BLOCK_NESTING,
   measureInputRichBlocks,
+  normalizeInputRichBlocks,
   normalizeRichText,
+  richTextLink,
   type InputRichBlock,
   type InputRichBlockParagraph,
   type RichBlockTableCell,
@@ -23,7 +26,12 @@ import {
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
 import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
-import { htmlNodesToRichText, parseHtmlFragment, type HtmlNode } from "./rich-blocks-html.js";
+import {
+  htmlNodesToRichText,
+  nodeText,
+  parseHtmlFragment,
+  type HtmlNode,
+} from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
@@ -58,24 +66,14 @@ type StructuralSegment =
   | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
   | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
 
-function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undefined {
-  switch (style) {
-    case "heading_1":
-      return 1;
-    case "heading_2":
-      return 2;
-    case "heading_3":
-      return 3;
-    case "heading_4":
-      return 4;
-    case "heading_5":
-      return 5;
-    case "heading_6":
-      return 6;
-    default:
-      return undefined;
-  }
-}
+const HEADING_SIZES: Partial<Record<MarkdownStyle, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  heading_1: 1,
+  heading_2: 2,
+  heading_3: 3,
+  heading_4: 4,
+  heading_5: 5,
+  heading_6: 6,
+};
 
 function isInlineStyle(style: MarkdownStyle): style is InlineStyleKind {
   return Object.hasOwn(INLINE_STYLE_RANK, style);
@@ -252,7 +250,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
           ? item.wrap(container)
           : item.kind === "link"
             ? item.target.kind === "url"
-              ? { type: "url", text: container, url: item.target.href }
+              ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
       frameStack.at(-1)?.push(node);
@@ -372,7 +370,7 @@ function collectStructuralSegments(
     if (span.end <= span.start) {
       continue;
     }
-    const headingSize = resolveHeadingSize(span.style);
+    const headingSize = HEADING_SIZES[span.style];
     if (headingSize) {
       segments.push({ kind: "heading", start: span.start, end: span.end, size: headingSize });
       continue;
@@ -454,7 +452,19 @@ function emitSegments(
   rangeEnd: number,
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
   htmlNodes: readonly HtmlNode[] = [],
+  depth = 0,
 ): InputRichBlock[] {
+  // Leave room for the existing list-limit fallback before applying the wire
+  // depth budget, but never recurse through an unbounded authored document.
+  if (depth >= MAX_RICH_BLOCK_NESTING * 2) {
+    degradationReasons.add("nesting-limit");
+    return [
+      {
+        type: "paragraph",
+        text: htmlNodes.length ? nodeText(htmlNodes, true) : ir.text.slice(rangeStart, rangeEnd),
+      },
+    ];
+  }
   preserveLiteralHtmlOwners(ir, segments, htmlNodes);
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
@@ -525,6 +535,7 @@ function emitSegments(
                   end,
                   degradationReasons,
                   nodes.slice(first, last + 1),
+                  depth + 1,
                 ),
               );
               first = last + 1;
@@ -551,36 +562,34 @@ function emitSegments(
         break;
       }
       case "blockquote": {
-        const inner = emitSegments(ir, children, segment.start, segment.end, degradationReasons);
+        const inner = emitSegments(
+          ir,
+          children,
+          segment.start,
+          segment.end,
+          degradationReasons,
+          [],
+          depth + 1,
+        );
         if (inner.length > 0) {
           blocks.push({ type: "blockquote", blocks: inner });
         }
         break;
       }
       case "list": {
-        const rendered = renderMarkdownRichListSource(segment.source, (start, end) =>
-          emitSegments(
-            ir,
-            children.filter((child) => child.start >= start && child.end <= end),
-            start,
-            end,
-            degradationReasons,
+        blocks.push(
+          renderMarkdownRichListSource(segment.source, (start, end) =>
+            emitSegments(
+              ir,
+              children.filter((child) => child.start >= start && child.end <= end),
+              start,
+              end,
+              degradationReasons,
+              [],
+              depth + 1,
+            ),
           ),
         );
-        if (rendered) {
-          blocks.push(...rendered);
-        } else {
-          degradationReasons.add("list-limit");
-          blocks.push(
-            ...emitSegments(
-              ir,
-              children.filter((child) => child.kind !== "list"),
-              segment.start,
-              segment.end,
-              degradationReasons,
-            ),
-          );
-        }
         break;
       }
       case "table": {
@@ -637,6 +646,10 @@ export function markdownToTelegramRichBlocks(
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);
+  }
+  if (measureInputRichBlocks(blocks).nesting > MAX_RICH_BLOCK_NESTING) {
+    degradationReasons.add("nesting-limit");
+    blocks = normalizeInputRichBlocks(blocks);
   }
 
   if (blocks.length === 0 && ir.text.trim()) {

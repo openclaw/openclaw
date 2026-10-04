@@ -13,6 +13,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  pruneTranscriptReactionsInTransaction,
   readTranscriptMutationStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
@@ -22,10 +23,7 @@ import {
   insertTranscriptRowsWithoutProjectionInTransaction,
   scheduleTranscriptProjectionReconcile,
 } from "./session-accessor.sqlite-transcript-store.js";
-import {
-  prepareIncrementalSuffixIdempotencyMutation,
-  type IncrementalSuffixIdempotencyMutation,
-} from "./session-accessor.sqlite-transcript-suffix-idempotency.js";
+import { prepareIncrementalSuffixIdempotencyMutation } from "./session-accessor.sqlite-transcript-suffix-idempotency.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   replaceSessionTranscriptIndexSuffixInTransaction,
@@ -108,39 +106,6 @@ function verifyIncrementalPlanningFence(
       `SQLite transcript changed while planning suffix removal for ${resolved.sessionId}`,
     );
   }
-}
-
-function prepareReconciledIncrementalSuffixMutation(params: {
-  database: OpenClawAgentDatabase;
-  expectedMutationAt: number | null;
-  expectedRows: readonly SqliteTranscriptStorageRow[];
-  idempotencyMutation: IncrementalSuffixIdempotencyMutation;
-  next: readonly TranscriptEvent[];
-  nextCreatedAt: readonly number[];
-  resolved: ResolvedTranscriptScope;
-  startSeq: number;
-}): SqliteTranscriptSuffixMutationPlan {
-  verifyIncrementalPlanningFence(params.database, params.resolved, params.expectedMutationAt);
-  return {
-    expectedRows: params.expectedRows,
-    incremental: {
-      expectedMutationAt: params.expectedMutationAt,
-      projectionWasHealthy: false,
-      removedMessageIds: [],
-      retainedActiveCount: 0,
-      ...params.idempotencyMutation,
-    },
-    next: params.next,
-    nextCreatedAt: params.nextCreatedAt,
-    nextProjection: {
-      activeMessageCount: 0,
-      activeRows: [],
-      indexedSeq: params.startSeq - 1,
-      leafEventId: null,
-    },
-    prefixLength: 0,
-    startSeq: params.startSeq,
-  };
 }
 
 function prepareIncrementalTranscriptSuffixMutation(
@@ -245,17 +210,28 @@ function prepareIncrementalTranscriptSuffixMutation(
     database.db,
     resolved.sessionId,
   );
+  const suffix = { expectedRows, next, nextCreatedAt, prefixLength: 0, startSeq };
+  const prepareReconciledMutation = (): SqliteTranscriptSuffixMutationPlan => {
+    verifyIncrementalPlanningFence(database, resolved, currentMutationAt);
+    return {
+      ...suffix,
+      incremental: {
+        expectedMutationAt: currentMutationAt,
+        projectionWasHealthy: false,
+        removedMessageIds: [],
+        retainedActiveCount: 0,
+        ...idempotencyMutation,
+      },
+      nextProjection: {
+        activeMessageCount: 0,
+        activeRows: [],
+        indexedSeq: startSeq - 1,
+        leafEventId: null,
+      },
+    };
+  };
   if (!projectionWasHealthy) {
-    return prepareReconciledIncrementalSuffixMutation({
-      database,
-      expectedMutationAt: currentMutationAt,
-      expectedRows,
-      idempotencyMutation,
-      next,
-      nextCreatedAt,
-      resolved,
-      startSeq,
-    });
+    return prepareReconciledMutation();
   }
   const anchorId =
     parseSessionTranscriptTreeEntry(next[0])?.parentId ??
@@ -303,16 +279,7 @@ function prepareIncrementalTranscriptSuffixMutation(
     // Root-level, inactive, and externally redirected branches can expose durable history outside
     // the prepared suffix.
     // Rebuild their derived rows after the fenced mutation instead of publishing an incomplete view.
-    return prepareReconciledIncrementalSuffixMutation({
-      database,
-      expectedMutationAt: currentMutationAt,
-      expectedRows,
-      idempotencyMutation,
-      next,
-      nextCreatedAt,
-      resolved,
-      startSeq,
-    });
+    return prepareReconciledMutation();
   }
   const retainedActiveCount = anchor.active_position + 1;
   const activeSuffixRows = executeSqliteQuerySync(
@@ -376,7 +343,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   const addedMessages = activeRows.filter((row) => row.messagePosition !== null).length;
   verifyIncrementalPlanningFence(database, resolved, currentMutationAt);
   return {
-    expectedRows,
+    ...suffix,
     incremental: {
       expectedMutationAt: currentMutationAt,
       projectionWasHealthy,
@@ -384,16 +351,12 @@ function prepareIncrementalTranscriptSuffixMutation(
       retainedActiveCount,
       ...idempotencyMutation,
     },
-    next,
-    nextCreatedAt,
     nextProjection: {
       activeMessageCount: retainedMessageCount + addedMessages,
       activeRows,
       indexedSeq: next.length > 0 ? startSeq + next.length - 1 : startSeq - 1,
       leafEventId: relativeProjection.leafEventId,
     },
-    prefixLength: 0,
-    startSeq,
   };
 }
 
@@ -429,6 +392,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   plan: SqliteTranscriptSuffixMutationPlan,
+  projection: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  } = {},
 ): void {
   const db = getSessionKysely(database.db);
   if (
@@ -546,6 +513,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     }),
     retainedIdempotencyKeys,
   );
+  pruneTranscriptReactionsInTransaction(database, resolved, [...suffixIdentityKeys.keys()]);
   if (stagedData) {
     executeSqliteQuerySync(
       database.db,
@@ -629,7 +597,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     });
   } else {
     markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    projection.onProjectionReconcileNeeded?.();
+    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
 }

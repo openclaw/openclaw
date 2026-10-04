@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
+import { LitElement, nothing, render } from "lit";
 import { vi } from "vitest";
 import { resetChatThreadState } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -10,6 +10,31 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
 export const transcriptDomState = { measuredRowHeight: 100, detachedRowHeight: 100 };
+
+export class TranscriptTestHost extends LitElement {
+  readonly transcriptRoot = document.createElement("div");
+  renderTranscript: () => unknown = () => nothing;
+  committedRenders = 0;
+
+  protected override createRenderRoot() {
+    this.append(this.transcriptRoot);
+    return this.transcriptRoot;
+  }
+
+  protected override render() {
+    return this.renderTranscript();
+  }
+
+  protected override updated() {
+    this.committedRenders += 1;
+  }
+
+  async settleUpdates(): Promise<void> {
+    while (this.isUpdatePending) {
+      await this.updateComplete;
+    }
+  }
+}
 
 class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
@@ -92,6 +117,10 @@ export function threadProps(
     onDraftChange: () => {},
     onSend: () => {},
   };
+}
+
+export function requireElement(container: ParentNode, selector: string): HTMLElement {
+  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
 }
 
 export function transcriptRows(container: HTMLElement): HTMLElement[] {

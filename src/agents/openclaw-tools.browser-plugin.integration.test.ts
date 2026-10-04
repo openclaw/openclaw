@@ -295,7 +295,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(resolveTools({ ...deliveryOptions, config: {} }).context.delivery).toBeUndefined();
   });
 
-  it("does not expose CLI message-only authority to plugin delivery", () => {
+  it("does not expose CLI message-only authority to plugin delivery", async () => {
     const identity = {
       agentId: "main",
       runId: "cli-message-only",
@@ -308,7 +308,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       requesterSenderId: "sender-1",
     });
     setActivePluginRegistry(createEmptyPluginRegistry());
-    resolveGatewayScopedTools({
+    await resolveGatewayScopedTools({
       ...identity,
       cfg: { tools: { allow: ["message"] } },
       surface: "loopback",
@@ -321,45 +321,55 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
   });
 
-  it("does not expose scheduled message authority to plugin delivery with an announce route", () => {
-    const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
-    installChannel(
-      createOutboundTestPlugin({
-        id: "telegram",
-        outbound: {
-          deliveryMode: "direct",
-          sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+  it.each(["scheduled", "delivery-only"] as const)(
+    "does not expose %s message authority to plugin delivery with an announce route",
+    (kind) => {
+      const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
+      installChannel(
+        createOutboundTestPlugin({
+          id: "telegram",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+          },
+        }),
+        ["work"],
+      );
+      const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
+      const token = mintTurn({
+        ...identity,
+        sessionKey,
+        ...(kind === "scheduled"
+          ? {
+              scheduled: {
+                policy: { version: 1, mode: "trusted" } as const,
+                assertCurrent: () => {},
+              },
+            }
+          : { deliveryAttempt: { beforeAttempt: async () => {}, assertCurrent: () => {} } }),
+      });
+      createOpenClawTools({
+        ...deliveryOptions,
+        ...identity,
+        agentSessionKey: sessionKey,
+        runSessionKey: `${sessionKey}:run:session-cron`,
+        agentThreadId: "7",
+        messageActionTurnCapability: token,
+        config: {
+          channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
+          plugins: { allow: ["telegram"] },
         },
-      }),
-      ["work"],
-    );
-    const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
-    const token = mintTurn({
-      ...identity,
-      sessionKey,
-      scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
-    });
-    createOpenClawTools({
-      ...deliveryOptions,
-      ...identity,
-      agentSessionKey: sessionKey,
-      runSessionKey: `${sessionKey}:run:session-cron`,
-      agentThreadId: "7",
-      messageActionTurnCapability: token,
-      config: {
-        channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
-        plugins: { allow: ["telegram"] },
-      },
-    });
-    const { context } = firstResolvePluginToolsParams();
-    expect(context.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: "work",
-      threadId: "7",
-    });
-    expect(context.delivery).toBeUndefined();
-  });
+      });
+      const { context } = firstResolvePluginToolsParams();
+      expect(context.deliveryContext).toEqual({
+        channel: "telegram",
+        to: "123",
+        accountId: "work",
+        threadId: "7",
+      });
+      expect(context.delivery).toBeUndefined();
+    },
+  );
 
   it("does not expose process-local plugin delivery to gateway-owned channels", () => {
     installChannel(

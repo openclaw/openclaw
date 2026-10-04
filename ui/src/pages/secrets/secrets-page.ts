@@ -88,16 +88,16 @@ class SecretsPage extends OpenClawLightDomElement {
 
   private ensureInitialData() {
     if (this.canList && !this.store.loaded && !this.store.loading) {
-      void this.runStoreTask((store) => loadSecretsStore(store));
+      void this.runStoreTask(loadSecretsStore);
     }
   }
 
-  private async runStoreTask<T>(task: (store: SecretsStoreState) => Promise<T>): Promise<T> {
+  private async runStoreTask(task: (store: SecretsStoreState) => Promise<unknown>): Promise<void> {
     const store = this.store;
     try {
       const result = task(store);
       this.requestUpdate();
-      return await result;
+      await result;
     } finally {
       if (this.store === store) {
         this.requestUpdate();
@@ -109,34 +109,25 @@ class SecretsPage extends OpenClawLightDomElement {
     if (!this.canList) {
       return;
     }
-    void this.runStoreTask((store) => loadSecretsStore(store));
+    void this.runStoreTask(loadSecretsStore);
   }
 
-  private openAdd() {
+  private openEntry(entry?: (typeof this.store.entries)[number]) {
     if (!this.canSet) {
       return;
     }
     this.notice = null;
     this.formError = null;
-    this.secretKindOverridden = false;
-    this.draft = { name: "", value: "", kind: "env", allowedHosts: "" };
-    this.dialogMode = "add";
-  }
-
-  private openEdit(entry: (typeof this.store.entries)[number]) {
-    if (!this.canSet) {
-      return;
-    }
-    this.notice = null;
-    this.formError = null;
-    this.secretKindOverridden = true;
-    this.draft = {
-      name: entry.name,
-      value: entry.kind === "env" ? entry.value : "",
-      kind: entry.kind,
-      allowedHosts: entry.kind === "secret" ? (entry.allowedHosts ?? []).join("\n") : "",
-    };
-    this.dialogMode = "edit";
+    this.secretKindOverridden = Boolean(entry);
+    this.draft = entry
+      ? {
+          name: entry.name,
+          value: entry.kind === "env" ? entry.value : "",
+          kind: entry.kind,
+          allowedHosts: entry.kind === "secret" ? (entry.allowedHosts ?? []).join("\n") : "",
+        }
+      : { name: "", value: "", kind: "env", allowedHosts: "" };
+    this.dialogMode = entry ? "edit" : "add";
   }
 
   private closeDialog() {
@@ -171,25 +162,12 @@ class SecretsPage extends OpenClawLightDomElement {
     return null;
   }
 
-  private validateDraft(): string | null {
-    if (!ENV_SECRET_REF_ID_RE.test(this.draft.name)) {
-      return t("secretsStore.badName");
-    }
-    return this.validateValue(this.draft.value, this.draft.kind);
-  }
-
-  private submitDraft() {
-    if (!this.canSet || !this.dialogMode) {
-      return;
-    }
-    const error = this.validateDraft();
-    if (error) {
-      this.formError = error;
-      return;
-    }
-    const draft = { ...this.draft };
+  private saveEntryTask<Result extends { warningCount?: number }>(
+    save: (store: SecretsStoreState) => Promise<Result | null>,
+    finish: (result: Result) => string,
+  ) {
     void this.runStoreTask(async (store) => {
-      const result = await setSecretsStoreEntry(store, draft);
+      const result = await save(store);
       if (this.store !== store) {
         return;
       }
@@ -197,16 +175,36 @@ class SecretsPage extends OpenClawLightDomElement {
         this.formError = store.error;
         return;
       }
-      this.dialogMode = null;
+      const saved = finish(result);
       this.formError = null;
-      const saved = t(
-        draft.kind === "secret" ? "secretsStore.savedProtected" : "secretsStore.savedReadable",
-        { name: draft.name },
-      );
       this.notice = result.warningCount
         ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
         : saved;
     });
+  }
+
+  private submitDraft() {
+    if (!this.canSet || !this.dialogMode) {
+      return;
+    }
+    const error = ENV_SECRET_REF_ID_RE.test(this.draft.name)
+      ? this.validateValue(this.draft.value, this.draft.kind)
+      : t("secretsStore.badName");
+    if (error) {
+      this.formError = error;
+      return;
+    }
+    const draft = { ...this.draft };
+    this.saveEntryTask(
+      (store) => setSecretsStoreEntry(store, draft),
+      () => {
+        this.dialogMode = null;
+        return t(
+          draft.kind === "secret" ? "secretsStore.savedProtected" : "secretsStore.savedReadable",
+          { name: draft.name },
+        );
+      },
+    );
   }
 
   private openBulk() {
@@ -251,26 +249,17 @@ class SecretsPage extends OpenClawLightDomElement {
         return;
       }
     }
-    void this.runStoreTask(async (store) => {
-      const result = await bulkSetSecretsStoreEntries(store, parsed.entries);
-      if (this.store !== store) {
-        return;
-      }
-      if (!result) {
-        this.formError = store.error;
-        return;
-      }
-      this.bulkOpen = false;
-      this.formError = null;
-      const saved = t("secretsStore.savedMany", {
-        count: String(result.saved),
-        protected: String(parsed.entries.filter((entry) => entry.kind === "secret").length),
-        readable: String(parsed.entries.filter((entry) => entry.kind === "env").length),
-      });
-      this.notice = result.warningCount
-        ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
-        : saved;
-    });
+    this.saveEntryTask(
+      (store) => bulkSetSecretsStoreEntries(store, parsed.entries),
+      (result) => {
+        this.bulkOpen = false;
+        return t("secretsStore.savedMany", {
+          count: String(result.saved),
+          protected: String(parsed.entries.filter((entry) => entry.kind === "secret").length),
+          readable: String(parsed.entries.filter((entry) => entry.kind === "env").length),
+        });
+      },
+    );
   }
 
   private async removeEntry(entry: (typeof this.store.entries)[number]) {
@@ -325,8 +314,8 @@ class SecretsPage extends OpenClawLightDomElement {
       bulkEntryCount: parsed.entries.length,
       bulkInvalidNames: parsed.invalidNames,
       onRefresh: () => this.refresh(),
-      onOpenAdd: () => this.openAdd(),
-      onOpenEdit: (entry) => this.openEdit(entry),
+      onOpenAdd: () => this.openEntry(),
+      onOpenEdit: (entry) => this.openEntry(entry),
       onCloseDialog: () => this.closeDialog(),
       onDraftNameChange: (name) => this.changeDraftName(name),
       onDraftValueChange: (value) => this.patchDraft({ value }),

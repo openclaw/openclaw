@@ -6,7 +6,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveConfiguredAgentId,
@@ -68,6 +67,7 @@ import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js"
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -103,7 +103,6 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
-  cwd?: string;
   skipPluginValidation?: boolean;
 };
 
@@ -161,7 +160,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
-    : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
+    : resolveAgentIdByWorkspacePath(config, process.cwd());
   const agentId = explicitAgentId
     ? resolveConfiguredAgentId(config, explicitAgentId)
     : (inferredAgentId ??
@@ -217,13 +216,6 @@ async function runSkillsAction(
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
   });
-}
-
-function resolveSkillsWorkspaceForCommand(
-  command: Command | null | undefined,
-  opts?: { agent?: string },
-): ReturnType<typeof resolveSkillsWorkspace> {
-  return resolveSkillsWorkspace({ agentId: resolveAgentOption(command ?? undefined, opts) });
 }
 
 function resolveClawHubTargetWorkspace(
@@ -520,11 +512,7 @@ export function registerSkillsCli(program: Command) {
     .description("List and inspect available skills")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--json", "Output as JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/skills", "docs.openclaw.ai/cli/skills")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/skills"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);
   setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
@@ -895,7 +883,9 @@ export function registerSkillsCli(program: Command) {
     format: (result: T) => string,
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await action(resolveSkillsWorkspaceForCommand(command, opts));
+      const result = await action(
+        resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) }),
+      );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
         return;

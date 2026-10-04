@@ -74,21 +74,12 @@ function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Cont
   });
 }
 
-/**
- * Map tool choice string to Gemini FunctionCallingConfigMode.
- * @internal Directly tested provider implementation detail.
- */
 function mapToolChoice(choice: string): FunctionCallingConfigMode {
-  switch (choice) {
-    case "auto":
-      return FunctionCallingConfigMode.AUTO;
-    case "none":
-      return FunctionCallingConfigMode.NONE;
-    case "any":
-      return FunctionCallingConfigMode.ANY;
-    default:
-      return FunctionCallingConfigMode.AUTO;
-  }
+  return choice === "none"
+    ? FunctionCallingConfigMode.NONE
+    : choice === "any"
+      ? FunctionCallingConfigMode.ANY
+      : FunctionCallingConfigMode.AUTO;
 }
 
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {
@@ -126,11 +117,6 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       nextToolCallId: params.nextToolCallId,
     });
   } catch (error) {
-    for (const block of output.content) {
-      if ("index" in block) {
-        delete (block as { index?: number }).index;
-      }
-    }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     failTransportStream({ stream, output, error: failure, signal: options?.signal });
   }

@@ -202,11 +202,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  });
+  return splitSystemdEnvironmentWords(value);
 }
 
 export function splitSystemdEnvironmentWords(value: string): string[] {
@@ -230,7 +226,7 @@ export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; va
 
 /** Read declared inline Service metadata; files and specifier expansion belong to effective inspection. */
 export function parseSystemdInlineEnvironment(content: string): Record<string, string> {
-  const environment: Record<string, string> = {};
+  let environment: Record<string, string> = {};
   let section = "";
   for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
@@ -244,9 +240,7 @@ export function parseSystemdInlineEnvironment(content: string): Record<string, s
     ) {
       const value = line.slice(separator + 1);
       if (!value.trim()) {
-        for (const key of Object.keys(environment)) {
-          delete environment[key];
-        }
+        environment = {};
       }
       for (const assignment of parseSystemdEnvAssignments(value)) {
         environment[assignment.key] = assignment.value;

@@ -1,5 +1,7 @@
+import { symlinkSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -60,19 +62,21 @@ it("retains only declared reply rows and their stored model parent at each snaps
     await upsertSessionEntryCore(parentScope, { ...parent, label: "before commit" });
     expect(snapshot.readEntry(parentKey)?.label).toBe("before snapshot");
 
+    const sql = observeHostDataSql();
     const committed = await commitReplySessionInitialization({
       ...scope,
       activeSessionKey: sessionKey,
-      archivePreviousTranscript: false,
       expectedRevision: snapshot.revision,
       sessionEntry: persistedCurrent,
       prepareSessionEntry: async ({ readEntry, sessionEntry }) => {
         expect(readEntry(parentKey)?.label).toBe("before commit");
+        expect(readEntry(storedParentKey)?.sessionId).toBe("stored-parent");
         await upsertSessionEntryCore(parentScope, { ...parent, label: "after commit snapshot" });
         expect(readEntry(parentKey)?.label).toBe("before commit");
         return sessionEntry;
       },
-    });
+    }).finally(() => sql.restore());
+    expect(sql.queries, "reply initialization caller-thread SQL").toEqual([]);
     expect(committed.ok).toBe(true);
     if (!committed.ok) {
       throw new Error("reply initialization unexpectedly conflicted");
@@ -83,6 +87,81 @@ it("retains only declared reply rows and their stored model parent at each snaps
     expect(committed.sessionStoreView[parentKey]?.label).toBe("before commit");
     expect(loadSessionEntry(parentScope)?.label).toBe("after commit snapshot");
     expect(loadSessionEntry({ ...scope, sessionKey: unrelatedKey })).toEqual(persistedUnrelated);
+  });
+});
+
+it("returns the successor after a worker upsert conflict without replaying preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:reply-conflict",
+      storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 1 });
+    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const prepare = vi.fn(async () => {
+      await upsertSessionEntryCore(scope, {
+        sessionId: "successor",
+        updatedAt: 3,
+        label: "successor metadata",
+      });
+    });
+    const result = await commitReplySessionInitialization({
+      ...scope,
+      activeSessionKey: scope.sessionKey,
+      expectedRevision: snapshot.revision,
+      sessionEntry: { sessionId: "candidate", updatedAt: 2 },
+      beforeEntryMutation: prepare,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "stale-snapshot",
+      currentEntry: { sessionId: "successor", label: "successor metadata" },
+    });
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(scope)?.sessionId).toBe("successor");
+  });
+});
+
+it("refuses a replacement physical store with the same session identity after preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const primary = path.join(state.sessionsDir("main"), "reply-primary.sqlite");
+    const successor = path.join(state.sessionsDir("main"), "reply-successor.sqlite");
+    const alias = path.join(state.sessionsDir("main"), "reply-alias.sqlite");
+    const scope = { agentId: "main", sessionKey: "agent:main:reply-source", storePath: alias };
+    for (const [storePath, label] of [
+      [primary, "primary"],
+      [successor, "successor"],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { ...scope, storePath },
+        { sessionId: "same-session", updatedAt: 1, label },
+      );
+    }
+    symlinkSync(primary, alias);
+    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const prepare = vi.fn(async () => {
+      unlinkSync(alias);
+      symlinkSync(successor, alias);
+      return { ...snapshot.currentEntry!, label: "must not publish" };
+    });
+    try {
+      await expect(
+        commitReplySessionInitialization({
+          ...scope,
+          activeSessionKey: scope.sessionKey,
+          expectedRevision: snapshot.revision,
+          sessionEntry: snapshot.currentEntry!,
+          prepareSessionEntry: prepare,
+        }),
+      ).rejects.toThrow("Reply initialization database changed after its snapshot");
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ ...scope, storePath: primary })?.label).toBe("primary");
+      expect(loadSessionEntry({ ...scope, storePath: successor })?.label).toBe("successor");
+    } finally {
+      unlinkSync(alias);
+      symlinkSync(primary, alias);
+    }
   });
 });
 

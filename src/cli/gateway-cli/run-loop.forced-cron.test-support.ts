@@ -105,8 +105,7 @@ await runGatewayLoop({
           close: async () => {
             cron.stop();
             await drainGatewayCron({
-              exitWatchersStop: Promise.resolve(),
-              streamWatchersStop: Promise.resolve(),
+              settlements: [cron.waitForIdle()],
               logger: { warn: (...args) => assert.fail(JSON.stringify(args)) },
             });
             trace("close-completed");

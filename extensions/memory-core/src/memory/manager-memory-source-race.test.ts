@@ -266,8 +266,8 @@ describe("memory source changes during indexing", () => {
     const recordOrigins = memoryOrigins.recordMemoryEntryOrigins;
     const originsSpy = vi
       .spyOn(memoryOrigins, "recordMemoryEntryOrigins")
-      .mockImplementation((params) => {
-        const recorded = recordOrigins(params);
+      .mockImplementation(async (params) => {
+        const recorded = await recordOrigins(params);
         events.push("origins");
         return recorded;
       });
@@ -322,7 +322,7 @@ describe("memory source changes during indexing", () => {
         db.prepare("SELECT id FROM memory_index_chunks_fts WHERE path = ?").all(stalePath),
       ).toEqual([]);
       expect(sibling()).toEqual(siblingBefore);
-      const recorded = memoryOrigins.listMemoryEntryOrigins({
+      const recorded = await memoryOrigins.listMemoryEntryOrigins({
         agentId: "main",
         sessionIds: [sessionId],
       });

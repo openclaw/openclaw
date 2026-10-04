@@ -5,7 +5,7 @@ import {
   evaluateExecAllowlist,
   evaluateShellAllowlistWithAuthorization,
   resolvePlannedSegmentArgv,
-  type ExecAllowlistEntry,
+  type ExecAllowlistAnalysis,
   type ExecApprovalsResolved,
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
@@ -27,21 +27,8 @@ import {
 } from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
-/**
- * Allowlist analysis and argv rewriting for node-host system.run.
- *
- * This module keeps command approval analysis separate from process execution,
- * and only rewrites shell transports when the rebuilt command still satisfies policy.
- */
-type SystemRunAllowlistAnalysis = {
-  analysisOk: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
-  allowlistSatisfied: boolean;
+type SystemRunAllowlistAnalysis = ExecAllowlistAnalysis & {
   allowlistAuthorizationSatisfied: boolean;
-  segments: ExecCommandSegment[];
-  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
-  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
-  authorizationPlan?: ExecAuthorizationPlan;
 };
 
 /** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
@@ -58,39 +45,7 @@ export async function evaluateSystemRunAllowlist(params: {
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
 }): Promise<SystemRunAllowlistAnalysis> {
-  if (params.shellCommand) {
-    const allowlistEval = await evaluateShellAllowlistWithAuthorization({
-      command: params.shellCommand,
-      allowlist: params.approvals.allowlist,
-      safeBins: params.safeBins,
-      safeBinProfiles: params.safeBinProfiles,
-      cwd: params.cwd,
-      env: params.env,
-      trustedSafeBinDirs: params.trustedSafeBinDirs,
-      skillBins: params.skillBins,
-      autoAllowSkills: params.autoAllowSkills,
-      platform: process.platform,
-    });
-    return {
-      analysisOk: allowlistEval.analysisOk,
-      allowlistMatches: allowlistEval.allowlistMatches,
-      allowlistSatisfied:
-        params.security === "allowlist" && allowlistEval.analysisOk
-          ? allowlistEval.allowlistSatisfied
-          : false,
-      allowlistAuthorizationSatisfied: allowlistEval.analysisOk && allowlistEval.allowlistSatisfied,
-      segments: allowlistEval.segments,
-      segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-      segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-      ...(allowlistEval.authorizationPlan
-        ? { authorizationPlan: allowlistEval.authorizationPlan }
-        : {}),
-    };
-  }
-
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
-  const allowlistEval = evaluateExecAllowlist({
-    analysis,
+  const context = {
     allowlist: params.approvals.allowlist,
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
@@ -98,16 +53,28 @@ export async function evaluateSystemRunAllowlist(params: {
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
-  });
+  };
+  let evaluation: ExecAllowlistAnalysis;
+  if (params.shellCommand) {
+    evaluation = await evaluateShellAllowlistWithAuthorization({
+      ...context,
+      command: params.shellCommand,
+      env: params.env,
+      platform: process.platform,
+    });
+  } else {
+    const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+    evaluation = {
+      ...evaluateExecAllowlist({ ...context, analysis }),
+      analysisOk: analysis.ok,
+      segments: analysis.segments,
+    };
+  }
   return {
-    analysisOk: analysis.ok,
-    allowlistMatches: allowlistEval.allowlistMatches,
+    ...evaluation,
     allowlistSatisfied:
-      params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
-    allowlistAuthorizationSatisfied: analysis.ok && allowlistEval.allowlistSatisfied,
-    segments: analysis.segments,
-    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-    segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+      params.security === "allowlist" && evaluation.analysisOk && evaluation.allowlistSatisfied,
+    allowlistAuthorizationSatisfied: evaluation.analysisOk && evaluation.allowlistSatisfied,
   };
 }
 
@@ -285,7 +252,6 @@ function replacePosixShellInlineCommand(params: {
 }
 
 /** Mark truncated output in stderr when possible, otherwise stdout. */
-/** Truncates captured stdout/stderr in place to the node-host output cap. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

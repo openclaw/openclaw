@@ -66,11 +66,6 @@
   color: var(--muted);
 }
 
-.sidebar-issues-panel__heading-icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 .sidebar-issues-panel__header-actions {
   display: flex;
   align-items: center;
@@ -211,20 +206,21 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding: 24px;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }
 
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-md);
 }
 
 .sidebar-issues-panel__empty-icon {
   display: inline-flex;
-  margin-block-end: 3px;
+  margin-block-end: 12px;
   color: var(--muted);
 }
 
@@ -314,7 +310,11 @@ footer.sidebar-issues-panel__mentions-note {
   background: var(--bg-hover);
 }
 
-.sidebar-issues-panel__summary:focus-visible {
+.sidebar-issues-panel__summary:focus-visible,
+.sidebar-issues-panel__action:focus-visible,
+.sidebar-issues-panel__navigation-link:focus-visible,
+.sidebar-issues-panel__dismiss:focus-visible,
+.sidebar-approval-row__open-session:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -366,11 +366,6 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--text);
 }
 
-.sidebar-issues-panel__action:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__icon {
   display: inline-grid;
   width: 28px;
@@ -381,6 +376,7 @@ footer.sidebar-issues-panel__mentions-note {
   color: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
+.sidebar-issues-panel__heading-icon svg,
 .sidebar-issues-panel__icon svg,
 .sidebar-issues-panel__chevron svg {
   width: 16px;
@@ -448,8 +444,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__entity {
@@ -504,11 +498,6 @@ footer.sidebar-issues-panel__mentions-note {
   }
 }
 
-.sidebar-issues-panel__dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__chevron {
   display: inline-flex;
   flex: none;
@@ -561,14 +550,14 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-update-card__review--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .sidebar-update-card__review--primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-foreground);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
 }
 
 .sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {
@@ -739,11 +728,6 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-approval-row__open-session:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.sidebar-approval-row__open-session:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-approval-row__open-session svg {

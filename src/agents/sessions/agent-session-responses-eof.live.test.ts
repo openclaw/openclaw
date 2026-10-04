@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -107,11 +106,11 @@ describeLive("AgentSession Responses EOF live", () => {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey("openai", apiKey);
     const { session } = await createAgentSession({
+      systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
       cwd: root,
-      agentDir: join(root, "agent"),
       model,
       thinkingLevel: "low",
-      noTools: "builtin",
+      tools: ["record_receipt"],
       customTools: [
         {
           name: "record_receipt",
@@ -130,7 +129,6 @@ describeLive("AgentSession Responses EOF live", () => {
         },
       ],
       resourceLoader: createResourceLoader(),
-      authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({

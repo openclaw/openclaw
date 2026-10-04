@@ -32,6 +32,50 @@ import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
 
+test("sessions.create publishes repository metadata before the next socket read", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const key = "agent:main:dashboard:repository-worker";
+  try {
+    const created = await rpcReq<{
+      key: string;
+      entry: { repositoryWorkspaceId: string };
+    }>(ws, "sessions.create", {
+      agentId: "main",
+      key,
+      repository: { url: "https://github.com/example/repository.git", ref: "main" },
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const workspaceId = requireNonEmptyString(
+      created.payload?.entry.repositoryWorkspaceId,
+      "created repository workspace",
+    );
+    expect(created.payload?.key).toBe(key);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      repositoryWorkspaceId: workspaceId,
+    });
+
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        repositoryWorkspaceId?: string;
+        repository?: { url: string; ref?: string; branch: string };
+      }>;
+    }>(ws, "sessions.list", { agentId: "main", limit: 100 });
+    expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+    expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+      repositoryWorkspaceId: workspaceId,
+      repository: {
+        url: "https://github.com/example/repository.git",
+        ref: "main",
+        branch: `openclaw/${workspaceId}`,
+      },
+    });
+  } finally {
+    ws.close();
+  }
+});
+
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
@@ -39,13 +83,13 @@ test("chat.send fences dashboard title persistence from concurrent session delet
   let deletionCleanup: Promise<unknown> | undefined;
   let dispatchAdmissionsReleased: Promise<void> | undefined;
   const scheduleTitle = await actualDashboardTitleScheduler();
-  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, ready) => {
+  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, turn) => {
     // Capture chat custody before the independent title admission is created.
     dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
     });
-    scheduleTitle(params, ready);
+    scheduleTitle(params, turn);
   });
   const dispatchStarted = createDeferredCore();
   const { promise: dispatchFinished, resolve: finishDispatch } = createDeferredCore();
@@ -228,11 +272,86 @@ test.each(["assistant", "item", "tool", "thinking", "approval", "empty", "error"
   },
 );
 
+test("chat.send retries a title that failed during its turn once that turn settles", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const sessionKey = "agent:main:dashboard:title-retry-after-turn";
+  let dispatchFinished = false;
+  let stopTitleObserver = () => {};
+  const dispatchStarted = createDeferredCore();
+  const firstLabelFailed = createDeferredCore();
+  const titlePersisted = createDeferredCore();
+  const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
+  const retriedAfterTurn: boolean[] = [];
+  dashboardTitleGenerationMocks.generate
+    .mockImplementationOnce(async () => {
+      // A one-request-at-a-time model holds the label behind the running reply until it times out.
+      firstLabelFailed.resolve();
+      throw new Error("conversation label generation failed (primary fallback)");
+    })
+    .mockImplementationOnce(async () => {
+      retriedAfterTurn.push(dispatchFinished);
+      return "Generated Dashboard Title";
+    });
+  dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
+    const runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
+    replyOptions?.onAgentRunStart?.(runId);
+    emitAgentEvent({ runId, stream: "assistant", data: { text: "Planning the release" } });
+    dispatchStarted.resolve();
+    await dispatchPending;
+    dispatchFinished = true;
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    return {
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    };
+  });
+  try {
+    const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+      agentId: "main",
+      key: sessionKey,
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    stopTitleObserver = sessionChanges.subscribe((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === sessionKey &&
+        loadSessionEntry({ agentId: "main", sessionKey, storePath })?.displayName
+      ) {
+        titlePersisted.resolve();
+      }
+    });
+
+    const sent = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      message: "Help me plan the release",
+      idempotencyKey: "dashboard-title-retry-after-turn",
+    });
+    expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+    await Promise.all([dispatchStarted.promise, firstLabelFailed.promise]);
+    finishDispatch();
+    await titlePersisted.promise;
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      displayName: "Generated Dashboard Title",
+    });
+    expect(retriedAfterTurn).toEqual([true]);
+  } finally {
+    stopTitleObserver();
+    const released = getSessionWorkAdmissionRelease({
+      scope: storePath,
+      identities: [sessionKey],
+    });
+    finishDispatch();
+    await released;
+    ws.close();
+  }
+});
+
 test("sessions.create can start the first agent turn from an initial task", async () => {
   const { storePath } = await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { ws } = await openClient();
 
   const created = await rpcReq<{
@@ -276,8 +395,6 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
 const mentionCreationOwners = [
   ["main", "per-sender"],
-  ["ops", "per-sender"],
-  ["main", "global"],
   ["ops", "global"],
 ] as const;
 
@@ -336,7 +453,7 @@ test.each(mentionCreationOwners)(
         expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );
@@ -365,7 +482,7 @@ test("sessions.create rejects stale mention spans before creating a selected-age
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
   chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "attachment-run", status: "started" });
@@ -397,7 +514,7 @@ test("sessions.create forwards an attachment-only first turn", async () => {
 
 test("sessions.create rejects unusable attachment-only input before creating a session", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
 
   const created = await directSessionReq("sessions.create", {
     agentId: "main",

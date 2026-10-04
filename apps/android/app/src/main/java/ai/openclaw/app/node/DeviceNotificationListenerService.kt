@@ -97,6 +97,11 @@ data class NotificationActionResult(
   val message: String? = null,
 )
 
+private fun notificationActionError(
+  code: String,
+  message: String,
+): NotificationActionResult = NotificationActionResult(ok = false, code = code, message = "$code: $message")
+
 internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean = kind == NotificationActionKind.Dismiss
 
 /**
@@ -312,7 +317,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
   companion object {
     private const val recentPackagesPref = "notifications.forwarding.recentPackages"
-    private const val legacyRecentPackagesPref = "notifications.recentPackages"
     private const val recentPackagesLimit = 64
 
     @Volatile private var activeService: DeviceNotificationListenerService? = null
@@ -327,24 +331,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     private fun recentPackagesPrefs(context: Context) = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
 
-    private fun migrateLegacyRecentPackagesIfNeeded(context: Context) {
-      val prefs = recentPackagesPrefs(context)
-      val hasNew = prefs.contains(recentPackagesPref)
-      val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
-      if (!hasNew && legacy.isNotEmpty()) {
-        // Keep recent package suggestions across the preference-key rename.
-        prefs.edit {
-          putString(recentPackagesPref, legacy)
-          remove(legacyRecentPackagesPref)
-        }
-      } else if (hasNew && prefs.contains(legacyRecentPackagesPref)) {
-        prefs.edit { remove(legacyRecentPackagesPref) }
-      }
-    }
-
     /** Returns recent third-party packages seen by the listener for settings suggestions. */
     fun recentPackages(context: Context): List<String> {
-      migrateLegacyRecentPackagesIfNeeded(context)
       val prefs = recentPackagesPrefs(context)
       val stored = prefs.getString(recentPackagesPref, null).orEmpty()
       return stored
@@ -381,19 +369,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       request: NotificationActionRequest,
     ): NotificationActionResult {
       if (!isAccessEnabled(context)) {
-        return NotificationActionResult(
-          ok = false,
-          code = "NOTIFICATIONS_DISABLED",
-          message = "NOTIFICATIONS_DISABLED: enable notification access in system Settings",
-        )
+        return notificationActionError("NOTIFICATIONS_DISABLED", "enable notification access in system Settings")
       }
       val service =
         activeService
-          ?: return NotificationActionResult(
-            ok = false,
-            code = "NOTIFICATIONS_UNAVAILABLE",
-            message = "NOTIFICATIONS_UNAVAILABLE: notification listener not connected",
-          )
+          ?: return notificationActionError("NOTIFICATIONS_UNAVAILABLE", "notification listener not connected")
       return service.executeActionInternal(request)
     }
 
@@ -407,7 +387,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       val service = activeService ?: return
       val normalized = packageName?.trim().orEmpty()
       if (normalized.isEmpty() || normalized == service.packageName) return
-      migrateLegacyRecentPackagesIfNeeded(service.applicationContext)
       val prefs = recentPackagesPrefs(service.applicationContext)
       val existing =
         prefs
@@ -430,28 +409,16 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           it.key == request.key &&
             isGatewayVisibleNotification(packageName, it.packageName)
         }
-        ?: return NotificationActionResult(
-          ok = false,
-          code = "NOTIFICATION_NOT_FOUND",
-          message = "NOTIFICATION_NOT_FOUND: notification key not found",
-        )
+        ?: return notificationActionError("NOTIFICATION_NOT_FOUND", "notification key not found")
     if (actionRequiresClearableNotification(request.kind) && !sbn.isClearable) {
-      return NotificationActionResult(
-        ok = false,
-        code = "NOTIFICATION_NOT_CLEARABLE",
-        message = "NOTIFICATION_NOT_CLEARABLE: notification is ongoing or protected",
-      )
+      return notificationActionError("NOTIFICATION_NOT_CLEARABLE", "notification is ongoing or protected")
     }
 
     return when (request.kind) {
       NotificationActionKind.Open -> {
         val pendingIntent =
           sbn.notification.contentIntent
-            ?: return NotificationActionResult(
-              ok = false,
-              code = "ACTION_UNAVAILABLE",
-              message = "ACTION_UNAVAILABLE: notification has no open action",
-            )
+            ?: return notificationActionError("ACTION_UNAVAILABLE", "notification has no open action")
         performNotificationAction("open failed") {
           pendingIntent.send()
         }
@@ -467,11 +434,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       NotificationActionKind.Reply -> {
         val replyText = request.replyText?.trim().orEmpty()
         if (replyText.isEmpty()) {
-          return NotificationActionResult(
-            ok = false,
-            code = "INVALID_REQUEST",
-            message = "INVALID_REQUEST: replyText required for reply action",
-          )
+          return notificationActionError("INVALID_REQUEST", "replyText required for reply action")
         }
         val action =
           sbn.notification.actions
@@ -479,11 +442,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
               // Android reply actions are identified by RemoteInput, not by a stable action title.
               candidate.actionIntent != null && !candidate.remoteInputs.isNullOrEmpty()
             }
-            ?: return NotificationActionResult(
-              ok = false,
-              code = "ACTION_UNAVAILABLE",
-              message = "ACTION_UNAVAILABLE: notification has no reply action",
-            )
+            ?: return notificationActionError("ACTION_UNAVAILABLE", "notification has no reply action")
         val remoteInputs = action.remoteInputs ?: emptyArray()
         val fillInIntent = Intent()
         val replyBundle = android.os.Bundle()
@@ -506,10 +465,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       action()
       NotificationActionResult(ok = true)
     } catch (err: Throwable) {
-      NotificationActionResult(
-        ok = false,
-        code = "ACTION_FAILED",
-        message = "ACTION_FAILED: ${err.message ?: fallbackMessage}",
-      )
+      notificationActionError("ACTION_FAILED", err.message ?: fallbackMessage)
     }
 }

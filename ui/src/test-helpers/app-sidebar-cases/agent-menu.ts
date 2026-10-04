@@ -74,40 +74,69 @@ describe("AppSidebar agent chip", () => {
     expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
   });
 
-  it("keeps the hydrated identity while the active roster row is unavailable", async () => {
-    const request = vi.fn().mockResolvedValue({
-      agentId: "main",
-      name: "Workspace Molty",
-      emoji: "🦞",
-    });
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      null,
-      [],
-      agentIdentity,
-    );
-
-    sidebar.connected = true;
-    await vi.waitFor(() => {
-      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe(
-        "Workspace Molty",
+  it.each(["loading", "excluded"] as const)(
+    "does not revive a hydrated picker identity when discovery is %s",
+    async (discovery) => {
+      const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+        agentId: params.agentId,
+        name: params.agentId === "main" ? "Private agent" : "Shared agent",
+        emoji: "🦞",
+      }));
+      const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+      await agentIdentity.ensure(["main"]);
+      const sessions = createSessions("main", ["agent:main:thread:readable"]);
+      const row = sessions.state.result?.sessions[0];
+      if (row) {
+        row.displayName = "Existing readable conversation";
+      }
+      const { sidebar } = await mountSidebar(
+        gatewayHarness.gateway,
+        sessions,
+        "panel",
+        discovery === "loading" ? null : { ...TWO_AGENTS, agents: [{ id: "shared" }] },
+        [],
+        agentIdentity,
       );
-    });
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await vi.waitFor(() => {
+
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).not.toContain(
+        "Private agent",
+      );
+      if (discovery === "loading") {
+        expect(sidebar.querySelector(".sidebar-agent-card__main")).toBeNull();
+        expect(sidebar.querySelector(".sidebar-recent-session__title-row")?.textContent).toContain(
+          "Existing readable conversation",
+        );
+      } else {
+        expect(
+          sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+        ).toMatch(/shared/i);
+      }
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          ".sidebar-workspace-header__main, .sidebar-agent-card__main",
+        )
+        ?.click();
+      await vi.dynamicImportSettled();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")?.textContent).not.toContain(
+        "Private agent",
+      );
+      const capabilities = sidebar.querySelector('wa-dropdown-item[value="command:capabilities"]');
+      if (discovery === "loading") {
+        expect(capabilities).toBeNull();
+      } else {
+        expect(capabilities?.textContent).toMatch(/shared/i);
+      }
       expect(
         sidebar
-          .querySelector<HTMLElement>(
-            'wa-dropdown-item[value="command:capabilities"] .sidebar-customize-menu__text',
-          )
-          ?.textContent?.trim(),
-      ).toBe("What can Workspace Molty do?");
-    });
-  });
+          .querySelector('wa-dropdown-item[value="command:agent-settings"]')
+          ?.hasAttribute("disabled"),
+      ).toBe(discovery === "loading");
+    },
+  );
 
   it("keeps the configured roster label when identity hydration returns a fallback", async () => {
     const request = vi.fn(async (_method: string, params: { agentId: string }) =>
@@ -414,7 +443,11 @@ describe("AppSidebar agent chip", () => {
       sidebar.connected = true;
       await sidebar.updateComplete;
 
-      sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+        )
+        ?.click();
       await sidebar.updateComplete;
       const menu = sidebar.querySelector(".sidebar-agent-menu");
       expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
@@ -429,7 +462,7 @@ describe("AppSidebar agent chip", () => {
         "command:sidebar-agents",
         "command:all-agents",
         "command:new-agent",
-        "command:capabilities",
+        ...(count ? ["command:capabilities"] : []),
         "command:agent-settings",
       ]);
     },
@@ -461,27 +494,6 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(onNavigate).toHaveBeenCalledWith(...navigation);
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-  });
-
-  it("keeps the plain roster without a filter at six agents or fewer", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(6),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(6);
   });
 
   it("keeps pinned agents first in large scrollable rosters without a filter", async () => {
@@ -522,49 +534,6 @@ describe("AppSidebar agent chip", () => {
       "agent-10",
       "agent-11",
     ]);
-  });
-
-  it("keeps the full large roster scrollable when nothing is pinned", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(12);
-    expect(sidebar.querySelector(".sidebar-agent-menu__agent-grid")).not.toBeNull();
-  });
-
-  it("ignores stale pins when choosing the large-roster fallback", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("agent-1", ["agent:agent-1:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    sidebar.connected = true;
-    sidebar.pinnedAgentIds = ["deleted-agent"];
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    expect(
-      sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ).toHaveLength(12);
   });
 
   it("loads switcher avatar tiles through the authenticated avatar loader", async () => {

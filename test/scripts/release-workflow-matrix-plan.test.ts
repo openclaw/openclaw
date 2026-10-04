@@ -112,12 +112,12 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
 
 const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
+  "package-update-restart-auth",
   "package-update-onboarding",
   "package-update-migrations",
-  "package-update-self-upgrade",
 ];
 
-const STABLE_DOCKER_CHUNKS = [
+const FULL_DOCKER_CHUNKS = [
   "core",
   ...PACKAGE_UPDATE_CHUNKS,
   "plugins-runtime-plugins",
@@ -145,12 +145,12 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
     profile: "full",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -620,9 +620,14 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       );
       expect(
         plan.dockerE2e.matrix.include.find(
-          (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
         ),
-      ).toMatchObject({ timeout_minutes: 80 });
+      ).toMatchObject({ timeout_minutes: 60 });
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
+        ),
+      ).toMatchObject({ timeout_minutes: 55 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

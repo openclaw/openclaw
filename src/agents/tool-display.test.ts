@@ -34,19 +34,32 @@ describe("isShellToolDisplayName", () => {
 
   it("keeps the compact summary form for a capitalized shell tool", () => {
     const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
-    // Compact form is "<emoji> <detail>", not "<emoji> Bash: <detail>".
-    expect(formatToolSummary(display)).toBe(`${display.emoji} ${formatToolDetail(display)}`);
+    expect(formatToolSummary(display)).toBe("print text, `echo alpha`");
   });
 });
 
 describe("tool display details", () => {
+  it("displays the called tool and inner query for a Tool Search invocation", () => {
+    expect(
+      resolveToolDisplay({
+        name: "tool_call",
+        args: { id: "openclaw:search:web_search", args: { query: "OpenClaw release notes" } },
+      }),
+    ).toMatchObject({
+      name: "web_search",
+      label: "Web Search",
+      verb: "search",
+      detail: 'for "OpenClaw release notes"',
+    });
+  });
+
   it("preserves the curated presentation for historical image activity", () => {
     const display = resolveToolDisplay({
       name: "image",
       args: { image: "/tmp/screenshot.png", prompt: "Inspect the error" },
     });
 
-    expect(display).toMatchObject({ emoji: "🖼️", title: "Image" });
+    expect(display.title).toBe("Image");
   });
 
   it("uses the curated view_image presentation", () => {
@@ -55,7 +68,7 @@ describe("tool display details", () => {
       args: { path: "/tmp/screenshot.png", prompt: "Inspect the error" },
     });
 
-    expect(display).toMatchObject({ emoji: "🖼️", title: "View Image" });
+    expect(display.title).toBe("View Image");
     expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
   });
 
@@ -68,7 +81,7 @@ describe("tool display details", () => {
       },
     });
 
-    expect(formatToolSummary(display)).toBe("⏸️ Yield");
+    expect(formatToolSummary(display)).toBe("Yield");
     expect(formatToolDetail(display)).toBeUndefined();
   });
 
@@ -499,7 +512,7 @@ describe("tool display details", () => {
           detailMode: "explain",
         }),
       ),
-    ).toBe("🛠️ fetch git changes (agent)");
+    ).toBe("fetch git changes (agent)");
 
     expect(
       formatToolSummary(
@@ -508,7 +521,7 @@ describe("tool display details", () => {
           args: { query: "OpenClaw docs" },
         }),
       ),
-    ).toBe('🔎 Web Search: for "OpenClaw docs"');
+    ).toBe('Web Search: for "OpenClaw docs"');
   });
 
   it("moves cd path to context suffix with || separator", () => {

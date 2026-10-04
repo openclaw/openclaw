@@ -184,6 +184,8 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             }
             return;
           }
+          const triageCommandIndex = Array.isArray(message.commandArgv) &&
+            message.commandArgv[1] === "--no-install" ? 3 : 2;
           if (
             params.action === "triage" &&
             message.type === "triage-ready" &&
@@ -228,10 +230,11 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             !stagedContinuation && !continuation && !continuationCancelled &&
             Object.keys(message).length === 4 &&
             Array.isArray(message.commandArgv) &&
-            (message.commandArgv.length === 3 ||
-              (message.commandArgv.length === 5 && message.commandArgv[3] === "--update-result")) &&
+            (message.commandArgv.length === triageCommandIndex + 1 ||
+              (message.commandArgv.length === triageCommandIndex + 3 &&
+                message.commandArgv[triageCommandIndex + 1] === "--update-result")) &&
             message.commandArgv.every((arg) => typeof arg === "string" && arg.length < 4096) &&
-            message.commandArgv[2] === "triage" &&
+            message.commandArgv[triageCommandIndex] === "triage" &&
             validTriageFailure(message.failure) &&
             message.failure.kind === "update" &&
             params.serviceRecovery?.kind === "systemd" &&
@@ -345,6 +348,21 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
 export const HANDOFF_NOTICE_MARKER = "before-park\n";
 export const HANDOFF_PARK_ADMITTED_MARKER = "park-admitted\n";
 
+export function createHandoffLineReader(onLine: (line: string) => void | false) {
+  let buffered = "";
+  return (chunk: Buffer | string) => {
+    buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+    let newline;
+    while ((newline = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, newline + 1);
+      buffered = buffered.slice(newline + 1);
+      if (onLine(line) === false) {
+        return;
+      }
+    }
+  };
+}
+
 export type HandoffChild = ChildProcess & {
   stdin: NonNullable<ChildProcess["stdin"]>;
   stdout: NonNullable<ChildProcess["stdout"]>;
@@ -364,7 +382,6 @@ export function waitForHandoffResponse(
     const output = child.stdout;
     const exitEvent = command === "closed" ? "close" : "exit";
     let settled = false;
-    let buffered = "";
     // An already-expired deadline can settle before a timer exists.
     let cancelTimeout = () => {};
     const finish = (result: string | Error) => {
@@ -406,18 +423,13 @@ export function waitForHandoffResponse(
         finish(new Error("managed update handoff control input closed"));
       }
     };
-    const onData = (chunk: Buffer | string) => {
-      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
-      let newline;
-      while ((newline = buffered.indexOf("\n")) >= 0) {
-        const line = buffered.slice(0, newline + 1);
-        buffered = buffered.slice(newline + 1);
-        if (line !== HANDOFF_NOTICE_MARKER && line !== HANDOFF_PARK_ADMITTED_MARKER) {
-          finish(line.slice(0, -1));
-          return;
-        }
+    const onData = createHandoffLineReader((line) => {
+      if (line !== HANDOFF_NOTICE_MARKER && line !== HANDOFF_PARK_ADMITTED_MARKER) {
+        finish(line.slice(0, -1));
+        return false;
       }
-    };
+      return undefined;
+    });
     // The canonical updater owns activation/finalization budgets. Once closed,
     // the parent joins its helper instead of inventing a shorter shutdown timer.
     if (command !== "closed") {

@@ -132,6 +132,8 @@ type AnthropicInlineContentNormalizer = (
 
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
+  /** Creates background resources outside the embedding application's request contexts. */
+  runInDetachedAsyncContext<T>(run: () => T): T;
   /** Retains accepted lifecycle work after its caller observes cancellation. */
   observePendingProviderWork?: (pending: Promise<unknown>) => void;
   /**
@@ -233,6 +235,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 };
 
 const inertAiTransportHost: ActiveAiTransportHost = {
+  runInDetachedAsyncContext: (run) => run(),
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
   redactModelVisibleSecrets: (value) => value,
@@ -273,10 +276,66 @@ const inertAiTransportHost: ActiveAiTransportHost = {
 };
 
 let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
+type AiTransportHostScope = {
+  getStore(): ActiveAiTransportHost | undefined;
+  run<T>(store: ActiveAiTransportHost, callback: () => T): T;
+};
+type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
+  getBuiltinModule?: (id: "node:async_hooks") => {
+    AsyncLocalStorage: new <T>() => {
+      getStore(): T | undefined;
+      run<R>(store: T, callback: () => R): R;
+    };
+  };
+};
 
-/** Installs host implementations for the transport policy ports. */
-export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
-  activeAiTransportHost = {
+function createAiTransportHostScope(): AiTransportHostScope | undefined {
+  if (typeof process === "undefined") {
+    return undefined;
+  }
+  // SAFETY: Node's Process type can lag the process.getBuiltinModule runtime API.
+  const asyncHooks = (process as ProcessWithAsyncHooksBuiltin).getBuiltinModule?.(
+    "node:async_hooks",
+  );
+  return asyncHooks ? new asyncHooks.AsyncLocalStorage<ActiveAiTransportHost>() : undefined;
+}
+
+// Avoid a static node:async_hooks import: provider modules also load in browser/Vite builds.
+const scopedAiTransportHost = createAiTransportHostScope();
+let pendingUnscopedHost: ActiveAiTransportHost | undefined;
+let pendingUnscopedOperations = 0;
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof Reflect.get(value, "then") === "function"
+  );
+}
+
+function trackUnscopedOperation(host: ActiveAiTransportHost, result: unknown): void {
+  if (!isPromiseLike(result)) {
+    return;
+  }
+  pendingUnscopedHost = host;
+  pendingUnscopedOperations += 1;
+  const release = () => {
+    pendingUnscopedOperations -= 1;
+    if (pendingUnscopedOperations === 0) {
+      pendingUnscopedHost = undefined;
+    }
+  };
+  void Promise.resolve(result).then(release, release);
+}
+
+/** Reports whether distinct host policy can survive asynchronous work. */
+export function supportsScopedAiTransportHosts(): boolean {
+  return scopedAiTransportHost !== undefined;
+}
+
+/** Resolves an explicit embedding policy without replacing the process default. */
+export function createAiTransportHost(host: Partial<AiTransportHost> = {}): ActiveAiTransportHost {
+  return {
     ...inertAiTransportHost,
     ...host,
     normalizeAnthropicInlineContentBlocks:
@@ -284,6 +343,35 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
       inertAiTransportHost.normalizeAnthropicInlineContentBlocks,
     plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
   };
+}
+
+/** Provider operations retain their policy across lazy loads and asynchronous I/O. */
+export function runWithAiTransportHost<T>(host: ActiveAiTransportHost, run: () => T): T {
+  if (!scopedAiTransportHost) {
+    if (host !== activeAiTransportHost) {
+      throw new Error("Scoped AI transport hosts require Node.js async context support");
+    }
+    if (pendingUnscopedHost && pendingUnscopedHost !== host) {
+      throw new Error("AI transport host changed while browser provider work was still pending");
+    }
+    const result = run();
+    trackUnscopedOperation(host, result);
+    return result;
+  }
+  return scopedAiTransportHost.run(host, run);
+}
+
+/** Installers must read the process default, never an unrelated operation's scoped policy. */
+export function getDefaultAiTransportHost(): ActiveAiTransportHost {
+  return activeAiTransportHost;
+}
+
+/** Installs host implementations for the transport policy ports. */
+export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
+  if (!scopedAiTransportHost && pendingUnscopedOperations > 0) {
+    throw new Error("Cannot replace the AI transport host while browser provider work is pending");
+  }
+  activeAiTransportHost = createAiTransportHost(host);
   const transportHost = activeAiTransportHost;
   if (
     transportHost.registerCustomApi === inertAiTransportHost.registerCustomApi ||
@@ -311,7 +399,7 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
 
 /** Returns the active transport host (inert defaults unless configured). */
 export function getAiTransportHost(): ActiveAiTransportHost {
-  return activeAiTransportHost;
+  return scopedAiTransportHost?.getStore() ?? activeAiTransportHost;
 }
 
 /** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */

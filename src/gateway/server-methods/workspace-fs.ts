@@ -1,10 +1,12 @@
 // Shared workspace filesystem access for gateway file browsers and editors.
 // Local access uses fs-safe roots; remote access stays with the registered
 // workspace provider and its path/byte/lifecycle checks.
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   getAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
@@ -31,7 +33,6 @@ type WorkspaceFileReadResult = {
   canonicalPath: string;
   readOnly?: boolean;
 };
-type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonicalPath: string };
 
 export const enqueueWorkspaceFileUpdate = createAsyncLock();
 
@@ -46,7 +47,6 @@ export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot 
     return await fsSafeRoot(rootDir, {
       hardlinks: "reject",
       maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
   } catch {
@@ -157,11 +157,11 @@ export async function listWorkspacePath(
 }
 
 export async function readWorkspaceFile(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
   opts?: { maxBytes?: number; assertCurrent?: () => void },
 ): Promise<WorkspaceFileReadResult | undefined | "too-large"> {
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -213,14 +213,14 @@ export async function readWorkspaceFile(
 
 /** Reads only a bounded prefix after fs-safe opens and verifies the file identity. */
 export async function readWorkspaceFilePrefix(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
   maxBytes: number,
-): Promise<WorkspaceFilePrefixResult | undefined | "unsupported"> {
+): Promise<WorkspaceFileReadResult | undefined | "unsupported"> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     return undefined;
   }
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -254,8 +254,8 @@ export type WorkspaceFileUpdateResult =
 export async function updateWorkspaceFile(
   rootDir: string,
   browserPath: string,
-  content: string,
-  expectedHash: string,
+  content: string | Buffer,
+  expectedHash: string | undefined,
   assertCurrent?: () => void,
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
@@ -275,16 +275,16 @@ export async function updateWorkspaceFile(
     } catch {
       return { status: "unsafe" };
     }
-    if (decodeUtf8Strict(current.buffer) === undefined) {
+    if (typeof content === "string" && decodeUtf8Strict(current.buffer) === undefined) {
       return { status: "unsafe" };
     }
-    const currentHash = createHash("sha256").update(current.buffer).digest("hex");
-    if (currentHash !== expectedHash) {
+    const currentHash = sha256Hex(current.buffer);
+    if (expectedHash !== undefined && currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
     assertCurrent?.();
     await workspaceRoot.write(browserPath, content, {
-      encoding: "utf8",
+      ...(typeof content === "string" ? { encoding: "utf8" as const } : {}),
       renameIdentity: "strict",
       assertBeforeMutation: assertCurrent,
     });
@@ -298,10 +298,66 @@ export async function updateWorkspaceFile(
         .relative(workspaceRoot.rootReal, current.realPath)
         .split(path.sep)
         .join("/"),
-      hash: createHash("sha256").update(content, "utf8").digest("hex"),
+      hash: sha256Hex(content),
       stat,
     };
   });
+}
+
+/** Publishes user-selected artifacts beneath an unguessable workspace upload directory. */
+export async function createWorkspaceUploadBatch(params: {
+  rootDir: string;
+  files: ReadonlyArray<{ relativePath: string; data: Buffer }>;
+  assertCurrent: () => void;
+}): Promise<{ rootDir: string; paths: string[] }> {
+  if (
+    !params.files.length ||
+    params.files.length > 64 ||
+    params.files.reduce((sum, file) => sum + file.data.length, 0) > 5 * 1024 * 1024
+  ) {
+    throw new Error("Workspace upload exceeds the batch limit");
+  }
+  const names = new Set<string>();
+  for (const file of params.files) {
+    const segments = file.relativePath.split("/");
+    if (
+      file.relativePath.length > 2048 ||
+      file.relativePath.includes("\\") ||
+      segments.some(
+        (segment) =>
+          !segment ||
+          segment === "." ||
+          segment === ".." ||
+          segment.includes(":") ||
+          containsAsciiControlCharacter(segment),
+      ) ||
+      names.has(file.relativePath)
+    ) {
+      throw new Error("Invalid workspace upload path");
+    }
+    names.add(file.relativePath);
+  }
+  params.assertCurrent();
+  const root = await openWorkspaceRoot(params.rootDir);
+  params.assertCurrent();
+  if (!root || "access" in root) {
+    throw new Error("This workspace does not provide local upload publication authority");
+  }
+  const directory = ".openclaw/uploads/mcp-form-" + randomUUID();
+  const paths: string[] = [];
+  for (const file of params.files) {
+    const relativePath = directory + "/" + file.relativePath;
+    params.assertCurrent();
+    await root.write(relativePath, file.data, {
+      mkdir: true,
+      overwrite: false,
+      mode: 0o600,
+      assertBeforeMutation: params.assertCurrent,
+    });
+    paths.push(path.join(root.rootReal, relativePath));
+  }
+  // Published uploads are user artifacts, not form scratch: the server reads them after answering.
+  return { rootDir: path.join(root.rootReal, directory), paths };
 }
 
 export function decodeUtf8Strict(buffer: Buffer): string | undefined {

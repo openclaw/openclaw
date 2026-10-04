@@ -1,8 +1,7 @@
 // Sessions tail tests cover transcript tailing, filtering, and session-store setup.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
@@ -14,7 +13,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
@@ -52,6 +51,8 @@ function runtimeOutput(runtime: RuntimeEnv): string {
     .join("\n");
 }
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tail-");
+
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
@@ -59,11 +60,11 @@ describe("sessionsTailCommand", () => {
 
   beforeEach(() => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
+    tmpDir = sessionDirs.make();
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     });
     storePath = path.join(tmpDir, "sessions.sqlite");
@@ -76,9 +77,6 @@ describe("sessionsTailCommand", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   async function writeSessionEntry(

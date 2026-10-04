@@ -9,6 +9,7 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import {
+  forkCliSessionBindings,
   normalizeCliSessionReseedReceipt,
   rebindCliSessionReseedReceiptsForReset,
 } from "../config/sessions/cli-session-binding.js";
@@ -24,6 +25,9 @@ import {
   shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
 import { FailoverError } from "./failover-error.js";
+
+const ordinaryPolicyHash = "3ae4a9801e78dd74aa01b3ccad9fb6ab5628c39000b88276f651ed7fb9bdb555";
+const explicitFalsePolicyHash = "92a8de91722cbb4fe1a7fd6892245e359c339d96cafe8db3a08738ffda913d71";
 
 describe("cli-session helpers", () => {
   it("persists binding metadata without recreating the retired Claude field", () => {
@@ -317,6 +321,59 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
   });
 
+  it("validates a forked binding against the child's account before resuming it", () => {
+    const forked = forkCliSessionBindings(
+      {
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-parent",
+            resumeCheckpointId: "parent-checkpoint",
+            forceReuse: true,
+            authProfileId: "anthropic:work",
+            authEpoch: "auth-epoch-a",
+            authEpochVersion: 2,
+          },
+        },
+      },
+      () => true,
+    );
+    const binding = forked?.["claude-cli"];
+
+    // The fork marker never bypasses the fingerprint checks.
+    expect(binding).toEqual({
+      sessionId: "native-parent",
+      resumeCheckpointId: "parent-checkpoint",
+      forkNextResume: true,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+    });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-b",
+        authEpochVersion: 2,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-b",
+        authEpochVersion: 2,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-epoch" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+      }),
+    ).toMatchObject({ mode: "reuse", sessionId: "native-parent" });
+  });
+
   it("keeps content-drift bindings reusable for queued turns until hashes refresh", () => {
     const binding = {
       sessionId: "cli-session-1",
@@ -370,6 +427,62 @@ describe("cli-session helpers", () => {
         messageToolPolicyHash: "message-policy-a",
       }),
     ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
+  });
+
+  it.each([
+    ["tool-only delivery", "dd1ac522a78b476a0d590b59b030bc2782506da8411e21ab0a5c973320e0754d"],
+    [
+      "explicit message targets",
+      "d454cef8c2f11b7bda35560680cb87dc78286ac7d9c3ba02f5ab832a5db65cda",
+    ],
+    ["unknown policy", "unknown-policy-fingerprint"],
+  ])("does not normalize %s into the implicit ordinary policy", (_name, policyHash) => {
+    for (const ordinaryHash of [undefined, ordinaryPolicyHash, explicitFalsePolicyHash]) {
+      for (const [stored, current] of [
+        [ordinaryHash, policyHash],
+        [policyHash, ordinaryHash],
+      ]) {
+        expect(
+          resolveCliSessionReuse({
+            binding: { sessionId: "cli-session-1", messageToolPolicyHash: stored },
+            authEpochVersion: 7,
+            messageToolPolicyHash: current,
+          }),
+        ).toEqual({ mode: "invalidate", invalidatedReason: "message-policy" });
+      }
+    }
+  });
+
+  it.each([
+    {
+      reason: "auth-profile",
+      current: { authProfileId: "other-profile", authEpoch: "other-epoch" },
+    },
+    { reason: "auth-epoch", current: { authEpoch: "other-epoch" } },
+    { reason: "cwd", current: { cwdHash: "other-workspace" } },
+    { reason: "mcp", current: { mcpConfigHash: "other-mcp-topology" } },
+  ])("keeps the $reason boundary strict when upgrading implicit policy", ({ reason, current }) => {
+    const compatible = {
+      authProfileId: "profile-a",
+      authEpoch: "epoch-a",
+      authEpochVersion: 7,
+      cwdHash: "workspace-a",
+      mcpConfigHash: "mcp-topology-a",
+    };
+    for (const storedPolicy of [undefined, ordinaryPolicyHash, explicitFalsePolicyHash]) {
+      expect(
+        resolveCliSessionReuse({
+          ...compatible,
+          binding: {
+            ...compatible,
+            sessionId: "cli-session-1",
+            messageToolPolicyHash: storedPolicy,
+          },
+          messageToolPolicyHash: ordinaryPolicyHash,
+          ...current,
+        }),
+      ).toEqual({ mode: "invalidate", invalidatedReason: reason });
+    }
   });
 
   it("invalidates reuse when the task cwd changes", () => {

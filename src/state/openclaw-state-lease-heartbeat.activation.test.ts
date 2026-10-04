@@ -2,7 +2,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,6 +17,9 @@ import {
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import { acquireOpenClawStateLeaseInTransaction } from "./openclaw-state-lease-store.js";
+import { runWithOpenClawStateLeaseWorker } from "./openclaw-state-lease-worker-operation.js";
+import { withOpenClawStateLease } from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 it("keeps deferred activation pending until renewal commits after contention", async () => {
   await withOpenClawTestState({ label: "lease-activation-contention" }, async (state) => {
@@ -127,5 +131,76 @@ it("keeps deferred activation pending until renewal commits after contention", a
       await worker.terminate();
       await exited.promise;
     }
+  });
+});
+
+it("admits heartbeat-owned worker writes without blocking the host and rolls back revoked commits", async () => {
+  await withOpenClawTestState({ label: "native-lease-worker-write" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const context = captureOpenClawStateWorkerContext({ env: state.env });
+    const storeKey = "native-heartbeat-grants";
+    await withOpenClawStateLease(
+      {
+        scope: "core:mcp-oauth",
+        key: storeKey,
+        database: { scope: "shared", options: { env: state.env } },
+        leaseMs: 60_000,
+        waitMs: 0,
+        heartbeat: "worker",
+      },
+      async (lease) => {
+        const { StatementSync } = requireNodeSqlite();
+        const hostCalls = [
+          vi.spyOn(DatabaseSync.prototype, "prepare"),
+          vi.spyOn(DatabaseSync.prototype, "exec"),
+          vi.spyOn(StatementSync.prototype, "get"),
+          vi.spyOn(StatementSync.prototype, "all"),
+          vi.spyOn(StatementSync.prototype, "run"),
+          vi.spyOn(StatementSync.prototype, "iterate"),
+          vi.spyOn(Atomics, "wait"),
+        ];
+        const caller = new AbortController();
+        const revoked = new Error("Synthetic caller authority was revoked");
+        const write = (marker: string, revokeAtCommit = false) =>
+          runWithOpenClawStateLeaseWorker(
+            lease,
+            context,
+            (scope, identity) =>
+              scope.execute({
+                type: "mcpOAuth.writePending",
+                input: { storeKey, identity, state: marker },
+              }),
+            {
+              assertCurrent: () => caller.signal.throwIfAborted(),
+              beforeCommit: () => {
+                if (revokeAtCommit) {
+                  caller.abort(revoked);
+                }
+              },
+            },
+          );
+        try {
+          await write("accepted");
+          await expect(write("refused", true)).rejects.toBe(revoked);
+          for (const call of hostCalls) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        } finally {
+          for (const call of hostCalls) {
+            call.mockRestore();
+          }
+        }
+      },
+    );
+    expect(
+      database.db
+        .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE store_key = ?")
+        .all(storeKey),
+    ).toEqual([{ state: "accepted" }]);
+    expect(
+      database.db
+        .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .all("core:mcp-oauth", storeKey),
+    ).toEqual([]);
   });
 });

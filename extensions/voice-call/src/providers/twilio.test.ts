@@ -14,7 +14,6 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
-import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
 const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
@@ -35,7 +34,6 @@ type TwilioPrivateCallState = {
   callStreamMap: Map<string, string>;
   streamAuthTokens: Map<string, string>;
   twimlStorage: Map<string, string>;
-  activeStreamCalls: Set<string>;
 };
 
 function getTwilioPrivateCallState(provider: TwilioProvider): TwilioPrivateCallState {
@@ -55,7 +53,6 @@ function seedTwilioPrivateCallState(params: {
   state.callStreamMap.set(params.providerCallId, "MZ-private-state");
   state.streamAuthTokens.set(params.providerCallId, "stream-token");
   state.twimlStorage.set(params.callId, "<Response><Say>Hello</Say></Response>");
-  state.activeStreamCalls.add(params.providerCallId);
 }
 
 function expectTwilioPrivateCallStateReleased(params: {
@@ -68,7 +65,6 @@ function expectTwilioPrivateCallStateReleased(params: {
   expect(state.callStreamMap.has(params.providerCallId)).toBe(false);
   expect(state.streamAuthTokens.has(params.providerCallId)).toBe(false);
   expect(state.twimlStorage.has(params.callId)).toBe(false);
-  expect(state.activeStreamCalls.has(params.providerCallId)).toBe(false);
 }
 
 function expectTwilioPrivateCallStatePresent(params: {
@@ -81,7 +77,6 @@ function expectTwilioPrivateCallStatePresent(params: {
   expect(state.callStreamMap.has(params.providerCallId)).toBe(true);
   expect(state.streamAuthTokens.has(params.providerCallId)).toBe(true);
   expect(state.twimlStorage.has(params.callId)).toBe(true);
-  expect(state.activeStreamCalls.has(params.providerCallId)).toBe(true);
 }
 
 function createContext(rawBody: string, query?: WebhookContext["query"]): WebhookContext {
@@ -174,20 +169,19 @@ describe("TwilioProvider", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      const result = verifyTwilioProviderWebhook({
-        ctx: {
-          headers: {
-            host: "example.com",
-            "x-twilio-signature": "invalid",
-          },
-          rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
-          url: "https://example.com/voice/twilio?callId=call-1&turnToken=secret-turn-token",
-          method: "POST",
-          query: { callId: "call-1", turnToken: "secret-turn-token" },
-        },
+      const provider = new TwilioProvider({
+        accountSid: "AC123",
         authToken: "test-auth-token",
-        currentPublicUrl: null,
-        options: {},
+      });
+      const result = provider.verifyWebhook({
+        headers: {
+          host: "example.com",
+          "x-twilio-signature": "invalid",
+        },
+        rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
+        url: "https://example.com/voice/twilio?callId=call-1&turnToken=secret-turn-token",
+        method: "POST",
+        query: { callId: "call-1", turnToken: "secret-turn-token" },
       });
 
       const messages = warn.mock.calls.map((call) => call.join(" ")).join("\n");
@@ -344,7 +338,6 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA222");
 
     const firstResult = provider.parseWebhookEvent(firstInbound);
-    // Simulate the stream actually connecting (the bug: without this, no activeStreamCalls entry exists)
     provider.registerCallStream("CA111", "MZ111");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
@@ -735,5 +728,19 @@ describe("TwilioProvider", () => {
 
     provider.unregisterCallStream("CA-reconnect", "MZ-new");
     expect(provider.hasRegisteredStream("CA-reconnect")).toBe(false);
+  });
+
+  it("releases an empty stream ID on disconnect", () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-empty", "");
+    expect(provider.hasRegisteredStream("CA-empty")).toBe(true);
+
+    provider.unregisterCallStream("CA-empty", "");
+
+    expect(provider.hasRegisteredStream("CA-empty")).toBe(false);
+    const nextCall = provider.parseWebhookEvent(
+      createContext("CallStatus=ringing&Direction=inbound&CallSid=CA-next"),
+    );
+    expectStreamingTwiml(requireResponseBody(nextCall.providerResponseBody));
   });
 });

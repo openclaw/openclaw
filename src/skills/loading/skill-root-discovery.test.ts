@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
+import { installSkillFromSource } from "../lifecycle/source-install.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
@@ -70,6 +71,32 @@ afterAll(async () => {
 });
 
 describe("discoverSkillCandidates", () => {
+  it("rejects an undiscoverable replacement without removing the installed skill", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const sourceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: sourceDir,
+      name: "installed-skill",
+      description: "Keep the discoverable installation",
+    });
+    expect(
+      await installSkillFromSource({ workspaceDir, spec: sourceDir, slug: "installed-skill" }),
+    ).toMatchObject({ ok: true });
+    await fs.writeFile(path.join(sourceDir, "SKILL.md"), "---\nname: installed-skill\n---\n");
+
+    expect(
+      await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        slug: "installed-skill",
+        force: true,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("description is required") });
+    expect(loadTestWorkspaceSkills(workspaceDir).map((entry) => entry.skill.description)).toEqual([
+      "Keep the discoverable installation",
+    ]);
+  });
+
   it("does not count invalid grouped candidates against the loaded skill cap", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     for (const nestedName of ["a", "b"]) {

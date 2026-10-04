@@ -22,7 +22,6 @@ import { recordStartupMigrationWarnings } from "../infra/state-migrations.messag
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
@@ -40,10 +39,6 @@ import {
 } from "./doctor-startup-migration-refusal.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-
-const loadInstalledPluginIndexStoreWrite = createLazyRuntimeModule(
-  () => import("../plugins/installed-plugin-index-store-write.js"),
-);
 
 export type ConfigPreflightSnapshotRead = {
   snapshot: ConfigFileSnapshot;
@@ -176,7 +171,7 @@ export async function persistRefreshedPluginIndex(params: {
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
   // Startup precedes plugin ownership; derive again after any pending installer settles.
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.assertCurrent },
+    { env: params.env, assertCurrent: params.assertCurrent, processBound: true },
     async (pluginLease) => {
       const fresh = await params.readPersistedSnapshot();
       assertPreflightConfigUnchanged(params.snapshotRead.snapshot, fresh.snapshot);
@@ -193,7 +188,7 @@ export async function persistRefreshedPluginIndex(params: {
       }
       const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
         "plugin-index-store-import",
-        loadInstalledPluginIndexStoreWrite,
+        () => import("../plugins/installed-plugin-index-store-write.js"),
       );
       // Persist the original workspace scope; a config-wide union cannot pass scoped freshness checks.
       await params.measure("plugin-index-persistence", () =>

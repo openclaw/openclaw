@@ -39,10 +39,11 @@ gh workflow run full-release-validation.yml --ref main \
   -f expected_sha="$VALIDATION_SHA"
 ```
 
-Gateway extended-stable shared publication requires complete exact-target Full
-Release Validation from the trusted main-pinned `release-ci/*` harness targeting
-the frozen `extended-stable/YYYY.M.33` tip. Direct canonical-branch and `main`
-producers do not satisfy the protected publisher. Current
+Gateway extended-stable shared publication requires complete candidate-owned
+Full Release Validation from an independently admitted `release-ci/*` harness
+at Q=C, targeting the frozen `extended-stable/YYYY.M.33` tip. The raw diagnostic
+example above and direct `main` producers do not satisfy that publication
+contract. Current
 manifests also supply qualified npm preflight artifacts. The shared
 `OpenClaw Release Publish` parent dispatches from a protected lightweight
 `release-publish/<sha12>-<epoch>` tag at the frozen trusted-main Tooling SHA and
@@ -64,6 +65,13 @@ proof job on GitHub-hosted `windows-2025` when no installed package binding is
 supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
+
+Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
+throughout the workflow, including native and installed Scheduled Task proof jobs.
+This skips only the workspace and Node process exclusions; proof selection,
+isolation checks, native lifecycle tests, cleanup, and evidence upload remain
+unchanged. The default is `false`, preserving the existing best-effort exclusions
+for Windows CI and exact replay.
 
 For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
 check out that target, and native proof verifies checkout equality before running

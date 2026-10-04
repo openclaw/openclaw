@@ -161,6 +161,29 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).toContain("Bash failed");
   });
 
+  it.each([
+    {
+      // Transient-looking prose must not turn the agent's verdict into a scheduler retry.
+      reply: "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
+      expected: {
+        status: "error",
+        error: "Network timeout: no shell tool is available in this run.",
+        errorClassification: { kind: "permanent", reportedByAgent: true },
+      },
+    },
+    {
+      reply: "Report posted. Reply AUTOMATION_FAILED only when the report is blocked.",
+      expected: { status: "ok", error: undefined, errorClassification: undefined },
+    },
+  ])("settles the run from a reported failure line: $expected.status", async (testCase) => {
+    await useRealOutcome();
+    mockAgentRun({
+      payloads: [{ text: testCase.reply }],
+      meta: { finalAssistantVisibleText: testCase.reply },
+    });
+    expectObjectFields(await runTurn(), testCase.expected);
+  });
+
   it("does not mark empty accepted child-session handoffs as cron errors", async () => {
     mockChildRun([], 0);
     mockAnnounceOutcome([], undefined, { deliveryDisposition: { kind: "empty" } });

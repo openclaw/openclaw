@@ -4,10 +4,6 @@ const ED25519_RAW_KEY_LENGTH = 32;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64url");
-}
-
 // Ed25519 public keys and signatures are fixed-size (<= ~86 base64url chars),
 // so a caller passing far larger input is almost certainly malformed or abusive.
 // Bound the decoded buffer to keep a single request from allocating arbitrary memory.
@@ -37,7 +33,7 @@ export function decodeCanonicalBase64OrBase64Url(input: string): Buffer {
   assertBoundedBase64Input(input);
   if (/^[A-Za-z0-9_-]+$/.test(input)) {
     const decoded = Buffer.from(input, "base64url");
-    if (base64UrlEncode(decoded) !== input) {
+    if (decoded.toString("base64url") !== input) {
       throw new Error("invalid canonical base64url input");
     }
     return decoded;
@@ -100,33 +96,26 @@ function assertEd25519KeyType(key: crypto.KeyObject, label: string): void {
   }
 }
 
-function deriveRawKeyFromDer(params: { der: Buffer; label: string; prefix: Buffer }): Buffer {
-  const expectedLength = params.prefix.length + ED25519_RAW_KEY_LENGTH;
-  if (
-    params.der.length !== expectedLength ||
-    !params.der.subarray(0, params.prefix.length).equals(params.prefix)
-  ) {
-    throw new Error(`${params.label} has a noncanonical Ed25519 encoding`);
+function deriveRawKeyFromDer(der: Buffer, label: string, prefix: Buffer): Buffer {
+  const expectedLength = prefix.length + ED25519_RAW_KEY_LENGTH;
+  if (der.length !== expectedLength || !der.subarray(0, prefix.length).equals(prefix)) {
+    throw new Error(`${label} has a noncanonical Ed25519 encoding`);
   }
-  return params.der.subarray(params.prefix.length);
+  return der.subarray(prefix.length);
 }
 
 export function deriveCanonicalEd25519PublicKeyRaw(publicKeyPem: string): Buffer {
   const spki = decodeCanonicalPem("PUBLIC KEY", publicKeyPem);
   const key = crypto.createPublicKey({ key: spki, type: "spki", format: "der" });
   assertEd25519KeyType(key, "public key");
-  return deriveRawKeyFromDer({ der: spki, label: "public key", prefix: ED25519_SPKI_PREFIX });
+  return deriveRawKeyFromDer(spki, "public key", ED25519_SPKI_PREFIX);
 }
 
 export function deriveCanonicalEd25519PrivateKeyRaw(privateKeyPem: string): Buffer {
   const pkcs8 = decodeCanonicalPem("PRIVATE KEY", privateKeyPem);
   const key = crypto.createPrivateKey({ key: pkcs8, type: "pkcs8", format: "der" });
   assertEd25519KeyType(key, "private key");
-  return deriveRawKeyFromDer({
-    der: pkcs8,
-    label: "private key",
-    prefix: ED25519_PKCS8_PRIVATE_PREFIX,
-  });
+  return deriveRawKeyFromDer(pkcs8, "private key", ED25519_PKCS8_PRIVATE_PREFIX);
 }
 
 /** Parse any Node-compatible Ed25519 PEM and return its canonical raw public key. */
@@ -134,7 +123,7 @@ export function deriveEd25519PublicKeyRaw(publicKeyPem: string): Buffer {
   const key = crypto.createPublicKey(publicKeyPem);
   assertEd25519KeyType(key, "public key");
   const spki = key.export({ type: "spki", format: "der" });
-  return deriveRawKeyFromDer({ der: spki, label: "public key", prefix: ED25519_SPKI_PREFIX });
+  return deriveRawKeyFromDer(spki, "public key", ED25519_SPKI_PREFIX);
 }
 
 /** Parse any Node-compatible Ed25519 PEM and return its canonical raw private key. */
@@ -142,15 +131,11 @@ export function deriveEd25519PrivateKeyRaw(privateKeyPem: string): Buffer {
   const key = crypto.createPrivateKey(privateKeyPem);
   assertEd25519KeyType(key, "private key");
   const pkcs8 = key.export({ type: "pkcs8", format: "der" });
-  return deriveRawKeyFromDer({
-    der: pkcs8,
-    label: "private key",
-    prefix: ED25519_PKCS8_PRIVATE_PREFIX,
-  });
+  return deriveRawKeyFromDer(pkcs8, "private key", ED25519_PKCS8_PRIVATE_PREFIX);
 }
 
 export function publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem: string): string {
-  return base64UrlEncode(deriveEd25519PublicKeyRaw(publicKeyPem));
+  return deriveEd25519PublicKeyRaw(publicKeyPem).toString("base64url");
 }
 
 export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | null {
@@ -161,7 +146,7 @@ export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | 
     if (raw.length === 0) {
       return null;
     }
-    return base64UrlEncode(raw);
+    return raw.toString("base64url");
   } catch {
     return null;
   }
@@ -170,7 +155,7 @@ export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | 
 export function signEd25519Payload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
   const signature = crypto.sign(null, Buffer.from(payload, "utf8"), key);
-  return base64UrlEncode(signature);
+  return signature.toString("base64url");
 }
 
 function createEd25519PublicKey(publicKey: string): crypto.KeyObject {

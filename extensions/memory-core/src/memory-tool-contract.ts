@@ -83,7 +83,7 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
 }
 
 const SEARCH_CORPUS_OUTCOME_GUIDANCE =
-  "Corpus outcomes cover each requested corpus; a corpus warning means results are partial and must be surfaced to the user.";
+  "Corpus outcomes cover each requested corpus; only a top-level corpus warning means results are partial and must be surfaced to the user. An optional corpus outcome of not-registered in a multi-corpus result is informational.";
 const GET_READ_OUTCOME_GUIDANCE =
   "status=ok means the requested excerpt was read; status=not_found means every requested available corpus missed; status=error means the requested read failed, not that memory is disabled.";
 
@@ -112,7 +112,7 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
     return normalized;
   },
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
@@ -140,9 +140,9 @@ export function buildMemoryPromptSection({
 
   // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
-    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search${
+    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search without corpus to search the configured sources${
         hasMemoryGet ? "; for memory-file hits, use memory_get to pull only the needed lines" : ""
-      }. If low confidence after search, say you checked.`
+      }. Use corpus=all only when compiled wiki supplements are needed. If low confidence after search, say you checked.`
     : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific memory file: run memory_get to pull only the needed lines. If low confidence after reading, say you checked.";
   const sessionGuidance = !hasMemorySearch
     ? []
@@ -159,7 +159,7 @@ export function buildMemoryPromptSection({
         "Session search line numbers are not history offsets. Never read raw transcript files to expand session hits.",
       ];
   const outcomeGuidance =
-    "Report partial, unavailable, or stale recall to the user, including returned warning and action guidance.";
+    "Report recall as partial, unavailable, or stale when the result includes a top-level warning or action guidance, or explicitly sets disabled=true or stale=true. In a multi-corpus result without a top-level warning or action guidance, treat an optional corpus outcome of not-registered as informational.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."

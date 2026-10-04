@@ -64,17 +64,27 @@ beforeAll(async () => {
     },
   });
 
-  const [cliShim, githubCleanup, plugins, workers, projection, lifetime, discovery, skills] =
-    await Promise.all([
-      import("../infra/openclaw-cli-shim.js"),
-      import("../agents/github-tool-profile-cleanup.js"),
-      import("./server-startup-plugins.js"),
-      import("./server-worker-environment-startup.js"),
-      import("./session-row-projection.js"),
-      import("./server-lifetime-sidecars.js"),
-      import("./server-discovery-runtime.js"),
-      import("../skills/runtime/remote.js"),
-    ]);
+  const [
+    cliShim,
+    githubCleanup,
+    plugins,
+    workers,
+    projection,
+    lifetime,
+    discovery,
+    skills,
+    subagents,
+  ] = await Promise.all([
+    import("../infra/openclaw-cli-shim.js"),
+    import("../agents/github-tool-profile-cleanup.js"),
+    import("./server-startup-plugins.js"),
+    import("./server-worker-environment-startup.js"),
+    import("./session-row-projection.js"),
+    import("./server-lifetime-sidecars.js"),
+    import("./server-discovery-runtime.js"),
+    import("../skills/runtime/remote.js"),
+    import("../agents/subagents/registry/subagent-registry.js"),
+  ]);
   vi.spyOn(cliShim, "prepareGatewayAgentCliShim").mockImplementation(() =>
     rejectDeferredWork("agent CLI shim"),
   );
@@ -98,6 +108,12 @@ beforeAll(async () => {
   );
   vi.spyOn(skills, "primeRemoteSkillsCache").mockImplementation(() =>
     rejectDeferredWork("remote skills warmup"),
+  );
+  vi.spyOn(subagents, "initSubagentRegistry").mockImplementation(() =>
+    rejectDeferredWork("subagent recovery hydration"),
+  );
+  vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() =>
+    rejectDeferredWork("subagent recovery activation"),
   );
   const pluginLoad = vi.spyOn(plugins, "loadGatewayStartupPluginRuntime");
   await withAgentDatabaseStartupAdmission(async (admission) => {

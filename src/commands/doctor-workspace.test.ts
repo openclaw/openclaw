@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
 
@@ -73,14 +72,12 @@ async function hasDistinctRootMemoryFiles(directory: string): Promise<boolean> {
 
 describe("root memory repair", () => {
   let tmpDir = "";
-  let cfg: OpenClawConfig;
+  let scope: Parameters<typeof noteWorkspaceMemoryHealth>[0];
   let prompter: DoctorPrompter;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
-    cfg = {
-      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
-    };
+    scope = { agentId: "main", workspaceDir: tmpDir, labelAgent: false };
     prompter = createDoctorPrompter({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { yes: true },
@@ -106,10 +103,10 @@ describe("root memory repair", () => {
   it("ignores lowercase-only root memory for automatic repair", async () => {
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
 
-    await noteWorkspaceMemoryHealth(cfg);
+    await noteWorkspaceMemoryHealth(scope);
     expect(note).not.toHaveBeenCalled();
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
     const entries = await fs.readdir(tmpDir);
@@ -125,13 +122,13 @@ describe("root memory repair", () => {
       return;
     }
 
-    await noteWorkspaceMemoryHealth(cfg);
+    await noteWorkspaceMemoryHealth(scope);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Split root durable memory files detected"),
       "Workspace memory",
     );
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
     expect(canonical).toContain("# Canonical");
@@ -157,7 +154,7 @@ describe("root memory repair", () => {
       await fs.rename(sourcePath, targetPath);
     });
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     const canonical = await fs.readFile(canonicalPath, "utf8");
     expect(canonical).toContain("# Legacy");
     expect(canonical).toContain("# Added before archive");
@@ -179,7 +176,7 @@ describe("root memory repair", () => {
       await fs.rename(sourcePath, targetPath);
     });
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -209,7 +206,7 @@ describe("root memory repair", () => {
       await fs.writeFile(sourcePath, "# Concurrent replacement\n", "utf8");
     });
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -228,7 +225,7 @@ describe("root memory repair", () => {
     if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
       return;
     }
-    await noteWorkspaceMemoryHealth(cfg);
+    await noteWorkspaceMemoryHealth(scope);
     expect(note).toHaveBeenCalledWith(
       [
         "Split root durable memory files detected:",
@@ -242,7 +239,7 @@ describe("root memory repair", () => {
     );
     note.mockClear();
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
       message: "Merge legacy root memory.md into canonical MEMORY.md and remove the shadowed file?",
@@ -289,7 +286,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
         "Workspace memory root repair skipped (a file exceeded the safe read limit):",
@@ -312,7 +309,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
         "Workspace memory root repair skipped (a file exceeded the safe read limit):",
@@ -337,7 +334,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Workspace memory root repair skipped (a file could not be read):"),
       "Doctor changes",
@@ -358,7 +355,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(note).toHaveBeenCalledTimes(1);
     const repairNote = note.mock.calls[0];
@@ -379,7 +376,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(note).toHaveBeenCalledTimes(1);
     const repairNote = note.mock.calls[0];
@@ -412,7 +409,7 @@ describe("root memory repair", () => {
       .mockRejectedValueOnce(Object.assign(new Error("cross-device rename"), { code: "EXDEV" }));
 
     try {
-      await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+      await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
       expect(note).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -438,7 +435,7 @@ describe("root memory repair", () => {
       .mockRejectedValueOnce(Object.assign(new Error("cross-device rename"), { code: "EXDEV" }));
 
     try {
-      await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+      await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
     } finally {
       rename.mockRestore();
     }
@@ -471,7 +468,7 @@ describe("root memory repair", () => {
       rename.mockRestore();
       await fs.rename(sourcePath, targetPath);
     });
-    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     const repairLines = String(note.mock.calls[0]?.[0] ?? "").split("\n");
     expect(repairLines).toContainEqual(expect.stringContaining("- preserved archive: "));

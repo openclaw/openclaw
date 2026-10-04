@@ -72,27 +72,20 @@ export function writeRfbPreauthFrame(
   });
 }
 
-/** Exact-byte queue shared by stream and WebSocket handshake adapters. */
+/** Exact-byte queue for each sequential stream or WebSocket handshake. */
 export class RfbPreauthBuffer {
   private buffered = Buffer.alloc(0);
   private failure: Error | undefined;
-  private readonly waiters = new Set<() => void>();
+  private wake?: () => void;
 
   push(chunk: Buffer): void {
     this.buffered = Buffer.concat([this.buffered, chunk]);
-    this.wake();
+    this.wake?.();
   }
 
   fail(error: Error): void {
     this.failure = error;
-    this.wake();
-  }
-
-  private wake(): void {
-    for (const waiter of this.waiters) {
-      waiter();
-    }
-    this.waiters.clear();
+    this.wake?.();
   }
 
   private async waitForData(signal: AbortSignal): Promise<void> {
@@ -101,7 +94,7 @@ export class RfbPreauthBuffer {
     }
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
-        this.waiters.delete(onWake);
+        this.wake = undefined;
         signal.removeEventListener("abort", onAbort);
       };
       const onWake = () => {
@@ -112,7 +105,7 @@ export class RfbPreauthBuffer {
         cleanup();
         reject(abortReason(signal));
       };
-      this.waiters.add(onWake);
+      this.wake = onWake;
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }
@@ -229,9 +222,6 @@ function leftPadBigInt(value: bigint, length: number): Buffer {
 }
 
 function modularExponentiation(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  if (modulus <= 0n) {
-    throw new Error("invalid ARD Diffie-Hellman modulus");
-  }
   let result = 1n;
   let factor = base % modulus;
   let power = exponent;

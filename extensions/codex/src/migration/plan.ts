@@ -7,7 +7,6 @@ import {
 import {
   createMigrationItem,
   createMigrationManualItem,
-  hasMigrationConfigPatchConflict,
   MIGRATION_REASON_TARGET_EXISTS,
   readMigrationConfigPath,
   summarizeMigrationItems,
@@ -24,21 +23,18 @@ import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
 import { sanitizeName } from "./helpers.js";
 import { isOnlyMigrationKind } from "./scope.js";
-import type { CodexMemorySource, CodexSkillSource } from "./source-files.js";
+import type { CodexMemorySource, CodexPluginSource, CodexSkillSource } from "./source-files.js";
 import {
   codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
-  type CodexPluginSource,
 } from "./source.js";
 
 export const CODEX_PLUGIN_CONFIG_ITEM_ID = "config:codex-plugins";
 export const CODEX_PLUGIN_CONFIG_PATH = ["plugins", "entries", "codex"] as const;
-const CODEX_PLUGIN_ENABLED_PATH = ["plugins", "entries", "codex", "enabled"] as const;
+const CODEX_PLUGIN_ENABLED_PATH = [...CODEX_PLUGIN_CONFIG_PATH, "enabled"] as const;
 const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
-  "plugins",
-  "entries",
-  "codex",
+  ...CODEX_PLUGIN_CONFIG_PATH,
   "config",
   "codexPlugins",
 ] as const;
@@ -52,6 +48,17 @@ export type CodexPluginMigrationConfigEntry = {
   enabled: boolean;
   allowDestructiveActions?: "auto" | "ask";
 };
+
+function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
+  return {
+    enabled: entry.enabled,
+    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    pluginName: entry.pluginName,
+    ...(entry.allowDestructiveActions
+      ? { allow_destructive_actions: entry.allowDestructiveActions }
+      : {}),
+  };
+}
 
 async function lstatIfExists(filePath: string) {
   try {
@@ -251,12 +258,12 @@ function buildPluginItems(
         existingPluginEntries[configKey],
         plugin.pluginName,
       );
-      const plannedEntry = {
+      const plannedEntry = pluginConfigValue({
+        configKey,
         enabled: true,
-        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
         pluginName: plugin.pluginName,
-        ...(allowDestructiveActions ? { allow_destructive_actions: allowDestructiveActions } : {}),
-      };
+        allowDestructiveActions,
+      });
       const conflict =
         !ctx.overwrite &&
         hasExistingCodexPluginEntry(
@@ -295,18 +302,21 @@ function buildPluginItems(
     }
 
     manualIndex += 1;
+    const manualItem = {
+      id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+      source: plugin.source,
+      message:
+        plugin.message ??
+        `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+    };
     if (plugin.migrationBlock && plugin.pluginName) {
       items.push(
         createMigrationItem({
-          id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+          ...manualItem,
           kind: "manual",
           action: "manual",
-          source: plugin.source,
           status: "skipped",
           reason: plugin.migrationBlock.code,
-          message:
-            plugin.message ??
-            `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
           details: {
             pluginName: plugin.pluginName,
             marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -319,11 +329,7 @@ function buildPluginItems(
     }
     items.push(
       createMigrationManualItem({
-        id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
-        source: plugin.source,
-        message:
-          plugin.message ??
-          `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+        ...manualItem,
         recommendation:
           "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path> --force.",
       }),
@@ -359,16 +365,6 @@ export function readCodexPluginMigrationConfigEntry(
   };
 }
 
-function readExistingAllowDestructiveActions(
-  config: MigrationProviderContext["config"],
-): boolean | "auto" | "ask" | undefined {
-  const value = readMigrationConfigPath(config as Record<string, unknown>, [
-    ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
-    "allow_destructive_actions",
-  ]);
-  return normalizeExistingAllowDestructiveActions(value);
-}
-
 function normalizeExistingAllowDestructiveActions(
   value: unknown,
 ): boolean | "auto" | "ask" | undefined {
@@ -383,7 +379,7 @@ function normalizeExistingAllowDestructiveActions(
 
 function readExistingPluginPolicyRepairs(
   config: MigrationProviderContext["config"],
-): Record<string, unknown> {
+): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
     Object.entries(readExistingCodexPluginEntries(config)).flatMap(([configKey, entry]) => {
       const pluginEntry = isRecord(entry) ? entry : undefined;
@@ -398,23 +394,13 @@ function readExistingPluginPolicyRepairs(
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
   config: MigrationProviderContext["config"],
-): Record<string, unknown> {
-  const plugins = {
+) {
+  const plugins: Record<string, Record<string, unknown>> = {
     ...readExistingPluginPolicyRepairs(config),
     ...Object.fromEntries(
       entries
         .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
-        .map((entry) => [
-          entry.configKey,
-          {
-            enabled: entry.enabled,
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: entry.pluginName,
-            ...(entry.allowDestructiveActions
-              ? { allow_destructive_actions: entry.allowDestructiveActions }
-              : {}),
-          },
-        ]),
+        .map((entry) => [entry.configKey, pluginConfigValue(entry)]),
     ),
   };
   return {
@@ -422,7 +408,13 @@ export function buildCodexPluginsConfigValue(
     config: {
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: readExistingAllowDestructiveActions(config) ?? true,
+        allow_destructive_actions:
+          normalizeExistingAllowDestructiveActions(
+            readMigrationConfigPath(config as Record<string, unknown>, [
+              ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+              "allow_destructive_actions",
+            ]),
+          ) ?? true,
         plugins,
       },
     },
@@ -431,7 +423,7 @@ export function buildCodexPluginsConfigValue(
 
 export function hasCodexPluginConfigConflict(
   config: MigrationProviderContext["config"],
-  value: Record<string, unknown>,
+  value: ReturnType<typeof buildCodexPluginsConfigValue>,
 ): boolean {
   const enabled = readMigrationConfigPath(
     config as Record<string, unknown>,
@@ -440,10 +432,7 @@ export function hasCodexPluginConfigConflict(
   if (enabled !== undefined && enabled !== true) {
     return true;
   }
-  const nativeConfig = (value.config as Record<string, unknown> | undefined)?.codexPlugins;
-  if (!isRecord(nativeConfig)) {
-    return hasMigrationConfigPatchConflict(config, CODEX_PLUGIN_NATIVE_CONFIG_PATH, nativeConfig);
-  }
+  const nativeConfig = value.config.codexPlugins;
   const existingNativeConfig = readMigrationConfigPath(
     config as Record<string, unknown>,
     CODEX_PLUGIN_NATIVE_CONFIG_PATH,
@@ -467,21 +456,15 @@ export function hasCodexPluginConfigConflict(
   ) {
     return true;
   }
-  const plugins = nativeConfig.plugins;
-  if (!isRecord(plugins)) {
-    return false;
-  }
-  return Object.entries(plugins).some(([configKey, plugin]) => {
-    if (!isRecord(plugin)) {
-      return existingNativeConfig[configKey] !== undefined;
-    }
-    return hasExistingCodexPluginEntry(
-      readExistingCodexPluginEntries(config),
+  const existingEntries = readExistingCodexPluginEntries(config);
+  return Object.entries(nativeConfig.plugins).some(([configKey, plugin]) =>
+    hasExistingCodexPluginEntry(
+      existingEntries,
       configKey,
       typeof plugin.pluginName === "string" ? plugin.pluginName : configKey,
       plugin,
-    );
-  });
+    ),
+  );
 }
 
 function buildPluginConfigItem(

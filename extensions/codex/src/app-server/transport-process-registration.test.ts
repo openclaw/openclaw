@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as pluginState from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
@@ -42,10 +43,8 @@ const liveChild: PosixProcess = { ...child, ppid: 1, state: "S" };
 const command = "/opt/codex app-server --listen stdio://";
 const commandFingerprint = createHash("sha256").update(command).digest("hex");
 
-async function openStore() {
-  const { createPluginStateSyncKeyedStore } =
-    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
-  return createPluginStateSyncKeyedStore<{
+function openStore() {
+  return pluginState.createPluginStateSyncKeyedStore<{
     parent: typeof parent;
     child: typeof child & { commandFingerprint?: string };
   }>("codex", {
@@ -55,15 +54,15 @@ async function openStore() {
   });
 }
 
-describe("Codex process registration", () => {
+// Real SQLite workers must observe the same native platform as the test process.
+describe.skipIf(process.platform === "win32")("Codex POSIX process registration", () => {
   let root: string;
-  let store: Awaited<ReturnType<typeof openStore>>;
+  let store: ReturnType<typeof openStore>;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-process-registration-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    store = await openStore();
+    store = openStore();
     vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
       observer,
       { ...parent, ppid: 1, state: "Z" },
@@ -196,84 +195,72 @@ describe("Codex process registration", () => {
     expect(store.lookup("owned")).toEqual(registration);
   });
 
-  it.for([
-    "live",
-    "state directory changed",
-    "unreadable command",
-    "exited during inspection",
-    "windows",
-  ])("registers only a live child with its command: %s", async (mode, ctx) => {
-    if (mode === "windows") {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    }
-    const spawned = new RegistrationTestChildProcess(child.pid);
-    ctx.onTestFinished(() => {
-      spawned.stdin.destroy();
-      spawned.stdout.destroy();
-      spawned.stderr.destroy();
-      spawned.removeAllListeners();
-    });
-    const kill = vi.spyOn(spawned, "kill").mockReturnValue(true);
-    vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
-      observer,
-      { ...liveChild, ppid: process.pid },
-    ]);
-    vi.mocked(readCodexAppServerProcessCommand).mockImplementation(async () => {
-      if (mode === "exited during inspection") {
-        Object.defineProperty(spawned, "exitCode", { value: 0, configurable: true });
-        spawned.emit("exit", 0, null);
-      }
-      if (mode === "unreadable command") {
-        throw new ProcessInspectionError("permission");
-      }
-      return command;
-    });
-    const register = await prepareCodexAppServerProcessRegistration();
-    if (mode === "state directory changed") {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "other-state"));
-    }
-    const registered = register(spawned);
-    spawned.emit("spawn");
-
-    if (mode === "windows") {
-      await registered;
-      expect(readCodexAppServerProcessSnapshot).not.toHaveBeenCalled();
-      expect(readCodexAppServerProcessCommand).not.toHaveBeenCalled();
-      expect(store.entries()).toEqual([]);
-      expect(kill).not.toHaveBeenCalled();
-    } else if (mode === "live" || mode === "state directory changed") {
-      await registered;
-      if (mode === "state directory changed") {
-        expect(store.entries()).toEqual([]);
-        vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      }
-      expect(store.entries().map((entry) => entry.value)).toEqual([
-        {
-          parent: { pid: observer.pid, pgid: observer.pgid, startedAt: observer.startedAt },
-          child: { ...child, commandFingerprint },
-        },
+  it.for(["live", "state directory changed", "unreadable command", "exited during inspection"])(
+    "registers only a live child with its command: %s",
+    async (mode, ctx) => {
+      const spawned = new RegistrationTestChildProcess(child.pid);
+      ctx.onTestFinished(() => {
+        spawned.stdin.destroy();
+        spawned.stdout.destroy();
+        spawned.stderr.destroy();
+        spawned.removeAllListeners();
+      });
+      const kill = vi.spyOn(spawned, "kill").mockReturnValue(true);
+      vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
+        observer,
+        { ...liveChild, ppid: process.pid },
       ]);
-      // Durable rows must never expose the raw argv (appServer.args can carry secrets).
-      expect(JSON.stringify(store.entries())).not.toContain(command);
-      expect(kill).not.toHaveBeenCalled();
+      vi.mocked(readCodexAppServerProcessCommand).mockImplementation(async () => {
+        if (mode === "exited during inspection") {
+          Object.defineProperty(spawned, "exitCode", { value: 0, configurable: true });
+          spawned.emit("exit", 0, null);
+        }
+        if (mode === "unreadable command") {
+          throw new ProcessInspectionError("permission");
+        }
+        return command;
+      });
+      const register = await prepareCodexAppServerProcessRegistration();
       if (mode === "state directory changed") {
         vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "other-state"));
       }
-      spawned.emit("exit", 0, null);
-      await waitForCodexAppServerProcessRegistrationCleanup(spawned);
-      vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      expect(store.entries()).toEqual([]);
-    } else {
-      await expect(registered).rejects.toThrow(
-        mode === "unreadable command"
-          ? "Cannot inspect Codex processes"
-          : "Cannot register the Codex child process command",
-      );
-      expect(store.entries()).toEqual([]);
-    }
-  });
+      const registered = register(spawned);
+      spawned.emit("spawn");
 
-  it.for(["success", "failure", "win32"])(
+      if (mode === "live" || mode === "state directory changed") {
+        await registered;
+        if (mode === "state directory changed") {
+          expect(store.entries()).toEqual([]);
+          vi.stubEnv("OPENCLAW_STATE_DIR", root);
+        }
+        expect(store.entries().map((entry) => entry.value)).toEqual([
+          {
+            parent: { pid: observer.pid, pgid: observer.pgid, startedAt: observer.startedAt },
+            child: { ...child, commandFingerprint },
+          },
+        ]);
+        // Durable rows must never expose the raw argv (appServer.args can carry secrets).
+        expect(JSON.stringify(store.entries())).not.toContain(command);
+        expect(kill).not.toHaveBeenCalled();
+        if (mode === "state directory changed") {
+          vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "other-state"));
+        }
+        spawned.emit("exit", 0, null);
+        await waitForCodexAppServerProcessRegistrationCleanup(spawned);
+        vi.stubEnv("OPENCLAW_STATE_DIR", root);
+        expect(store.entries()).toEqual([]);
+      } else {
+        await expect(registered).rejects.toThrow(
+          mode === "unreadable command"
+            ? "Cannot inspect Codex processes"
+            : "Cannot register the Codex child process command",
+        );
+        expect(store.entries()).toEqual([]);
+      }
+    },
+  );
+
+  it.for(["success", "failure"])(
     "starts a nonblocking best-effort boot sweep: %s",
     async (mode) => {
       store.register("orphan", { parent, child: { ...child, commandFingerprint } });
@@ -281,9 +268,6 @@ describe("Codex process registration", () => {
       const service = createCodexAppServerProcessReaperService();
       const sweep = createDeferred<boolean>();
       vi.mocked(terminateCodexAppServerOrphan).mockReturnValue(sweep.promise);
-      if (mode === "win32") {
-        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      }
 
       expect(
         service.start({
@@ -293,13 +277,6 @@ describe("Codex process registration", () => {
         }),
       ).toBeUndefined();
 
-      if (mode === "win32") {
-        expect(readCodexAppServerProcessSnapshot).not.toHaveBeenCalled();
-        expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
-        expect(store.lookup("orphan")).toBeDefined();
-        expect(warn).not.toHaveBeenCalled();
-        return;
-      }
       await expect.poll(() => vi.mocked(terminateCodexAppServerOrphan).mock.calls.length).toBe(1);
       if (mode === "failure") {
         sweep.reject(new Error("inspection unavailable"));
@@ -320,7 +297,6 @@ describe("Codex process registration", () => {
     async (mode) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
       store.register("orphan", registration);
-      const pluginState = await import("openclaw/plugin-sdk/plugin-state-store-runtime");
       const asyncStore = pluginState.createPluginStateKeyedStore<unknown>("codex", {
         namespace: "app-server-processes",
         maxEntries: 512,
@@ -373,4 +349,53 @@ describe("Codex process registration", () => {
       }
     },
   );
+});
+
+describe("Codex process registration on Windows", () => {
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(pluginState, "createPluginStateKeyedStore");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
+  });
+
+  it("waits for spawn without inspecting or registering the child", async (ctx) => {
+    const spawned = new RegistrationTestChildProcess(child.pid);
+    ctx.onTestFinished(() => {
+      spawned.stdin.destroy();
+      spawned.stdout.destroy();
+      spawned.stderr.destroy();
+      spawned.removeAllListeners();
+    });
+    const kill = vi.spyOn(spawned, "kill").mockReturnValue(true);
+    const register = await prepareCodexAppServerProcessRegistration();
+    const registered = register(spawned);
+    spawned.emit("spawn");
+    await registered;
+
+    expect(pluginState.createPluginStateKeyedStore).not.toHaveBeenCalled();
+    expect(readCodexAppServerProcessSnapshot).not.toHaveBeenCalled();
+    expect(readCodexAppServerProcessCommand).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("skips the boot sweep without opening the registration store", () => {
+    const warn = vi.fn();
+    const service = createCodexAppServerProcessReaperService();
+    expect(
+      service.start({
+        config: {},
+        stateDir: "/unused-state",
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      }),
+    ).toBeUndefined();
+
+    expect(pluginState.createPluginStateKeyedStore).not.toHaveBeenCalled();
+    expect(readCodexAppServerProcessSnapshot).not.toHaveBeenCalled();
+    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

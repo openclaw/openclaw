@@ -2,16 +2,31 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const SESSION_LIST_SOURCES = [
+  "sidebar",
+  "dashboard",
+  "activity",
+  "sessions-page",
+  "chat-pane",
+  "agent-roster",
+  "command-palette",
+  "skill-workshop",
+] as const;
+
 export const SessionsListParamsSchema = closedObject({
+  /** Bounded caller attribution for response diagnostics; does not affect selection. */
+  source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
+  /** Omit detail-only capability metadata; sessions.describe retains the full row. */
+  rowMode: Type.Optional(Type.Literal("compact")),
   /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Activity age for sortBy: "activity"; otherwise metadata update age. */
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
-  /** Epoch ms of the caller's local midnight; returns an hourly activity pulse from that instant. */
-  activityPulseSince: Type.Optional(Type.Number({ minimum: 0 })),
-  /** Epoch ms of the caller's next local midnight; bounds `activityPulse` to the civil day. */
-  activityPulseUntil: Type.Optional(Type.Number({ minimum: 0 })),
+  /** Strictly ascending epoch-ms bucket boundaries in the caller's local time zone. */
+  activityPulseBoundaries: Type.Optional(
+    Type.Array(Type.Number({ minimum: 0 }), { minItems: 2, maxItems: 64 }),
+  ),
   /** Select sessions with current direct running or queued work before pagination. */
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */

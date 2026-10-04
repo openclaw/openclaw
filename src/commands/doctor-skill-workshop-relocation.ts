@@ -26,6 +26,7 @@ import {
 } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import { listWorkspaceOwnerAgentIds } from "./doctor-skill-workshop-collection-backups.js";
+import type { LegacyWorkshopProposal } from "./doctor-skill-workshop-read.kernel.js";
 
 const INVALID_LEGACY_SKILL_REASON =
   "Skill Workshop could not load the applied legacy skill; the path stays in place and the proposal is stale.";
@@ -167,11 +168,6 @@ function staleWorkshopProposal(record: SkillProposalRecord, reason: string): Ski
     statusReason: reason,
   };
 }
-
-export type LegacyWorkshopProposal = {
-  record: SkillProposalRecord;
-  ownerAgentId: string | null;
-};
 
 export type WorkshopProposalUpdate = {
   record: SkillProposalRecord;

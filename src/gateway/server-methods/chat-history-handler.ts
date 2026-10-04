@@ -4,6 +4,7 @@ import {
   errorShape,
   validateChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -22,11 +23,12 @@ import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
-import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -34,7 +36,6 @@ import { prepareProjectedSessionPresentation } from "../session-row-presentation
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
-import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
   reportOmittedChatHistory,
@@ -141,13 +142,16 @@ export async function handleChatHistoryRequest({
         },
         signal,
       );
-      return Boolean(
-        transcript &&
-        scopeLegacySessionKeyToAgent({
-          sessionKey: transcript.sessionKey,
-          agentId: sessionAgentId,
-        }) === scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId }),
-      );
+      if (!transcript) {
+        return false;
+      }
+      const storedKey = transcript.sessionKey;
+      // Literal stored owners must not acquire the scope of a legacy alias.
+      const ownerKey =
+        storedKey === "global" || storedKey === "unknown"
+          ? storedKey
+          : scopeLegacySessionKeyToAgent({ sessionKey: storedKey, agentId: sessionAgentId });
+      return ownerKey === canonicalKey;
     };
     if (!(await readTranscriptOwner())) {
       if (retainedTranscript) {
@@ -164,15 +168,6 @@ export async function handleChatHistoryRequest({
         );
       }
       return;
-    }
-    if (method === "chat.startup") {
-      void prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
-        (error: unknown) => {
-          context.logGateway.debug(
-            `chat.startup continuing without a workspace icon: ${formatErrorMessage(error)}`,
-          );
-        },
-      );
     }
     const readStartupProjection = () =>
       measureDiagnosticsTimelineSpan(
@@ -330,6 +325,12 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       storePath,
     };
+    const [unsavedAcpMeta] = entry
+      ? []
+      : await readAcpSessionMetaForEntries({
+          cfg,
+          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
+        });
     const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -344,12 +345,19 @@ export async function handleChatHistoryRequest({
             : buildGatewaySessionRow({
                 ...selectedSession,
                 key: canonicalKey,
+                preparedAcpMeta: unsavedAcpMeta ?? null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
         { config: cfg, phase: method },
       );
 
+      // Unsaved sessions have no resident row, but their configured defaults use the same wire contract.
+      if (!entry && sessionInfo) {
+        const presentFastMode = prepareSessionFastModePresentation(client);
+        sessionInfo.fastMode = presentFastMode(sessionInfo.fastMode);
+        sessionInfo.effectiveFastMode = presentFastMode(sessionInfo.effectiveFastMode);
+      }
       if (entry && !sessionInfo) {
         respondChatHistoryUnavailable(
           method,
@@ -575,7 +583,7 @@ export async function handleChatHistoryRequest({
         defaults,
         sessionInfo,
         thinkingLevel,
-        fastMode: entry?.fastMode,
+        fastMode: prepareSessionFastModePresentation(client)(entry?.fastMode),
         toolOverrides: entry?.toolOverrides,
         verboseLevel,
         ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
@@ -603,7 +611,6 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) =>
-    handleChatStartupRequest(opts, handleChatHistoryRequest, respondChatHistoryUnavailable),
+  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
   "chat.metadata": handleChatMetadataRequest,
 };

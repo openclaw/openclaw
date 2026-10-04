@@ -1,5 +1,5 @@
 // Plugin ClawHub release tests validate plugin release metadata and artifacts.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -376,6 +376,128 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it.each([
+    { state: "published" },
+    { state: "absent" },
+    { state: "pending", stage: "staging" },
+    { state: "pending", stage: "checks", attemptId: "jd7abc_123-xyz" },
+    { state: "pending", stage: "finalization", attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: true, attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: false, attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: false },
+  ])(
+    "plans publication detail without republishing $state/$stage/$recoverable",
+    async (publication) => {
+      const repoDir = createTempPluginRepo();
+      const name = "@openclaw/demo-plugin";
+      const version = "2026.4.1";
+      const { fetchImpl, requests } = createClawHubPlanFetch({
+        packages: { [name]: { status: 200 } },
+        trustedPublishers: { [name]: { status: 200, body: { trustedPublisher } } },
+        publications: {
+          [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+        },
+        // A legacy probe would wrongly turn pending/failed into a publish candidate.
+        versions: { [`${name}@${version}`]: 404 },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      for (const [bucket, state] of [
+        ["candidates", "absent"],
+        ["skippedPublished", "published"],
+        ["pendingPublication", "pending"],
+        ["failedPublication", "failed"],
+      ] as const) {
+        expect(plan[bucket]).toEqual(publication.state === state ? plan.all : []);
+      }
+      expect(plan.all[0]).toMatchObject({
+        publication,
+        alreadyPublished: publication.state === "published",
+      });
+      expect(requests.filter((url) => url.includes("/versions/"))).toEqual([
+        `/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/${version}/publication`,
+      ]);
+    },
+  );
+
+  it.each([
+    { state: "pending", stage: "staging" },
+    { state: "failed", recoverable: true, attemptId: "attempt_recover" },
+  ])(
+    "does not bootstrap a $state package shell hidden by the metadata route",
+    async (publication) => {
+      const repoDir = createTempPluginRepo();
+      const name = "@openclaw/demo-plugin";
+      const version = "2026.4.1";
+      const { fetchImpl } = createClawHubPlanFetch({
+        packages: { [name]: { status: 404 } },
+        publications: {
+          [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+        },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      expect(plan.candidates).toEqual([]);
+      expect(plan.bootstrapCandidates).toEqual([]);
+      expect(plan.missingTrustedPublisher).toEqual([]);
+      expect([...plan.pendingPublication, ...plan.failedPublication]).toEqual(plan.all);
+      expect(plan.all[0]?.publication).toEqual(publication);
+    },
+  );
+
+  it.each([404, 200])(
+    "uses the legacy probe after a %i response without state",
+    async (publicationStatus) => {
+      const repoDir = createTempPluginRepo({ extraExtensionIds: ["demo-two"] });
+      const names = ["@openclaw/demo-plugin", "@openclaw/demo-two"];
+      const { fetchImpl, requests } = createClawHubPlanFetch({
+        packages: Object.fromEntries(names.map((name) => [name, { status: 200 }])),
+        trustedPublishers: Object.fromEntries(
+          names.map((name) => [name, { status: 200, body: { trustedPublisher } }]),
+        ),
+        publications: Object.fromEntries(
+          names.map((name) => [
+            `${name}@2026.4.1`,
+            { status: publicationStatus, body: { version: {} } },
+          ]),
+        ),
+        versions: { "@openclaw/demo-plugin@2026.4.1": 200, "@openclaw/demo-two@2026.4.1": 404 },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      expect(plan.skippedPublished.map((entry) => entry.packageName)).toEqual([names[0]]);
+      expect(plan.candidates.map((entry) => entry.packageName)).toEqual([names[1]]);
+      expect(requests.filter((url) => url.endsWith("/versions/2026.4.1"))).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    { state: "future" },
+    { state: null },
+    { state: "published", extra: "private detail" },
+    { state: "published", name: "@openclaw/wrong" },
+    { state: "absent", version: "2026.4.2" },
+    { state: "pending", stage: "checks" },
+    { state: "pending", stage: "staging", attemptId: "attempt-1" },
+    { state: "pending", stage: "unknown", attemptId: "attempt-1" },
+    { state: "failed", recoverable: "true" },
+    { state: "failed", recoverable: true, attemptId: "bad\ncommand" },
+    { state: "failed", recoverable: false, attemptId: "x".repeat(201) },
+  ])("fails closed on invalid publication detail %j", async (publication) => {
+    const repoDir = createTempPluginRepo();
+    const name = "@openclaw/demo-plugin";
+    const version = "2026.4.1";
+    const { fetchImpl, requests } = createClawHubPlanFetch({
+      packages: { [name]: { status: 200 } },
+      trustedPublishers: { [name]: { status: 200, body: { trustedPublisher } } },
+      publications: {
+        [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+      },
+      versions: { [`${name}@${version}`]: 404 },
+    });
+    await expect(collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl })).rejects.toThrow(
+      "Invalid ClawHub publication state",
+    );
+    expect(requests.some((url) => url.endsWith(`/versions/${version}`))).toBe(false);
+  });
+
   it("consumes completed package observations without another ClawHub read", async () => {
     const repoDir = createTempPluginRepo({ requiredLatestDependencyVersion: "1.2.3" });
     const forbidden = vi.fn(async () => {
@@ -433,13 +555,18 @@ describe("collectPluginClawHubReleasePlan", () => {
     }).fetchImpl;
     let activeRequests = 0;
     let maxActiveRequests = 0;
+    let releaseFirstWave: () => void;
+    const firstWave = new Promise<void>((resolve) => {
+      releaseFirstWave = resolve;
+    });
     const fetchImpl: typeof fetch = async (...args) => {
       activeRequests += 1;
       maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
       try {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 5);
-        });
+        if (activeRequests === 8) {
+          releaseFirstWave();
+        }
+        await firstWave;
         return await baseFetch(...args);
       } finally {
         activeRequests -= 1;
@@ -545,6 +672,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(requests).toEqual([
       "/api/v1/packages/%40openclaw%2Fdemo-plugin",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
+      "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1/publication",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1",
     ]);
   });
@@ -574,6 +702,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (url.pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response(
@@ -629,6 +760,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
@@ -686,6 +820,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           { status: 200 },
         );
       }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
+      }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
       }
@@ -726,6 +863,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         versionRequests += 1;
@@ -832,6 +972,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           { status: 200 },
         );
       }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
+      }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
       }
@@ -878,6 +1021,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
@@ -1088,6 +1234,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
     expect(plan.skippedPublished).toHaveLength(1);
     expect(plan.skippedPublished[0]).toEqual({
+      publication: { state: "published" },
       alreadyPublished: true,
       artifactName: "clawhub-package-openclaw-demo-plugin-2026.4.1",
       channel: "stable",
@@ -1825,19 +1972,110 @@ exit 99
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  it("publishes the exact validated tgz and retries transient failures", () => {
+  it.each([
+    {
+      name: "retries verified bytes",
+      error: "HTTP 503 temporarily unavailable",
+      failures: 1,
+      sleeps: [60],
+      attempts: 2,
+    },
+    {
+      name: "honors CLI Retry-After",
+      error: "Rate limit exceeded (retry in 125s, remaining: 0/10, reset in 125s)",
+      failures: 1,
+      sleeps: [125],
+      attempts: 2,
+    },
+    {
+      name: "keeps backoff above a short server delay",
+      error: "HTTP 429 (retry in 1s)",
+      failures: 1,
+      sleeps: [60],
+      attempts: 2,
+    },
+    {
+      name: "caps a long server delay",
+      error: "HTTP 429 (retry in 999999999999999999999999s)",
+      failures: 1,
+      sleeps: [300],
+      attempts: 2,
+    },
+    {
+      name: "grows backoff up to the cap",
+      error: "HTTP 503",
+      failures: 4,
+      sleeps: [60, 120, 240, 300],
+      attempts: 5,
+    },
+    {
+      name: "bounds total retry sleep",
+      error: "HTTP 429 (retry in 300s)",
+      failures: 8,
+      sleeps: [300, 300, 300],
+      attempts: 4,
+      diagnostic: "sleep budget exhausted",
+    },
+    {
+      name: "stops non-retryable errors",
+      error: "Permission denied",
+      failures: 1,
+      sleeps: [],
+      attempts: 1,
+    },
+    {
+      name: "refuses source-mode replay without a bound identity",
+      error: "HTTP 503",
+      failures: 1,
+      sleeps: [],
+      attempts: 1,
+      sourceMode: true,
+      diagnostic: "no caller-bound artifact identity",
+    },
+    {
+      name: "refuses changed artifact bytes",
+      error: "HTTP 503",
+      failures: 1,
+      sleeps: [60],
+      attempts: 1,
+      mutate: true,
+    },
+    {
+      name: "replays identical bytes after a timed-out publish",
+      error: "no output",
+      failures: 1,
+      sleeps: [60],
+      attempts: 2,
+      exitCode: 124,
+    },
+    {
+      name: "replays identical bytes after a killed publish",
+      error: "no output",
+      failures: 1,
+      sleeps: [60],
+      attempts: 2,
+      exitCode: 137,
+    },
+  ])("$name", ({ error, failures, sleeps, attempts, sourceMode, mutate, exitCode, diagnostic }) => {
     const repoDir = createTempPluginRepo();
+    if (sourceMode) {
+      const runtimeDir = join(repoDir, "extensions/demo-plugin/dist");
+      mkdirSync(runtimeDir, { recursive: true });
+      writeFileSync(join(runtimeDir, "index.js"), "export {};\n");
+    }
     const binDir = join(repoDir, "bin");
     const markerPath = join(repoDir, "clawhub-invoked");
     const attemptsPath = join(repoDir, "publish-attempts");
+    const sleepsPath = join(repoDir, "sleeps");
     const tgzPath = join(repoDir, "immutable.tgz");
     const tgzBytes = createClawPackBytes("@openclaw/demo-plugin", "2026.4.1");
     mkdirSync(binDir, { recursive: true });
     writeFileSync(tgzPath, tgzBytes);
+    writeFileSync(sleepsPath, "");
     writeFileSync(
       join(binDir, "sleep"),
       `#!/usr/bin/env bash
-exit 0
+printf '%s\\n' "$1" >> "$TEST_SLEEPS"
 `,
     );
     chmodSync(join(binDir, "sleep"), 0o755);
@@ -1845,32 +2083,36 @@ exit 0
       join(binDir, "clawhub"),
       `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
-if [[ "\${1:-}" == "--workdir" ]]; then
-  shift 2
+printf '%s\\n' "$*" >> "$TEST_INVOCATIONS"
+if [[ "\${1:-}" == "--workdir" ]]; then shift 2; fi
+if [[ "\${2:-}" == "pack" ]]; then
+  printf '{"path":"%s"}\\n' "$TEST_TGZ"
+  exit 0
 fi
 if [[ " $* " == *" --dry-run "* ]]; then
   printf '{"name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n'
   exit 0
 fi
 attempts=0
-if [[ -f ${JSON.stringify(attemptsPath)} ]]; then
-  attempts="$(cat ${JSON.stringify(attemptsPath)})"
-fi
+if [[ -f "$TEST_ATTEMPTS" ]]; then attempts="$(cat "$TEST_ATTEMPTS")"; fi
 attempts=$((attempts + 1))
-printf '%s' "$attempts" > ${JSON.stringify(attemptsPath)}
-if [[ "$attempts" == "1" ]]; then
-  echo "HTTP 503 temporarily unavailable" >&2
-  exit 1
+printf '%s' "$attempts" > "$TEST_ATTEMPTS"
+if ((attempts <= TEST_FAILURES)); then
+  if [[ "$TEST_MUTATE" == "true" ]]; then printf x >> "$TEST_TGZ"; fi
+  printf '%s\\n' "$TEST_ERROR" >&2
+  exit "$TEST_EXIT_CODE"
 fi
-exit 0
 `,
     );
     chmodSync(join(binDir, "clawhub"), 0o755);
 
-    execFileSync(
+    const result = spawnSync(
       "bash",
-      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--publish-packed", tgzPath],
+      [
+        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+        sourceMode ? "--publish" : "--publish-packed",
+        sourceMode ? "extensions/demo-plugin" : tgzPath,
+      ],
       {
         cwd: repoDir,
         encoding: "utf8",
@@ -1880,77 +2122,38 @@ exit 0
           EXPECTED_CLAWHUB_ARTIFACT_SIZE: String(tgzBytes.byteLength),
           EXPECTED_CLAWHUB_PACKAGE_NAME: "@openclaw/demo-plugin",
           EXPECTED_CLAWHUB_PACKAGE_VERSION: "2026.4.1",
-          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "2",
-          OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "1",
+          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "8",
+          OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "60",
+          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           PACKAGE_DIR: "extensions/demo-plugin",
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          TEST_ATTEMPTS: attemptsPath,
+          TEST_INVOCATIONS: markerPath,
+          TEST_SLEEPS: sleepsPath,
+          TEST_TGZ: tgzPath,
+          TEST_FAILURES: String(failures),
+          TEST_MUTATE: String(mutate ?? false),
+          TEST_ERROR: error,
+          TEST_EXIT_CODE: String(exitCode ?? 1),
         },
       },
     );
 
-    const invocations = readFileSync(markerPath, "utf8");
-    expect(invocations).not.toContain("package pack");
-    expect(invocations.match(/immutable\.tgz/gu)).toHaveLength(3);
-    expect(readFileSync(attemptsPath, "utf8")).toBe("2");
-  });
-
-  it("bounds each packed publish attempt and retries a timed-out CLI", () => {
-    const repoDir = createTempPluginRepo();
-    const binDir = join(repoDir, "bin");
-    const attemptsPath = join(repoDir, "publish-attempts");
-    const tgzPath = join(repoDir, "immutable.tgz");
-    const tgzBytes = createClawPackBytes("@openclaw/demo-plugin", "2026.4.1");
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(tgzPath, tgzBytes);
-    writeFileSync(
-      join(binDir, "clawhub"),
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "--workdir" ]]; then
-  shift 2
-fi
-if [[ " $* " == *" --dry-run "* ]]; then
-  printf '{"name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n'
-  exit 0
-fi
-attempts=0
-if [[ -f ${JSON.stringify(attemptsPath)} ]]; then
-  attempts="$(cat ${JSON.stringify(attemptsPath)})"
-fi
-attempts=$((attempts + 1))
-printf '%s' "$attempts" > ${JSON.stringify(attemptsPath)}
-if [[ "$attempts" == "1" ]]; then
-  sleep 60
-fi
-exit 0
-`,
-    );
-    chmodSync(join(binDir, "clawhub"), 0o755);
-
-    const startedAt = Date.now();
-    execFileSync(
-      "bash",
-      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--publish-packed", tgzPath],
-      {
-        cwd: repoDir,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          EXPECTED_CLAWHUB_ARTIFACT_SHA256: createHash("sha256").update(tgzBytes).digest("hex"),
-          EXPECTED_CLAWHUB_ARTIFACT_SIZE: String(tgzBytes.byteLength),
-          EXPECTED_CLAWHUB_PACKAGE_NAME: "@openclaw/demo-plugin",
-          EXPECTED_CLAWHUB_PACKAGE_VERSION: "2026.4.1",
-          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "2",
-          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPT_TIMEOUT_SECONDS: "1",
-          OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "1",
-          PACKAGE_DIR: "extensions/demo-plugin",
-          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-        },
-      },
-    );
-
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
-    expect(readFileSync(attemptsPath, "utf8")).toBe("2");
+    expect(existsSync(attemptsPath), result.stderr).toBe(true);
+    expect(readFileSync(attemptsPath, "utf8"), result.stderr).toBe(String(attempts));
+    expect(readFileSync(sleepsPath, "utf8")).toBe(sleeps.map((delay) => `${delay}\n`).join(""));
+    expect(result.status === 0).toBe(attempts > failures && !mutate);
+    if (diagnostic) {
+      expect(result.stderr).toContain(diagnostic);
+    }
+    if (error.includes("125s")) {
+      expect(result.stderr).toContain("cap=300s");
+    }
+    if (!sourceMode) {
+      const invocations = readFileSync(markerPath, "utf8");
+      expect(invocations).not.toContain("package pack");
+      expect(invocations.match(/immutable\.tgz/gu)).toHaveLength(attempts + 1);
+    }
   });
 });
 
@@ -2110,6 +2313,7 @@ function createClawHubPlanFetch(config: {
     }
   >;
   versions?: Record<string, number>;
+  publications?: Record<string, { status: number; body?: unknown }>;
 }) {
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
@@ -2146,13 +2350,24 @@ function createClawHubPlanFetch(config: {
       });
     }
 
+    const publicationMatch = url.pathname.match(
+      /^\/api\/v1\/packages\/([^/]+)\/versions\/([^/]+)\/publication$/u,
+    );
+    if (publicationMatch?.[1] && publicationMatch[2]) {
+      const key = `${decodeURIComponent(publicationMatch[1])}@${decodeURIComponent(publicationMatch[2])}`;
+      const reply = config.publications?.[key] ?? { status: 404 };
+      return new Response(JSON.stringify(reply.body ?? {}), { status: reply.status });
+    }
+
     const versionMatch = url.pathname.match(/^\/api\/v1\/packages\/([^/]+)\/versions\/([^/]+)$/u);
     const encodedVersionPackageName = versionMatch?.[1];
     const encodedVersion = versionMatch?.[2];
     if (encodedVersionPackageName !== undefined && encodedVersion !== undefined) {
       const packageName = decodeURIComponent(encodedVersionPackageName);
       const version = decodeURIComponent(encodedVersion);
-      const status = config.versions?.[`${packageName}@${version}`];
+      const status =
+        config.versions?.[`${packageName}@${version}`] ??
+        (config.packages[packageName]?.status === 404 ? 404 : undefined);
       if (!status) {
         throw new Error(`Unexpected version detail request for ${packageName}@${version}`);
       }

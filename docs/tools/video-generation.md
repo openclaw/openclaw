@@ -69,9 +69,10 @@ Video generation is asynchronous:
    an idempotent direct fallback with the media.
 
 While a job is in flight, duplicate `video_generate` calls in the same
-session return the current task status instead of starting another
+chat return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
-generation.
+generation. Direct chats keep separate tasks even when they share the main
+session transcript; completion returns to the requesting peer.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path
@@ -220,6 +221,12 @@ dimensions). Providers that do not declare it surface the value via
 <ParamField path="model" type="string">Provider/model override (e.g. `runway/gen4.5`).</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
 <ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.mediaModels.video.timeoutMs` if configured, otherwise the plugin-authored provider default when one exists.</ParamField>
+
+For Runway and Together, an explicit timeout covers submission, polling, and
+downloading together. Individual HTTP requests retain a 120-second limit.
+Without an explicit timeout, their 120-second polling budget starts after
+submission; request and download limits remain separate.
+
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown

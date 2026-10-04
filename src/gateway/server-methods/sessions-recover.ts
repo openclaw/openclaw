@@ -2,11 +2,11 @@ import {
   validateSessionsRecoverParams,
   type SessionsRecoverResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recoverGatewaySession } from "../session-recovery-service.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { emitSessionArchived, emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { launchSessionRecoveryContinuation } from "./session-recovery-continuation.js";
 import type { GatewayRequestHandlers } from "./types.js";

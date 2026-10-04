@@ -1,7 +1,3 @@
-/**
- * Builds the skills, tools, capability profile, and system prompt used by one
- * prepared direct compaction attempt.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -16,8 +12,9 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -50,12 +47,12 @@ import {
   buildAgentRuntimePlan,
   resolvePreparedProviderRuntimeHandle,
 } from "../runtime-plan/build.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
 import { toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
@@ -63,7 +60,7 @@ import {
   filterRuntimeCompatibleTools,
 } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
-import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
+import { prepareWatchedSessionsPromptAsync } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -73,7 +70,6 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -105,7 +101,7 @@ export async function buildPreparedCompactionRuntime(
     sandbox,
     effectiveWorkspace,
     effectiveCwd,
-    effectiveSkillAgentId: sessionAgentId,
+    sessionAgentId,
   } = prepared;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
@@ -127,15 +123,12 @@ export async function buildPreparedCompactionRuntime(
       return;
     }
     toolRuntimesDisposed = true;
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
+    for (const runtime of [bundleMcpRuntime, bundleLspRuntime]) {
+      try {
+        await runtime?.dispose();
+      } catch {
+        /* best-effort */
+      }
     }
   };
   const restoreSkillEnvironment = () => {
@@ -205,7 +198,6 @@ export async function buildPreparedCompactionRuntime(
       provider: contextConfigProvider,
       modelId,
       model: runtimeModel,
-      agentId: sessionAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
@@ -306,11 +298,15 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
+    const authProfileStoreSource =
+      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
-      ? createOpenClawCodingToolsInternal(
+      ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
+            authProfileStoreSource,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,
@@ -345,14 +341,17 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsRaw,
+    const toolDiagnosticContext = {
       runId,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+    };
+    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
+    await logRuntimeToolSchemaQuarantine({
+      ...toolDiagnosticContext,
+      diagnostics: normalizableToolProjection.diagnostics,
+      tools: toolsRaw,
     });
     const tools = runtimePlan.tools.normalize(
       [...normalizableToolProjection.tools],
@@ -385,13 +384,10 @@ export async function buildPreparedCompactionRuntime(
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
     if (normalizableBundledToolProjection.diagnostics.length > 0) {
-      logRuntimeToolSchemaQuarantine({
+      await logRuntimeToolSchemaQuarantine({
+        ...toolDiagnosticContext,
         diagnostics: normalizableBundledToolProjection.diagnostics,
         tools: filteredBundledTools,
-        runId,
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
       });
     }
     const normalizedBundledTools =
@@ -403,13 +399,10 @@ export async function buildPreparedCompactionRuntime(
         : filteredBundledTools;
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
-    logRuntimeToolSchemaQuarantine({
+    await logRuntimeToolSchemaQuarantine({
+      ...toolDiagnosticContext,
       diagnostics: toolSchemaProjection.diagnostics,
       tools: projectedEffectiveTools,
-      runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
     });
     const effectiveTools = [...toolSchemaProjection.tools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
@@ -510,9 +503,7 @@ export async function buildPreparedCompactionRuntime(
       cwd: effectiveCwd,
       moduleUrl: import.meta.url,
     });
-    const promptContributionContext: Parameters<
-      AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
-    >[0] = {
+    const buildPromptContributionContext = () => ({
       config: params.config,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -522,9 +513,10 @@ export async function buildPreparedCompactionRuntime(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-    };
-    const promptContribution =
-      runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+    });
+    const promptContribution = runtimePlan.prompt.resolveSystemPromptContribution(
+      buildPromptContributionContext(),
+    );
     const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
       enabled: promptMode === "full",
       toolNames: promptTools.map((tool) => tool.name),
@@ -535,17 +527,22 @@ export async function buildPreparedCompactionRuntime(
     });
     // Match live-turn policy gates so restricted endpoint compaction cannot disclose
     // private ambient sections through its model-visible developer prompt.
-    const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+    const preparedWatchedSessions = await prepareWatchedSessionsPromptAsync({
       enabled: promptMode === "full",
       config: params.config,
       sessionKey: params.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
       toolNames: promptTools.map((tool) => tool.name),
       capabilityToolNames: promptAllowedToolNames,
+      assertCurrent: () => params.abortSignal?.throwIfAborted(),
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
+    const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
+    const preparedTtsPreferences =
+      promptMode === "full" ? await prepareTtsPreferences() : undefined;
     const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildEmbeddedSystemPrompt({
+      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+        preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
         agentId: sessionAgentId,
@@ -585,15 +582,7 @@ export async function buildPreparedCompactionRuntime(
         config: params.config,
         workspaceDir: effectiveWorkspace,
         context: {
-          config: params.config,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          provider,
-          modelId,
-          promptMode,
-          runtimeChannel,
-          runtimeCapabilities,
-          agentId: sessionAgentId,
+          ...buildPromptContributionContext(),
           systemPrompt: builtSystemPrompt,
         },
       });
@@ -610,7 +599,6 @@ export async function buildPreparedCompactionRuntime(
       allowedToolNames,
       buildSystemPromptText,
       resolvedMessageProvider,
-      sessionAgentId,
     };
   } catch (err) {
     restoreSkillEnvironment();

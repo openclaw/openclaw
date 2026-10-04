@@ -1,11 +1,60 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionManager } from "./session-manager.js";
+
+it.each([false, true])("shares immutable initial messages (incognito=%s)", async (incognito) => {
+  await withOpenClawTestState({ label: "shared-model-context" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "shared-context",
+      sessionKey: incognito
+        ? "agent:main:dashboard:incognito-shared-context"
+        : "agent:main:shared-context",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const seed = await SessionManager.openAsync(scope);
+    const userId = await seed.appendMessageAsync({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const replyId = await seed.appendMessageAsync(
+      Object.assign(makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }), {
+        __openclaw: { upstreamUserText: "synthetic-private-native-payload" },
+      }),
+    );
+    const manager = await SessionManager.openAsync(scope, undefined, {
+      maxEvents: 20,
+      maxBytes: 8192,
+    });
+    const context = await manager[sessionManagerReadInitialContext]();
+    const user = manager.getEntry(userId!);
+    const reply = manager.getEntry(replyId!);
+    const projectedReply = context.messages[1];
+    if (
+      user?.type !== "message" ||
+      reply?.type !== "message" ||
+      reply.message.role !== "assistant" ||
+      projectedReply?.role !== "assistant"
+    ) {
+      throw new Error("Missing stored messages");
+    }
+    expect(context.messages[0]).toBe(user.message);
+    expect(projectedReply.content).toBe(reply.message.content);
+    expect(Object.isFrozen(user.message)).toBe(true);
+    expect(Object.isFrozen(reply.message.content)).toBe(true);
+    expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
+    expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
+    expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+});
 
 it.each(
   [false, true].flatMap((incognito) =>
@@ -48,15 +97,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
         if (incognito) {

@@ -1,9 +1,10 @@
-// Captures plugin registrations for controlled registry assembly.
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { StorageProvider } from "../storage/types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -67,6 +68,7 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   agentHarnesses: AgentHarness[];
+  agentExecutorControllers: AgentExecutorController[];
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
@@ -84,6 +86,7 @@ export type CapturedPluginRegistration = {
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   workerProviders: WorkerProvider[];
+  storageProviders: StorageProvider[];
   migrationProviders: MigrationProviderPlugin[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
@@ -104,6 +107,14 @@ function captureInto<T>(entries: T[]): (entry: T) => void {
   };
 }
 
+function captureCapabilityInto<T extends { id: string }>(entries: T[]) {
+  return (entry: Parameters<typeof resolveCapabilityProviderRegistration<T>>[0]) => {
+    entries.push(
+      resolveCapabilityProviderRegistration(entry, resolvePluginCapabilityCatalogContext),
+    );
+  };
+}
+
 export function createCapturedPluginRegistration(params?: {
   config?: OpenClawConfig;
   contracts?: PluginManifestContracts;
@@ -115,6 +126,7 @@ export function createCapturedPluginRegistration(params?: {
   const captured: Omit<CapturedPluginRegistration, "api"> = {
     providers: [],
     agentHarnesses: [],
+    agentExecutorControllers: [],
     cliRegistrars: [],
     cliBackends: [],
     textTransforms: [],
@@ -132,6 +144,7 @@ export function createCapturedPluginRegistration(params?: {
     webFetchProviders: [],
     webSearchProviders: [],
     workerProviders: [],
+    storageProviders: [],
     migrationProviders: [],
     sessionExtensions: [],
     trustedToolPolicies: [],
@@ -209,6 +222,7 @@ export function createCapturedPluginRegistration(params?: {
         registerModelCatalogProvider: captureInto(captured.modelCatalogProviders),
         registerSessionCatalog: captureInto(captured.sessionCatalogs),
         registerAgentHarness: captureInto(captured.agentHarnesses),
+        registerAgentExecutorController: captureInto(captured.agentExecutorControllers),
         registerCodexAppServerExtensionFactory: captureInto(
           captured.codexAppServerExtensionFactories,
         ),
@@ -252,27 +266,11 @@ export function createCapturedPluginRegistration(params?: {
         registerCliBackend: captureInto(captured.cliBackends),
         registerTextTransforms: captureInto(captured.textTransforms),
         registerEmbeddingProvider: captureInto(captured.embeddingProviders),
-        registerSpeechProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.speechProviders.push(provider);
-        },
-        registerRealtimeTranscriptionProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.realtimeTranscriptionProviders.push(provider);
-        },
-        registerRealtimeVoiceProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.realtimeVoiceProviders.push(provider);
-        },
+        registerSpeechProvider: captureCapabilityInto(captured.speechProviders),
+        registerRealtimeTranscriptionProvider: captureCapabilityInto(
+          captured.realtimeTranscriptionProviders,
+        ),
+        registerRealtimeVoiceProvider: captureCapabilityInto(captured.realtimeVoiceProviders),
         registerMediaUnderstandingProvider: captureInto(captured.mediaUnderstandingProviders),
         registerTranscriptSourceProvider: captureInto(captured.transcriptSourceProviders),
         registerImageGenerationProvider: captureInto(captured.imageGenerationProviders),
@@ -281,6 +279,7 @@ export function createCapturedPluginRegistration(params?: {
         registerWebFetchProvider: captureInto(captured.webFetchProviders),
         registerWebSearchProvider: captureInto(captured.webSearchProviders),
         registerWorkerProvider: captureInto(captured.workerProviders),
+        registerStorageProvider: captureInto(captured.storageProviders),
         registerMigrationProvider: captureInto(captured.migrationProviders),
         registerSessionExtension: captureInto(captured.sessionExtensions),
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {

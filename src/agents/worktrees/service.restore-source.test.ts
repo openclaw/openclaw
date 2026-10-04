@@ -9,9 +9,9 @@ import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as allocation from "./allocation.js";
 import * as worktreeGit from "./git.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry.js";
@@ -210,61 +210,50 @@ it.each(["captured", "failed"] as const)(
   },
 );
 
-it("does not claim a restore whose final recovery-ref cleanup never acknowledged completion", async () => {
-  const rollback = vi.spyOn(owner, "rollbackPreparation");
-  const restoreFailure = new Error("Final restore recovery-ref cleanup did not complete");
-  const requireGit = worktreeGit.requireGit;
-  vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
-    if (
-      args[0] === "update-ref" &&
-      args[1] === "-d" &&
-      args.length === 3 &&
-      args[2] === `refs/openclaw/removals/${removed.id}`
-    ) {
-      throw restoreFailure;
+it.each(["unacknowledged restore", "live checkout"] as const)(
+  "does not claim %s after source unwind",
+  async (state) => {
+    const rollback = vi.spyOn(owner, "rollbackPreparation");
+    const restoreFailure = new Error("Final restore recovery-ref cleanup did not complete");
+    const sourceFailure = new Error("Source unwind after live reuse");
+    if (state === "live checkout") {
+      await owner.restore({ id: removed.id });
+      await fs.writeFile(path.join(removed.path, "local.env"), "existing user content");
+    } else {
+      const requireGit = worktreeGit.requireGit;
+      vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
+        if (
+          args[0] === "update-ref" &&
+          args[1] === "-d" &&
+          args.length === 3 &&
+          args[2] === `refs/openclaw/removals/${removed.id}`
+        ) {
+          throw restoreFailure;
+        }
+        return await requireGit(cwd, args, options);
+      });
     }
-    return await requireGit(cwd, args, options);
-  });
-  await expect(
-    owner.createWithOutcome({
-      repoRoot: repo,
-      name: removed.name,
-      withSource: unwindSource(new Error("Source must not reach successful unwind")),
-      withRollback,
-    }),
-  ).rejects.toBe(restoreFailure);
-  expect(rollback).not.toHaveBeenCalled();
-  expect(
-    vi
-      .mocked(gitWorker.runGitWorkerOperation)
-      .mock.calls.some(([command]) => command.type === "worktree.snapshot"),
-  ).toBe(false);
-  expect(getRegistryWorktree(env, removed.id)?.removedAt).toBeUndefined();
-  expect(await payload()).toBe("restored provisioned content");
-  expect(events).not.toContain("removal-claimed");
-});
-
-it("does not claim an already live checkout after source unwind", async () => {
-  await owner.restore({ id: removed.id });
-  await fs.writeFile(path.join(removed.path, "local.env"), "existing user content");
-  const rollback = vi.spyOn(owner, "rollbackPreparation");
-  const failure = new Error("Source unwind after live reuse");
-  await expect(
-    owner.createWithOutcome({
-      repoRoot: repo,
-      name: removed.name,
-      withSource: unwindSource(failure),
-      withRollback,
-    }),
-  ).rejects.toBe(failure);
-  expect(rollback).not.toHaveBeenCalled();
-  expect(
-    vi
-      .mocked(gitWorker.runGitWorkerOperation)
-      .mock.calls.some(([command]) => command.type === "worktree.snapshot"),
-  ).toBe(false);
-  expect(await payload()).toBe("existing user content");
-});
+    await expect(
+      owner.createWithOutcome({
+        repoRoot: repo,
+        name: removed.name,
+        withSource: unwindSource(sourceFailure),
+        withRollback,
+      }),
+    ).rejects.toBe(state === "live checkout" ? sourceFailure : restoreFailure);
+    expect(rollback).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(gitWorker.runGitWorkerOperation)
+        .mock.calls.some(([command]) => command.type === "worktree.snapshot"),
+    ).toBe(false);
+    expect(getRegistryWorktree(env, removed.id)?.removedAt).toBeUndefined();
+    expect(await payload()).toBe(
+      state === "live checkout" ? "existing user content" : "restored provisioned content",
+    );
+    expect(events).not.toContain("removal-claimed");
+  },
+);
 
 it("still permits discarding a fresh preparation when its first snapshot fails", async () => {
   const fresh = await owner.create({ repoRoot: repo, name: "fresh", baseRef: "HEAD" });

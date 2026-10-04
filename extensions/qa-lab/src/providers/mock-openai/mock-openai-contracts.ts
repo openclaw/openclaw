@@ -42,6 +42,7 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  previewPause?: () => Promise<void>;
   responsePauseMs?: number;
 };
 
@@ -172,20 +173,6 @@ export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-/** Snapshot fields known before the mock decides an outcome or plans a tool. */
-export type MockOpenAiRequestSnapshotBase = Omit<
-  MockOpenAiRequestSnapshotInput,
-  | "outcome"
-  | "errorCode"
-  | "plannedToolCallId"
-  | "plannedToolItemId"
-  | "plannedToolName"
-  | "plannedWireToolName"
-  | "plannedToolArgs"
-  | "toolOutputCallId"
-  | "toolOutputStructuredError"
->;
-
 // Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
@@ -234,6 +221,9 @@ export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
+export const QA_STALLED_TURN_RECOVERY_PROMPT_RE = /stalled turn recovery qa check/i;
+export const QA_STALLED_TURN_RECOVERY_NEEDLE = "previous turn stopped making progress";
+export const QA_STALLED_TURN_RECOVERY_MARKER = "STALLED-TURN-RECOVERED-OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -241,6 +231,7 @@ export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+export const QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE = /qa group progress then empty check/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_THREAD_REPLY_RECEIPT_PROMPT_RE =
   /qa thread reply receipt check[\s\S]*channel id: `([^`]+)`[\s\S]*thread id: `([^`]+)`/i;
@@ -289,6 +280,13 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+// A message-tool-only group turn that starts detached image generation, calls
+// sessions_yield (which cannot wait for detached media), sends a progress ack,
+// and ends empty. The delayed image keeps the media run pending meanwhile.
+export const QA_YIELD_REJECTION_PROMPT_RE = /yield rejection qa check/i;
+export const QA_YIELD_REJECTION_ACK_MARKER = "QA-YIELD-REJECTION-ACK";
+export const QA_YIELD_REJECTION_IMAGE_PROMPT = "QA yield rejection pending lighthouse image.";
+export const QA_YIELD_REJECTION_IMAGE_DELAY_MS = 4_000;
 // A subagent that yields on its own behalf, then finishes on a later follow-up
 // dispatched to the same paused child session. The worker regex must not match
 // the follow-up text, so the two turns carry deliberately disjoint wording: the
@@ -380,6 +378,7 @@ export type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
+  stalledTurnRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 
@@ -452,13 +451,14 @@ export async function writeSse(
   events: Array<StreamEvent | AnthropicStreamEvent>,
   protocol: "responses" | "anthropic",
   pauseMs?: number,
+  pause?: () => Promise<void>,
 ) {
   const frames = events.map(
     (event) =>
       `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
   );
   const completionIndex =
-    pauseMs === undefined
+    pauseMs === undefined && pause === undefined
       ? -1
       : events.findIndex((event, index) => isPreviewCompletion(event, events[index - 1]));
   const body =
@@ -473,7 +473,11 @@ export async function writeSse(
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));
-    await sleep(pauseMs);
+    if (pause) {
+      await pause();
+    } else {
+      await sleep(pauseMs);
+    }
   }
   res.end(body);
 }
@@ -513,7 +517,8 @@ export function extractEmbeddingInputTexts(input: unknown): string[] {
   return [];
 }
 
-export function buildDeterministicEmbedding(text: string, dimensions = 16) {
+export function buildDeterministicEmbedding(text: string) {
+  const dimensions = 16;
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
     const embeddingIndex = index % dimensions;

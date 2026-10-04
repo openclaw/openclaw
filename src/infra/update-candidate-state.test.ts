@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -23,11 +23,15 @@ import {
   readUpdateStateSchemaVersions,
   updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
-import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import {
+  materializeUpdateCandidateStateWorker,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
 
 let root: string;
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-state-")));
+  await materializeUpdateCandidateStateWorker(root);
 });
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
@@ -74,7 +78,9 @@ it.each(["DELETE", "WAL"])(
     insert.run("main", path.relative(source, canonical));
     const now = Date.now();
     registry
-      .prepare("INSERT INTO agent_database_leases VALUES (?, ?, ?, ?, ?, ?)")
+      .prepare(
+        "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
       .run(
         "live-main",
         "main",
@@ -802,6 +808,7 @@ it.each([
     if (shared) {
       expect((await readPlugin(sharedOwner)).value).toBe("owner");
     }
+    await materializeUpdateCandidateStateWorker(candidateHost);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config: { plugins: { load: { paths } } },
       stateDir: path.join(root, "source-state"),
@@ -942,6 +949,7 @@ it("rejects an ordinary link that would repeatedly copy an immutable host packag
   });
   expect(source.code, source.stderr.toString()).toBe(0);
   expect(source.stdout.toString().trim()).toBe("serving");
+  await materializeUpdateCandidateStateWorker(candidate);
   await expect(
     prepareUpdateCandidateRehearsal({
       config: { plugins: { load: { paths: [plugin] } } },

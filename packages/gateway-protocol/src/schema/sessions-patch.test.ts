@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
+  it.each([
+    [1_800_000_000_000, true],
+    [null, true],
+    [0, false],
+    [-1, false],
+    [1.5, false],
+    ["1800000000000", false],
+  ] as const)("validates snoozedUntil %j for single and batch patches", (snoozedUntil, valid) => {
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:chat" }],
+        patch: { snoozedUntil },
+      }),
+    ).toBe(valid);
+  });
+
   it.each(["off", null] as const)(
     "accepts sandbox mode %s with single and batch CAS",
     (sandboxMode) => {

@@ -9,7 +9,7 @@ import {
   type ActivePluginChannelRegistrySnapshot,
 } from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type ChannelPluginView = {
@@ -82,7 +82,7 @@ export function listLoadedChannelPlugins(): ActiveChannelPluginRuntimeShape[] {
 /** Lists one exact registry without substituting a pinned or active registry. */
 export function listLoadedChannelPluginsForRegistry(
   registry: ActivePluginChannelRegistry,
-): ChannelPlugin[] {
+): AnyChannelPlugin[] {
   return resolveChannelPlugins(registry).sorted.slice();
 }
 
@@ -97,7 +97,7 @@ export function getLoadedChannelPluginById(
 }
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */
-export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
+export function getLoadedChannelPluginForRead(id: ChannelId): AnyChannelPlugin | undefined {
   return getLoadedChannelPluginById(id);
 }
 

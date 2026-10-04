@@ -1,15 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import {
-  readActiveTranscriptEntryAnchor,
-  rewriteTranscriptMessageAtAnchor,
-} from "../../config/sessions/session-accessor.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   runWithOwnedSessionTranscriptWrite,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   onInternalSessionTranscriptUpdate,
@@ -51,6 +51,7 @@ export function observeChatSendCommentaryMedia(params: {
   const { session } = params;
   const seen = new Set<string>();
   let pending = Promise.resolve();
+  let uncertainRewrite = false;
   let lastRewrite: { sessionId: string; generation: string } | undefined;
   const reportPreparationFailure = (error: unknown) => {
     if (!(error instanceof SessionTranscriptWriterClaimReboundError)) {
@@ -69,6 +70,7 @@ export function observeChatSendCommentaryMedia(params: {
       message?.role !== "assistant" ||
       readSessionTranscriptRunId(message) !== params.getRunId() ||
       !params.isCurrent() ||
+      uncertainRewrite ||
       !Array.isArray(message.content) ||
       Array.isArray(message[ASSISTANT_DISPLAY_CONTENT_FIELD])
     ) {
@@ -113,13 +115,21 @@ export function observeChatSendCommentaryMedia(params: {
     const lifecycleRevision = current.entry.lifecycleRevision;
     const scope = { ...target, storePath: current.storePath };
     const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
-    const assertCurrent = () => {
+    const assertLive = () => {
       assertOwned();
-      const latest = loadSessionEntry(session.sessionKey, session.sessionLoadOptions);
       if (
+        uncertainRewrite ||
         !params.isCurrent() ||
         params.abortSignal?.aborted ||
-        params.getRunId() !== runId ||
+        params.getRunId() !== runId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    };
+    const assertCurrent = () => {
+      assertLive();
+      const latest = loadSessionEntry(session.sessionKey, session.sessionLoadOptions);
+      if (
         latest.entry?.sessionId !== scope.sessionId ||
         latest.entry.lifecycleRevision !== lifecycleRevision
       ) {
@@ -134,13 +144,15 @@ export function observeChatSendCommentaryMedia(params: {
       previous
         .then(async () => {
           assertCurrent();
-          let anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+          let anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+          assertCurrent();
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
             await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
-            anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+            anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+            assertCurrent();
           }
           if (!anchor) {
             return;
@@ -169,9 +181,7 @@ export function observeChatSendCommentaryMedia(params: {
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
-                  localRoots: getWebchatReplyMediaLocalRoots({
-                    ...mediaScope,
-                  }),
+                  localRoots: getWebchatReplyMediaLocalRoots(mediaScope),
                   continueOnPrepareError: true,
                   assertCurrent: mediaScope.assertCurrent,
                   abortSignal: params.abortSignal,
@@ -189,42 +199,49 @@ export function observeChatSendCommentaryMedia(params: {
               await import("../../config/sessions/session-transcript-reconcile.js");
             await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
-            const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
-              assertCurrent();
-              const active = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-              const currentMessage = asOptionalRecord(value);
-              if (
-                active?.rawSeq !== anchor.rawSeq ||
-                !currentMessage ||
-                readSessionTranscriptRunId(currentMessage) !== runId ||
-                !isDeepStrictEqual(currentMessage.content, originalContent)
-              ) {
-                return undefined;
-              }
-              const displayContent: unknown[] = [];
-              for (const [index, raw] of originalContent.entries()) {
-                const block = asOptionalRecord(raw);
-                if (!block || !commentaryIndexes.has(index) || typeof block.text !== "string") {
-                  displayContent.push(raw);
-                  continue;
+            const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
+              anchor,
+              (value) => {
+                assertLive();
+                const currentMessage = asOptionalRecord(value);
+                if (
+                  !currentMessage ||
+                  readSessionTranscriptRunId(currentMessage) !== runId ||
+                  !isDeepStrictEqual(currentMessage.content, originalContent)
+                ) {
+                  return undefined;
                 }
-                const parsed = splitMediaFromOutput(block.text);
-                const segments = parsed.segments ?? [{ type: "text" as const, text: block.text }];
-                displayContent.push({ ...block, text: "" });
-                for (const segment of segments) {
-                  if (segment.type === "text") {
-                    displayContent.push({ ...block, text: segment.text });
-                  } else {
-                    displayContent.push(
-                      ...(managedMedia.get(segment.url) ?? [
-                        { ...block, text: `MEDIA:${segment.url}` },
-                      ]),
-                    );
+                const displayContent: unknown[] = [];
+                for (const [index, raw] of originalContent.entries()) {
+                  const block = asOptionalRecord(raw);
+                  if (!block || !commentaryIndexes.has(index) || typeof block.text !== "string") {
+                    displayContent.push(raw);
+                    continue;
+                  }
+                  const parsed = splitMediaFromOutput(block.text);
+                  const segments = parsed.segments ?? [{ type: "text" as const, text: block.text }];
+                  displayContent.push({ ...block, text: "" });
+                  for (const segment of segments) {
+                    if (segment.type === "text") {
+                      displayContent.push({ ...block, text: segment.text });
+                    } else {
+                      displayContent.push(
+                        ...(managedMedia.get(segment.url) ?? [
+                          { ...block, text: `MEDIA:${segment.url}` },
+                        ]),
+                      );
+                    }
                   }
                 }
-              }
-              return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
-            });
+                return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
+              },
+              {
+                active: "sequence",
+                expectedEntry: { lifecycleRevision: lifecycleRevision ?? null },
+                assertCurrent: assertLive,
+                assertNativeCurrent: assertCurrent,
+              },
+            );
             if (rewritten) {
               // Publication failures must not discard originals already referenced by history.
               committed = true;
@@ -247,6 +264,32 @@ export function observeChatSendCommentaryMedia(params: {
               }
               await publishAssistantTranscriptRewrite({ scope, rewritten: [{ messageId }] });
             }
+          } catch (error) {
+            if (hasSqliteWorkerOutcomeUnknown(error)) {
+              uncertainRewrite = true;
+              // The rewrite may own these bytes. Let the media owner inspect the
+              // exact transcript references during reclamation instead of deleting them here.
+              committed = true;
+              try {
+                if (
+                  !(await attachManagedOutgoingMediaToMessage({
+                    messageId,
+                    blocks: [...managedMedia.values()].flat(),
+                  }))
+                ) {
+                  throw new Error("Uncertain commentary media ownership could not be retained", {
+                    cause: error,
+                  });
+                }
+              } catch (retentionError) {
+                throw createSqliteLifecycleAggregateError(
+                  [error, retentionError],
+                  "Transcript rewrite and media retention failed",
+                  error,
+                );
+              }
+            }
+            throw error;
           } finally {
             if (!committed) {
               await removeManagedOutgoingMediaBlocks({

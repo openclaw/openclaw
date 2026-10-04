@@ -1,6 +1,4 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
-// Gateway chat run state registries.
-// Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
@@ -11,6 +9,11 @@ import {
 } from "./live-chat-projector.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import {
+  createToolEventRecipientRegistry,
+  type ChatRunToolRecipientState,
+  type ToolEventRecipientRegistry,
+} from "./server-chat-tool-recipients.js";
 
 export type ChatRunTiming = {
   ackedAtMs: number;
@@ -35,14 +38,9 @@ export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
 
 let chatRunOrderingSequence = 0;
 
-function nextChatRunOrderingSequence(): number {
-  chatRunOrderingSequence += 1;
-  return chatRunOrderingSequence;
-}
-
 /** Create an abort marker ordered against chat run registrations, using a shared monotonic sequence. */
 export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
-  return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
+  return { abortedAtMs: now, sequence: ++chatRunOrderingSequence };
 }
 
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
@@ -82,12 +80,6 @@ type ChatRunAgentTextState = {
   lastSentAt?: number;
   bufferedEvent?: BufferedAgentEvent;
   snapshot?: { text: string; itemId?: string };
-};
-
-type ChatRunToolRecipientState = {
-  connIds: Set<string>;
-  updatedAt: number;
-  finalizedAt?: number;
 };
 
 type PendingLiveTextFlush = {
@@ -165,7 +157,7 @@ function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
   delete record.pendingTextFlushes;
 }
 
-export type ChatRunRegistry = {
+type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
@@ -174,7 +166,7 @@ export type ChatRunRegistry = {
 
 function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegistry {
   const add = (sessionId: string, entry: ChatRunRegistration) => {
-    const registeredEntry = { ...entry, registeredSequence: nextChatRunOrderingSequence() };
+    const registeredEntry = { ...entry, registeredSequence: ++chatRunOrderingSequence };
     const record = store.getOrCreate(sessionId);
     (record.registrations ??= []).push(registeredEntry);
   };
@@ -235,10 +227,10 @@ export type ChatRunState = {
 };
 
 /** Create the single record map used by Gateway chat-run runtime state. */
-export function createChatRunState(): ChatRunState {
+export function createChatRunState(isConnectionActive?: (connId: string) => boolean): ChatRunState {
   const store = createChatRunRecordStore();
   const registry = createChatRunRegistryForStore(store);
-  const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
+  const toolEventRecipients = createToolEventRecipientRegistry(store, isConnectionActive);
 
   const recordProgressEvent = (
     runId: string,
@@ -431,13 +423,6 @@ export function createChatRunState(): ChatRunState {
   };
 }
 
-export type ToolEventRecipientRegistry = {
-  add: (runId: string, connId: string) => void;
-  get: (runId: string) => ReadonlySet<string> | undefined;
-  markFinal: (runId: string) => void;
-  pruneExpired: (now?: number) => void;
-};
-
 export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
   unsubscribe: (connId: string) => void;
@@ -476,9 +461,6 @@ type ProvisionalSubscriptionState = {
 };
 
 type SessionMessageSubscriptionOwners = Map<string | undefined, ProvisionalSubscriptionState>;
-
-const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
-const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
@@ -697,78 +679,4 @@ export function createSessionMessageSubscriberRegistry(
     },
   };
   return registry;
-}
-
-function createToolEventRecipientRegistryForStore(
-  store: ChatRunRecordStore,
-): ToolEventRecipientRegistry {
-  let nextPruneAt = Infinity;
-  const pruneExpired = (now = Date.now()) => {
-    if (now < nextPruneAt) {
-      return;
-    }
-    nextPruneAt = Infinity;
-    for (const [runId, record] of store.runs) {
-      const entry = record.toolRecipient;
-      if (!entry) {
-        continue;
-      }
-      const cutoff = entry.finalizedAt
-        ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
-      if (now >= cutoff) {
-        delete record.toolRecipient;
-        store.releaseIfEmpty(runId);
-      } else {
-        nextPruneAt = Math.min(nextPruneAt, cutoff);
-      }
-    }
-  };
-
-  const prune = (updated: ChatRunToolRecipientState) => {
-    // Refreshes can move expiry later; a conservative lower bound avoids a
-    // full run scan on each tool event while retaining exact expiry cleanup.
-    nextPruneAt = Math.min(
-      nextPruneAt,
-      updated.finalizedAt
-        ? updated.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : updated.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS,
-    );
-    pruneExpired();
-  };
-
-  const add = (runId: string, connId: string) => {
-    if (!runId || !connId) {
-      return;
-    }
-    const now = Date.now();
-    const entry = (store.getOrCreate(runId).toolRecipient ??= {
-      connIds: new Set<string>(),
-      updatedAt: now,
-    });
-    entry.connIds.add(connId);
-    entry.updatedAt = now;
-    prune(entry);
-  };
-
-  const get = (runId: string) => {
-    const entry = store.runs.get(runId)?.toolRecipient;
-    if (entry) {
-      entry.updatedAt = Date.now();
-      prune(entry);
-    }
-    // Pruning may retire this finalized run; never return its former audience.
-    return store.runs.get(runId)?.toolRecipient?.connIds;
-  };
-
-  const markFinal = (runId: string) => {
-    const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return;
-    }
-    entry.finalizedAt = Date.now();
-    prune(entry);
-  };
-
-  return { add, get, markFinal, pruneExpired };
 }

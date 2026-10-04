@@ -28,10 +28,7 @@ import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
-import type {
-  EffectiveToolInventoryNotice,
-  EffectiveToolInventoryResult,
-} from "../../agents/tools-effective-inventory.types.js";
+import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import {
   buildMcpCatalogNotices,
   buildRuntimeCompatibleMcpToolInventory,
@@ -54,44 +51,12 @@ import {
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
-import type { TrustedToolsEffectiveContext } from "./tools-effective.types.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
-const defaultToolsEffectiveDependencies = {
-  applyFinalEffectiveToolPolicy,
-  buildBundleMcpToolsFromCatalog,
-  deliveryContextFromSession,
-  getActivePluginChannelRegistryVersion,
-  getActivePluginRegistryVersion,
-  getConnectedNodePluginToolsVersion,
-  getRegisteredAgentHarness,
-  listAgentIds,
-  loadGatewaySessionEntryReadOnly,
-  peekSessionMcpRuntime,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveEffectiveToolInventory,
-  acquireEffectiveToolInventoryRuntimeModelContext,
-  resolveReplyToMode,
-  resolveRuntimeConfigCacheKey,
-  resolveSessionAgentId,
-  resolveSessionMcpConfigSummary,
-  resolveSessionModelRef,
-};
-
-type SessionMcpRuntimeView = Pick<
-  NonNullable<ReturnType<typeof peekSessionMcpRuntime>>,
-  "configFingerprint" | "peekCatalog" | "workspaceDir"
+type TrustedToolsEffectiveContext = NonNullable<
+  ReturnType<typeof resolveTrustedToolsEffectiveContext>
 >;
-type ToolsEffectiveDependencies = Omit<
-  typeof defaultToolsEffectiveDependencies,
-  "peekSessionMcpRuntime"
-> & {
-  peekSessionMcpRuntime: (
-    params: Parameters<typeof peekSessionMcpRuntime>[0],
-  ) => SessionMcpRuntimeView | undefined;
-};
 
 const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
 const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
@@ -116,11 +81,7 @@ function optionalCacheString(value: string | undefined | null): string {
   return value?.trim() ?? "";
 }
 
-function buildToolsEffectiveCacheKey(params: {
-  sessionKey: string;
-  context: TrustedToolsEffectiveContext;
-}): string {
-  const context = params.context;
+function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): string {
   return JSON.stringify({
     v: 1,
     config: context.runtimeConfigCacheKey,
@@ -130,7 +91,7 @@ function buildToolsEffectiveCacheKey(params: {
     // MCP fingerprint/server names intentionally stay out of this key: the MCP
     // layer is applied after the base cache, so warm/stale runtime state alone
     // never invalidates base entries.
-    sessionKey: params.sessionKey,
+    sessionKey: context.sessionKey,
     sessionId: context.sessionId,
     workspaceDir: optionalCacheString(context.workspaceDir),
     agentId: context.agentId,
@@ -159,11 +120,11 @@ function buildToolsEffectiveCacheKey(params: {
   });
 }
 
-function buildMcpConfigSummaryCacheKey(params: {
+function resolveCachedSessionMcpConfigSummary(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
-}): string {
-  return JSON.stringify({
+}): SessionMcpConfigSummary {
+  const key = JSON.stringify({
     v: 1,
     config: params.context.runtimeConfigCacheKey,
     pluginRegistry: params.context.pluginRegistryVersion,
@@ -171,19 +132,11 @@ function buildMcpConfigSummaryCacheKey(params: {
     toolOverrides: params.context.toolOverrides,
     toolDenylist: params.context.capabilityProfile.policy.explicitToolDenylist,
   });
-}
-
-function resolveCachedSessionMcpConfigSummary(params: {
-  context: TrustedToolsEffectiveContext;
-  workspaceDir: string;
-  dependencies: ToolsEffectiveDependencies;
-}): SessionMcpConfigSummary {
-  const key = buildMcpConfigSummaryCacheKey(params);
   const cached = mcpConfigSummaryCache.get(key);
   if (cached) {
     return cached;
   }
-  const summary = params.dependencies.resolveSessionMcpConfigSummary({
+  const summary = resolveSessionMcpConfigSummary({
     workspaceDir: params.workspaceDir,
     cfg: params.context.cfg,
     ...(params.context.toolOverrides ? { toolOverrides: params.context.toolOverrides } : {}),
@@ -206,7 +159,6 @@ function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryRes
 function scheduleBaseToolsEffectiveRefresh(
   key: string,
   context: TrustedToolsEffectiveContext,
-  dependencies: ToolsEffectiveDependencies,
 ): Promise<EffectiveToolInventoryResult> {
   const existing = toolsEffectiveInflight.get(key);
   if (existing) {
@@ -215,7 +167,7 @@ function scheduleBaseToolsEffectiveRefresh(
   const startedAt = nowForToolsEffectiveCache();
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
     setImmediate(() => {
-      void resolveBaseToolsEffectiveInventory(context, dependencies)
+      void resolveBaseToolsEffectiveInventory(context)
         .then((value) => {
           cacheToolsEffectiveResult(key, value);
           const durationMs = nowForToolsEffectiveCache() - startedAt;
@@ -234,22 +186,10 @@ function scheduleBaseToolsEffectiveRefresh(
   return task;
 }
 
-function refreshBaseToolsEffectiveInBackground(
-  key: string,
+async function resolveCachedBaseToolsEffective(
   context: TrustedToolsEffectiveContext,
-  dependencies: ToolsEffectiveDependencies,
-): void {
-  void scheduleBaseToolsEffectiveRefresh(key, context, dependencies).catch((err: unknown) => {
-    logWarn(`tools-effective: background refresh failed: ${String(err)}`);
-  });
-}
-
-async function resolveCachedBaseToolsEffective(params: {
-  sessionKey: string;
-  context: TrustedToolsEffectiveContext;
-  dependencies: ToolsEffectiveDependencies;
-}): Promise<EffectiveToolInventoryResult> {
-  const key = buildToolsEffectiveCacheKey(params);
+): Promise<EffectiveToolInventoryResult> {
+  const key = buildToolsEffectiveCacheKey(context);
   const now = nowForToolsEffectiveCache();
   const cached = toolsEffectiveCache.get(key);
   if (cached) {
@@ -260,20 +200,21 @@ async function resolveCachedBaseToolsEffective(params: {
     if (ageMs < TOOLS_EFFECTIVE_STALE_TTL_MS) {
       // Stale-while-revalidate keeps the tools panel responsive while a new
       // registry/config snapshot is rebuilt in the background.
-      refreshBaseToolsEffectiveInBackground(key, params.context, params.dependencies);
+      void scheduleBaseToolsEffectiveRefresh(key, context).catch((err: unknown) => {
+        logWarn(`tools-effective: background refresh failed: ${String(err)}`);
+      });
       return cached.value;
     }
   }
-  return scheduleBaseToolsEffectiveRefresh(key, params.context, params.dependencies);
+  return scheduleBaseToolsEffectiveRefresh(key, context);
 }
 
 function resolveRequestedAgentIdOrRespondError(params: {
   rawAgentId: unknown;
   cfg: OpenClawConfig;
   respond: RespondFn;
-  dependencies: ToolsEffectiveDependencies;
 }) {
-  const knownAgents = params.dependencies.listAgentIds(params.cfg);
+  const knownAgents = listAgentIds(params.cfg);
   const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
   if (!requestedAgentId) {
     return undefined;
@@ -289,20 +230,7 @@ function resolveRequestedAgentIdOrRespondError(params: {
   return requestedAgentId;
 }
 
-function appendToolInventoryNotice(
-  base: EffectiveToolInventoryResult,
-  notice: EffectiveToolInventoryNotice,
-): EffectiveToolInventoryResult {
-  return {
-    ...base,
-    notices: [...(base.notices ?? []), notice],
-  };
-}
-
 function formatMcpServerNames(names: readonly string[]): string {
-  if (names.length === 0) {
-    return "configured MCP servers";
-  }
   const visible = names
     .slice(0, 3)
     .map((name) => `"${name}"`)
@@ -310,58 +238,53 @@ function formatMcpServerNames(names: readonly string[]): string {
   return names.length > 3 ? `${visible}, and ${names.length - 3} more MCP servers` : visible;
 }
 
-function mcpDiscoveryNotice(
-  mcpServerNames: string[],
-  reason: "not-connected" | "not-listed" | "stale-config",
-): EffectiveToolInventoryNotice | undefined {
-  if (mcpServerNames.length === 0) {
-    return undefined;
-  }
-  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
-  const formattedServers = formatMcpServerNames(servers);
-  switch (reason) {
-    case "stale-config":
-      return {
-        id: "mcp-stale-catalog",
-        severity: "info",
-        message: `MCP servers ${formattedServers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
-        servers,
-      };
-    case "not-listed":
-      return {
-        id: "mcp-not-yet-listed",
-        severity: "info",
-        message: `MCP servers ${formattedServers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
-        servers,
-      };
-    case "not-connected":
-      return {
-        id: "mcp-not-yet-connected",
-        severity: "info",
-        message: `MCP servers ${formattedServers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
-        servers,
-      };
-    default:
-      // Exhaustiveness guard for oxlint's consistent-return rule.
-      return undefined;
-  }
-}
+const MCP_DISCOVERY_NOTICES = {
+  "stale-config": {
+    id: "mcp-stale-catalog",
+    message: (servers: string) =>
+      `MCP servers ${servers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+  },
+  "not-listed": {
+    id: "mcp-not-yet-listed",
+    message: (servers: string) =>
+      `MCP servers ${servers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+  },
+  "not-connected": {
+    id: "mcp-not-yet-connected",
+    message: (servers: string) =>
+      `MCP servers ${servers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+  },
+};
 
 function maybeAppendMcpNotice(
   base: EffectiveToolInventoryResult,
   mcpServerNames: string[],
-  reason: "not-connected" | "not-listed" | "stale-config",
+  reason: keyof typeof MCP_DISCOVERY_NOTICES,
 ): EffectiveToolInventoryResult {
-  const notice = mcpDiscoveryNotice(mcpServerNames, reason);
-  return notice ? appendToolInventoryNotice(base, notice) : base;
+  if (mcpServerNames.length === 0) {
+    return base;
+  }
+  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
+  const notice = MCP_DISCOVERY_NOTICES[reason];
+  return {
+    ...base,
+    notices: [
+      ...(base.notices ?? []),
+      {
+        id: notice.id,
+        severity: "info",
+        message: notice.message(formatMcpServerNames(servers)),
+        servers,
+      },
+    ],
+  };
 }
 
 async function resolveBaseToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
-  dependencies: ToolsEffectiveDependencies,
 ): Promise<EffectiveToolInventoryResult> {
-  const agentDir = dependencies.resolveAgentDir(context.cfg, context.agentId);
-  const acquired = await dependencies.acquireEffectiveToolInventoryRuntimeModelContext({
+  const agentDir = resolveAgentDir(context.cfg, context.agentId);
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
     cfg: context.cfg,
     agentId: context.agentId,
     agentDir,
@@ -370,8 +293,8 @@ async function resolveBaseToolsEffectiveInventory(
     modelId: context.modelId,
   });
   try {
-    return acquired.run((runtimeModelContext) =>
-      dependencies.resolveEffectiveToolInventory({
+    return await acquired.run((runtimeModelContext) =>
+      resolveEffectiveToolInventory({
         conversationCapabilityProfile: context.capabilityProfile,
         cfg: context.cfg,
         agentId: context.agentId,
@@ -400,21 +323,15 @@ async function resolveBaseToolsEffectiveInventory(
 
 async function resolveReadOnlyToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
-  dependencies: ToolsEffectiveDependencies,
 ): Promise<EffectiveToolInventoryResult> {
-  const base = await resolveCachedBaseToolsEffective({
-    sessionKey: context.sessionKey,
-    context,
-    dependencies,
-  });
+  const base = await resolveCachedBaseToolsEffective(context);
   const harness = context.agentHarnessId
-    ? dependencies.getRegisteredAgentHarness(context.agentHarnessId)?.harness
+    ? getRegisteredAgentHarness(context.agentHarnessId)?.harness
     : undefined;
   if (harness?.loadMcpToolCatalog) {
     const mcpConfig = resolveCachedSessionMcpConfigSummary({
       context,
       workspaceDir: context.workspaceDir,
-      dependencies,
     });
     if (mcpConfig.serverNames.length === 0) {
       return base;
@@ -435,7 +352,6 @@ async function resolveReadOnlyToolsEffectiveInventory(
           catalog,
           context,
           workspaceDir: context.workspaceDir,
-          dependencies,
         });
       }
     } catch (error) {
@@ -451,7 +367,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
   // runtimes, connect transports, or issue tools/list. It only projects an
   // already-warm core session catalog. Native harnesses opt into their own
   // catalog read above because they own a separate per-thread runtime.
-  const runtime = dependencies.peekSessionMcpRuntime({
+  const runtime = peekSessionMcpRuntime({
     sessionId: context.sessionId,
     sessionKey: context.sessionKey,
   });
@@ -461,7 +377,6 @@ async function resolveReadOnlyToolsEffectiveInventory(
   const mcpConfig = resolveCachedSessionMcpConfigSummary({
     context,
     workspaceDir: runtime?.workspaceDir ?? context.workspaceDir,
-    dependencies,
   });
   if (mcpConfig.serverNames.length === 0) {
     return base;
@@ -482,7 +397,6 @@ async function resolveReadOnlyToolsEffectiveInventory(
     catalog,
     context,
     workspaceDir: runtime.workspaceDir,
-    dependencies,
   });
 }
 
@@ -491,19 +405,18 @@ async function projectMcpCatalog(params: {
   catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
-  dependencies: ToolsEffectiveDependencies;
 }): Promise<EffectiveToolInventoryResult> {
   const catalogNotices = buildMcpCatalogNotices(params.catalog);
   const base =
     catalogNotices.length > 0
       ? { ...params.base, notices: [...(params.base.notices ?? []), ...catalogNotices] }
       : params.base;
-  const projectedMcpTools = params.dependencies.buildBundleMcpToolsFromCatalog({
+  const projectedMcpTools = buildBundleMcpToolsFromCatalog({
     catalog: params.catalog,
     reservedToolNames: params.base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
     includeSessionDenied: true,
   });
-  const filteredMcpTools = params.dependencies.applyFinalEffectiveToolPolicy({
+  const filteredMcpTools = applyFinalEffectiveToolPolicy({
     bundledTools: projectedMcpTools,
     config: params.context.cfg,
     conversationCapabilityProfile: params.context.capabilityProfile,
@@ -512,10 +425,10 @@ async function projectMcpCatalog(params: {
   if (filteredMcpTools.length === 0) {
     return base;
   }
-  const acquired = await params.dependencies.acquireEffectiveToolInventoryRuntimeModelContext({
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
     cfg: params.context.cfg,
     agentId: params.context.agentId,
-    agentDir: params.dependencies.resolveAgentDir(params.context.cfg, params.context.agentId),
+    agentDir: resolveAgentDir(params.context.cfg, params.context.agentId),
     workspaceDir: params.workspaceDir,
     modelProvider: params.context.modelProvider,
     modelId: params.context.modelId,
@@ -550,11 +463,10 @@ function resolveTrustedToolsEffectiveContext(params: {
   sessionKey: string;
   requestedAgentId?: string;
   respond: RespondFn;
-  dependencies: ToolsEffectiveDependencies;
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = params.dependencies.loadGatewaySessionEntryReadOnly(
+  const loaded = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
   );
@@ -568,7 +480,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   }
 
   const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
-  const sessionAgentId = params.dependencies.resolveSessionAgentId({
+  const sessionAgentId = resolveSessionAgentId({
     sessionKey: canonicalKey,
     config: loaded.cfg,
     ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
@@ -585,20 +497,16 @@ function resolveTrustedToolsEffectiveContext(params: {
     return null;
   }
 
-  const delivery = params.dependencies.deliveryContextFromSession(loaded.entry);
+  const delivery = deliveryContextFromSession(loaded.entry);
   const origin = sessionDeliveryOrigin(loaded.entry);
-  const resolvedModel = params.dependencies.resolveSessionModelRef(
-    loaded.cfg,
-    loaded.entry,
-    sessionAgentId,
-  );
+  const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
   const workspaceDir =
     normalizeOptionalString(loaded.entry.spawnedWorkspaceDir) ??
-    params.dependencies.resolveAgentWorkspaceDir(loaded.cfg, sessionAgentId);
-  const runtimeConfigCacheKey = params.dependencies.resolveRuntimeConfigCacheKey(loaded.cfg);
-  const pluginRegistryVersion = params.dependencies.getActivePluginRegistryVersion();
-  const channelRegistryVersion = params.dependencies.getActivePluginChannelRegistryVersion();
-  const nodePluginToolsVersion = params.dependencies.getConnectedNodePluginToolsVersion();
+    resolveAgentWorkspaceDir(loaded.cfg, sessionAgentId);
+  const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
+  const pluginRegistryVersion = getActivePluginRegistryVersion();
+  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  const nodePluginToolsVersion = getConnectedNodePluginToolsVersion();
   const context = {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -626,7 +534,7 @@ function resolveTrustedToolsEffectiveContext(params: {
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
     agentHarnessId: normalizeOptionalString(loaded.entry.agentHarnessId),
     toolOverrides: loaded.entry.toolOverrides,
-    replyToMode: params.dependencies.resolveReplyToMode(
+    replyToMode: resolveReplyToMode(
       loaded.cfg,
       delivery?.channel ?? origin?.provider,
       delivery?.accountId ?? origin?.accountId,
@@ -652,61 +560,45 @@ function resolveTrustedToolsEffectiveContext(params: {
   };
 }
 
-export function createToolsEffectiveHandlers(
-  dependencies: ToolsEffectiveDependencies = defaultToolsEffectiveDependencies,
-): GatewayRequestHandlers {
-  return {
-    "tools.effective": defineValidatedGatewayHandler(
-      "tools.effective",
-      validateToolsEffectiveParams,
-      async ({ params, respond, context }) => {
-        const cfg = context.getRuntimeConfig();
-        const requestedAgentId = resolveRequestedAgentIdOrRespondError({
-          rawAgentId: params.agentId,
-          cfg,
-          respond,
-          dependencies,
-        });
-        if (requestedAgentId === null) {
-          return;
-        }
-        const sessionOwner = resolveRequestedSessionAgentId(
-          cfg,
-          params.sessionKey,
-          requestedAgentId,
+export const toolsEffectiveHandlers: GatewayRequestHandlers = {
+  "tools.effective": defineValidatedGatewayHandler(
+    "tools.effective",
+    validateToolsEffectiveParams,
+    async ({ params, respond, context }) => {
+      const cfg = context.getRuntimeConfig();
+      const requestedAgentId = resolveRequestedAgentIdOrRespondError({
+        rawAgentId: params.agentId,
+        cfg,
+        respond,
+      });
+      if (requestedAgentId === null) {
+        return;
+      }
+      const sessionOwner = resolveRequestedSessionAgentId(cfg, params.sessionKey, requestedAgentId);
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      const trustedContext = resolveTrustedToolsEffectiveContext({
+        sessionKey: params.sessionKey,
+        requestedAgentId: sessionOwner.agentId,
+        respond,
+      });
+      if (!trustedContext) {
+        return;
+      }
+      try {
+        respond(true, await resolveReadOnlyToolsEffectiveInventory(trustedContext), undefined);
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
         );
-        if (!sessionOwner.ok) {
-          respond(false, undefined, sessionOwner.error);
-          return;
-        }
-        const trustedContext = resolveTrustedToolsEffectiveContext({
-          sessionKey: params.sessionKey,
-          requestedAgentId: sessionOwner.agentId,
-          respond,
-          dependencies,
-        });
-        if (!trustedContext) {
-          return;
-        }
-        try {
-          respond(
-            true,
-            await resolveReadOnlyToolsEffectiveInventory(trustedContext, dependencies),
-            undefined,
-          );
-        } catch (err) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
-          );
-        }
-      },
-    ),
-  };
-}
-
-export const toolsEffectiveHandlers = createToolsEffectiveHandlers();
+      }
+    },
+  ),
+};
 
 export const testing = {
   resetToolsEffectiveCacheForTest() {

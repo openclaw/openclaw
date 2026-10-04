@@ -67,45 +67,51 @@ function nativeOwner() {
 }
 
 describe("message cuts and native context ownership", () => {
-  it.each(["rewind", "switch"] as const)(
-    "retires native context only with a committed %s",
+  it.each(["rewind", "switch", "fork"] as const)(
+    "preserves source context only when the committed cut is a fork (%s)",
     async (mode) => {
       const { env, scope } = await createSession();
+      const before = loadSessionEntry(scope);
       const owner = nativeOwner();
       const result = await owner.run(() =>
         mode === "rewind"
           ? rewindSessionToMessage({ agentId, env, sessionKey, entryId: "user-2" })
-          : switchSessionBranch({ agentId, env, sessionKey, leafEntryId: "off-path-user" }),
+          : mode === "switch"
+            ? switchSessionBranch({ agentId, env, sessionKey, leafEntryId: "off-path-user" })
+            : forkSessionAtMessage({
+                agentId,
+                env,
+                sessionKey,
+                entryId: "user-2",
+                targetKey: `${sessionKey}:fork`,
+              }),
       );
 
       expect(result.status).toBe("created");
-      expect(loadSessionEntry(scope)?.previousSessionId).toBe(scope.sessionId);
-      expect(owner.binding()).toBeUndefined();
-      expect(owner.finalized()).toBe(true);
+      if (mode === "fork") {
+        expect(loadSessionEntry(scope)).toEqual(before);
+      } else {
+        expect(loadSessionEntry(scope)?.previousSessionId).toBe(scope.sessionId);
+      }
+      expect(owner.binding()).toBe(mode === "fork" ? "native-history-before-cut" : undefined);
+      expect(owner.finalized()).toBe(mode !== "fork");
     },
   );
 
-  it.each(["rewind", "switch"] as const)(
-    "restores native context when the local %s transaction fails",
-    async (mode) => {
-      const { env, scope } = await createSession();
-      const owner = nativeOwner();
-      const before = loadSessionEntry(scope);
-      openOpenClawAgentDatabase({ agentId, env }).db.exec(
-        "CREATE TEMP TRIGGER reject_context_cut BEFORE UPDATE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected context cut failure'); END",
-      );
-      await expect(
-        owner.run(() =>
-          mode === "rewind"
-            ? rewindSessionToMessage({ agentId, env, sessionKey, entryId: "user-2" })
-            : switchSessionBranch({ agentId, env, sessionKey, leafEntryId: "off-path-user" }),
-        ),
-      ).rejects.toThrow("injected context cut failure");
-      expect(loadSessionEntry(scope)).toEqual(before);
-      expect(owner.binding()).toBe("native-history-before-cut");
-      expect(owner.finalized()).toBe(false);
-    },
-  );
+  it("restores native context when the local cut transaction fails", async () => {
+    const { env, scope } = await createSession();
+    const owner = nativeOwner();
+    const before = loadSessionEntry(scope);
+    openOpenClawAgentDatabase({ agentId, env }).db.exec(
+      "CREATE TEMP TRIGGER reject_context_cut BEFORE UPDATE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected context cut failure'); END",
+    );
+    await expect(
+      owner.run(() => rewindSessionToMessage({ agentId, env, sessionKey, entryId: "user-2" })),
+    ).rejects.toThrow("injected context cut failure");
+    expect(loadSessionEntry(scope)).toEqual(before);
+    expect(owner.binding()).toBe("native-history-before-cut");
+    expect(owner.finalized()).toBe(false);
+  });
 
   it.each([
     ["rewind", "missing", "missing-entry"],
@@ -124,25 +130,6 @@ describe("message cuts and native context ownership", () => {
         : switchSessionBranch({ agentId, env, sessionKey, leafEntryId: entryId }),
     );
     expect(result.status).toBe(status);
-    expect(loadSessionEntry(scope)).toEqual(before);
-    expect(owner.binding()).toBe("native-history-before-cut");
-    expect(owner.finalized()).toBe(false);
-  });
-
-  it("leaves the source native context intact when forking", async () => {
-    const { env, scope } = await createSession();
-    const before = loadSessionEntry(scope);
-    const owner = nativeOwner();
-    const result = await owner.run(() =>
-      forkSessionAtMessage({
-        agentId,
-        env,
-        sessionKey,
-        entryId: "user-2",
-        targetKey: `${sessionKey}:fork`,
-      }),
-    );
-    expect(result.status).toBe("created");
     expect(loadSessionEntry(scope)).toEqual(before);
     expect(owner.binding()).toBe("native-history-before-cut");
     expect(owner.finalized()).toBe(false);

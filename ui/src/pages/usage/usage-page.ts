@@ -6,11 +6,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import {
   GatewayPageController,
@@ -26,7 +26,6 @@ import {
   createDefaultUsageDateRange,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
-  toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
@@ -203,10 +202,7 @@ class UsagePage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection) => this.observeAgentScope(selection),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -313,7 +309,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (snapshot.state === "settled") {
       const result = snapshot.result;
       this.providerUsageUnavailable = !result.ok;
-      this.providerUsageIncomplete = !result.ok || isUsageIncomplete(result.value);
+      this.providerUsageIncomplete = !result.ok || result.value.refreshing === true;
       if (result.ok && !this.providerUsageIncomplete) {
         this.providerUsageSummary = result.value;
       }
@@ -396,7 +392,7 @@ class UsagePage extends OpenClawLightDomElement {
     const missingScope = isMissingOperatorReadScopeError(error);
     this.usageError = missingScope
       ? formatMissingOperatorReadScopeMessage("usage")
-      : toUsageErrorMessage(error);
+      : formatUiError(error, "request failed");
     if (missingScope) {
       this.usageSnapshot = null;
     }
@@ -421,15 +417,11 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
-  private clearSelections() {
+  private clearSelectionsAndDetails() {
+    this.usageExportRequest.cancel();
     this.usageSelectedDays = [];
     this.usageSelectedHours = [];
     this.usageSelectedSessions = [];
-  }
-
-  private clearSelectionsAndDetails() {
-    this.usageExportRequest.cancel();
-    this.clearSelections();
     this.details.clear();
   }
 

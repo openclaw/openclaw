@@ -22,6 +22,8 @@ import {
 } from "./tui-formatters.js";
 import { extractTuiImageSources } from "./tui-images.js";
 import {
+  captureTuiSessionIncarnation,
+  captureTuiSessionSelection,
   matchesTuiSessionMetadata,
   matchesTuiSessionSelection,
   readTuiSessionUserMessage,
@@ -87,10 +89,7 @@ export function createSessionActions(context: SessionActionContext) {
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const captureSessionSelection = () => ({
-    sessionKey: state.currentSessionKey,
-    agentId: state.currentAgentId,
-  });
+  const captureSessionSelection = () => captureTuiSessionSelection(state);
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     matchesTuiSessionSelection(state, selection);
@@ -639,15 +638,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
-    const selection = captureSessionSelection();
-    const sessionId = state.currentSessionId;
-    const sessionGeneration = state.sessionGeneration ?? 0;
+    const { selection, isCurrent: isCurrentAbort } = captureTuiSessionIncarnation(state);
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
-    const isCurrentAbort = () =>
-      isCurrentSessionSelection(selection) &&
-      (state.sessionGeneration ?? 0) === sessionGeneration &&
-      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",
@@ -701,7 +694,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   return {
-    applyAgentsResult,
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,

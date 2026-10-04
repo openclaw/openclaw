@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { iterateAnsiSegments } from "./ansi-sequences.js";
 import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
@@ -43,10 +44,7 @@ function resolveDefaultBorder(
 }
 
 function repeat(ch: string, n: number): string {
-  if (n <= 0) {
-    return "";
-  }
-  return ch.repeat(n);
+  return ch.repeat(Math.max(0, n));
 }
 
 function padCell(text: string, width: number, align: Align): string {
@@ -73,10 +71,10 @@ function padCell(text: string, width: number, align: Align): string {
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";
-const C1_OSC = "\u009d";
-const C1_ST = "\u009c";
 const BEL = "\u0007";
 const SGR_CONTROL_CHARS_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+// oxlint-disable-next-line eslint/no-control-regex -- OSC 8 delimiters are terminal control characters.
+const OSC8_SEQUENCE_RE = /^(?:\u001b\]|\u009d)8;([^;]*);([\s\S]*)(?:\u001b\\|\u0007|\u009c)$/u;
 
 type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
@@ -204,42 +202,11 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
 type Osc8Link = { params: string; uri: string };
 
 function parseOsc8Sequence(value: string): Osc8Link | undefined {
-  let payloadStart: number;
-  if (value.startsWith(`${ESC}]`)) {
-    payloadStart = 2;
-  } else if (value.startsWith(C1_OSC)) {
-    payloadStart = 1;
-  } else {
-    return undefined;
-  }
-
-  let terminatorLength: number;
-  if (value.endsWith(`${ESC}\\`)) {
-    terminatorLength = 2;
-  } else if (value.endsWith(BEL) || value.endsWith(C1_ST)) {
-    terminatorLength = 1;
-  } else {
-    return undefined;
-  }
-
-  const payload = value.slice(payloadStart, -terminatorLength);
-  if (!payload.startsWith("8;")) {
-    return undefined;
-  }
-  const uriSeparator = payload.indexOf(";", 2);
-  if (uriSeparator < 0) {
-    return undefined;
-  }
-  return {
-    params: payload.slice(2, uriSeparator),
-    uri: payload.slice(uriSeparator + 1),
-  };
+  const match = OSC8_SEQUENCE_RE.exec(value);
+  return match ? { params: match[1] ?? "", uri: match[2] ?? "" } : undefined;
 }
 
 function wrapLine(text: string, width: number): string[] {
-  if (width <= 0) {
-    return [text];
-  }
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
   if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
@@ -401,16 +368,6 @@ function wrapLine(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
-function normalizeWidth(n: number | undefined): number | undefined {
-  if (n == null) {
-    return undefined;
-  }
-  if (!Number.isFinite(n) || n <= 0) {
-    return undefined;
-  }
-  return Math.floor(n);
-}
-
 export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
   return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
 }
@@ -464,7 +421,7 @@ export function renderTable(opts: RenderTableOptions): string {
     return Math.max(c.minWidth ?? 3, capped);
   });
 
-  const maxWidth = normalizeWidth(opts.width);
+  const maxWidth = Math.floor(asPositiveFiniteNumber(opts.width) ?? 0);
   const sepCount = columns.length + 1;
   const total = widths.reduce((a, b) => a + b, 0) + sepCount;
 

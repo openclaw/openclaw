@@ -153,9 +153,7 @@ final class CookieSyncManager: NSObject {
             return
         }
 
-        let profile = appState.cookieSyncIntoProfile
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmpty ?? "imported"
+        let profile = appState.cookieSyncIntoProfile.nonEmpty ?? "imported"
         guard let endpoint = self.remoteEndpoint else {
             self.stopChild(nextState: .error("no remote gateway credentials available"))
             return
@@ -182,8 +180,8 @@ final class CookieSyncManager: NSObject {
         guard case let .ready(mode, url, rawToken, rawPassword, _) = self.endpointState,
               mode == .remote
         else { return nil }
-        let token = rawToken?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let password = rawPassword?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let token = rawToken?.nonEmpty
+        let password = rawPassword?.nonEmpty
         guard token != nil || password != nil else { return nil }
         return Endpoint(url: url, token: token, password: token == nil ? password : nil)
     }

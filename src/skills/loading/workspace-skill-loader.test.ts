@@ -622,7 +622,7 @@ describe("loadWorkspaceSkills", () => {
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     };
-    const directoryReads = vi.spyOn(fsSync, "readdirSync");
+    const directoryReads = vi.spyOn(fsSync, "opendirSync");
     const reads = (dir: string) =>
       directoryReads.mock.calls.filter(([file]) => String(file) === path.join(dir, "skills"))
         .length;
@@ -950,7 +950,7 @@ description: Broken skill
           defaults: {
             skills: ["github"],
           },
-          list: [{ id: "writer" }],
+          entries: { writer: {} },
         },
       },
       agentId: "writer",
@@ -964,7 +964,7 @@ description: Broken skill
           defaults: {
             skills: ["github"],
           },
-          list: [{ id: "writer", skills: ["docs-search"] }],
+          entries: { writer: { skills: ["docs-search"] } },
         },
       },
       agentId: "writer",
@@ -988,7 +988,7 @@ description: Broken skill
           defaults: {
             skills: ["remote-only"],
           },
-          list: [{ id: "writer" }],
+          entries: { writer: {} },
         },
       },
       agentId: "writer",

@@ -988,6 +988,14 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
   lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
 ) STRICT;
 
+-- Older readers retain owned-anchor custody: lineage EOF is not this certificate.
+CREATE TABLE IF NOT EXISTS node_worker_launch_process_scopes (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  scope_kind TEXT NOT NULL CHECK (scope_kind = 'linux-subreaper'),
+  descendants_reaped INTEGER CHECK (descendants_reaped IS NULL OR descendants_reaped = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1270,7 +1278,8 @@ CREATE TABLE IF NOT EXISTS agent_database_leases (
   path TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
-  opened_at INTEGER NOT NULL
+  opened_at INTEGER NOT NULL,
+  provenance TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -1490,6 +1499,7 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
   config_revision TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   request_run_id TEXT,
+  delivery_attempt_state TEXT NOT NULL DEFAULT 'unknown' CHECK (delivery_attempt_state IN ('unknown', 'not-started', 'started')),
   status TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
@@ -1580,7 +1590,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
@@ -1779,6 +1789,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     REFERENCES meeting_transcript_sessions(session_id, started_at)
     ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,

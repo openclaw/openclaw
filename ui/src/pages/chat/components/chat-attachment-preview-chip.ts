@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
@@ -17,6 +18,7 @@ export function renderAttachmentChip(options: {
   onReveal?: () => void;
   keyboardClick?: boolean;
   removal?: AttachmentChipRemoval;
+  elementRef?: (element: Element | undefined) => void;
 }) {
   const label = html`
     <span aria-hidden="true">${options.icon}</span>
@@ -27,6 +29,7 @@ export function renderAttachmentChip(options: {
     >
   `;
   return html`<span
+    ${options.elementRef ? ref(options.elementRef) : nothing}
     class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
     role=${options.removal ? nothing : "button"}
     tabindex=${options.removal ? nothing : "0"}
@@ -79,6 +82,7 @@ export function renderAttachmentPreviewChip(options: {
   onReveal?: () => void;
   openOnClick?: boolean;
   removal?: AttachmentChipRemoval;
+  elementRef?: (element: Element | undefined) => void;
 }) {
   return html`<openclaw-tooltip
     class=${options.removal ? "chat-comment-preview chat-comment-preview--editable" : "chat-comment-preview"}
@@ -95,6 +99,7 @@ export function renderAttachmentPreviewChip(options: {
       onClick: options.openOnClick ? options.onReveal : undefined,
       keyboardClick: options.openOnClick ?? false,
       removal: options.removal,
+      elementRef: options.elementRef,
     })}
     <div
       slot="content"

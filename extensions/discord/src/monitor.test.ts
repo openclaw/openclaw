@@ -4,7 +4,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
+import * as fixtures from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
 import { mapGatewayDispatchData } from "./internal/gateway-dispatch.js";
@@ -536,7 +536,7 @@ describe("discord autoThread name sanitization", () => {
 
 describe("discord reaction notification gating", () => {
   it("applies mode-specific reaction notification rules", () => {
-    const cases = typedCases<{
+    const cases = fixtures.typedCases<{
       name: string;
       input: Parameters<typeof shouldEmitDiscordReactionNotification>[0];
       expected: boolean;
@@ -718,7 +718,7 @@ const {
   registerDiscordListener,
 } = await import("./monitor/listeners.js");
 
-const requireRecord = createRequireRecord("object", "expected-label-object");
+const requireRecord = fixtures.createRequireRecord("object", "expected-label-object");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -891,7 +891,7 @@ describe("discord DM reaction handling", () => {
       Listener: DiscordReactionRemoveListener,
     },
   ])("preserves distinct normal and super reactions when $action", async (testCase) => {
-    channelRuntimeModule.resetSystemEventsForTest();
+    fixtures.resetSystemEventsForTest();
     enqueueSystemEventSpy.mockImplementation((text: string, options: { sessionKey: string }) =>
       channelRuntimeModule.enqueueSystemEvent(text, options),
     );
@@ -955,7 +955,7 @@ describe("discord DM reaction handling", () => {
       );
     } finally {
       enqueueSystemEventSpy.mockReset();
-      channelRuntimeModule.resetSystemEventsForTest();
+      fixtures.resetSystemEventsForTest();
     }
   });
 
@@ -1175,7 +1175,7 @@ describe("discord reaction notification modes", () => {
   const guild = fakeGuild(guildId, "Mode Guild");
 
   it("applies message-fetch behavior across notification modes and channel types", async () => {
-    const cases = typedCases<{
+    const cases = fixtures.typedCases<{
       name: string;
       reactionNotifications: "off" | "all" | "allowlist" | "own";
       users: string[] | undefined;

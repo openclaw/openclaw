@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { compareLineCapViolations, main } from "../../scripts/check-line-cap-ratchet.mts";
+import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -100,28 +100,6 @@ describe("line-cap growth ratchet", () => {
     errors.mockClear();
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(errors).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: "over-cap shrinking", before: 705, after: 703, fails: false },
-    { label: "over-cap growing", before: 705, after: 706, fails: true },
-    { label: "newly over-cap", before: 700, after: 701, fails: true },
-    { label: "under-cap growth", before: 698, after: 700, fails: false },
-    { label: "unchanged over-cap", before: 705, after: 705, fails: false },
-  ])("$label", ({ before, after, fails }) => {
-    const violations = (count: number) =>
-      new Map(count > 700 ? [["src/file.ts", { count, cap: 700 }]] : []);
-    expect(compareLineCapViolations(violations(after), violations(before)).length > 0).toBe(fails);
-  });
-
-  it("carries the old path's count across a rename", () => {
-    expect(
-      compareLineCapViolations(
-        new Map([["src/renamed.ts", { count: 703, cap: 700 }]]),
-        new Map([["src/original.ts", { count: 705, cap: 700 }]]),
-        [{ from: "src/original.ts", to: "src/renamed.ts" }],
-      ),
-    ).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")("preserves native filenames beginning with file:", () => {

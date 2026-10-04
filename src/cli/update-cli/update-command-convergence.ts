@@ -260,11 +260,10 @@ export async function convergeUpdatePlugins(params: {
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           databaseBackup: params.databaseBackup,
-          onDatabaseWriteStep: (step) => params.result.steps.push(step),
+          onDoctorStep: (step) => params.result.steps.push(step),
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,
-          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,

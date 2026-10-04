@@ -4,7 +4,6 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { QaGatewayChild } from "../../gateway-child.js";
-export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -29,12 +28,8 @@ type WhatsAppQaMessageSendMode =
       mediaType: string;
     };
 
-export type WhatsAppQaGateway = QaGatewayChild;
-export type WhatsAppQaGatewayRuntime = Pick<
-  WhatsAppQaGateway,
-  "call" | "restart" | "workspaceDir"
-> &
-  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
+export type WhatsAppQaGatewayRuntime = Pick<QaGatewayChild, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<QaGatewayChild, "logs" | "token" | "wsUrl">>;
 export type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
@@ -66,7 +61,6 @@ export type WhatsAppQaMessageScenarioContext = {
   sutPhoneE164: string;
   target: string;
   targetKind: "dm" | "group";
-  waitForReady: () => Promise<void>;
 };
 
 type WhatsAppQaResolvedScenarioTarget =
@@ -130,7 +124,6 @@ export type WhatsAppQaMessageScenarioRun = {
   expectReply: boolean;
   expectedJoinedSutTextIncludes?: string[];
   expectedSutMessageCount?: number;
-  expectedSutMessageCountRange?: readonly [number, number];
   input: string;
   kind?: "message";
   matchText: string | RegExp;
@@ -195,32 +188,4 @@ export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage
   matchedScenario?: boolean;
   scenarioId?: string;
   scenarioTitle?: string;
-}
-
-export type WhatsAppQaScenarioResult = {
-  details: string;
-  id: string;
-  posture: WhatsAppQaScenarioPosture;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "approval-request-to-resolution" | "request-to-observed-message";
-  };
-  status: "fail" | "pass" | "skip";
-  title: string;
-};
-
-export function buildWhatsAppQaScenarioResultBase(
-  scenario: WhatsAppQaScenarioMetadata,
-  implementation: WhatsAppQaScenarioImplementation,
-) {
-  return {
-    id: scenario.id,
-    title: scenario.title,
-    posture: implementation.posture,
-  };
 }

@@ -100,24 +100,6 @@ export function parseCliBackendPreserveEnv(raw: string | undefined): Set<string>
   }
   return new Set(trimmed.split(/[,\s]+/).filter(Boolean));
 }
-function listPresentCliEnvKeys(
-  env: Record<string, string | undefined>,
-  keys: readonly string[],
-): string[] {
-  return keys.filter((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.length > 0;
-  });
-}
-function formatCliEnvKeyList(keys: readonly string[]): string {
-  return keys.length > 0 ? keys.join(",") : "none";
-}
-function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
-  return [
-    `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
-  ].join(" ");
-}
 function fingerprintCliSessionId(sessionId?: string): string {
   const trimmed = sessionId?.trim();
   if (!trimmed) {
@@ -165,22 +147,16 @@ export function buildCliExecLogLine(params: {
 }
 
 function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
-  const hostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_AUTH_LOG_KEYS);
-  const childKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_AUTH_LOG_KEYS);
-  const childKeySet = new Set(childKeys);
-  const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
-  const runtimeHostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_RUNTIME_LOG_KEYS);
-  const runtimeChildKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_RUNTIME_LOG_KEYS);
-  const runtimeChildKeySet = new Set(runtimeChildKeys);
-  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
-  return [
-    `host=${formatCliEnvKeyList(hostKeys)}`,
-    `child=${formatCliEnvKeyList(childKeys)}`,
-    `cleared=${formatCliEnvKeyList(clearedKeys)}`,
-    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
-    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
-    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
-  ].join(" ");
+  const formatKeys = (keys: readonly string[], labels: readonly string[]) => {
+    const present = (env: Record<string, string | undefined>) =>
+      keys.filter((key) => typeof env[key] === "string" && env[key].length > 0);
+    const host = present(process.env);
+    const child = present(childEnv);
+    return [host, child, host.filter((key) => !child.includes(key))]
+      .map((values, index) => `${labels[index]}=${values.join(",") || "none"}`)
+      .join(" ");
+  };
+  return `${formatKeys(CLI_ENV_AUTH_LOG_KEYS, ["host", "child", "cleared"])} ${formatKeys(CLI_ENV_RUNTIME_LOG_KEYS, ["runtimeHost", "runtimeChild", "runtimeCleared"])}`;
 }
 
 export function logCliInvocation(params: {
@@ -197,6 +173,8 @@ export function logCliInvocation(params: {
   params.log(`cli argv: ${params.command} ${logArgs.join(" ")}`);
   params.log(`cli env auth: ${buildCliEnvAuthLog(params.env)}`);
   if (params.env.OPENCLAW_MCP_TOKEN) {
-    params.log(`cli env mcp: ${buildCliEnvMcpLog(params.env)}`);
+    params.log(
+      `cli env mcp: token=set capture=${params.env.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
+    );
   }
 }

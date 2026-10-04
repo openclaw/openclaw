@@ -257,24 +257,6 @@ describe("invocation-scoped update ownership reader", () => {
     },
   );
 
-  it.each(["owner", "payload", "generation", "deleted"] as const)(
-    "observes committed %s revocation on the next fence",
-    async (change) => {
-      await expectRevocationWithoutWrites(() => {
-        write((database) => {
-          const sql = {
-            owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
-            payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
-            generation:
-              "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
-            deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
-          }[change];
-          expect(database.prepare(sql).run(root).changes).toBe(1);
-        });
-      });
-    },
-  );
-
   it.each(["callback failure", "preflight handoff"] as const)(
     "disposes its reader on %s and releases the original lease",
     async (ending) => {
@@ -357,7 +339,16 @@ describe("invocation-scoped update ownership reader", () => {
     });
   });
 
-  const damage = [
+  const damage: { name: string; apply: () => void; windowsSharingError?: string }[] = [
+    ...Object.entries({
+      owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
+      payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
+      generation: "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
+      deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
+    }).map(([name, sql]) => ({
+      name: `committed ${name} revocation`,
+      apply: () => write((database) => expect(database.prepare(sql).run(root).changes).toBe(1)),
+    })),
     {
       name: "missing database",
       windowsSharingError: "EBUSY",
@@ -486,32 +477,26 @@ describe("invocation-scoped update ownership reader", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
-    "refuses unsafe %s permissions without repairing them",
-    async (target) => {
-      await expectRevocationWithoutWrites(() => {
-        fs.chmodSync(
-          target === "database" ? databasePath : directory,
-          target === "database" ? 0o640 : 0o750,
-        );
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
-    "refuses a symlinked %s even when it reaches the original inode",
-    async (target) => {
-      await expectRevocationWithoutWrites(() => {
-        const source = target === "database" ? databasePath : directory;
-        const retained = path.join(
-          root,
-          target === "database" ? "retained.sqlite" : "retained-parent",
-        );
-        fs.renameSync(source, retained);
-        fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
-      });
-    },
-  );
+  it.skipIf(process.platform === "win32").each([
+    { kind: "permissions", target: "database" },
+    { kind: "permissions", target: "parent" },
+    { kind: "symlink", target: "database" },
+    { kind: "symlink", target: "parent" },
+  ] as const)("refuses unsafe $target $kind without repairing them", async ({ kind, target }) => {
+    await expectRevocationWithoutWrites(() => {
+      const source = target === "database" ? databasePath : directory;
+      if (kind === "permissions") {
+        fs.chmodSync(source, target === "database" ? 0o640 : 0o750);
+        return;
+      }
+      const retained = path.join(
+        root,
+        target === "database" ? "retained.sqlite" : "retained-parent",
+      );
+      fs.renameSync(source, retained);
+      fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
+    });
+  });
 
   it("refuses a hot journal after warming the reader and preserves its recovery bytes", async () => {
     await expectRevocationWithoutWrites((fence) => {
@@ -532,15 +517,24 @@ describe("invocation-scoped update ownership reader", () => {
         import { DatabaseSync } from 'node:sqlite';
         const database = new DatabaseSync(process.argv[1]);
         database.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; UPDATE managed_update_handoffs SET owner='uncommitted'; UPDATE padding SET data=zeroblob(16384)");
-        process.exit(0);
+        process.kill(process.pid, "SIGKILL");
       `,
           databasePath,
         ],
         { encoding: "utf8", env: {}, timeout: 5000 },
       );
       expect(crashed.error).toBeUndefined();
-      expect(crashed.status, crashed.stderr).toBe(0);
-      expect(fs.statSync(databasePath + "-journal").size).toBeGreaterThan(512);
+      // A self-directed Windows kill uses TerminateProcess(1), not a POSIX signal exit.
+      expect({ status: crashed.status, signal: crashed.signal }, crashed.stderr).toEqual(
+        process.platform === "win32"
+          ? { status: 1, signal: null }
+          : { status: null, signal: "SIGKILL" },
+      );
+      const journal = fs.readFileSync(databasePath + "-journal");
+      expect(journal.length).toBeGreaterThan(512);
+      expect(journal.subarray(0, 8)).toEqual(
+        Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]),
+      );
     });
   });
 });

@@ -47,6 +47,7 @@ function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
   className = "chat-author-avatar",
+  agentAvatar?: { avatar?: string | null; textAvatar?: string | null },
 ): TemplateResult | typeof nothing {
   const label = formatSenderLabel(sender);
   if (!sender || !label) {
@@ -57,7 +58,8 @@ export function renderChatAuthorAvatar(
     return html`<span class=${className} role="img" aria-label=${label} title=${label}>
       ${renderAgentIdentityAvatar({
         id: sender.identity.id,
-        avatar: avatar.kind === "profile" ? avatar.url : null,
+        avatar: agentAvatar?.avatar ?? (avatar.kind === "profile" ? avatar.url : null),
+        textAvatar: agentAvatar?.textAvatar,
       })}
     </span>`;
   }
@@ -85,9 +87,9 @@ export function resolveChatDefaultAvatarPlacement(
  * stale configured URL); swap to initials instead of a broken image. Lit
  * reuses DOM parts, so a load must clear a prior identity's error state.
  */
-export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
+export function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
+    class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     role="img"
     aria-label="${label}"
@@ -101,7 +103,7 @@ export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, ro
     ${renderIdentityAvatarImage({
       view,
       fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
+      className: "chat-avatar user",
       alt: label,
     })}${initialsAvatar}
   </span>`;

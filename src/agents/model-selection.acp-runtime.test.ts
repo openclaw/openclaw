@@ -31,36 +31,71 @@ function buildConfig(agent: AgentEntryConfig): OpenClawConfig {
 }
 
 describe("ACP native model policy", () => {
-  it("uses native defaults without changing a string harness primary", () => {
-    const cfg = buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } });
-    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
-    expect(primary).toEqual({ provider: "native", model: "primary" });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
-    expect(resolveAgentExplicitModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
-    expect(
-      resolveModelCandidateChain({
+  it.each([
+    {
+      name: "ACP harness primary",
+      cfg: buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } }),
+      authored: HARNESS_MODEL,
+      primary: { provider: "native", model: "primary" },
+      pinned: false,
+      fallbacks: undefined,
+      chain: [nativePrimary, nativeFallback],
+    },
+    {
+      name: "strict native primary",
+      cfg: buildConfig({ model: "other/primary" }),
+      authored: "other/primary",
+      primary: { provider: "other", model: "primary" },
+      pinned: false,
+      fallbacks: [],
+      chain: ["other/primary"],
+    },
+    {
+      name: "implicit native default for a native-shaped ACP primary",
+      cfg: {
+        plugins: { enabled: false },
+        agents: { entries: { worker: { model: "openai/gpt-5.4", runtime: { type: "acp" } } } },
+      } satisfies OpenClawConfig,
+      authored: "openai/gpt-5.4",
+      primary: { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL },
+      pinned: false,
+      fallbacks: undefined,
+      chain: [`${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`],
+    },
+    {
+      name: "persisted native selection without a source marker",
+      cfg: buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } }),
+      authored: HARNESS_MODEL,
+      primary: { provider: "native", model: "primary" },
+      pinned: true,
+      fallbacks: [],
+      chain: ["pinned/selection"],
+    },
+  ])(
+    "resolves $name without changing the authored model",
+    ({ cfg, authored, primary, pinned, fallbacks, chain }) => {
+      expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual(
+        primary,
+      );
+      expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(authored);
+      expect(resolveAgentExplicitModelPrimary(cfg, "worker")).toBe(authored);
+      const fallbacksOverride = resolveEffectiveModelFallbacks({
         cfg,
         agentId: "worker",
-        ...primary,
-        manifestPlugins: [],
-        fallbacksOverride: resolveEffectiveModelFallbacks({
+        hasSessionModelOverride: pinned,
+      });
+      expect(fallbacksOverride).toEqual(fallbacks);
+      expect(
+        resolveModelCandidateChain({
           cfg,
           agentId: "worker",
-          hasSessionModelOverride: false,
-        }),
-      }).map((candidate) => candidate.provider + "/" + candidate.model),
-    ).toEqual([nativePrimary, nativeFallback]);
-  });
-
-  it("keeps native agent primaries strict when fallbacks are omitted", () => {
-    const cfg = buildConfig({ model: "other/primary" });
-    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
-    expect(primary).toEqual({ provider: "other", model: "primary" });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe("other/primary");
-    expect(
-      resolveEffectiveModelFallbacks({ cfg, agentId: "worker", hasSessionModelOverride: false }),
-    ).toEqual([]);
-  });
+          manifestPlugins: [],
+          fallbacksOverride,
+          ...(pinned ? { provider: "pinned", model: "selection" } : primary),
+        }).map(({ provider, model }) => `${provider}/${model}`),
+      ).toEqual(chain);
+    },
+  );
 
   it.each([
     { fallbacks: undefined, expected: nativeFallback },
@@ -78,6 +113,7 @@ describe("ACP native model policy", () => {
       const result = runWithModelFallback({
         cfg,
         agentId: "worker",
+        skipAuthProfileRuntime: true,
         ...primary,
         manifestPlugins: [],
         fallbacksOverride: resolveEffectiveModelFallbacks({
@@ -104,19 +140,6 @@ describe("ACP native model policy", () => {
     },
   );
 
-  it("uses the native implicit default even for a native-shaped ACP primary", () => {
-    const model = "openai/gpt-5.4";
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { entries: { worker: { model, runtime: { type: "acp" } } } },
-    };
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual({
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(model);
-  });
-
   it.each(["acp", "native"] as const)(
     "reports native model advice only for native spawn selection (%s)",
     async (modelRuntime) => {
@@ -140,23 +163,4 @@ describe("ACP native model policy", () => {
       }
     },
   );
-
-  it("keeps persisted native model selections strict without a source marker", () => {
-    const cfg = buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } });
-    const fallbacksOverride = resolveEffectiveModelFallbacks({
-      cfg,
-      agentId: "worker",
-      hasSessionModelOverride: true,
-    });
-    expect(
-      resolveModelCandidateChain({
-        cfg,
-        agentId: "worker",
-        provider: "pinned",
-        model: "selection",
-        fallbacksOverride,
-        manifestPlugins: [],
-      }).map(({ provider, model }) => provider + "/" + model),
-    ).toEqual(["pinned/selection"]);
-  });
 });

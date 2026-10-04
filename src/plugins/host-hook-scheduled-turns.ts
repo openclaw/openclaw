@@ -1,9 +1,9 @@
-// Schedules host hook turns requested by plugin hook contracts.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import {
@@ -72,17 +72,9 @@ function formatScheduleLogContext(params: {
   name?: string;
   jobId?: string;
 }): string {
-  const parts = [`pluginId=${params.pluginId}`];
-  if (params.sessionKey) {
-    parts.push(`sessionKey=${params.sessionKey}`);
-  }
-  if (params.name) {
-    parts.push(`name=${params.name}`);
-  }
-  if (params.jobId) {
-    parts.push(`jobId=${params.jobId}`);
-  }
-  return parts.join(" ");
+  return (["pluginId", "sessionKey", "name", "jobId"] as const)
+    .flatMap((key) => (key === "pluginId" || params[key] ? [`${key}=${params[key]}`] : []))
+    .join(" ");
 }
 
 async function removeScheduledSessionTurn(params: {
@@ -94,21 +86,13 @@ async function removeScheduledSessionTurn(params: {
 }): Promise<boolean> {
   try {
     const result = await params.cron.remove(params.jobId);
-    return didCronCleanupJob(result);
+    return isCronRemoveResult(result) && result.ok;
   } catch (error) {
     log.warn(
       `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
     );
     return false;
   }
-}
-
-function didCronRemoveJob(value: unknown): boolean {
-  return isCronRemoveResult(value) && value.ok && value.removed;
-}
-
-function didCronCleanupJob(value: unknown): boolean {
-  return isCronRemoveResult(value) && value.ok;
 }
 
 const PLUGIN_CRON_RESERVED_DELIMITER = ":";
@@ -151,13 +135,7 @@ function buildPluginSchedulerTagPrefix(params: {
 function isCronRemoveResult(
   value: unknown,
 ): value is Awaited<ReturnType<CronServiceContract["remove"]>> {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof (value as { ok?: unknown }).ok === "boolean" &&
-    typeof (value as { removed?: unknown }).removed === "boolean"
-  );
+  return isRecord(value) && typeof value.ok === "boolean" && typeof value.removed === "boolean";
 }
 
 async function listAllCronJobsForPluginTagCleanup(
@@ -204,9 +182,6 @@ async function listAllCronJobsForPluginTagCleanup(
 
     if (!snapshotChanged) {
       throw new Error("cron.list pagination exceeded maximum pages");
-    }
-    if (restart === PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly during cleanup");
     }
   }
 
@@ -376,9 +351,9 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
     return { removed: 0, failed: 1 };
   }
-  const candidates = jobs.filter((job) => {
-    return job.name.startsWith(namePrefix) && job.sessionTarget === `session:${sessionKey}`;
-  });
+  const candidates = jobs.filter(
+    (job) => job.name.startsWith(namePrefix) && job.sessionTarget === `session:${sessionKey}`,
+  );
   let removed = 0;
   let failed = 0;
   for (const job of candidates) {
@@ -388,7 +363,7 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     }
     try {
       const result = await cron.remove(id);
-      if (didCronRemoveJob(result)) {
+      if (isCronRemoveResult(result) && result.ok && result.removed) {
         removed += 1;
         deletePluginSessionSchedulerJob({
           pluginId: params.pluginId,

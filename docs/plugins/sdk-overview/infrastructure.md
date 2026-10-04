@@ -49,6 +49,30 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### Filesystem observation and worker notifications
+
+`resolveFsObservationMode(env?)` and `resolveFsObservationIntervalMs(env?)` from
+`openclaw/plugin-sdk/file-access-runtime` share the host's preserved
+[`CHOKIDAR_*` environment contract](/help/environment#filesystem-observation).
+Use `admitObservationRoot`, `watch`, and their types from the same SDK entrypoint,
+including `ObservationRoot`, `WatchOptions`, and `WatchSubscription`. These
+operations share the host's fs-safe instance; a plugin's separate dependency
+copy cannot observe those Roots.
+Pass the resolved mode and `pollIntervalMs` to `watch` so
+automatic fallback preserves the polling interval. Keep parsing, settling,
+retries, and indexing in the consumer. With fs-safe, classify native watch capacity through
+`health.failure.operation === "watch"` and `health.failure.code === "watch-limit"`;
+`getFileWatchCapacityCode` retains its existing Node watch-error contract.
+
+For same-version observation workers, `createFileWatchNotifier(output, onFailure)`
+from the same SDK entrypoint sends JSON lines through a borrowed writable stream.
+Call `send("change" | "unavailable" | "available")` for invalidation and
+availability updates. It coalesces pending notifications, keeps one write in
+flight, and calls `onFailure` when output fails or closes unexpectedly. Await
+`close()` to stop accepting notifications and join accepted writes before
+retiring the worker; the stream remains caller-owned. This carries current
+observation state, not a complete history of filesystem events.
+
 ### Streaming file verification
 
 `sha256File(pathOrHandle, { maxBytes, signal })` from
@@ -59,6 +83,25 @@ offset; the caller owns admission and close. Path inputs reject final symlinks
 and close their owned handle. Cancellation settles pending work before rejecting.
 The optional native helper hashes off the JavaScript event loop; the fallback
 uses bounded buffers. Neither route provides a snapshot of concurrent writes.
+
+### Browser lifecycle cleanup
+
+`closeTrackedBrowserTabsForSessions` from `openclaw/plugin-sdk/browser-maintenance`
+accepts an optional `prepareCurrent(): Promise<boolean>` check after plugin
+activation and before each new cleanup claim. Returning `false` skips new claims;
+the existing `isCurrent()` callback remains a synchronous owner check after awaited
+preparation. A host-supplied `sessionEntryCurrent` check restricts native claim and
+pre-claim state writes using current session facts; it does not grant store access.
+Supplying `sessionEntryCurrent` also requires `prepareCurrent`, which checks
+process-local tabs before they acquire a cleanup reservation. Unpaired checks are
+refused with a warning before tab cleanup begins.
+Official plugins share the `SessionEntryCurrentPreparation` and
+`SessionEntryCurrentCheck` types through `openclaw/plugin-sdk/plugin-state-runtime`.
+Once a tab is claimed, closing and retiring that tab finish under its captured
+Browser authority even if the cleanup caller subsequently changes.
+Artifacts advertise this contract with `supportsSessionEntryCurrent: true`.
+Guarded cleanup against an older artifact leaves tabs untouched and reports an
+update warning; callers using only the existing synchronous guard remain supported.
 
 ### SQLite write admission
 
@@ -95,6 +138,11 @@ Inside those workers, import `serveWorkerTasks` and the
 `WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
 loading the host process and pool runtime. Both paths use the same task protocol.
 
+The shared implementation lives in the private `@openclaw/worker-runtime`
+workspace package. Plugins keep using these public SDK entrypoints; OpenClaw's
+host adapter supplies worker creation, resource cleanup, and process accounting
+to the same scheduler.
+
 The older serving exports in `process-runtime` remain for released official
 plugins. Bundled workers use `worker-task-server`; remove the older exports only
 after supported official plugin versions have migrated to hosts with this subpath.
@@ -118,6 +166,13 @@ For stateless computation, `sharedCompute: true` also shares an aggregate
 128-task/256-MiB admission budget and CPU execution capacity with participating
 pools in the same isolate. Dedicated ordered pools retain their own execution
 capacity and still enforce their individual admission limits.
+
+For interactive tasks waiting on a host response, queue pressure can request a
+cooperative checkpoint through `yieldSignal` so queued work can run. The host
+operation retains its own lifetime. Internal `openclaw.worker.task` diagnostics
+include `hostWaitMs` alongside the existing timing fields; host wait is included
+in `runMs`, not added to it. This field is diagnostic data, not a public config
+option.
 
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
@@ -267,20 +322,25 @@ cleanup. Body byte limits and read timeouts remain separate from transport clean
 For a custom error representation after a response-first body read, await
 `sendHttpRequestRejection(req, res, statusCode, body, contentType?)` instead of
 calling `res.end()` and destroying the request. It preserves security headers,
-frames the complete error, then on Node closes the write side while keeping application
+frames the complete error, then on Node and Node-compatible Bun HTTP transports closes the write side while keeping application
 body readers paused. Node's request backpressure bounds residual input buffering;
 cleanup allows at most one second, not another body-read timeout. A disconnected peer, malformed HTTP, or an
 exhausted cleanup budget can prevent delivery. Committed responses are closed
 without appending a replacement error or completing a partial successful body.
 
-On Node, transport-owned rejections emit response `close` without `finish`.
+On these transports, rejections emit response `close` without `finish`.
 Use `close` for terminal cleanup or selected-error diagnostics; it does not prove
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Bun uses its native HTTP response completion because its raw socket operations
-do not flush the HTTP response. Bun can still report client connection resets
-during large outstanding uploads, even after delivering the complete error.
+Older Bun HTTP transports use native response completion because their raw socket
+operations do not flush the HTTP response. OpenClaw detects the native HTTP
+`destroySoon` implementation introduced by Bun's Node compatibility rework rather
+than relying on version labels shared by different canary builds. Queued HEAD
+rejections on newer Bun wait for response socket assignment, including builds
+without HTTP response-finish diagnostics. Older Bun can still report client
+connection resets during large outstanding uploads, even after delivering the
+complete error.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued
@@ -332,15 +392,41 @@ limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
 registration contracts, not new operator configuration.
 
-The channel owns effective listener resolution: preserve its shipped default when
-`legacyWebhook` is omitted, use an explicit endpoint object when configured, and
-register no legacy listener when it is `false`. Resolve the same endpoint for
+The channel owns effective listener resolution: register a legacy listener only
+for an explicit `legacyWebhook` endpoint object. Omitted settings and `false`
+select Gateway-only ingress. Resolve the same endpoint for
 runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
 legacy host without a port uses the channel's shipped default port. Canonical
 `false` settings remain authoritative when Doctor removes retired keys.
+For retirement of a historical default, export the helper's static
+`historicalWebhookListener` property from the existing config Doctor module and
+its `config-doctor-api` and `doctor-contract-api` entrypoints. This
+`{ channelId, port, host? }` object reuses the helper's historical defaults.
+The host validates that the channel belongs to the plugin, the port is an integer
+from 1 to 65535, and an explicit host is nonblank. Set the factory option
+`preserveAuthoredActivation: true` only when authored listener settings previously
+implied channel activation. The returned static declaration carries this flag;
+the host preserves activation after prior-operation and completion checks, before
+adding implicit pins. The normalizer must not enable the channel itself. Keep
+`doctorContract.configRepair: true` in the manifest. Return
+`historicalWebhookAccountIds` from the existing `normalizeCompatibilityConfig`
+result, using the plugin's account and transport owners to select eligible
+accounts. An empty array means inspection completed with no eligible accounts;
+an `undefined` array entry selects an accountless channel root. Return `null`
+when the current process cannot decide environment-dependent eligibility. Omit
+the field only when the contract is not implemented. The host owns
+prior-operation detection, pin creation, and completion; the normalizer returns
+eligibility without opening listeners or creating implicit endpoints.
+Automatic pins belong to existing accounts, including `accounts.default`, so
+accounts added later do not inherit them. Doctor backs up the config before
+persisting pins with `meta.migrations.webhookListeners`. The marker records exact
+inserted paths per completed channel, or `true` for a fresh installation.
+Removing a pin while retaining this marker does not recreate it on a later
+Doctor run or update. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for read-only config behavior.
 Return normal listener guidance in `runConfigSequence().infoNotes` so Doctor
 labels it as information. Keep actionable configuration problems in
 `warningNotes`; `changeNotes` describe applied repairs.
@@ -485,3 +571,20 @@ Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
+
+### Doctor plugin-state repairs
+
+`PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
+is available during the offline `after-session-repair` phase. Each replacement
+contains an exact `PluginDoctorRawStateEntry` observation from
+`readPluginStateEntriesInKeyRange` and a JSON-compatible `value`. An empty read
+prefix scans the namespace in pages of at most 512 rows. The host binds plugin
+identity and the state location; plugins never supply database paths or SQL.
+
+The host freezes each batch, verifies a backup containing the original row bytes,
+and compares the complete observations under current maintenance authority before
+one transaction replaces their values. Keys, creation timestamps, and expiry
+remain unchanged. Any changed row or database generation refuses the whole batch.
+Plugins keep format interpretation in their Doctor contract and leave credential
+binding and runtime lifecycle decisions with their existing owners. Older hosts
+may omit this optional repair capability.

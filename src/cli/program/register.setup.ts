@@ -18,27 +18,6 @@ import {
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
 const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
-type SetupRoute = "onboarding" | "system-agent";
-
-export function resolveSetupCommandRoute(input: {
-  hasOnboardingFlag: boolean;
-  hasSystemAgentRequest: boolean;
-  configured: boolean;
-  interactive: boolean;
-  json: boolean;
-}): SetupRoute {
-  if (input.hasOnboardingFlag) {
-    return "onboarding";
-  }
-  if (input.hasSystemAgentRequest) {
-    return "system-agent";
-  }
-  if (input.configured && (input.interactive || input.json)) {
-    return "system-agent";
-  }
-  return "onboarding";
-}
-
 async function runSystemAgentEntry(
   options: Record<string, unknown>,
   runtime: RuntimeEnv,
@@ -156,14 +135,11 @@ export function registerSetupCommand(program: Command): void {
         const { readConfigFileSnapshot } = await import("../../config/config.js");
         configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
       }
-      const route = resolveSetupCommandRoute({
-        hasOnboardingFlag,
-        hasSystemAgentRequest,
-        configured,
-        interactive: process.stdin.isTTY && process.stdout.isTTY,
-        json: Boolean(options.json),
-      });
-      if (route === "system-agent") {
+      if (
+        !hasOnboardingFlag &&
+        (hasSystemAgentRequest ||
+          (configured && ((process.stdin.isTTY && process.stdout.isTTY) || Boolean(options.json))))
+      ) {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }

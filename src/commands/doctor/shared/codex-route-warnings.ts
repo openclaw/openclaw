@@ -9,6 +9,7 @@ import {
   resolveModelExtraParamSources,
 } from "../../../agents/model-extra-params.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -21,10 +22,7 @@ import {
   readLosslessSummaryModel,
   sharedDefaultLosslessCompactionHasNonCodexConsumer,
 } from "./codex-route-compaction-scan.js";
-import {
-  configRepairWouldClearLegacyRuntimePins,
-  rewriteConfigModelRefs,
-} from "./codex-route-config-repair.js";
+import { rewriteConfigModelRefs } from "./codex-route-config-repair.js";
 import {
   codexPluginRepairIsBlocked,
   collectCodexRuntimeRouteHits,
@@ -351,9 +349,9 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
-/** Collect doctor warnings for legacy Codex model refs, runtime pins, and compaction overrides. */
+/** Collect doctor warnings for legacy Codex model refs and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): string[] {
@@ -363,14 +361,8 @@ export function collectCodexRouteWarnings(params: {
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins({
-    cfg: params.cfg,
-    blockedModelIdentities,
-    env,
-  });
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
     cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins,
     env,
   });
   const legacyLosslessCompactionPaths = new Set(
@@ -380,18 +372,15 @@ export function collectCodexRouteWarnings(params: {
   );
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
     cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins,
     env,
   }).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
   const sharedDefaultCompactionConsumers = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins,
     env,
   });
   const sharedLosslessDefaultHasNonCodexConsumer =
     sharedDefaultLosslessCompactionHasNonCodexConsumer({
       cfg: params.cfg,
-      ignoreLegacyAgentRuntimePins,
       env,
     });
   const warnings = [
@@ -403,13 +392,8 @@ export function collectCodexRouteWarnings(params: {
     warnings.push(
       [
         "- Legacy `codex/*` and `openai-codex/*` model refs should be rewritten to `openai/*`.",
-        ...hits.map(
-          (hit) =>
-            `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}${
-              hit.runtime ? `; current runtime is "${hit.runtime}"` : ""
-            }.`,
-        ),
-        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+        ...hits.map((hit) => `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}.`),
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, and moves Codex intent to provider/model runtime policy.",
       ].join("\n"),
     );
   }
@@ -470,31 +454,23 @@ export function collectCodexRouteWarnings(params: {
 
 /** Rewrite legacy Codex config routes to OpenAI refs and explicit runtime policy when allowed. */
 export function maybeRepairCodexRoutes(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
-  codexRuntimeReady?: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
-}): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
+}): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
   const blockedProviderPlan =
     params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins({
-    cfg: params.cfg,
-    blockedModelIdentities,
-    env,
-  });
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
     cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins,
     env,
   });
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
     cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins,
     env,
   });
   const hasRemovableServiceTier = collectCodexModelParamHits(params.cfg, env).some(
@@ -544,7 +520,6 @@ export function maybeRepairCodexRoutes(params: {
     changes: [
       ...routeChanges,
       ...repaired.runtimePolicyChanges,
-      ...repaired.runtimePinChanges,
       ...repaired.unsupportedCompactionChanges,
       ...codexPluginRepair.changes,
       ...serviceTierRepair.changes,

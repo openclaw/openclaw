@@ -1,7 +1,7 @@
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import type { QaBusInboundMessageInput } from "./runtime-api.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 
 describe("QA suite round-trip probe", () => {

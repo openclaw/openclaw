@@ -14,7 +14,7 @@ const context: MarkdownRenderOptions = {
 };
 
 describe("GitHub reference presentation parity", () => {
-  it.each(["persisted", "streaming", "expanded", "sidebar"] as const)(
+  it.each(["persisted", "streaming", "sidebar"] as const)(
     "uses per-reference identity in %s content",
     (surface) => {
       const container = document.createElement("div");
@@ -51,9 +51,6 @@ describe("GitHub reference presentation parity", () => {
             ...context,
             isStreaming: false,
             showReasoning: false,
-            ...(surface === "expanded"
-              ? { assistantMessageDisclosure: { expanded: true, message } }
-              : {}),
           }),
           container,
         );

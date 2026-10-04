@@ -1,6 +1,7 @@
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
 import type {
   ExecElevatedDefaults,
@@ -69,6 +70,8 @@ export type ProcessGatewayAllowlistResult = {
   allowWithoutEnforcedCommand?: boolean;
   revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
+  releaseSpawn?: (reason?: "retry") => void;
   pendingResult?: AgentToolResult<ExecToolDetails>;
   deniedResult?: AgentToolResult<ExecToolDetails>;
 };

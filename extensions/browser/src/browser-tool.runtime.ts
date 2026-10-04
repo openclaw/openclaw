@@ -1,14 +1,11 @@
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 /**
- * Runtime dependency barrel for the Browser agent tool.
- *
  * Kept separate from browser-tool.ts so tests can mock the tool boundary while
  * production still imports SDK helpers and browser client actions lazily.
  */
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export { getRuntimeConfig };
-/** Resolve global image downscaling for screenshots returned to agent tools. */
 export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
   const maxDimensionPx = resolveOptionalIntegerOption(
     getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx,
@@ -32,8 +29,6 @@ export {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-export { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-export { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 export { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 export {
   normalizeOptionalString,

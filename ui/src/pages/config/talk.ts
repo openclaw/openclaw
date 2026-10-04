@@ -1,3 +1,4 @@
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // Curated Talk home: realtime provider/model/voice pickers driven by
 // talk.catalog, above the embedded talk schema editor (see memory.ts for the
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
@@ -23,21 +24,7 @@ import {
 } from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
-/** One realtime provider row from talk.catalog, reduced to what the pickers use. */
-export type TalkRealtimeProviderOption = {
-  id: string;
-  label: string;
-  configured: boolean;
-  aliases: readonly string[];
-  models: readonly string[];
-  voices: readonly string[];
-  activeVoices?: readonly string[];
-  activeVoiceSelectionPolicy?: "allowlist-default";
-  voicesByModel?: Record<string, readonly string[]>;
-  /** Empty when the catalog does not declare transports for the provider. */
-  transports: readonly string[];
-  defaultModel: string | null;
-};
+export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["providers"][number];
 
 /**
  * Catalog as the page knows it. `loading`/`unavailable` keep an unread catalog
@@ -78,7 +65,7 @@ function findProviderOption(
     return undefined;
   }
   return providers.find(
-    (provider) => provider.id === providerId || provider.aliases.includes(providerId),
+    (provider) => provider.id === providerId || provider.aliases?.includes(providerId),
   );
 }
 
@@ -156,15 +143,20 @@ function renderStatusRow(props: TalkViewProps) {
   });
 }
 
+function renderConfiguredTalkValue(field: "provider" | "model" | "voice", value: string) {
+  return renderSettingsRow({
+    title: t(`talkPage.${field}.title`),
+    description: t(`talkPage.${field}.description`),
+    control: renderSettingsValue(value, { mono: true }),
+  });
+}
+
 function renderProviderRow(props: TalkViewProps) {
   if (props.catalog.kind !== "ready" || props.catalog.providers.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.provider.title"),
-      description: t("talkPage.provider.description"),
-      control: renderSettingsValue(props.selection.provider ?? t("talkPage.provider.auto"), {
-        mono: true,
-      }),
-    });
+    return renderConfiguredTalkValue(
+      "provider",
+      props.selection.provider ?? t("talkPage.provider.auto"),
+    );
   }
   const selected = findProviderOption(props.catalog.providers, props.selection.provider);
   // A configured provider missing from the catalog (for example a disabled
@@ -195,13 +187,9 @@ function renderModelRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
   const { model } = effectiveTalkValues(props.selection, provider);
   if (!provider) {
-    return renderSettingsRow({
-      title: t("talkPage.model.title"),
-      description: t("talkPage.model.description"),
-      control: renderSettingsValue(model ?? t("talkPage.model.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("model", model ?? t("talkPage.model.default"));
   }
-  const known = provider.models.length
+  const known = provider.models?.length
     ? provider.models
     : provider.defaultModel
       ? [provider.defaultModel]
@@ -249,11 +237,7 @@ function renderVoiceRow(props: TalkViewProps) {
     voice !== null &&
     !voices.includes(voice);
   if (voices.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.voice.title"),
-      description: t("talkPage.voice.description"),
-      control: renderSettingsValue(voice ?? t("talkPage.voice.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("voice", voice ?? t("talkPage.voice.default"));
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },

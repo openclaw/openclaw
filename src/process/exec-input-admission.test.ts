@@ -42,38 +42,51 @@ describe("child input admission", () => {
     });
   });
 
-  it.each([undefined, "EPIPE"])(
-    "joins the child without delivering input when admission rejects (%s)",
-    async (code) => {
+  it.each(["refused", "EPIPE", "async"] as const)(
+    "joins the child without delivering input when admission is %s",
+    async (kind) => {
       let pid: number | undefined;
-      const refusal = Object.assign(new Error("authority lost before input"), { code });
+      const refusal = Object.assign(new Error("authority lost before input"), {
+        code: kind === "EPIPE" ? kind : undefined,
+      });
+      const options = {
+        input: "forbidden",
+        timeoutMs: 5_000,
+        killProcessTree: true,
+        beforeInput: (childPid: number) => {
+          pid = childPid;
+          throw refusal;
+        },
+      };
+      if (kind === "async") {
+        // An untyped caller can violate the synchronous callback contract.
+        Reflect.set(options, "beforeInput", async (childPid: number) => {
+          pid = childPid;
+          throw refusal;
+        });
+      }
       const work = runCommandWithTimeout(
         [
           process.execPath,
           "-e",
           "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
         ],
-        {
-          input: "forbidden",
-          timeoutMs: 5_000,
-          killProcessTree: true,
-          beforeInput: (childPid) => {
-            pid = childPid;
-            throw refusal;
-          },
-        },
+        options,
       );
-      await expect(work).rejects.toBe(refusal);
-      expect(refusal).toMatchObject({
-        cleanup: process.platform === "win32" ? "forced" : "cooperative",
-      });
+      if (kind === "async") {
+        await expect(work).rejects.toThrow("must complete synchronously");
+      } else {
+        await expect(work).rejects.toBe(refusal);
+        expect(refusal).toMatchObject({
+          cleanup: process.platform === "win32" ? "forced" : "cooperative",
+        });
+      }
       expect(pid).toBeTypeOf("number");
       expect(isPidAlive(pid!)).toBe(false);
     },
   );
 
   it.runIf(process.platform !== "win32").each([
-    { admitted: false, exitCode: 0 },
     { admitted: false, exitCode: 23 },
     { admitted: true, exitCode: 0 },
     { admitted: true, exitCode: 23 },
@@ -262,20 +275,4 @@ describe("child input admission", () => {
       }
     },
   );
-
-  it("rejects asynchronous admission and drains its rejection before returning", async () => {
-    let pid: number | undefined;
-    const options = { input: "forbidden", timeoutMs: 5_000, killProcessTree: true };
-    // Model an untyped JS caller; the typed callback contract forbids a Promise.
-    Reflect.set(options, "beforeInput", async (childPid: number) => {
-      pid = childPid;
-      throw new Error("late refusal");
-    });
-    const work = runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdin.resume();setInterval(()=>{},1000)"],
-      options,
-    );
-    await expect(work).rejects.toThrow("must complete synchronously");
-    expect(isPidAlive(pid!)).toBe(false);
-  });
 });

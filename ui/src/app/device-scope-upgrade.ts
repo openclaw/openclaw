@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   readScopeUpgradeAvailability,
   type ScopeUpgradeState,
@@ -60,10 +61,7 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway): Scope
     request: () => controller?.request(),
     retry: () => controller?.retry(),
     cancel: () => controller?.cancel(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       controller?.dispose();

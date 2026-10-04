@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
@@ -11,6 +11,8 @@ import {
   type JsonValue,
 } from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
+// Loads the provider's lazy runtime at collection, outside the first test's deadline.
+import "./web-search-provider.runtime.js";
 
 function codexModel(
   options: {
@@ -195,12 +197,6 @@ function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvid
     agentDir: "/tmp/openclaw-agent",
   });
 }
-
-beforeAll(async () => {
-  // Execution cases share this lazy runtime. Import it once so the first case
-  // does not absorb module initialization that every later case reuses.
-  await import("./web-search-provider.runtime.js");
-});
 
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {

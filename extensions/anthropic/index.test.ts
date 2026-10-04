@@ -329,6 +329,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
+    expectModelParams(models, "anthropic/claude-sonnet-5-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
@@ -347,7 +348,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},
@@ -355,7 +355,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     expectFields(next?.agents?.defaults?.heartbeat, {
       every: "1h",
@@ -363,6 +363,7 @@ describe("anthropic provider replay hooks", () => {
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
       "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
       "anthropic/claude-sonnet-5",
       "anthropic/claude-fable-5",
       "anthropic/claude-fable-5-1",
@@ -455,7 +456,6 @@ describe("anthropic provider replay hooks", () => {
           },
           entries: {
             main: {
-              default: true,
               model: { primary: "anthropic/opus-4.7" },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
@@ -563,7 +563,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/opus-5.0" },
             models: {
               "anthropic/opus-5.0": { alias: "Future Opus" },
@@ -571,7 +570,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     expect(models["anthropic/opus-5.0"]).toEqual({
@@ -659,6 +658,7 @@ describe("anthropic provider replay hooks", () => {
       defaultLevel = "high",
       cost,
       thinkingLevelMap,
+      thinkingLevels,
       checksMedia,
       restoresMissingCost,
       checksCliPolicy,
@@ -690,11 +690,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "anthropic",
         modelId,
       } as never);
-      expect(levelIds(profile)).toStrictEqual(
-        defaultLevel === "medium"
-          ? ["low", "medium", "high", "xhigh", "max"]
-          : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-      );
+      expect(levelIds(profile)).toStrictEqual(thinkingLevels);
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
       const normalized = provider.normalizeResolvedModel?.({
         provider: "anthropic",

@@ -132,9 +132,6 @@ export async function writeGeminiSystemSettings(
       mcpServers,
     },
   ) as Record<string, unknown>;
-  if (!isRecord(settings.mcp) || !isRecord(settings.mcpServers)) {
-    throw new Error("Gemini MCP settings merge produced an invalid object");
-  }
   return await writeGeminiSettings(settings, inheritedEnv);
 }
 

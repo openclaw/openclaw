@@ -55,36 +55,44 @@ afterEach(() => {
 });
 
 describe("shell visual viewport", () => {
-  it("keeps ordinary layout resizes CSS-driven even before the scheduled frame", () => {
-    disconnect = connectShellViewport();
-    for (const next of [900, 1440, 844]) {
-      vi.stubGlobal("innerHeight", next);
-      Object.assign(viewport, { height: next });
-      window.dispatchEvent(new Event("resize"));
-      expect(height()).toBe("");
-      flush();
-      expect(height()).toBe("");
-    }
-    resize({ height: 843.9999 });
-    expect(height()).toBe("");
-  });
-
-  it("ignores the shorter standalone layout viewport, focus alone and small browser bars", () => {
-    root.style.setProperty("--shell-viewport-base", "100lvh");
-    vi.stubGlobal("innerHeight", 796);
-    viewport.height = 796;
-    disconnect = connectShellViewport();
-    editor();
-    flush();
-    expect(height()).toBe("");
-    expect(inset()).toBe("");
-    resize({ height: 756 });
-    expect(height()).toBe("");
-    expect(inset()).toBe("");
-    resize({ height: 716 });
-    expect(height()).toBe("716px");
-    expect(inset()).toBe("0px");
-  });
+  it.each([
+    { focus: "none", heights: [900, 1440, 844], layoutResize: true },
+    { focus: "none", heights: [782], layoutResize: false },
+    { focus: "editor", heights: [782], layoutResize: false },
+    { focus: "button", heights: [480], layoutResize: false },
+  ])(
+    "bounds $focus occlusion without inventing a keyboard ($heights)",
+    ({ focus, heights, layoutResize }) => {
+      if (focus === "button") {
+        const button = document.createElement("input");
+        button.type = "button";
+        document.body.append(button);
+        button.focus();
+      }
+      disconnect = connectShellViewport();
+      if (focus === "editor") {
+        editor();
+        flush();
+      }
+      for (const next of heights) {
+        if (layoutResize) {
+          vi.stubGlobal("innerHeight", next);
+          Object.assign(viewport, { height: next });
+          window.dispatchEvent(new Event("resize"));
+          flush();
+        } else {
+          resize({ height: next });
+        }
+        expect(height()).toBe(`${next}px`);
+        expect(inset()).toBe("");
+        if (next === 782) {
+          resize({ height: 770, offsetTop: 12 }, "scroll");
+          expect(height()).toBe("782px");
+          expect(inset()).toBe("");
+        }
+      }
+    },
+  );
 
   it.each([false, true])(
     "tracks keyboard pan and dismissal with retained focus (shadow: %s)",
@@ -97,7 +105,7 @@ describe("shell visual viewport", () => {
       resize({ height: 440, offsetTop: 70 }, "scroll");
       expect(height()).toBe("510px");
       resize({ height: 844, offsetTop: 0 });
-      expect(height()).toBe("");
+      expect(height()).toBe("844px");
       expect(inset()).toBe("");
       expect(input.matches(":focus")).toBe(true);
     },
@@ -109,11 +117,11 @@ describe("shell visual viewport", () => {
     // The browser can resize both viewports before the first focus frame.
     vi.stubGlobal("innerHeight", 480);
     resize({ height: 480 });
-    expect(height()).toBe("");
+    expect(height()).toBe("480px");
     expect(inset()).toBe("0px");
     vi.stubGlobal("innerHeight", 844);
     resize({ height: 844 });
-    expect(height()).toBe("");
+    expect(height()).toBe("844px");
     expect(inset()).toBe("");
   });
 
@@ -126,7 +134,7 @@ describe("shell visual viewport", () => {
     resize({ height: 390 });
     window.dispatchEvent(new Event("orientationchange"));
     flush();
-    expect(height()).toBe("");
+    expect(height()).toBe("390px");
     expect(inset()).toBe("");
     resize({ height: 210 });
     expect(height()).toBe("210px");
@@ -142,17 +150,6 @@ describe("shell visual viewport", () => {
     expect(inset()).toBe("");
     resize({ height: 480, scale: 1, offsetTop: 0 });
     expect(height()).toBe("480px");
-  });
-
-  it("bounds visual occlusion without inventing a keyboard for a non-editor", () => {
-    const button = document.createElement("input");
-    button.type = "button";
-    document.body.append(button);
-    button.focus();
-    disconnect = connectShellViewport();
-    resize({ height: 480 });
-    expect(height()).toBe("480px");
-    expect(inset()).toBe("");
   });
 
   it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {

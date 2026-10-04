@@ -36,13 +36,13 @@ export type ProviderUsageDisplayProps = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
 };
 
-export type QuotaLimitSummary = {
+type QuotaLimitSummary = {
   label: string;
   usedPercent: number;
   resetAt?: number;
 };
 
-export type QuotaBudgetSummary = {
+type QuotaBudgetSummary = {
   label?: string;
   used: number;
   limit: number;
@@ -100,15 +100,14 @@ export function collectProviderQuotaGroups(
       ) {
         return [];
       }
-      const budget: QuotaBudgetSummary = {
-        used: entry.used,
-        limit: entry.limit,
-        unit: entry.unit,
-      };
-      if (entry.label) {
-        budget.label = entry.label;
-      }
-      return [budget];
+      return [
+        {
+          used: entry.used,
+          limit: entry.limit,
+          unit: entry.unit,
+          ...(entry.label ? { label: entry.label } : {}),
+        },
+      ];
     });
     if (windows.length === 0 && budgets.length === 0) {
       continue;

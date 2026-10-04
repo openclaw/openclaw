@@ -76,7 +76,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 6,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -167,7 +166,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 3,
       activeEntries: 1,
       legacyOpenAICodexEntries: 0,
@@ -217,7 +215,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 10,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -260,7 +257,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 8,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -297,7 +293,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 7,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -328,7 +323,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 2,
       activeEntries: 1,
       legacyOpenAICodexEntries: 1,
@@ -359,7 +353,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 2,
       activeEntries: 1,
       legacyOpenAICodexEntries: 1,
@@ -402,7 +395,7 @@ describe("doctor session transcript health", () => {
       const [issue] = await detectSessionTranscriptHealthIssues({
         sessionDirs: [path.dirname(filePath)],
       });
-      expect(issue).toMatchObject({ filePath, deferred: true, broken: false, repaired: false });
+      expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
       expect(readSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();

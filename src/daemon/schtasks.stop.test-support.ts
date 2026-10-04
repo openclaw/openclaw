@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
@@ -29,11 +29,6 @@ const readWindowsProcessStartTimeSync = vi.hoisted(() =>
 );
 const readWindowsProcessAncestorsSync = vi.hoisted(() =>
   vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessAncestorsSync>(),
-);
-const sleepMock = vi.hoisted(() =>
-  vi.fn(async (ms: number) => {
-    timeState.now += ms;
-  }),
 );
 type SpawnSyncResult = {
   pid: number;
@@ -85,7 +80,9 @@ vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleepMock(ms),
+    sleep: async (ms: number) => {
+      timeState.now += ms;
+    },
   };
 });
 
@@ -133,20 +130,14 @@ function freePortUsage() {
   };
 }
 
-function busyPortUsage(
-  pid: number,
-  options: {
-    command?: string;
-    commandLine?: string;
-  } = {},
-) {
+function busyPortUsage(pid: number, options: { commandLine?: string } = {}) {
   return {
     port: GATEWAY_PORT,
     status: "busy" as const,
     listeners: [
       {
         pid,
-        command: options.command ?? "node.exe",
+        command: "node.exe",
         address: `127.0.0.1:${GATEWAY_PORT}`,
         ...(options.commandLine ? { commandLine: options.commandLine } : {}),
       },
@@ -270,10 +261,6 @@ beforeEach(() => {
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
-  sleepMock.mockReset();
-  sleepMock.mockImplementation(async (ms: number) => {
-    timeState.now += ms;
-  });
   spawnSync.mockReset();
   spawnSync.mockImplementation((_exe, args) =>
     args?.includes("-EncodedCommand")

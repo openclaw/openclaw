@@ -285,9 +285,6 @@ describe("formatInboundEnvelope", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
-          envelopeTimezone: "user",
-          envelopeTimestamp: "off",
-          envelopeElapsed: "off",
           userTimezone: "Europe/Vienna",
         },
       },

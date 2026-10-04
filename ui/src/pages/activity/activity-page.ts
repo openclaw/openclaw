@@ -38,7 +38,7 @@ import { createPresenceActivityController } from "../../lit/presence-activity-co
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
-import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
+import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -99,7 +99,7 @@ class ActivityPage extends OpenClawLightDomElement {
     () => projectPresencePayload(this.presencePayload).users,
   );
 
-  private liveActivity: LiveActivity | null = null;
+  private liveActivity: ReturnType<typeof createLiveActivity> | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
   private sessionActivityRevision = -1;
@@ -113,10 +113,7 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context?.gateway,
       (gateway) => {
@@ -489,10 +486,6 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private clearEntries() {
-    this.liveActivity?.clear();
-  }
-
   private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
     if (pending && route.mode === "run") {
       return renderLoadingState();
@@ -601,7 +594,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.statusFilters = { ...this.statusFilters, [status]: enabled };
         },
         onToggleAutoFollow: (next) => (this.autoFollow = next),
-        onClear: () => this.clearEntries(),
+        onClear: () => this.liveActivity?.clear(),
         onExpandAll: () => {
           this.expandedIds = new Set(this.entries.map((entry) => entry.id));
         },

@@ -40,7 +40,7 @@ export function writeMeetingOutputChunk<TProcess>(
   });
 }
 
-type MeetingBridgeProcess = {
+export type MeetingBridgeProcess = {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -56,7 +56,6 @@ type MeetingBridgeProcess = {
 
 type TerminateMeetingBridgeProcessOptions = {
   graceMs: number;
-  forceKillWaitMs?: number;
   initialSignal?: NodeJS.Signals;
 };
 
@@ -105,9 +104,8 @@ export async function terminateMeetingBridgeProcess(
   } catch {
     return;
   }
-  const forceKillWaitMs = options.forceKillWaitMs ?? 1_000;
   if (initialSignal === "SIGKILL") {
-    await waitForExit(proc, forceKillWaitMs);
+    await waitForExit(proc, 1_000);
     return;
   }
   if (await waitForExit(proc, options.graceMs)) {
@@ -120,5 +118,5 @@ export async function terminateMeetingBridgeProcess(
   } catch {
     return;
   }
-  await waitForExit(proc, forceKillWaitMs);
+  await waitForExit(proc, 1_000);
 }

@@ -26,12 +26,11 @@ import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as musicGenerateBackground from "./media-generate-background.js";
-import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
 } from "./media-generation-lifecycle.test-support.js";
-import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
+import { createMusicGenerateTool } from "./music-generate-tool.js";
 
 function mockGeneratedMusic(
   overrides: Partial<Awaited<ReturnType<typeof musicGenerationRuntime.generateMusic>>> = {},
@@ -58,20 +57,6 @@ function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
   return { agents: { defaults } };
-}
-
-function createMusicGenerateTool(
-  params: Parameters<typeof createMusicGenerateToolImpl>[0],
-): ReturnType<typeof createMusicGenerateToolImpl> {
-  const options = params ?? {};
-  return createMusicGenerateToolImpl({
-    ...options,
-    config: canonicalizeMediaGenerationTestConfig(
-      options.config ?? {},
-      "music",
-      "musicGenerationModel",
-    ),
-  });
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({
@@ -115,11 +100,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   ...configMocks,
 }));
-vi.mock("../../media/store.js", async (importOriginal) => ({
-  ...mediaStoreMocks,
-  extractOriginalFilename: (await importOriginal<typeof import("../../media/store.js")>())
-    .extractOriginalFilename,
-}));
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../media/store.js")>();
+  return {
+    ...mediaStoreMocks,
+    extractOriginalFilename: original.extractOriginalFilename,
+    getMediaDir: original.getMediaDir,
+  };
+});
 vi.mock("../../media/media-probe.js", () => ({
   probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
 }));
@@ -152,10 +140,6 @@ vi.mock("./media-generate-background.js", async (importOriginal) => {
     },
   };
 });
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
 
 function expectMusicGenerateTool(
   tool: ReturnType<typeof createMusicGenerateTool>,
@@ -246,16 +230,14 @@ describe("createMusicGenerateTool", () => {
 
   it("returns null when generation tools are disabled", () => {
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    expect(
-      createMusicGenerateTool({ config: asConfig({ plugins: { enabled: false } }) }),
-    ).toBeNull();
+    expect(createMusicGenerateTool({ config: { plugins: { enabled: false } } })).toBeNull();
   });
 
   it("tells song requests to generate audio instead of only lyrics", () => {
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({
         config: configWithDefaults({
-          musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+          mediaModels: { music: { primary: "google/lyria-3-clip-preview" } },
         }),
       }),
     );
@@ -294,7 +276,7 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+        mediaModels: { music: { primary: "google/lyria-3-clip-preview" } },
       }),
     });
     expect(typeof tool?.execute).toBe("function");
@@ -347,14 +329,14 @@ describe("createMusicGenerateTool", () => {
     probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs: 10 }]);
 
     const tool = createMusicGenerateTool({
-      config: asConfig({
+      config: {
         agents: {
           defaults: {
             mediaMaxMb: 8,
-            musicGenerationModel: { primary: "google/lyria-3-pro-preview" },
+            mediaModels: { music: { primary: "google/lyria-3-pro-preview" } },
           },
         },
-      }),
+      },
     });
     expect(typeof tool?.execute).toBe("function");
     if (!tool) {
@@ -420,9 +402,11 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: {
-          primary: "google/lyria-3-clip-preview",
-          timeoutMs: 1000,
+        mediaModels: {
+          music: {
+            primary: "google/lyria-3-clip-preview",
+            timeoutMs: 1000,
+          },
         },
       }),
     });
@@ -457,9 +441,11 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: {
-          primary: "google/lyria-3-clip-preview",
-          timeoutMs: 180_000,
+        mediaModels: {
+          music: {
+            primary: "google/lyria-3-clip-preview",
+            timeoutMs: 180_000,
+          },
         },
       }),
     });
@@ -502,7 +488,7 @@ describe("createMusicGenerateTool", () => {
     mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("deployment.mp3", 5));
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({
-        config: configWithDefaults({ musicGenerationModel: { timeoutMs: 180_000 } }),
+        config: configWithDefaults({ mediaModels: { music: { timeoutMs: 180_000 } } }),
         preparedModelRuntime: {
           mediaCapabilityProviders: { musicGenerationProviders: [provider] },
         } as never,
@@ -615,7 +601,7 @@ describe("createMusicGenerateTool", () => {
       createMusicGenerateTool({
         config: configWithDefaults({
           mediaMaxMb: 8 / (1024 * 1024),
-          musicGenerationModel: { primary: "minimax/music-2.6" },
+          mediaModels: { music: { primary: "minimax/music-2.6" } },
         }),
       }),
     );
@@ -660,7 +646,7 @@ describe("createMusicGenerateTool", () => {
     );
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({
-        config: configWithDefaults({ musicGenerationModel: { primary: "google/lyria" } }),
+        config: configWithDefaults({ mediaModels: { music: { primary: "google/lyria" } } }),
       }),
     );
 
@@ -740,16 +726,18 @@ describe("createMusicGenerateTool", () => {
     let scheduledWork: (() => Promise<void>) | undefined;
     const onAsyncTaskStarted = vi.fn();
     const tool = createMusicGenerateTool({
-      config: asConfig({
+      config: {
         agents: {
           defaults: {
-            musicGenerationModel: {
-              primary: "google/lyria-3-pro-preview",
-              timeoutMs: 1000,
+            mediaModels: {
+              music: {
+                primary: "google/lyria-3-pro-preview",
+                timeoutMs: 1000,
+              },
             },
           },
         },
-      }),
+      },
       agentSessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -926,7 +914,7 @@ describe("createMusicGenerateTool", () => {
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({
         config: configWithDefaults({
-          musicGenerationModel: { primary: "minimax/music-2.6" },
+          mediaModels: { music: { primary: "minimax/music-2.6" } },
         }),
       }),
     );
@@ -978,7 +966,7 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: { primary: "minimax/music-2.6" },
+        mediaModels: { music: { primary: "minimax/music-2.6" } },
       }),
     });
     if (!tool) {
@@ -1025,7 +1013,7 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+        mediaModels: { music: { primary: "google/lyria-3-clip-preview" } },
       }),
     });
     if (!tool) {
@@ -1078,7 +1066,7 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: { primary: "minimax/music-2.6" },
+        mediaModels: { music: { primary: "minimax/music-2.6" } },
       }),
     });
     if (!tool) {
@@ -1108,7 +1096,7 @@ describe("createMusicGenerateTool", () => {
 
     const tool = createMusicGenerateTool({
       config: configWithDefaults({
-        musicGenerationModel: { primary: "minimax/music-2.6" },
+        mediaModels: { music: { primary: "minimax/music-2.6" } },
       }),
     });
     if (!tool) {
@@ -1152,14 +1140,14 @@ describe("createMusicGenerateTool", () => {
       savedMedia("generated-night-drive.mp3", 11),
     );
     const tool = createMusicGenerateTool({
-      config: asConfig({
+      config: {
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.6", timeoutMs: 180_000 },
+            mediaModels: { music: { primary: "minimax/music-2.6", timeoutMs: 180_000 } },
           },
         },
         tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
-      }),
+      },
     });
     if (!tool) {
       throw new Error("expected music_generate tool");

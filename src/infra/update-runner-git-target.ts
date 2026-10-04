@@ -4,6 +4,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -18,10 +19,10 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
-import type { DevUpdateTarget } from "./update-dev-target.js";
+import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -111,7 +112,8 @@ export async function withGitTargetInspectionRoot<T>(
     runCommand: CommandRunner;
     timeoutMs: number;
     work?: { timeoutMs?: number };
-    onWarning: (step: UpdateStepResult) => void;
+    onWarning: (step: UpdateStepResult) => void | Promise<void>;
+    retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
@@ -139,6 +141,7 @@ export async function withGitTargetInspectionRoot<T>(
     }
     return result.stdout;
   };
+  let cleanupUncertain = false;
   try {
     const head = (await command(params.root, ["rev-parse", "HEAD"])).trim();
     const headRef = (await command(params.root, ["symbolic-ref", "-q", "HEAD"], true)).trim();
@@ -266,14 +269,29 @@ export async function withGitTargetInspectionRoot<T>(
           : options,
       );
     return await inspect(inspectionRoot, runInspectionCommand);
+  } catch (error) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
-    await cleanupUpdateTemporaryDirectory({
-      directory: temporaryRoot,
-      root: params.root,
-      name: "git-target-inspection-cleanup",
-      onWarning: params.onWarning,
-    });
+    if (!cleanupUncertain) {
+      const cleanup = async () => {
+        let removed = true;
+        await cleanupUpdateTemporaryDirectory({
+          directory: temporaryRoot,
+          root: params.root,
+          name: "git-target-inspection-cleanup",
+          onWarning: (warning) => {
+            removed = false;
+            return params.onWarning(warning);
+          },
+        });
+        return removed;
+      };
+      if (!params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
+    }
   }
 }
 
@@ -324,9 +342,7 @@ export async function prepareGitMutation(params: {
   beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
 }): Promise<void> {
   const target = await readGitTargetSchemaVersions(params);
-  const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
-    ? params.revision.toLowerCase()
-    : undefined;
+  const sha = isFullGitObjectId(params.revision) ? params.revision.toLowerCase() : undefined;
   await params.beforeGitMutation({
     ...(sha ? { sha } : {}),
     ...(target.status === "ok"
@@ -413,6 +429,48 @@ export async function fetchGitUpdateTarget(params: {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
+  if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
+    // A pinned commit needs no remote freshness. Probe privately without allowing
+    // promised-object hydration; the normal candidate/transfer owners still verify its contents.
+    const options = targetStep(
+      "git-resolve-target",
+      [
+        "git",
+        "-C",
+        root,
+        "--no-lazy-fetch",
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
+      ],
+      root,
+    );
+    const cached = await runStep({
+      ...options,
+      input: `${devTarget.ref}\n`,
+      progress: { ...options.progress, onStepComplete: undefined },
+    });
+    const interrupted =
+      cached.termination === "signal" || cached.exitCode === 130 || cached.exitCode === 143;
+    const available =
+      !isFailedUpdateStep(cached) &&
+      !cached.signal &&
+      !interrupted &&
+      cached.stdoutTail?.trim() === `${devTarget.ref.toLowerCase()} commit`;
+    if (!interrupted && isFailedUpdateStep(cached)) {
+      cached.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Could not inspect the cached target; continuing remote discovery. ${cached.stderrTail ?? ""}`,
+      };
+    }
+    await reportUpdateStepCompletion(options.progress, {
+      ...cached,
+      index: options.stepIndex,
+      total: options.totalSteps,
+    });
+    if (interrupted || available) {
+      return result(available);
+    }
+  }
   const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
     return result(false);
@@ -466,7 +524,7 @@ export async function fetchGitUpdateTarget(params: {
     ? [authority]
     : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
       ? []
-      : targetRef && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(targetRef)
+      : targetRef && !isFullGitObjectId(targetRef)
         ? remotes.filter((candidate) => candidate === "origin")
         : remotes;
   for (const fetchRemote of fetchRemotes) {
@@ -498,7 +556,7 @@ export async function fetchGitUpdateTarget(params: {
         message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
       };
     }
-    options.progress?.onStepComplete?.({
+    await reportUpdateStepCompletion(options.progress, {
       ...fetch,
       index: options.stepIndex,
       total: options.totalSteps,
@@ -622,7 +680,7 @@ export async function readPreferredGitChannelTarget(params: {
         },
       );
       const sha = resolved.code === 0 ? resolved.stdout.trim() : "";
-      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(sha)) {
+      if (!isFullGitObjectId(sha)) {
         return undefined;
       }
       // Fetch preserves operator-only tags. A selected cached tag is not a fresh remote fact.

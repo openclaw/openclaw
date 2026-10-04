@@ -10,33 +10,32 @@ scenario:
   objective: Verify shell command behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
   successCriteria:
     - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
-    - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
-    - The row stays report-only until the fixture validates native Codex command behavior directly.
+    - Codex executes the happy and failure paths through its native command tool and projects correlated bash receipts.
+    - The fixture validates the successful output marker and the failed command result.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
     - src/agents/agent-tools.ts
     - src/agents/bash-tools.schemas.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
     summary: Exercise the bash family through the OpenClaw exec tool.
     config:
       toolName: exec
+      nativeWorkspaceBehavior: bash
       toolCoverage:
         family: bash
         actualTool: exec
         bucket: codex-native-workspace
         expectedLayer: codex-native-workspace
-        required: false
+        required: true
         tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P1
-        action: split native command behavior from OpenClaw dynamic tool parity
+        action: execute native command behavior separately from OpenClaw dynamic tool parity
         reason: Codex app-server intentionally owns command execution natively; the fixture must not require OpenClaw dynamic exec exposure.
-      knownHarnessGap:
-        issue: "#80319"
-        reason: QA tool-defaults currently needs native command behavior coverage instead of OpenClaw dynamic exec exposure.
       promptSnippet: "target=exec"
       failurePromptSnippet: "failure target=exec"
 

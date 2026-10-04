@@ -1,9 +1,8 @@
 // Codex tests cover harness plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -33,6 +32,8 @@ import {
   sessionBindingIdentity,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-harness-reset-");
 
 const isolatedTask = {
   config: {},
@@ -73,6 +74,33 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
+
+  it.each([
+    { enableUltrafast: false, expected: ["priority", "flex"] },
+    { enableUltrafast: true, expected: ["priority", "ultrafast", "flex"] },
+    { enableUltrafast: undefined, expected: ["priority", "ultrafast", "flex"] },
+  ])(
+    "filters picker tiers with enableUltrafast=$enableUltrafast",
+    ({ enableUltrafast, expected }) => {
+      const configuredHarness = createCodexAppServerAgentHarness({
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { enableUltrafast: !enableUltrafast } },
+      });
+      const serviceTiers = ["priority", "ultrafast", "flex"];
+      expect(
+        configuredHarness.filterModelServiceTiers?.({
+          config: {
+            plugins: { entries: { codex: { config: { appServer: { enableUltrafast } } } } },
+          },
+          agentId: "main",
+          provider: "openai",
+          modelId: "synthetic-tier-model",
+          serviceTiers,
+        }),
+      ).toEqual(expected);
+      expect(serviceTiers).toEqual(["priority", "ultrafast", "flex"]);
+    },
+  );
 
   it.each(["manual", "native-preflight"] as const)(
     "rejects legacy %s compaction input without inventing System authority",
@@ -538,7 +566,7 @@ describe("Codex agent harness reset()", () => {
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-harness-reset-"));
+    const root = sessionDirs.make();
     const storePath = path.join(root, "sessions.json");
     const bindingStore = createCodexTestBindingStore();
     const sessionKey = "agent:worker:main";
@@ -547,39 +575,35 @@ describe("Codex agent harness reset()", () => {
       sessionId: "session-1",
       sessionKey,
     });
-    try {
-      await upsertSessionEntry({
-        agentId: identity.agentId,
-        sessionKey,
-        storePath,
-        entry: { sessionId: identity.sessionId, updatedAt: 1 },
-      });
-      await bindingStore.mutate(identity, {
+    await upsertSessionEntry({
+      agentId: identity.agentId,
+      sessionKey,
+      storePath,
+      entry: { sessionId: identity.sessionId, updatedAt: 1 },
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    await bindingStore.retireSessionGeneration(identity);
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore,
+      resolveConfig: () => ({ session: { store: storePath } }),
+    });
+
+    await harness.reset?.({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey,
+      reason: "reset",
+    });
+
+    await expect(
+      bindingStore.mutate(identity, {
         kind: "set",
-        binding: { threadId: "thread-1", cwd: "/repo" },
-      });
-      await bindingStore.retireSessionGeneration(identity);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore,
-        resolveConfig: () => ({ session: { store: storePath } }),
-      });
-
-      await harness.reset?.({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey,
-        reason: "reset",
-      });
-
-      await expect(
-        bindingStore.mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-recovered", cwd: "/repo" },
-        }),
-      ).resolves.toBe(true);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+        binding: { threadId: "thread-recovered", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
   });
 
   it.each(["withSessionDeletion", "withSessionContextReset"] as const)(

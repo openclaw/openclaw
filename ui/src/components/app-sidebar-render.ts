@@ -48,8 +48,7 @@ import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   teamOnlineExpanded: boolean;
-  onlineRunningOnly: boolean;
-  onlineSessionSort: "presence" | "open" | "running";
+  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
@@ -74,11 +73,14 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  if (!cardAgent) {
+    return renderSidebarWorkspaceHeader(host);
+  }
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
+  const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
@@ -90,11 +92,9 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     <openclaw-sidebar-agent-card
       .agentName=${cardName}
       .agentId=${cardAgentId}
-      .avatarUrl=${
-        cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
-      }
+      .avatarUrl=${resolveAgentAvatarUrl(cardAgent, cardIdentity)}
       .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${resolveAgentTextAvatar(cardAgent ?? { identity: {} }, cardIdentity)}
+      .avatarText=${resolveAgentTextAvatar(cardAgent, cardIdentity)}
       .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
       .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
       .menuUnread=${menuUnread}
@@ -255,11 +255,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const session = mainRow ? host.projectHomeSession(mainRow, agentId) : null;
   const attention = session?.attention ?? host.resolveSessionAttention({ key: mainKey, agentId });
   const attentionLabel = sessionAttentionTooltipLabel(attention);
-  const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
+  const outboxAttentionCount = host.storedOutboxes?.attentionCountForSession(mainKey) ?? 0;
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const hasComposerDraft = host.hasSessionDraft(mainKey);
+  const hasComposerDraft = host.storedOutboxes?.hasSessionDraft(mainKey) ?? false;
   const ownRun = mainRow ? isSessionRunActive(mainRow) : false;
   const subagentsWorking = (session?.runningChildCount ?? 0) > 0;
   const running = ownRun || subagentsWorking;
@@ -393,16 +393,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                   lastError: host.lastError,
                   announce: false,
                 })
-              : html`
-                  ${
-                    gateway
-                      ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
-                          <span class="sidebar-gateway-name">${gateway.name}</span>
-                          ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
-                        </span>`
-                      : nothing
-                  }
-                `
+              : gateway
+                ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
+                    <span class="sidebar-gateway-name">${gateway.name}</span>
+                    ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
+                  </span>`
+                : nothing
           }
         </span>
       </button>
@@ -460,6 +456,7 @@ export function renderAppSidebarZoneEntry(
           ? html`<openclaw-plugin-contributions
               .kind=${"navigation"}
               .navigationKey=${entry.key}
+              .navigationMenus=${host.sidebarMenus}
             ></openclaw-plugin-contributions>`
           : sessionRows.has(entry.key)
             ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)

@@ -78,7 +78,6 @@ import {
 } from "../terminal-interactivity.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
-import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -440,9 +439,7 @@ async function maybeWriteGatewayStartupFailureBundle(
   const { writeDiagnosticStabilityBundleForFailureSync } =
     await import("../../logging/diagnostic-stability-bundle.js");
   const result = writeDiagnosticStabilityBundleForFailureSync(reason, err);
-  if ("message" in result) {
-    gatewayLog.warn(result.message);
-  }
+  gatewayLog.warn(result.message);
 }
 
 async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
@@ -454,7 +451,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   normalizeStateDirEnv(process.env);
   const { clearGatewayRunConfigEnvironment } = await import("./pre-bootstrap.js");
   clearGatewayRunConfigEnvironment();
-  installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   // Gateways inherit the launching shell, so suppress ambient channel credentials unless the
@@ -901,7 +897,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       return;
     }
     triageAttempted = true;
-    await triageGatewayStartupFailure(defaultRuntime, error, signal);
+    return await triageGatewayStartupFailure(defaultRuntime, error, signal);
   };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
@@ -972,13 +968,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       beginBoot,
       completeBoot,
       onRestartStartupFailure: triageStartupFailure,
-      start: async ({
-        processStartedAt,
-        startupStartedAt,
-        requestHotReloadRecovery,
-        hostLifecycle,
-        startupOperation,
-      } = {}) => {
+      start: async ({ requestHotReloadRecovery, ...startupOptions } = {}) => {
         const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -988,10 +978,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
-          ...(processStartedAt !== undefined ? { processStartedAt } : {}),
-          startupStartedAt,
-          hostLifecycle,
-          startupOperation,
+          ...startupOptions,
           prepareConfigSnapshot: snapshotPreparation.prepareHostConfigSnapshot,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,

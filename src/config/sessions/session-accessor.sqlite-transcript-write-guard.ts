@@ -1,7 +1,7 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
@@ -10,6 +10,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
+  getSessionKysely,
   transcriptWriteScopeIsCurrent,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -21,12 +22,9 @@ import {
 import type { InternalSessionEntry } from "./types.js";
 
 export function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return;
-  }
   // Message records require parent-link, idempotency, and redaction handling
   // from appendTranscriptMessage; raw event writes would bypass those invariants.
-  if ("type" in event && event.type === "message") {
+  if (isRecord(event) && "type" in event && event.type === "message") {
     throw new Error(
       "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
     );
@@ -40,7 +38,7 @@ export function createSessionTranscriptOwnerPredicate(
     sessionKey: string;
   },
 ): () => boolean {
-  let query = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_nodes">>(database.db)
+  let query = getSessionKysely(database.db)
     .selectFrom("session_nodes")
     .select((eb) => eb.val(1).as("matches"))
     .where("session_key", "=", expected.sessionKey)
@@ -106,7 +104,8 @@ export function assertLockedTranscriptWriteAllowed(
   assertOwnedTranscriptWriteCommit(fencedScope);
   if (
     fencedScope.expectedLifecycleRevision === undefined &&
-    fencedScope.expectedWriterRunId === undefined
+    fencedScope.expectedWriterRunId === undefined &&
+    fencedScope.expectedOwner === undefined
   ) {
     return undefined;
   }

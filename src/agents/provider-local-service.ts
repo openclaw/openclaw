@@ -15,6 +15,7 @@ import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   appendLocalServiceOutputTail,
   formatLocalServiceDiagnosticTail,
@@ -37,7 +38,7 @@ import type {
   ProviderLocalServiceTarget,
 } from "./provider-local-service-target.js";
 import { resolveConfiguredProviderLocalServiceTarget } from "./provider-local-service-target.js";
-import { setManagedProviderLocalServicesActive } from "./provider-runtime-lifecycle.js";
+import { setManagedProviderLocalServicesStop } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
@@ -154,7 +155,7 @@ async function acquireProviderLocalService(
   }
   const managed = current ?? { active: 0 };
   services.set(key, managed);
-  setManagedProviderLocalServicesActive(true);
+  setManagedProviderLocalServicesStop(stopManagedProviderLocalServices);
   clearIdleTimer(managed);
   managed.active += 1;
 
@@ -190,21 +191,25 @@ async function acquireProviderLocalService(
       }
       if (!managed.starting) {
         // Concurrent callers share one startup promise for the same service key.
-        const startupAbort = new AbortController();
-        managed.startupAbort = startupAbort;
-        managed.starting = startAndWaitForLocalService({
+        const startup = {
           key,
           provider: target.providerId,
           service,
           healthUrl,
           healthHeaders,
           managed,
-          signal: startupAbort.signal,
-        }).finally(() => {
-          managed.starting = undefined;
-          if (managed.startupAbort === startupAbort) {
-            managed.startupAbort = undefined;
-          }
+        };
+        managed.starting = runInDetachedAsyncContext(() => {
+          const startupAbort = new AbortController();
+          managed.startupAbort = startupAbort;
+          return startAndWaitForLocalService({ ...startup, signal: startupAbort.signal }).finally(
+            () => {
+              managed.starting = undefined;
+              if (managed.startupAbort === startupAbort) {
+                managed.startupAbort = undefined;
+              }
+            },
+          );
         });
       }
       await waitForAbort(managed.starting, signal);
@@ -471,7 +476,9 @@ function scheduleIdleStop(
   if (!managed.process) {
     if (!managed.starting) {
       services.delete(key);
-      setManagedProviderLocalServicesActive(services.size > 0);
+      setManagedProviderLocalServicesStop(
+        services.size > 0 ? stopManagedProviderLocalServices : undefined,
+      );
     }
     return;
   }
@@ -479,15 +486,17 @@ function scheduleIdleStop(
     return;
   }
   // Services without idleStopMs remain running until process exit or test cleanup.
-  managed.idleTimer = setTimeout(() => {
-    if (managed.active === 0) {
-      void stopManagedService(key, managed, "idle").catch((error: unknown) => {
-        log.warn("idle local model service shutdown failed", {
-          error: toErrorObject(error, "Local model service shutdown failed").message,
+  managed.idleTimer = runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      if (managed.active === 0) {
+        void stopManagedService(key, managed, "idle").catch((error: unknown) => {
+          log.warn("idle local model service shutdown failed", {
+            error: toErrorObject(error, "Local model service shutdown failed").message,
+          });
         });
-      });
-    }
-  }, idleStopMs);
+      }
+    }, idleStopMs),
+  );
   managed.idleTimer.unref?.();
 }
 
@@ -523,7 +532,9 @@ function stopManagedService(
       if (services.get(key) === managed) {
         services.delete(key);
       }
-      setManagedProviderLocalServicesActive(services.size > 0);
+      setManagedProviderLocalServicesStop(
+        services.size > 0 ? stopManagedProviderLocalServices : undefined,
+      );
     })
     .catch((error: unknown) => {
       // Keep retirement ownership; a later call may recheck a delayed process exit.
@@ -588,7 +599,7 @@ function installExitHandler() {
     for (const [key, managed] of services) {
       forceStopManagedService(key, managed);
     }
-    setManagedProviderLocalServicesActive(false);
+    setManagedProviderLocalServicesStop(undefined);
   });
 }
 

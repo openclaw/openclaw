@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
@@ -63,25 +64,6 @@ function isExpired(entry: unknown, now: number) {
   return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
-function toPluginNextTurnInjectionRecord(params: {
-  pluginId: string;
-  pluginName?: string;
-  injection: PluginNextTurnInjection;
-  now: number;
-}): PluginNextTurnInjectionRecord {
-  return {
-    id: params.injection.idempotencyKey?.trim() || randomUUID(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    text: params.injection.text,
-    idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
-    placement: params.injection.placement ?? "prepend_context",
-    ttlMs: params.injection.ttlMs,
-    createdAt: params.now,
-    metadata: params.injection.metadata,
-  };
-}
-
 export async function enqueuePluginNextTurnInjection(params: {
   cfg: OpenClawConfig;
   pluginId: string;
@@ -89,54 +71,40 @@ export async function enqueuePluginNextTurnInjection(params: {
   injection: PluginNextTurnInjection;
   now?: number;
 }): Promise<PluginNextTurnInjectionEnqueueResult> {
-  if (typeof params.injection.sessionKey !== "string") {
-    return { enqueued: false, id: "", sessionKey: "" };
-  }
-  const sessionKey = params.injection.sessionKey.trim();
+  const sessionKey = normalizeOptionalString(params.injection.sessionKey) ?? "";
   if (!sessionKey) {
     return { enqueued: false, id: "", sessionKey };
   }
-  if (typeof params.injection.text !== "string") {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  const text = params.injection.text.trim();
-  if (!text) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) {
-    return { enqueued: false, id: "", sessionKey };
-  }
+  const text = normalizeOptionalString(params.injection.text);
   if (
-    params.injection.idempotencyKey !== undefined &&
-    (typeof params.injection.idempotencyKey !== "string" ||
-      params.injection.idempotencyKey.trim().length === 0 ||
-      params.injection.idempotencyKey.length >
-        MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.placement !== undefined &&
-    !isPluginNextTurnInjectionPlacement(params.injection.placement)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.ttlMs !== undefined &&
-    (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0)
+    !text ||
+    text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH ||
+    (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) ||
+    (params.injection.idempotencyKey !== undefined &&
+      (typeof params.injection.idempotencyKey !== "string" ||
+        params.injection.idempotencyKey.trim().length === 0 ||
+        params.injection.idempotencyKey.length >
+          MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)) ||
+    (params.injection.placement !== undefined &&
+      !isPluginNextTurnInjectionPlacement(params.injection.placement)) ||
+    (params.injection.ttlMs !== undefined &&
+      (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0))
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
   const now = params.now ?? Date.now();
-  const record = toPluginNextTurnInjectionRecord({
+  const injection = { ...params.injection };
+  const record: PluginNextTurnInjectionRecord = {
+    id: injection.idempotencyKey?.trim() || randomUUID(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    injection: { ...params.injection, sessionKey, text },
-    now,
-  });
+    text,
+    idempotencyKey: injection.idempotencyKey?.trim() || undefined,
+    placement: injection.placement ?? "prepend_context",
+    ttlMs: injection.ttlMs,
+    createdAt: now,
+    metadata: injection.metadata,
+  };
   const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     const injections = { ...entry.pluginNextTurnInjections };
@@ -171,7 +139,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||

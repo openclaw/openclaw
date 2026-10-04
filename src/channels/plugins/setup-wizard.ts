@@ -4,7 +4,10 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
-import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
+import {
+  moveSingleAccountChannelSectionToDefaultAccount,
+  readChannelConfigSection,
+} from "./setup-helpers.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -29,17 +32,6 @@ export type {
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
 
-type ChannelSectionWithAccounts = Record<string, unknown> & {
-  accounts?: Record<string, unknown>;
-  defaultAccount?: string;
-};
-
-function getChannelSection(cfg: OpenClawConfig, channelKey: string): ChannelSectionWithAccounts {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const channel = channels?.[channelKey];
-  return channel && typeof channel === "object" ? (channel as ChannelSectionWithAccounts) : {};
-}
-
 function createWizardAccountScope(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -47,7 +39,7 @@ function createWizardAccountScope(params: {
   setupSurface?: ChannelSetupAdapter;
 }): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
   const accountId = normalizeAccountId(params.accountId);
-  const initialChannel = getChannelSection(params.cfg, params.channelKey);
+  const initialChannel = readChannelConfigSection(params.cfg, params.channelKey) ?? {};
   // An existing accounts map — even empty — makes legacy plugins write account-scoped
   // while root credentials linger; only a truly absent map may skip promotion.
   if (accountId === DEFAULT_ACCOUNT_ID && initialChannel.accounts === undefined) {
@@ -59,7 +51,7 @@ function createWizardAccountScope(params: {
     channelKey: params.channelKey,
     setupSurface: params.setupSurface,
   });
-  const channel = getChannelSection(cfg, params.channelKey);
+  const channel = readChannelConfigSection(cfg, params.channelKey) ?? {};
   const previousDefaultAccount = channel.defaultAccount;
 
   // Some shipped plugins ignore accountId and resolve through defaultAccount.
@@ -75,7 +67,7 @@ function createWizardAccountScope(params: {
   return {
     cfg: scopedCfg,
     restore: (currentCfg) => {
-      const currentChannel = getChannelSection(currentCfg, params.channelKey);
+      const currentChannel = readChannelConfigSection(currentCfg, params.channelKey) ?? {};
       const restoredChannel =
         previousDefaultAccount !== undefined
           ? { ...currentChannel, defaultAccount: previousDefaultAccount }
@@ -157,10 +149,7 @@ function applySetupInput(params: {
       name: params.input.name,
     });
   }
-  return {
-    cfg: next,
-    accountId: resolvedAccountId,
-  };
+  return next;
 }
 
 function collectCredentialValues(params: {
@@ -181,31 +170,6 @@ function collectCredentialValues(params: {
     }
   }
   return values;
-}
-
-// Text inputs can either update custom config state or reuse the same generic
-// setup input contract as credential steps.
-async function applyWizardTextInputValue(params: {
-  plugin: ChannelSetupPlugin;
-  input: ChannelSetupWizardTextInput;
-  cfg: OpenClawConfig;
-  accountId: string;
-  value: string;
-}) {
-  return params.input.applySet
-    ? await params.input.applySet({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        value: params.value,
-      })
-    : applySetupInput({
-        plugin: params.plugin,
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: {
-          [params.input.inputKey]: params.value,
-        },
-      }).cfg;
 }
 
 function resolveTextInputKeepMessage(
@@ -250,27 +214,19 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           options,
           shouldPromptAccountIds,
         }) ?? shouldPromptAccountIds;
+      const accountSelection = {
+        cfg,
+        prompter,
+        accountOverride: accountOverrides[plugin.id],
+        shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+        listAccountIds: plugin.config.listAccountIds,
+        defaultAccountId,
+      };
       const accountId = await (wizard.resolveAccountIdForConfigure
-        ? wizard.resolveAccountIdForConfigure({
-            cfg,
-            prompter,
-            options,
-            accountOverride: accountOverrides[plugin.id],
-            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
-            listAccountIds: plugin.config.listAccountIds,
-            defaultAccountId,
-          })
-        : resolveAccountIdForConfigure({
-            cfg,
-            prompter,
-            label: plugin.meta.label,
-            accountOverride: accountOverrides[plugin.id],
-            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
-            listAccountIds: plugin.config.listAccountIds,
-            defaultAccountId,
-          }));
+        ? wizard.resolveAccountIdForConfigure({ ...accountSelection, options })
+        : resolveAccountIdForConfigure({ ...accountSelection, label: plugin.meta.label }));
 
-      const channel = getChannelSection(cfg, plugin.id);
+      const channel = readChannelConfigSection(cfg, plugin.id) ?? {};
       // Wizards that explicitly own account selection may use defaultAccount as a
       // top-level routing label. Only inject temporary scope when generic selection
       // owns the account or an accounts map proves that scoped storage is in use.
@@ -413,10 +369,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                       [credential.inputKey]: undefined,
                       useEnv: true,
                     },
-                  }).cfg,
-            applySet: async (currentCfg, value, resolvedValue) => {
-              resolvedCredentialValue = resolvedValue;
-              return credential.applySet
+                  }),
+            applySet: async (currentCfg, value, resolvedValue) =>
+              credential.applySet
                 ? await credential.applySet({
                     cfg: currentCfg,
                     accountId,
@@ -432,8 +387,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                       [credential.inputKey]: value,
                       useEnv: false,
                     },
-                  }).cfg;
-            },
+                  }),
           });
 
           next = credentialResult.cfg;
@@ -452,13 +406,14 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
           const applyValue = async (value: string) => {
-            next = await applyWizardTextInputValue({
-              plugin,
-              input: textInput,
-              cfg: next,
-              accountId,
-              value,
-            });
+            next = textInput.applySet
+              ? await textInput.applySet({ cfg: next, accountId, value })
+              : applySetupInput({
+                  plugin,
+                  cfg: next,
+                  accountId,
+                  input: { [textInput.inputKey]: value },
+                });
           };
           let currentValue = normalizeOptionalString(credentialValues[textInput.inputKey]);
           if (!currentValue && textInput.currentValue) {

@@ -1,4 +1,3 @@
-// Agent config mutation and summary builders used by `openclaw agents` commands.
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -18,6 +17,7 @@ import { loadAgentIdentityFromWorkspaceAsync } from "../agents/identity-file.js"
 import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
@@ -48,7 +48,7 @@ export type AgentSummary = {
   isDefault: boolean;
 };
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 
 export { listAgentEntries };
 
@@ -158,7 +158,7 @@ export function applyAgentConfig(
   } else {
     nextList.push(nextEntry);
   }
-  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const { ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextConfig: OpenClawConfig = {
     ...cfg,
     agents: {
@@ -295,7 +295,7 @@ export function pruneAgentConfig(
         ),
       }
     : undefined;
-  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const { ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
     ? {
         ...agentsConfig,

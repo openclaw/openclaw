@@ -17,7 +17,7 @@ export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Pro
 
 export async function writeSessionStore(
   home: string,
-  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+  session: Pick<SessionEntry, "delivery">,
 ): Promise<string> {
   return writeSessionStoreEntries(home, {
     "agent:main:main": {
@@ -48,7 +48,7 @@ export function makeCfg(
 ): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),

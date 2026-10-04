@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type PhysicalSender = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type EventSender = (method: string, params: unknown) => void;
@@ -196,17 +197,12 @@ export class RelayFetch {
           }
         }),
       );
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
+      const timedOut = await raceWithTimeout(
         settled.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      if (timer) {
-        clearTimeout(timer);
-      }
+        timeoutMs,
+        () => true,
+        { ref: false },
+      );
       return {
         errors: [
           ...errors,

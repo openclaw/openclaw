@@ -159,16 +159,6 @@ const EMPTY_GROUPS_OPTIONS = [
   { mode: "never", labelKey: "sessionsView.emptyGroupsNever" },
 ] as const;
 
-function renderCompactSidebarOwnerFilter(params: {
-  owners: readonly SessionOwnerOption[];
-  ownerFilterId: string | null;
-  selfOwnerId: string | null;
-}) {
-  return renderCompactSessionMenuFrame(
-    html`${renderSidebarOwnerOptions({ ...params, submenu: false })}`,
-  );
-}
-
 function sidebarFilterMenuViewForValue(value: string | undefined): SidebarFilterMenuView | null {
   if (value === "compact:open-specific-owner") {
     return "specific-owner";
@@ -297,7 +287,9 @@ export function renderSidebarCatalogViewMenu(params: {
         ${renderSidebarMenuTrigger(position, t("chat.sidebar.catalogViewOptions"))}
         ${
           params.compact && params.view === "specific-owner"
-            ? renderCompactSidebarOwnerFilter(params)
+            ? renderCompactSessionMenuFrame(
+                html`${renderSidebarOwnerOptions({ ...params, submenu: false })}`,
+              )
             : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
                 ${groupingOptions.map((option) =>
                   renderSidebarMenuRadioItem({
@@ -334,9 +326,9 @@ export function renderSidebarSessionSortMenu(params: {
   ownerFilterId: string | null;
   involvingMe: boolean;
   selfOwnerId: string | null;
-  /** Any Filters row differs from its default, so Reset has work to do. */
-  filtersChanged: boolean;
-  onResetFilters: () => void;
+  /** Any visible Filters or Display setting differs from its default. */
+  settingsChanged: boolean;
+  onReset: () => void;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
@@ -363,9 +355,8 @@ export function renderSidebarSessionSortMenu(params: {
     value: T,
     options: ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
-    visibleLabel = label,
   ) => html`<div id=${id} class="sidebar-session-menu-row">
-    <span aria-hidden="true" title=${label}>${visibleLabel}</span>
+    <span aria-hidden="true" title=${label}>${label}</span>
     ${renderSettingsSegmented({
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
@@ -407,7 +398,7 @@ export function renderSidebarSessionSortMenu(params: {
           <div class="sidebar-session-menu-heading">
             <h3 id="sidebar-sessions-filters-label">${t("chat.sidebar.menuFilters")}</h3>
             ${
-              params.filtersChanged
+              params.settingsChanged
                 ? html`<button
                     type="button"
                     id="sidebar-sessions-reset"
@@ -419,7 +410,7 @@ export function renderSidebarSessionSortMenu(params: {
                           '#sidebar-sessions-status wa-radio[value="active"]',
                         )
                         ?.focus();
-                      params.onResetFilters();
+                      params.onReset();
                     }}
                   >
                     ${t("common.reset")}
@@ -477,9 +468,11 @@ export function renderSidebarSessionSortMenu(params: {
               label:
                 value === "active"
                   ? t("common.active")
-                  : value === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all"),
+                  : value === "snoozed"
+                    ? t("sessionsView.snoozed")
+                    : value === "archived"
+                      ? t("sessionsView.archived")
+                      : t("sessionsView.all"),
             })),
             params.onStatusFilterChange,
           )}

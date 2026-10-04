@@ -7,7 +7,6 @@ import type {
 } from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
-  WorkerHeartbeatParams,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -39,10 +38,10 @@ export type WorkerConnectionState =
   | { kind: "failed"; error: Error }
   | { kind: "stopped" };
 
-export type WorkerConnectionExit =
-  | { kind: "fenced"; reason: WorkerFencedReason }
-  | { kind: "failed"; error: Error }
-  | { kind: "stopped" };
+export type WorkerConnectionExit = Extract<
+  WorkerConnectionState,
+  { kind: "fenced" | "failed" | "stopped" }
+>;
 
 export type WorkerConnectionOptions = {
   endpoint: WorkerConnectionEndpoint;
@@ -52,9 +51,6 @@ export type WorkerConnectionOptions = {
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
   createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
-  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
-  /** The connect frame was written; this does not establish admission. */
-  onAdmissionRequestSent?: () => void;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 
@@ -108,8 +104,7 @@ export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadli
 export function parseWorkerAdmissionDeadlineResult(
   value: unknown,
 ): WorkerAdmissionDeadlineResult | undefined {
-  const parsed = WorkerAdmissionDeadlineResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return WorkerAdmissionDeadlineResultSchema.safeParse(value).data;
 }
 
 export class WorkerFencedError extends Error {

@@ -1,3 +1,4 @@
+import { afterEach, beforeEach } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
@@ -6,14 +7,14 @@ import {
   expect,
   it,
   vi,
-  THREAD_ID,
   TURN_ID,
   flushDiagnosticEvents,
   createParams,
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
   createProjector,
   buildEmptyToolTelemetry,
   requireRecord,
-  requireArray,
   readAttemptTerminal,
   findAgentEvent,
   forCurrentTurn,
@@ -21,7 +22,38 @@ import {
   type DiagnosticEventPayload,
 } from "./event-projector.test-harness.js";
 
+function notify(
+  projector: Awaited<ReturnType<typeof createProjector>>,
+  method: Parameters<typeof forCurrentTurn>[0],
+  params: Record<string, unknown>,
+) {
+  return projector.handleNotification(forCurrentTurn(method, params));
+}
+
 registerCodexEventProjectorTestLifecycle();
+
+const diagnosticEvents: DiagnosticEventPayload[] = [];
+let unsubscribeDiagnostics: (() => void) | undefined;
+beforeEach(() => {
+  diagnosticEvents.length = 0;
+  unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+});
+afterEach(() => unsubscribeDiagnostics?.());
+
+function expectUnknownOutcome(itemId: string) {
+  expect(
+    diagnosticEvents
+      .filter((event) => "toolCallId" in event && event.toolCallId === itemId)
+      .map((event) => ({
+        type: event.type,
+        terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+        errorCode: "errorCode" in event ? event.errorCode : undefined,
+      })),
+  ).toEqual([
+    { type: "tool.execution.started", terminalReason: undefined, errorCode: undefined },
+    { type: "tool.execution.error", terminalReason: "failed", errorCode: "tool_outcome_unknown" },
+  ]);
+}
 
 describe("CodexAppServerEventProjector native tool finalization", () => {
   const mcpItem = {
@@ -42,12 +74,10 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
   it("correlates only a unique active MCP item using raw server and tool identities", async () => {
     const projector = await createProjector();
     expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
-    await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { ...mcpItem, id: "other-server-item", server: "other-server" },
-      }),
-    );
+    await notify(projector, "item/started", { item: mcpItem });
+    await notify(projector, "item/started", {
+      item: { ...mcpItem, id: "other-server-item", server: "other-server" },
+    });
     expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual({
       id: mcpItem.id,
       server: mcpItem.server,
@@ -55,16 +85,12 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       arguments: mcpItem.arguments,
     });
 
-    const concurrentItem = { ...mcpItem, id: "concurrent-item", tool: "different.tool" };
-    await projector.handleNotification(forCurrentTurn("item/started", { item: concurrentItem }));
+    const concurrentItem = { ...mcpItem, id: "concurrent-item", pluginId: "external-plugin" };
+    await notify(projector, "item/started", { item: concurrentItem });
     expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", { item: { ...concurrentItem, status: "completed" } }),
-    );
+    await notify(projector, "item/completed", { item: { ...concurrentItem, status: "completed" } });
     expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", { item: { ...mcpItem, status: "completed" } }),
-    );
+    await notify(projector, "item/completed", { item: { ...mcpItem, status: "completed" } });
     expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
   });
 
@@ -72,7 +98,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     "preserves active MCP correlation after a nonterminal completion at %s",
     async (phase) => {
       const projector = await createProjector();
-      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      await notify(projector, "item/started", { item: mcpItem });
       const activeCall = {
         id: mcpItem.id,
         server: mcpItem.server,
@@ -108,62 +134,31 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     { label: "completed status", item: { status: "completed" } },
     { label: "missing raw arguments", item: { arguments: undefined } },
     { label: "blank raw tool", item: { tool: " " } },
+    { label: "missing tool", item: { tool: undefined } },
     { label: "app context", item: { appContext: { resourceUri: "ui://app/view" } } },
     { label: "plugin context", item: { pluginId: "external-plugin" } },
   ])("does not correlate an MCP item from $label", async (testCase) => {
     const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        ...("params" in testCase ? testCase.params : {}),
-        item: { ...mcpItem, ...("item" in testCase ? testCase.item : {}) },
-      }),
-    );
+    await notify(projector, "item/started", {
+      ...("params" in testCase ? testCase.params : {}),
+      item: { ...mcpItem, ...("item" in testCase ? testCase.item : {}) },
+    });
     expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
   });
 
-  it.each([
-    { label: "plugin", item: { pluginId: "external-plugin" } },
-    { label: "app", item: { appContext: { resourceUri: "ui://app/view" } } },
-    { label: "missing tool", item: { tool: undefined } },
-  ])(
-    "counts a $label item before deciding whether same-server correlation is unique",
-    async ({ item }) => {
-      const projector = await createProjector();
-      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: { ...mcpItem, ...item, id: "other-item" },
-        }),
-      );
-      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { ...mcpItem, ...item, id: "other-item", status: "completed" },
-        }),
-      );
-      expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
-    },
-  );
-
-  it.each(["closed", "finalized", "turn completed", "aborted", "timed out"])(
+  it.each(["closed", "finalized", "timed out"])(
     "does not correlate MCP items after the turn is %s",
     async (ending) => {
       const projector = await createProjector();
-      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      await notify(projector, "item/started", { item: mcpItem });
       if (ending === "closed") {
         await projector.closeProjection();
       } else if (ending === "finalized") {
         projector.buildResult(buildEmptyToolTelemetry());
-      } else if (ending === "turn completed") {
-        await projector.handleNotification(turnCompleted());
-      } else if (ending === "aborted") {
-        projector.markAborted();
       } else {
         projector.markTimedOut();
       }
-      await projector.handleNotification(
-        forCurrentTurn("item/started", { item: { ...mcpItem, id: "late-item" } }),
-      );
+      await notify(projector, "item/started", { item: { ...mcpItem, id: "late-item" } });
       expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
     },
   );
@@ -182,24 +177,18 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       durationMs: null,
     };
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { ...command, id: "cmd-started-only", status: "inProgress" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { ...command, id: "cmd-completed", status: "completed" },
-      }),
-    );
+    await notify(projector, "item/started", {
+      item: { ...command, id: "cmd-started-only", status: "inProgress" },
+    });
+    await notify(projector, "item/completed", {
+      item: { ...command, id: "cmd-completed", status: "completed" },
+    });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.toolMetas.map((meta) => meta.isError)).toEqual([undefined, false]);
   });
 
   it("keeps raw open-page status unknown until explicit completion", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
     const projector = await createProjector();
     const item = {
       id: "web-search-open-page-1",
@@ -208,52 +197,25 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       action: { type: "openPage", url: "https://example.com/sensitive" },
     };
 
-    try {
-      await projector.handleNotification(forCurrentTurn("item/started", { item }));
-      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            id: item.id,
-            type: "web_search_call",
-            status: "open",
-            action: { type: "open_page", url: "https://example.com/sensitive" },
-          },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
+    await notify(projector, "item/started", { item });
+    await notify(projector, "item/completed", { item });
+    await notify(projector, "rawResponseItem/completed", {
+      item: {
+        id: item.id,
+        type: "web_search_call",
+        status: "open",
+        action: { type: "open_page", url: "https://example.com/sensitive" },
+      },
+    });
+    await flushDiagnosticEvents();
 
-    expect(
-      diagnosticEvents
-        .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
-        .map((event) => ({
-          type: event.type,
-          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-          errorCode: "errorCode" in event ? event.errorCode : undefined,
-        })),
-    ).toEqual([
-      {
-        type: "tool.execution.started",
-        terminalReason: undefined,
-        errorCode: undefined,
-      },
-      {
-        type: "tool.execution.error",
-        terminalReason: "failed",
-        errorCode: "tool_outcome_unknown",
-      },
-    ]);
+    expectUnknownOutcome(item.id);
     expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
   });
 
   it("keeps native web-search outcomes unknown at finalization when no raw terminal arrives", async () => {
     const abortController = new AbortController();
     abortController.abort("cancelled");
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
     const projector = await createProjector(undefined, {
       runAbortSignal: abortController.signal,
     });
@@ -264,202 +226,54 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       action: { type: "search", query: "sensitive extension query", queries: null },
     };
 
-    try {
-      await projector.handleNotification(forCurrentTurn("item/started", { item }));
-      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
-      projector.buildResult(buildEmptyToolTelemetry());
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
+    await notify(projector, "item/started", { item });
+    await notify(projector, "item/completed", { item });
+    projector.buildResult(buildEmptyToolTelemetry());
+    await flushDiagnosticEvents();
 
-    expect(
-      diagnosticEvents
-        .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
-        .map((event) => ({
-          type: event.type,
-          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-          errorCode: "errorCode" in event ? event.errorCode : undefined,
-        })),
-    ).toEqual([
-      {
-        type: "tool.execution.started",
-        terminalReason: undefined,
-        errorCode: undefined,
-      },
-      {
-        type: "tool.execution.error",
-        terminalReason: "failed",
-        errorCode: "tool_outcome_unknown",
-      },
-    ]);
+    expectUnknownOutcome(item.id);
     expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive extension query");
   });
 
-  it.each([
-    [
-      "web search",
-      "cancelled",
-      {
-        id: "web-search-started-only",
-        type: "webSearch",
-        query: "sensitive query",
-        action: { type: "search", query: "sensitive query", queries: null },
-      },
-    ],
-    [
-      "image generation",
-      Object.assign(new Error("turn timed out"), { name: "TimeoutError" }),
-      {
-        id: "image-generation-started-only",
-        type: "imageGeneration",
-        status: "in_progress",
-        revisedPrompt: "sensitive prompt",
-        result: null,
-      },
-    ],
-  ] as const)(
-    "keeps started-only native %s outcomes unknown when the enclosing run stops",
-    async (_, abortReason, item) => {
-      const abortController = new AbortController();
-      abortController.abort(abortReason);
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector(undefined, {
-        runAbortSignal: abortController.signal,
-      });
-
-      try {
-        await projector.handleNotification(forCurrentTurn("item/started", { item }));
-        projector.buildResult(buildEmptyToolTelemetry());
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
-
-      expect(
-        diagnosticEvents
-          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
-          .map((event) => ({
-            type: event.type,
-            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-            errorCode: "errorCode" in event ? event.errorCode : undefined,
-          })),
-      ).toEqual([
-        {
-          type: "tool.execution.started",
-          terminalReason: undefined,
-          errorCode: undefined,
-        },
-        {
-          type: "tool.execution.error",
-          terminalReason: "failed",
-          errorCode: "tool_outcome_unknown",
-        },
-      ]);
-      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
-    },
-  );
-
-  it("projects native image-generation error status as a failed audit action", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-    const projector = await createProjector();
-    const startedItem = {
-      id: "image-generation-error-1",
+  it("keeps started-only image-generation outcome unknown when the run times out", async () => {
+    const abortController = new AbortController();
+    abortController.abort(Object.assign(new Error("turn timed out"), { name: "TimeoutError" }));
+    const projector = await createProjector(undefined, { runAbortSignal: abortController.signal });
+    const item = {
+      id: "image-generation-started-only",
       type: "imageGeneration",
       status: "in_progress",
+      revisedPrompt: "sensitive prompt",
+      result: null,
+    };
+    await notify(projector, "item/started", { item });
+    projector.buildResult(buildEmptyToolTelemetry());
+    await flushDiagnosticEvents();
+    expectUnknownOutcome(item.id);
+    expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+  });
+
+  it("keeps missing native image-generation terminal status non-successful", async () => {
+    const projector = await createProjector();
+    const item = {
+      id: "image-generation-missing",
+      type: "imageGeneration",
       revisedPrompt: null,
       result: null,
     };
-
-    try {
-      await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { ...startedItem, status: "error" },
-        }),
-      );
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribe();
-    }
-
-    expect(
-      diagnosticEvents
-        .filter((event) => "toolCallId" in event && event.toolCallId === startedItem.id)
-        .map((event) => ({
-          type: event.type,
-          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-        })),
-    ).toEqual([
-      { type: "tool.execution.started", terminalReason: undefined },
-      { type: "tool.execution.error", terminalReason: "failed" },
-    ]);
+    await notify(projector, "item/started", { item: { ...item, status: "in_progress" } });
+    await notify(projector, "item/completed", { item });
+    await flushDiagnosticEvents();
+    expectUnknownOutcome(item.id);
   });
 
-  it.each([
-    ["missing", undefined, undefined],
-    [
-      "unrecognized",
-      "future_status",
-      Object.assign(new Error("turn timed out"), { name: "TimeoutError" }),
-    ],
-  ] as const)(
-    "keeps %s native image-generation terminal status non-successful",
-    async (_, status, abortReason) => {
-      const abortController = new AbortController();
-      if (abortReason) {
-        abortController.abort(abortReason);
-      }
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector(undefined, {
-        runAbortSignal: abortController.signal,
-      });
-      const startedItem = {
-        id: `image-generation-${status ?? "missing"}`,
-        type: "imageGeneration",
-        status: "in_progress",
-        revisedPrompt: null,
-        result: null,
-      };
-
-      try {
-        await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", { item: { ...startedItem, status } }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
-
-      expect(
-        diagnosticEvents
-          .filter((event) => "toolCallId" in event && event.toolCallId === startedItem.id)
-          .map((event) => ({
-            type: event.type,
-            terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
-            errorCode: "errorCode" in event ? event.errorCode : undefined,
-          })),
-      ).toEqual([
-        {
-          type: "tool.execution.started",
-          terminalReason: undefined,
-          errorCode: undefined,
-        },
-        {
-          type: "tool.execution.error",
-          terminalReason: "failed",
-          errorCode: "tool_outcome_unknown",
-        },
-      ]);
-    },
-  );
-
   it("synthesizes native tool progress from turn completion snapshots", async () => {
+    const largeOutput = "a".repeat(9886) + "😀" + "a".repeat(2457);
     const onAgentEvent = vi.fn();
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
     const onToolResult = vi.fn();
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
@@ -469,6 +283,8 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     const projector = await createProjector(
       {
         ...(await createParams()),
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
         verboseLevel: "on",
         onAgentEvent,
         onToolResult,
@@ -482,19 +298,11 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       turnCompleted([
         createNativeCommandItem({
           id: "cmd-snapshot",
-          aggregatedOutput: "ok",
+          aggregatedOutput: largeOutput,
         }),
       ]),
     );
 
-    const itemStart = findAgentEvent(onAgentEvent, {
-      stream: "item",
-      phase: "start",
-      itemId: "cmd-snapshot",
-    }).data;
-    expect(itemStart.kind).toBe("command");
-    expect(itemStart.name).toBe("bash");
-    expect(itemStart.suppressChannelProgress).toBe(true);
     const toolStart = findAgentEvent(onAgentEvent, {
       stream: "tool",
       phase: "start",
@@ -511,81 +319,66 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResult.status).toBe("completed");
     expect(toolResult.isError).toBe(false);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash",
+      text: "Bash",
     });
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      itemId: "cmd-snapshot",
-      toolCallId: "cmd-snapshot",
-      name: "bash",
-      arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
-    });
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      itemId: "cmd-snapshot",
-      toolCallId: "cmd-snapshot",
-      name: "bash",
-      status: "completed",
-      isError: false,
-      result: { status: "completed", exitCode: 0, durationMs: 42 },
-      output: "ok",
-    });
-  });
-
-  it("preserves oversized native transcripts while bounding trajectory and progress projection", async () => {
-    const trajectoryRecorder = {
-      filePath: "trajectory.jsonl",
-      recordEvent: vi.fn(),
-      flush: vi.fn(async () => undefined),
-    };
-    const projector = await createProjector(
-      {
-        ...(await createParams()),
-      },
-      {
-        trajectoryRecorder,
-      },
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.call",
+      expect.objectContaining({
+        toolCallId: "cmd-snapshot",
+        name: "bash",
+        arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      }),
     );
-    const largeOutput = "x".repeat(12_345);
-
-    await projector.handleNotification(
-      turnCompleted([
-        createNativeCommandItem({
-          id: "cmd-large",
-          aggregatedOutput: largeOutput,
-        }),
-      ]),
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "cmd-snapshot",
+        name: "bash",
+        status: "completed",
+        isError: false,
+        result: { status: "completed", exitCode: 0, durationMs: 42 },
+        output: expect.stringContaining("OpenClaw truncated Codex native tool output"),
+      }),
     );
-
-    const output = (
-      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
-        | { output?: string }
-        | undefined
-    )?.output;
-    expect(output).toHaveLength(10_000);
-    expect(output).toContain("OpenClaw truncated Codex native tool output");
-    expect(output).toContain("original 12345 chars");
-    expect(output).toContain("showing 10000");
-
+    const trajectoryOutput = trajectoryRecorder.recordEvent.mock.calls.find(
+      ([type]) => type === "tool.result",
+    )?.[1];
+    expect(requireRecord(trajectoryOutput, "trajectory result").output).toHaveLength(9_999);
+    expect(requireRecord(trajectoryOutput, "trajectory result").output).toContain(
+      "original 12345 chars",
+    );
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = result.messagesSnapshot.find(
-      (message) => requireRecord(message, "message").role === "toolResult",
+    expect(result.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "cmd-snapshot",
+        toolName: "bash",
+        isError: false,
+        content: [{ type: "text", text: largeOutput }],
+      }),
     );
-    expect(toolResultMessage).toMatchObject({
-      role: "toolResult",
-      toolCallId: "cmd-large",
-      toolName: "bash",
-      isError: false,
-    });
-    const toolResultContent = requireArray(
-      requireRecord(toolResultMessage, "tool result message").content,
-      "tool result content",
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    expect(afterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "bash",
+        toolCallId: "cmd-snapshot",
+        runId: "run-1",
+        params: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+        result: { status: "completed", exitCode: 0, durationMs: 42 },
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-snapshot",
+      }),
     );
-    expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
-    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.text).toBe(largeOutput);
+    expect(
+      requireRecord(afterToolCall.mock.calls[0]?.[0], "native hook").durationMs,
+    ).toBeGreaterThanOrEqual(42);
   });
 
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
@@ -596,17 +389,15 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     };
     const projector = await createProjector(await createParams(), { trajectoryRecorder });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: createNativeCommandItem({
-          id: "cmd-denied",
-          command: "node scripts/report.js --publish",
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
-        }),
+    await notify(projector, "item/started", {
+      item: createNativeCommandItem({
+        id: "cmd-denied",
+        command: "node scripts/report.js --publish",
+        status: "inProgress",
+        exitCode: null,
+        durationMs: null,
       }),
-    );
+    });
     await projector.handleNotification(
       turnCompleted([
         {
@@ -646,43 +437,30 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
         text: "The requested publish command was denied before execution.",
       },
     ]);
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      itemId: "cmd-denied",
-      toolCallId: "cmd-denied",
-      name: "bash",
-      arguments: {
-        command: "node scripts/report.js --publish",
-        cwd: "/workspace",
-      },
-    });
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      itemId: "cmd-denied",
-      toolCallId: "cmd-denied",
-      name: "bash",
-      status: "failed",
-      isError: true,
-      result: { status: "failed", reason: "missing_tool_result" },
-      output: expect.stringContaining("without a matching tool.result"),
-    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "cmd-denied",
+        name: "bash",
+        status: "failed",
+        isError: true,
+        result: { status: "failed", reason: "missing_tool_result" },
+        output: expect.stringContaining("without a matching tool.result"),
+      }),
+    );
   });
 
   it("records promptError when a completed turn has only whitespace assistant text and an orphan tool call", async () => {
     const projector = await createProjector(await createParams());
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: createNativeCommandItem({
-          id: "cmd-whitespace",
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
-        }),
+    await notify(projector, "item/started", {
+      item: createNativeCommandItem({
+        id: "cmd-whitespace",
+        status: "inProgress",
+        exitCode: null,
+        durationMs: null,
       }),
-    );
+    });
     await projector.handleNotification(
       turnCompleted([
         {

@@ -1,9 +1,12 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
+import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+import type {
+  FileSidebarNavigation,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
@@ -11,28 +14,17 @@ export type SessionWorkspaceProps = {
   filter: SessionWorkspaceFilter;
   browserPath: string;
   browserSearch: string;
-  collapsed: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   error: string | null;
   activeId: string | null;
-  dock: ChatWorkspaceDock;
-  /** Pane too narrow for a side rail: presentation forces the bottom dock
-   * (the persisted dock preference still applies once the pane widens). */
-  narrowLayout: boolean;
-  onToggleCollapsed: () => void;
-  onSetDock: (dock: ChatWorkspaceDock) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
-  onToggleTerminal?: () => void;
-  onToggleBrowser?: () => void;
-  onToggleDesktop?: () => void;
-  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
@@ -57,9 +49,7 @@ export type SessionWorkspaceState = {
   browserPath: string;
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  collapsed: boolean;
   connectionEpoch: number;
-  dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
   errorOwner?: object;

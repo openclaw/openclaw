@@ -11,8 +11,10 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import {
   auditGatewayServiceConfig,
   type ServiceDefinitionDrift,
@@ -47,13 +49,22 @@ async function readUpdateRecoverySetStatus() {
       await import("../../infra/update-recovery-backup-status.js");
     const sets = await inspectUpdateRecoveryBackups();
     return {
-      recoverySets: sets.map(({ ref, runId, status, message, nextAction }) => ({
-        runId,
-        manifestPath: ref.manifestPath,
-        status,
-        message,
-        nextAction,
-      })),
+      recoverySets: sets.map((set) =>
+        set.status === "incomplete"
+          ? {
+              directory: set.directory,
+              status: set.status,
+              message: set.message,
+              nextAction: set.nextAction,
+            }
+          : {
+              runId: set.runId,
+              manifestPath: set.ref.manifestPath,
+              status: set.status,
+              message: set.message,
+              nextAction: set.nextAction,
+            },
+      ),
     };
   } catch (error) {
     return { recoverySetsError: formatErrorMessage(error) };
@@ -145,7 +156,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
-  const runStatus = readUpdateRunStatus();
+  const runStatus = await readUpdateRunStatus();
   const recoveryStatus = await readUpdateRecoverySetStatus();
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
@@ -153,6 +164,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
+  const configValidation = validateConfigObjectRaw(config);
+  const configWarnings = configValidation.ok
+    ? []
+    : [
+        ...formatConfigIssueLines(configValidation.issues, "", { normalizeRoot: true }),
+        "Run openclaw doctor --fix to repair the configuration.",
+      ].map(safeMessage);
   const replacement =
     config.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement();
   const lastGatewayInstallationReplacement = replacement
@@ -245,6 +263,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       ...(packageActivation ? { packageActivation } : {}),
       ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
+      ...(configWarnings.length > 0 ? { configWarnings } : {}),
     });
     return;
   }
@@ -253,15 +272,31 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const tableWidth = getTerminalTableWidth();
   const installLabel =
-    update.installKind === "git"
-      ? `git (${update.root ?? "unknown"})`
-      : update.installKind === "package"
-        ? update.packageManager
-        : "unknown";
+    update.installKind === "host"
+      ? (update.installOwner?.displayName ?? "host-managed")
+      : update.installKind === "immutable"
+        ? `immutable (${update.immutable?.root ?? update.root ?? "unknown"})`
+        : update.installKind === "git"
+          ? `git (${update.root ?? "unknown"})`
+          : update.installKind === "package"
+            ? update.packageManager
+            : "unknown";
 
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...(update.immutable
+      ? [
+          {
+            Item: "Immutable activation",
+            Value: update.immutable.activation
+              ? `${update.immutable.activation.phase} (${update.immutable.activation.operationId})`
+              : update.immutable.activationEnabled
+                ? "enabled"
+                : "preparation only",
+          },
+        ]
+      : []),
     ...(packageActivation
       ? [
           {
@@ -402,8 +437,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      defaultRuntime.log(safeMessage(`Update recovery set ${set.runId}: ${set.status}`));
-      defaultRuntime.log(safeMessage(set.manifestPath));
+      if (set.status === "incomplete") {
+        defaultRuntime.log("Update capture: incomplete");
+        defaultRuntime.log(safeMessage(set.directory));
+      } else {
+        const label = set.status === "manual" ? "Doctor capture" : "Update recovery set";
+        defaultRuntime.log(safeMessage(`${label} ${set.runId}: ${set.status}`));
+        defaultRuntime.log(safeMessage(set.manifestPath));
+      }
       defaultRuntime.log(safeMessage(set.message));
       defaultRuntime.log(safeMessage(`Next action: ${set.nextAction}`));
       defaultRuntime.log("");
@@ -413,5 +454,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     defaultRuntime.log(theme.warn(updateHint));
+  }
+  for (const warning of configWarnings) {
+    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
   }
 }

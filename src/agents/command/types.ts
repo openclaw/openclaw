@@ -22,7 +22,7 @@ import type {
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
-import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
@@ -167,6 +167,8 @@ export type AgentCommandOpts = {
   sessionEffects?: "visible" | "internal";
   /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */
   preserveUserFacingSessionModelState?: boolean;
+  /** Admitted private completion owes an internal result regardless of its channel origin. */
+  privateCompletion?: true;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
@@ -183,6 +185,8 @@ export type AgentCommandOpts = {
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
+  /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
+  internalDeliverySuppressErrors?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
@@ -261,12 +265,14 @@ type AgentCommandGatewayOnlyKey =
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "operatorAuthority"
+  | "privateCompletion"
   | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery";
+  | "beforeTerminalDelivery"
+  | "internalDeliverySuppressErrors";
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

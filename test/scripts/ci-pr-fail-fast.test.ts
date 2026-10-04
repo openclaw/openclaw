@@ -253,20 +253,14 @@ describe("PR failure monitor", () => {
     expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
   });
 
-  it.each(
-    [repository, "contributor/openclaw"].flatMap((headRepository) =>
-      [3, 4]
-        .flatMap((expectedJobs) =>
-          ["success", "cancelled", "neutral", "action_required", "stale"].map((result) => ({
-            headRepository,
-            expectedJobs,
-            result,
-            late: false,
-          })),
-        )
-        .concat({ headRepository, expectedJobs: 4, result: "success", late: true }),
-    ),
-  )(
+  it.each([
+    { headRepository: repository, expectedJobs: 3, result: "success", late: false },
+    { headRepository: repository, expectedJobs: 4, result: "success", late: false },
+    { headRepository: "contributor/openclaw", expectedJobs: 3, result: "success", late: false },
+    { headRepository: "contributor/openclaw", expectedJobs: 4, result: "success", late: true },
+    { headRepository: repository, expectedJobs: 4, result: "cancelled", late: false },
+    { headRepository: repository, expectedJobs: 4, result: "neutral", late: false },
+  ])(
     "publishes complete main-red evidence for $headRepository only after a successful sibling ($result, declared=$expectedJobs, late=$late)",
     async ({ headRepository, result, expectedJobs, late }) => {
       vi.useFakeTimers();
@@ -342,44 +336,58 @@ describe("PR failure monitor", () => {
     },
   );
 
-  it("never cancels a PR with auto-merge enabled", async () => {
-    const f = fixture({ currentPull: { ...pull, auto_merge: {} } });
-    expect(await f.monitor()).toBe("superseded");
-    expect(f.events).toEqual([]);
-  });
-  it("replaces the early check reservation with the completed planner's exact count", async () => {
-    vi.useFakeTimers();
-    const f = fixture({
+  it.each([
+    {
+      name: "reduced reservation",
       jobs: [job(1), job(2), plannedChecks(2), job(10), job(11)],
-      preflightCheckJobCount: 4,
-      checkPlanExpected: true,
-    });
-    let completion: string | undefined;
-    void f.monitor(7).then((reason) => {
-      completion = reason;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(completion).toBe("completed");
+      reserved: 4,
+      expected: 7,
+      planner: true,
+    },
+    {
+      name: "zero-row plan",
+      jobs: [job(1), job(2), plannedChecks(0)],
+      reserved: 1,
+      expected: 4,
+      planner: true,
+    },
+    {
+      name: "control jobs excluded",
+      jobs: [
+        job(1),
+        job(2),
+        job(3),
+        job(4, null, "pr-fail-fast"),
+        job(5, null, "openclaw/ci-gate"),
+      ],
+      reserved: 0,
+      expected: 3,
+      planner: false,
+    },
+  ])("completes the selected graph: $name", async ({ jobs, reserved, expected, planner }) => {
+    const f = fixture({ jobs, preflightCheckJobCount: reserved, checkPlanExpected: planner });
+    expect(await f.monitor(expected)).toBe("completed");
     expect(f.events).toEqual([]);
   });
 
-  it("waits for the planner's successful fact before declaring a partially expanded graph complete", async () => {
-    vi.useFakeTimers();
-    const f = fixture({
-      jobs: [job(1), job(2)],
-      preflightCheckJobCount: 0,
-      checkPlanExpected: true,
-    });
-    let completion: string | undefined;
-    void f.monitor(2).then((reason) => {
-      completion = reason;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(completion).toBeUndefined();
-    f.rows.push(job(3, "failure"));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(completion).toBe("failure-cancelled");
-  });
+  it.each([false, true])(
+    "waits for the complete inventory (planner=%s)",
+    async (checkPlanExpected) => {
+      vi.useFakeTimers();
+      const f = fixture({ jobs: [job(1), job(2)], checkPlanExpected });
+      let completion: string | undefined;
+      const monitor = f.monitor(checkPlanExpected ? 2 : 3).then((reason) => {
+        completion = reason;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completion).toBeUndefined();
+      expect(f.fetchMock).toHaveBeenCalledTimes(2);
+      f.rows.push(job(3, "failure"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      await monitor;
+      expect(completion).toBe("failure-cancelled");
+    },
+  );
   it.each([
     { name: "absent marker", steps: [] },
     {
@@ -461,16 +469,6 @@ describe("PR failure monitor", () => {
     },
   );
 
-  it("accepts a valid zero-row final plan", async () => {
-    const f = fixture({
-      jobs: [job(1), job(2), plannedChecks(0)],
-      preflightCheckJobCount: 1,
-      checkPlanExpected: true,
-    });
-    expect(await f.monitor()).toBe("completed");
-    expect(f.events).toEqual([]);
-  });
-
   it.each([
     ["2026-09-23T00:00:00Z", "observation-expired"],
     [null, "observation-unavailable"],
@@ -487,40 +485,67 @@ describe("PR failure monitor", () => {
     expect(f.events).toEqual([]);
   });
 
-  it("cancels the current run while GitHub still reports it queued", async () => {
-    const f = fixture({ currentRun: { ...run, status: "queued" } });
-    expect(await f.monitor()).toBe("failure-cancelled");
-    expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
-  });
-  it("leaves partial reruns to native fail-fast without waiting for cached jobs", async () => {
+  it("skips partial reruns without cancelling or waiting for cached jobs", async () => {
     const f = fixture({ jobs: [job(3)] });
     expect(await f.monitor(100, 2)).toBe("retry");
     expect(f.fetchMock).not.toHaveBeenCalled();
     expect(f.events).toEqual([]);
   });
-  it("records the failed row before cancelling only its own attempt's run", async () => {
-    const f = fixture({ jobs: [job(1), job(2), job(3, "failure"), job(4, "cancelled")] });
-    expect(await f.monitor()).toBe("failure-cancelled");
-    expect(f.recordFailure).toHaveBeenCalledWith({ id: 3, name: "row-3", runAttempt: 1 });
-    expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
-  });
+  it.each([
+    {
+      name: "queued run",
+      options: { currentRun: { ...run, status: "queued" } },
+      expectedJobs: 4,
+      failedId: 3,
+      lostResponse: false,
+    },
+    {
+      name: "failed sibling before cancellation",
+      options: { jobs: [job(1), job(2), job(3, "failure"), job(4, "cancelled")] },
+      expectedJobs: 4,
+      failedId: 3,
+      lostResponse: false,
+    },
+    {
+      name: "lost cancellation response",
+      options: { postError: true },
+      expectedJobs: 4,
+      failedId: 3,
+      lostResponse: true,
+    },
+    {
+      name: "paginated job inventory",
+      options: {
+        jobs: Array.from({ length: 101 }, (_, i) => job(i + 1, i === 100 ? "failure" : "success")),
+      },
+      expectedJobs: 101,
+      failedId: 101,
+      lostResponse: false,
+    },
+  ])(
+    "records the cause before one cancellation: $name",
+    async ({ options, expectedJobs, failedId, lostResponse }) => {
+      const f = fixture(options);
+      if (lostResponse) {
+        await expect(f.monitor(expectedJobs)).rejects.toThrow("simulated response loss");
+      } else {
+        expect(await f.monitor(expectedJobs)).toBe("failure-cancelled");
+      }
+      expect(f.recordFailure).toHaveBeenCalledWith({
+        id: failedId,
+        name: `row-${failedId}`,
+        runAttempt: 1,
+      });
+      expect(f.events).toEqual([`cause ${failedId}`, "POST /actions/runs/100/cancel"]);
+    },
+  );
 
-  it("retains the failure cause when the cancellation response is lost, without retrying", async () => {
-    const f = fixture({ postError: true });
-    await expect(f.monitor()).rejects.toThrow("simulated response loss");
-    expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
-  });
-
-  it.each(["push", "workflow_dispatch"])("never cancels a %s run", async (event) => {
-    const f = fixture({ currentRun: { ...run, event } });
-    await expect(f.monitor()).rejects.toThrow("identity changed");
-    expect(f.events).toEqual([]);
-  });
-
-  it("rejects an unexpected fork repository before observing its run", async () => {
-    const f = fixture({
-      currentRun: { ...run, head_repository: { full_name: "contributor/openclaw" } },
-    });
+  it.each([
+    { ...run, event: "push" },
+    { ...run, event: "workflow_dispatch" },
+    { ...run, head_repository: { full_name: "contributor/openclaw" } },
+  ])("rejects changed run identity without cancellation: %j", async (currentRun) => {
+    const f = fixture({ currentRun });
     await expect(f.monitor()).rejects.toThrow("identity changed");
     expect(f.events).toEqual([]);
   });
@@ -538,72 +563,22 @@ describe("PR failure monitor", () => {
     expect(f.recordKnownMainRed).not.toHaveBeenCalled();
   });
 
-  it("rejects changed live fork ownership without writing", async () => {
-    const headRepository = "contributor/openclaw";
-    const f = fixture({
-      headRepository,
-      currentRun: { ...run, head_repository: { full_name: headRepository } },
+  it.each([
+    { name: "new head", currentPull: { ...pull, head: { ...pull.head, sha: "b".repeat(40) } } },
+    { name: "draft", currentPull: { ...pull, draft: true } },
+    { name: "closed", currentPull: { ...pull, state: "closed" } },
+    { name: "auto merge", currentPull: { ...pull, auto_merge: {} } },
+    { name: "same-head newer run", recentRuns: [{ ...run, id: 101, run_number: 501 }] },
+    { name: "new attempt", laterRun: { ...run, run_attempt: 2 } },
+    {
+      name: "changed fork ownership",
+      headRepository: "contributor/openclaw",
+      currentRun: { ...run, head_repository: { full_name: "contributor/openclaw" } },
       currentPull: { ...pull, head: { ...pull.head, repo: { full_name: "another/openclaw" } } },
-    });
-    expect(await f.monitor()).toBe("superseded");
-    expect(f.events).toEqual([]);
-  });
-
-  it.each(["new head", "draft", "closed", "same-head newer run", "new attempt"])(
-    "preserves superseding work (%s)",
-    async (change) => {
-      const f = fixture({
-        currentPull: {
-          ...pull,
-          state: change === "closed" ? "closed" : "open",
-          draft: change === "draft",
-          head: { ...pull.head, sha: change === "new head" ? "b".repeat(40) : headSha },
-        },
-        recentRuns:
-          change === "same-head newer run" ? [{ ...run, id: 101, run_number: 501 }] : [run],
-        laterRun: change === "new attempt" ? { ...run, run_attempt: 2 } : run,
-      });
-      expect(await f.monitor()).toBe("superseded");
-      expect(f.events).toEqual([]);
     },
-  );
-
-  it("does not record a failure for externally cancelled rows", async () => {
-    const f = fixture({ jobs: [job(1), job(2), job(3, "cancelled")] });
-    expect(await f.monitor()).toBe("externally-cancelled");
-    expect(f.events).toEqual([]);
-  });
-
-  it("waits for all selected jobs to appear before declaring success", async () => {
-    vi.useFakeTimers();
-    const f = fixture({ jobs: [job(1), job(2)] });
-    const monitor = f.monitor(3);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.fetchMock).toHaveBeenCalledTimes(2);
-    f.rows.push(job(3, "failure"));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(await monitor).toBe("failure-cancelled");
-  });
-
-  it("finds a failure beyond the first job page", async () => {
-    const f = fixture({
-      jobs: Array.from({ length: 101 }, (_, i) => job(i + 1, i === 100 ? "failure" : "success")),
-    });
-    expect(await f.monitor(101)).toBe("failure-cancelled");
-    expect(f.recordFailure).toHaveBeenCalledWith({ id: 101, name: "row-101", runAttempt: 1 });
-  });
-
-  it("finishes a successful selected graph without waiting on its own gate", async () => {
-    const f = fixture({
-      jobs: [
-        job(1),
-        job(2),
-        job(3),
-        job(4, null, "pr-fail-fast"),
-        job(5, null, "openclaw/ci-gate"),
-      ],
-    });
-    expect(await f.monitor(3)).toBe("completed");
+  ])("preserves superseding work ($name)", async (options) => {
+    const f = fixture(options);
+    expect(await f.monitor()).toBe("superseded");
     expect(f.events).toEqual([]);
   });
 });

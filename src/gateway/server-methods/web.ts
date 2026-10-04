@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-// Web login methods delegate QR-login start/wait requests to the active channel
-// plugin that owns web login gateway methods.
 import {
   ErrorCodes,
   errorShape,
@@ -15,6 +13,7 @@ import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/regi
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { resolveRuntimeAccountSnapshot } from "./channels-account.js";
 import { respondUnavailable } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -40,7 +39,6 @@ function resolveWebLoginChannelId(
   );
 }
 
-/** Resolves the channel plugin that currently owns web QR-login methods. */
 const resolveWebLoginProvider = (channelId?: string) => {
   const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const plugins = registry ? listLoadedChannelPluginsForRegistry(registry) : listChannelPlugins();
@@ -88,26 +86,6 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
   return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${doctorFixCommand}.`;
 }
 
-function respondProviderUnavailable(params: {
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}) {
-  const repairHint = resolveMissingWebLoginPluginHint(params.context);
-  const message = repairHint
-    ? `web login provider is not available. ${repairHint}`
-    : "web login provider is not available";
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
-}
-
-function respondProviderUnsupported(respond: RespondFn, providerId: string) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `web login is not supported by provider ${providerId}`),
-  );
-}
-
-/** Resolves a concrete provider gateway login method or sends the public error. */
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   rawParams: WebLoginStartParams | WebLoginWaitParams;
   respond: RespondFn;
@@ -121,42 +99,47 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   const accountId = params.rawParams.accountId;
   const provider = resolveWebLoginProvider(params.rawParams.channel);
   if (!provider) {
-    respondProviderUnavailable({
-      respond: params.respond,
-      context: params.context,
-    });
+    const repairHint = resolveMissingWebLoginPluginHint(params.context);
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        repairHint
+          ? `web login provider is not available. ${repairHint}`
+          : "web login provider is not available",
+      ),
+    );
     return null;
   }
   const gateway = provider.gateway;
   const run = gateway?.[params.gatewayMethod];
   if (!run) {
-    respondProviderUnsupported(params.respond, provider.id);
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `web login is not supported by provider ${provider.id}`,
+      ),
+    );
     return null;
   }
   return { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]> };
 }
 
-/** Checks whether the matching channel/account should be restored after login start. */
 function wasChannelRunning(params: {
-  context: Parameters<GatewayRequestHandlers["web.login.start"]>[0]["context"];
+  context: GatewayRequestContext;
   channelId: ChannelId;
   accountId?: string;
 }): boolean {
   const runtime = params.context.getRuntimeSnapshot();
-  if (params.accountId) {
-    const accountRuntime = runtime.channelAccounts[params.channelId]?.[params.accountId];
-    if (accountRuntime) {
-      return accountRuntime.running === true;
-    }
-  }
-  if (!params.accountId) {
-    return runtime.channels[params.channelId]?.running === true;
-  }
-  const defaultRuntime = runtime.channels[params.channelId];
-  return defaultRuntime?.accountId === params.accountId && defaultRuntime.running === true;
+  const account = params.accountId
+    ? resolveRuntimeAccountSnapshot({ ...params, runtime, accountId: params.accountId })
+    : runtime.channels[params.channelId];
+  return account?.running === true;
 }
 
-/** Gateway handlers for plugin-owned web QR-login flows. */
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWebLoginStartParams, "web.login.start", respond)) {
@@ -194,11 +177,8 @@ export const webHandlers: GatewayRequestHandlers = {
         await context.stopChannel(provider.id, accountId);
       }
       const stoppedForLogin = stoppedBeforeLogin || stoppedAfterQrTakeover;
-      if (result.connected && stoppedForLogin) {
-        await context.startChannel(provider.id, accountId);
-      } else if (wasRunning && stoppedForLogin && !result.qrDataUrl) {
-        // When start fails before producing a QR code, restore the previously
-        // running channel/account so a transient login failure does not stop it.
+      // A failed start without a QR code must also restore the running account.
+      if (stoppedForLogin && (result.connected || (wasRunning && !result.qrDataUrl))) {
         await context.startChannel(provider.id, accountId);
       }
       respond(true, result, undefined);

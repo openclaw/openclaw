@@ -108,9 +108,11 @@ async function resetRuntime(persist: boolean): Promise<void> {
     import("../src/state/openclaw-state-db.js"),
     import("../src/state/openclaw-agent-db.js"),
   ]);
-  subagents.resetSubagentRegistryForTests({ persist });
-  stateDb.closeOpenClawStateDatabaseForTest();
-  agentDb.closeOpenClawAgentDatabasesForTest();
+  await subagents.resetSubagentRegistryForTests({ persist });
+  await Promise.all([
+    stateDb.closeOpenClawStateDatabaseAsync(),
+    agentDb.closeOpenClawAgentDatabasesAsync(),
+  ]);
 }
 
 function createTerminalWaitBarrier() {
@@ -266,6 +268,11 @@ async function runSpawnSample(
       progressSessionKey: "agent:bench:main",
     };
   });
+  const isSettledRun = (run: SubagentRunRecord | undefined) =>
+    run?.execution.status === "terminal" &&
+    typeof run.execution.endedAt === "number" &&
+    typeof run.cleanupCompletedAt === "number" &&
+    run.execution.outcome?.status === "ok";
   let result: Sample | undefined;
   let failure: unknown;
   try {
@@ -314,26 +321,24 @@ async function runSpawnSample(
     }
     for (const runId of runIds) {
       barrier.release(runId);
-      const runSettled = await waitForCondition(() => {
-        const run = registry.subagentRuns.get(runId);
-        return (
-          run?.execution.status === "terminal" &&
-          typeof run.execution.endedAt === "number" &&
-          typeof run.cleanupCompletedAt === "number" &&
-          run.execution.outcome?.status === "ok"
-        );
-      });
+      const runSettled = await waitForCondition(() =>
+        isSettledRun(registry.subagentRuns.get(runId)),
+      );
       if (!runSettled) {
-        throw new Error(`spawn ${mode} did not settle released run ${runId}`);
+        const current = registry.subagentRuns.get(runId);
+        throw new Error(
+          `spawn ${mode} did not settle released run ${runId}: ${JSON.stringify({
+            executionStatus: current?.execution.status,
+            outcomeStatus: current?.execution.outcome?.status,
+            suppressSessionEffects: current?.execution.suppressSessionEffects,
+            endedAt: current?.execution.endedAt,
+            cleanupHandled: current?.cleanupHandled,
+            cleanupCompletedAt: current?.cleanupCompletedAt,
+          })}`,
+        );
       }
     }
-    const settledRuns = [...registry.subagentRuns.values()].filter(
-      (entry) =>
-        entry.execution.status === "terminal" &&
-        typeof entry.execution.endedAt === "number" &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        entry.execution.outcome?.status === "ok",
-    ).length;
+    const settledRuns = [...registry.subagentRuns.values()].filter(isSettledRun).length;
     if (settledRuns !== fanout || barrier.outstanding !== 0) {
       throw new Error(
         `spawn ${mode} settlement invariant failed: ${JSON.stringify({ fanout, settledRuns, outstandingWaits: barrier.outstanding })}`,
@@ -455,6 +460,8 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
     createdAt: now - generation,
     archiveAtMs: current ? undefined : now - 1,
     terminalOwner: current ? "interrupted-recovery" : undefined,
+    completion: { required: false },
+    delivery: { status: "not_required" },
     endedReason: current ? "subagent-error" : undefined,
     execution: {
       status: "terminal",
@@ -473,25 +480,30 @@ async function runSweepSample(childCount: number): Promise<Sample> {
   const [
     { getSubagentRunsForChildSession, subagentRuns: runs },
     { createSubagentRegistrySweeper },
+    { mutateSubagentRuns },
+    { isSameSubagentRunOwner },
   ] = await Promise.all([
     import("../src/agents/subagents/registry/subagent-registry-memory.js"),
     import("../src/agents/subagents/registry/subagent-registry-sweeper.js"),
+    import("../src/agents/subagents/registry/subagent-registry-persistence.js"),
+    import("../src/agents/subagents/registry/subagent-run-generation.js"),
   ]);
   const now = Date.now();
   runs.clear();
+  const seeded = new Map<string, SubagentRunRecord>();
   for (let child = 0; child < childCount; child += 1) {
     for (const generation of [3, 2, 1]) {
       const entry = sweepRow(child, generation, now);
-      runs.set(entry.runId, entry);
+      seeded.set(entry.runId, entry);
     }
   }
+  await mutateSubagentRuns([...seeded.keys()], () => ({ value: undefined, postimages: seeded }));
   let sessionEffects = 0;
   let recoveryProjections = 0;
   let lostContextCompletions = 0;
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
-    persist: () => {},
     clearPendingLifecycleError: () => {},
     clearPendingLifecycleTimeout: () => {},
     sweepPendingLifecycle: () => {},
@@ -500,7 +512,10 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     },
     getGatewayRecoveryRuntime: () => undefined,
     finalizeInterruptedSubagentRun: async ({ runId, expectedEntry }) => {
-      if (runs.get(runId) !== expectedEntry || expectedEntry?.generation !== 3) {
+      if (
+        !isSameSubagentRunOwner(runs.get(runId), expectedEntry) ||
+        expectedEntry?.generation !== 3
+      ) {
         throw new Error(`unexpected recovery projection owner: ${runId}`);
       }
       recoveryProjections += 1;
@@ -508,14 +523,18 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     },
     resumeRequesterSettleWake: () => {},
     startSubagentAnnounceCleanupFlow: () => true,
-    completeCleanupBookkeeping: () => {},
+    completeCleanupBookkeeping: async () => {},
+    isCleanupOwnerCurrent: (runId, entry) =>
+      isSameSubagentRunOwner(runs.get(runId), entry) || !runs.has(runId),
+    sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,
+    shouldSuppressSessionEffects: async (entry) => entry.execution.suppressSessionEffects === true,
     discardTerminalDelivery: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
-    callGateway: (async <T>() => {
+    callGateway: async () => {
       sessionEffects += 1;
-      return {} as T;
-    }) as typeof import("../src/gateway/call.js").callGateway,
+      throw new Error("Recovery-sweep benchmark attempted Gateway session effects");
+    },
     cleanupCollectorLaunchResources: async () => true,
     runContextEngineSubagentEnded: async () => {
       sessionEffects += 1;
@@ -558,7 +577,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       },
     };
   } finally {
-    sweeper.reset();
+    await sweeper.reset();
     runs.clear();
   }
 }
@@ -671,20 +690,30 @@ async function main(): Promise<void> {
     const rssStartBytes = process.memoryUsage().rss;
     if (
       options.scenario === "spawnPipelineInMemory" ||
-      options.scenario === "spawnPipelineDurable"
+      options.scenario === "spawnPipelineDurable" ||
+      options.scenario === "recoverySweep"
     ) {
       const { installBenchmarkRegistryRuntime } =
         await import("./bench-agent-concurrency-runtime.mjs");
       registryRuntime = await installBenchmarkRegistryRuntime(
-        options.scenario === "spawnPipelineInMemory" ? "memory" : "durable",
+        options.scenario === "spawnPipelineDurable" ? "durable" : "memory",
       );
     }
     result = await runScenario(options, stateDir, rssStartBytes, registryRuntime);
+    if (options.scenario === "recoverySweep" && listSqliteFiles(stateDir).length > 0) {
+      throw new Error("In-memory recovery sweep created durable SQLite state");
+    }
   } catch (error) {
     failure = error;
   } finally {
     try {
       await resetRuntime(false);
+      if (
+        (options.scenario === "spawnPipelineInMemory" || options.scenario === "recoverySweep") &&
+        listSqliteFiles(stateDir).length > 0
+      ) {
+        failure ??= new Error("In-memory benchmark created SQLite state during teardown");
+      }
     } catch (error) {
       failure ??= error;
     } finally {

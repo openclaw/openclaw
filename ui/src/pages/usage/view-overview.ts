@@ -10,7 +10,6 @@ import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import {
   buildUsageCostWindows,
-  buildUsageCostWindowSummary,
   formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
@@ -18,14 +17,7 @@ import {
   formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
-import {
-  DEFAULT_VISIBLE_COLUMNS,
-  type UsageAggregates,
-  type UsageColumnId,
-  type UsageSessionEntry,
-  type UsageTotals,
-  type CostDailyEntry,
-} from "./types.ts";
+import type { UsageAggregates, UsageSessionEntry, UsageTotals, CostDailyEntry } from "./types.ts";
 import { renderSessionBarRow } from "./view-session-row.ts";
 
 function renderFilterChips(
@@ -127,12 +119,11 @@ function renderCostWindowComparison(
   rangeEndDate: string,
   timeZone: "local" | "utc",
 ) {
-  const range = buildUsageCostWindowSummary(daily, rangeStartDate, rangeEndDate);
+  const [range, ...windows] = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
   if (!range || daily.length === 0) {
     return nothing;
   }
 
-  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
   const today = formatIsoDate(new Date(), timeZone);
   const labelForWindow = (days: number, endDate: string) => {
     if (days === 1) {
@@ -521,14 +512,9 @@ function renderSessionsCard(
   onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
   onSessionSortDirChange: (dir: "asc" | "desc") => void,
   onSessionsTabChange: (tab: "all" | "recent") => void,
-  visibleColumns: UsageColumnId[] | undefined,
   totalSessions: number,
   onClearSessions: () => void,
 ) {
-  const columns = visibleColumns ?? DEFAULT_VISIBLE_COLUMNS;
-  const showColumn = (id: UsageColumnId) => columns.includes(id);
-  const showAgent =
-    showColumn("agent") || new Set(sessions.map((session) => session.agentId)).size > 1;
   const formatSessionListLabel = (s: UsageSessionEntry): string => {
     const raw = s.label || s.key;
     // Agent session keys often include a token query param; remove it for readability.
@@ -539,23 +525,14 @@ function renderSessionsCard(
   };
   const buildSessionMeta = (session: UsageSessionEntry): string[] =>
     [
-      showColumn("channel") && session.channel && `channel:${session.channel}`,
-      showColumn("provider") &&
-        (session.modelProvider || session.providerOverride) &&
+      session.channel && `channel:${session.channel}`,
+      (session.modelProvider || session.providerOverride) &&
         `provider:${session.modelProvider ?? session.providerOverride}`,
-      showColumn("model") && session.model && `model:${session.model}`,
-      showColumn("messages") &&
-        session.usage?.messageCounts &&
-        `msgs:${session.usage.messageCounts.total}`,
-      showColumn("tools") &&
-        session.usage?.toolUsage &&
-        `tools:${session.usage.toolUsage.totalCalls}`,
-      showColumn("errors") &&
-        session.usage?.messageCounts &&
-        `errors:${session.usage.messageCounts.errors}`,
-      showColumn("duration") &&
-        session.usage?.durationMs &&
-        `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
+      session.model && `model:${session.model}`,
+      session.usage?.messageCounts && `msgs:${session.usage.messageCounts.total}`,
+      session.usage?.toolUsage && `tools:${session.usage.toolUsage.totalCalls}`,
+      session.usage?.messageCounts && `errors:${session.usage.messageCounts.errors}`,
+      session.usage?.durationMs && `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
     ].filter((part): part is string => typeof part === "string" && part.length > 0);
 
   const selectedDaySet = new Set(selectedDays);
@@ -576,29 +553,17 @@ function renderSessionsCard(
           }
         }
       }
-      let sortValue: number;
-      switch (sessionSort) {
-        case "recent":
-          sortValue = session.updatedAt ?? 0;
-          break;
-        case "messages":
-          sortValue = usage?.messageCounts?.total ?? 0;
-          break;
-        case "errors":
-          sortValue = usage?.messageCounts?.errors ?? 0;
-          break;
-        case "cost":
-          sortValue = cost;
-          break;
-        case "tokens":
-          sortValue = tokens;
-          break;
-      }
       return {
         session,
         displayLabel: formatSessionListLabel(session),
         value: isTokenMode ? tokens : cost,
-        sortValue,
+        sortValue: {
+          recent: session.updatedAt ?? 0,
+          messages: usage?.messageCounts?.total ?? 0,
+          errors: usage?.messageCounts?.errors ?? 0,
+          cost,
+          tokens,
+        }[sessionSort],
       };
     })
     .toSorted((a, b) => {
@@ -637,7 +602,7 @@ function renderSessionsCard(
         sessionKey: entry.session.key,
         displayLabel: entry.displayLabel,
         meta: buildSessionMeta(entry.session),
-        agentId: showAgent ? entry.session.agentId : undefined,
+        agentId: entry.session.agentId,
         valueLabel: isTokenMode ? formatUsageTokens(entry.value) : formatAnalysisCost(entry.value),
         isSelected: selectedSet.has(entry.session.key),
         onSelect: (event) => onSelectSession(entry.session.key, event.shiftKey, orderedKeys),

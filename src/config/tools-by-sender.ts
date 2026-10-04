@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createDedupeCache } from "../infra/dedupe.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   parseToolsBySenderTypedKey,
@@ -26,34 +25,19 @@ type CompiledSenderPolicy = {
   wildcard?: GroupToolPolicyConfig;
 };
 
-const MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS = 4096;
-// Warning state spans fresh config snapshots; bounding it means evicted legacy keys can re-warn.
-const warnedLegacyToolsBySenderKeys = createDedupeCache({
-  ttlMs: 0,
-  maxSize: MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS,
-});
 const compiledToolsBySenderCache = new WeakMap<
   GroupToolPolicyBySenderConfig,
   CompiledSenderPolicy
 >();
 
-type ParsedSenderPolicyKey =
-  | { kind: "wildcard" }
-  | { kind: "typed"; type: ToolsBySenderKeyType; key: string };
-
 type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
 
-function normalizeSenderKey(
-  value: string,
-  options: {
-    stripLeadingAt?: boolean;
-  } = {},
-): string {
+function normalizeSenderKey(value: string, stripLeadingAt = false): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
   }
-  const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  const withoutAt = stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
   return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
@@ -61,9 +45,7 @@ function normalizeTypedSenderKey(value: string, type: ToolsBySenderKeyType): str
   if (type === "channel") {
     return normalizeChannelSenderKey(value);
   }
-  return normalizeSenderKey(value, {
-    stripLeadingAt: type === "username",
-  });
+  return normalizeSenderKey(value, type === "username");
 }
 
 function normalizeSenderPolicyChannel(value: string | null | undefined): string {
@@ -88,64 +70,6 @@ function normalizeChannelSenderKey(value: string): string {
   return `${channel}:${senderId}`;
 }
 
-function warnLegacyToolsBySenderKey(rawKey: string) {
-  const trimmed = rawKey.trim();
-  if (!trimmed || warnedLegacyToolsBySenderKeys.check(trimmed)) {
-    return;
-  }
-  process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (channel:, id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
-    {
-      type: "DeprecationWarning",
-      code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
-    },
-  );
-}
-
-function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
-  const trimmed = rawKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "*") {
-    return { kind: "wildcard" };
-  }
-  const typed = parseToolsBySenderTypedKey(trimmed);
-  if (typed) {
-    const key = normalizeTypedSenderKey(typed.value, typed.type);
-    if (!key) {
-      return undefined;
-    }
-    return {
-      kind: "typed",
-      type: typed.type,
-      key,
-    };
-  }
-
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
-  warnLegacyToolsBySenderKey(trimmed);
-  const key = normalizeSenderKey(trimmed, { stripLeadingAt: true });
-  if (!key) {
-    return undefined;
-  }
-  return {
-    kind: "typed",
-    type: "id",
-    key,
-  };
-}
-
-function createSenderPolicyBuckets(): SenderPolicyBuckets {
-  return {
-    channel: new Map<string, GroupToolPolicyConfig>(),
-    id: new Map<string, GroupToolPolicyConfig>(),
-    e164: new Map<string, GroupToolPolicyConfig>(),
-    username: new Map<string, GroupToolPolicyConfig>(),
-    name: new Map<string, GroupToolPolicyConfig>(),
-  };
-}
-
 function resolveCompiledToolsBySenderPolicy(
   toolsBySender: GroupToolPolicyBySenderConfig,
 ): CompiledSenderPolicy | undefined {
@@ -158,23 +82,34 @@ function resolveCompiledToolsBySenderPolicy(
     return undefined;
   }
 
-  const buckets = createSenderPolicyBuckets();
+  const buckets: SenderPolicyBuckets = {
+    channel: new Map(),
+    id: new Map(),
+    e164: new Map(),
+    username: new Map(),
+    name: new Map(),
+  };
   let wildcard: GroupToolPolicyConfig | undefined;
   for (const [rawKey, policy] of entries) {
     if (!policy) {
       continue;
     }
-    const parsed = parseSenderPolicyKey(rawKey);
-    if (!parsed) {
+    const trimmed = rawKey.trim();
+    if (!trimmed) {
       continue;
     }
-    if (parsed.kind === "wildcard") {
+    if (trimmed === "*") {
       wildcard = policy;
       continue;
     }
-    const bucket = buckets[parsed.type];
-    if (!bucket.has(parsed.key)) {
-      bucket.set(parsed.key, policy);
+    const typed = parseToolsBySenderTypedKey(trimmed);
+    if (!typed) {
+      throw new Error('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
+    }
+    const key = normalizeTypedSenderKey(typed.value, typed.type);
+    const bucket = buckets[typed.type];
+    if (key && !bucket.has(key)) {
+      bucket.set(key, policy);
     }
   }
 
@@ -190,11 +125,11 @@ function normalizeSenderIdCandidates(value: string | null | undefined): string[]
     return [];
   }
   const typed = normalizeTypedSenderKey(trimmed, "id");
-  const legacy = normalizeSenderKey(trimmed, { stripLeadingAt: true });
-  if (!legacy || legacy === typed) {
+  const withoutAt = normalizeSenderKey(trimmed, true);
+  if (!withoutAt || withoutAt === typed) {
     return [typed];
   }
-  return [typed, legacy];
+  return [typed, withoutAt];
 }
 
 function matchToolsBySenderPolicy(

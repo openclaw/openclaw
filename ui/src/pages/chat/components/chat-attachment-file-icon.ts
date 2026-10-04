@@ -223,7 +223,6 @@ const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0]!;
 export type ResolvedAttachmentFileIcon = {
   family: AttachmentFileIconFamily;
   accent: string;
-  extension?: string;
   extensionLabel: string;
   compact?: CompactFileIcon;
 };
@@ -252,7 +251,6 @@ export function resolveAttachmentFileIcon(
   return {
     family: definition.family,
     accent,
-    extension,
     extensionLabel:
       extension?.toUpperCase() ??
       (definition.family === "unknown" ? "FILE" : definition.family.toUpperCase()),

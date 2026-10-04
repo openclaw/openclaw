@@ -1,5 +1,6 @@
 // Line tests cover how inbound identity lookups pick their LINE endpoint.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as sendModule from "./send.js";
 
 const {
   getProfileMock,
@@ -66,10 +67,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 const LINE_TEST_CFG = { channels: { line: { accounts: { default: {} } } } };
 
 describe("LINE identity lookups", () => {
-  let sendModule: typeof import("./send.js");
-
-  beforeEach(async () => {
-    sendModule = await import("./send.js");
+  beforeEach(() => {
     getProfileMock.mockReset();
     getGroupMemberProfileMock.mockReset();
     getRoomMemberProfileMock.mockReset();

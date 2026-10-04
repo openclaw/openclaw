@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { resolveConfigPath } from "../../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
+import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
@@ -17,22 +24,24 @@ import {
   assertUpdateAdmissionConfigUnchanged,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutor,
+} from "./update-command-executor.js";
 import {
   acquireLegacyUpdateInitializationFence,
   confirmFreshUpdateDowngrade,
   initializeUpdateStateFromTarget,
   withUpdateInitializationCleanup,
   type InitializedUpdate,
+  type UpdateTargetSelection,
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  recordUpdateCommandTarget,
-  type prepareUpdateCommand,
-} from "./update-command-run.js";
+import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
   resolveUpdateTargetEnv,
@@ -54,11 +63,13 @@ export async function initializeAndRunUpdate(
   invocationCwd: string | undefined,
   env: NodeJS.ProcessEnv,
   runInitialized: (initialization: InitializedUpdate) => Promise<void>,
+  policy: { needsInitialization: boolean; captureOriginal: boolean },
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
+  let disposePresentation: (() => void) | undefined;
   try {
     await withUpdateCommandTerminalResult(
       (registerRun) =>
@@ -66,32 +77,94 @@ export async function initializeAndRunUpdate(
           withUpdateCommandExecutor(
             runId,
             async (executor) => {
-              const target = await withOwnedManagedUpdateEnv(targetEnv, () =>
-                resolveUpdateCommandTarget(
-                  opts,
-                  recoveryState,
-                  invocationCwd,
-                  prepared,
-                  executor,
-                  prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                ),
+              const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
+                targetEnv,
+                () =>
+                  resolveUpdateCommandTarget(
+                    opts,
+                    recoveryState,
+                    invocationCwd,
+                    prepared,
+                    executor,
+                    prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  ),
+              ).then(
+                (target) => (target ? { target } : undefined),
+                (error: unknown) => {
+                  if (
+                    policy.needsInitialization ||
+                    hasCommandProcessCleanupError(error) ||
+                    !(error instanceof UnreportedUpdateAdmissionOutcome)
+                  ) {
+                    throw error;
+                  }
+                  return { refusal: error };
+                },
               );
-              if (!target) {
+              if (!selection) {
                 return;
               }
-              const packageAdmission = { serviceRoot: target.managedServiceRoot };
+              const selectedTarget = selection.target;
+              const candidateAdmissionEnabled =
+                selectedTarget?.updateInstallKind === "package" &&
+                usesCandidateUpdateAdmission(opts, prepared.installKind);
+              // Candidate execution stays in the selected profile; only installed union checks
+              // can need a separate caller projection.
+              const callerLegacyConfigPlan =
+                selectedTarget &&
+                !selectedTarget.managedServiceRootRedirect &&
+                !candidateAdmissionEnabled &&
+                opts.channel &&
+                resolveConfigPath(env) !== resolveConfigPath()
+                  ? (await readUpdateChannelConfig(true)).legacyConfigPlan
+                  : undefined;
+              const root = selection.refusal
+                ? selection.refusal.report.root
+                : selection.target.root;
+              const packageAdmission = {
+                serviceRoot: selection.refusal
+                  ? selection.refusal.report.serviceRoot
+                  : selection.target.managedServiceRoot,
+              };
+              const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
+                ...selection,
                 env,
                 runId,
                 executor,
-                registerRun: async (run) => {
+                callerLegacyConfigPlan,
+                registerRun: async (run, dispose) => {
                   registerRun(run);
-                  if (target.inspectionWarning) {
+                  disposePresentation = dispose;
+                  for (const result of selectedTarget?.preflightSteps ?? []) {
+                    for (const step of updateRunStepsFromResultStep(result)) {
+                      recordUpdateCommandTarget(run, { step });
+                    }
+                  }
+                  if (selectedTarget?.inspectionWarning) {
                     recordUpdateCommandTarget(run, {
                       step: {
                         step: "warning:installation-inspection",
                         status: "completed",
-                        detail: target.inspectionWarning,
+                        detail: selectedTarget.inspectionWarning,
+                      },
+                    });
+                  }
+                  if (initialization.originalRecoveryCapture) {
+                    recordUpdateCommandTarget(run, {
+                      step: {
+                        step: "original-state-capture",
+                        status: "completed",
+                        detail: `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
+                      },
+                    });
+                  }
+                  for (const [index, detail] of originalCaptureWarnings.entries()) {
+                    recordUpdateCommandTarget(run, {
+                      step: {
+                        step: `warning:original-state-capture:${index + 1}`,
+                        status: "completed",
+                        detail,
                       },
                     });
                   }
@@ -100,12 +173,90 @@ export async function initializeAndRunUpdate(
                     recoveryState.triageTarget,
                   );
                 },
-                target,
                 databasePath: resolvePathViaExistingAncestorSync(
                   resolveOpenClawStateSqlitePath(env),
                 ),
                 configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
+              let originalCaptureAttempted = false;
+              const captureOriginal = async () => {
+                if (!policy.captureOriginal || originalCaptureAttempted) {
+                  return;
+                }
+                if (selectedTarget?.downgradeRisk && !initialization.downgradeConfirmed) {
+                  await confirmFreshUpdateDowngrade({
+                    target: selectedTarget,
+                    opts,
+                    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+                  });
+                  initialization.downgradeConfirmed = true;
+                }
+                const fence = await executor.enter(root, {
+                  preflight: true,
+                  ...packageAdmission,
+                });
+                const authority = captureUpdateCommandExecutorAuthority(fence, runId);
+                const assertCurrent = () => {
+                  fence.assertCurrent();
+                  assertUpdatePackageActivationAdmission(root, packageAdmission);
+                };
+                const warn = (message: string) => {
+                  const detail = redactSupportString(
+                    message,
+                    { env, stateDir: resolveStateDir(env) },
+                    { maxLength: 1000 },
+                  );
+                  originalCaptureWarnings.push(detail);
+                  defaultRuntime.error(`Warning: ${detail}`);
+                };
+                originalCaptureAttempted = true;
+                try {
+                  const { captureUpdateRecoveryBaseline } =
+                    await import("../../infra/update-recovery-baseline-capture.js");
+                  assertCurrent();
+                  const driver = readUpdateRunDriver();
+                  if (!driver) {
+                    throw new Error("The original update process identity is unavailable.");
+                  }
+                  const captured = await captureUpdateRecoveryBaseline({
+                    runId,
+                    installRoot: authority.installKey,
+                    env,
+                    drivers: [driver],
+                    assertCurrent,
+                    nodeRunner: selectedTarget?.packageUpdateNodeRunner,
+                    timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  });
+                  assertCurrent();
+                  initialization.originalRecoveryCapture = captured.ref;
+                  for (const message of [
+                    ...captured.warnings.map((warning) => warning.message),
+                    ...captured.diagnostics.databaseWarnings,
+                  ].slice(0, 32)) {
+                    warn(message);
+                  }
+                } catch (error) {
+                  assertCurrent();
+                  if (hasCommandProcessCleanupError(error)) {
+                    throw error;
+                  }
+                  warn(`Original state capture is unavailable: ${formatErrorMessage(error)}`);
+                }
+                assertCurrent();
+                if (resolveDebugProxySettings(env).enabled) {
+                  warn(
+                    "Debug HTTP capture is disabled in this updater process. Doctor may enable capture in its own process after schema readiness is confirmed.",
+                  );
+                }
+              };
+              const runCapturedInitialization = async () => {
+                await captureOriginal();
+                await runInitialized(initialization);
+              };
+              if (initialization.refusal) {
+                return await runCapturedInitialization();
+              }
+              const target = initialization.target;
               if (opts.dryRun) {
                 return await previewUpdateCommand({
                   target,
@@ -119,9 +270,6 @@ export async function initializeAndRunUpdate(
               const artifact =
                 target.updateInstallKind === "package" &&
                 !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-              const candidateAdmissionEnabled =
-                usesCandidateUpdateAdmission(opts, prepared.installKind) &&
-                target.updateInstallKind === "package";
               const stageParams = (presentation: ReturnType<typeof createUpdateProgress>) => ({
                 reapplyLocalOverrides: opts.reapplyLocalOverrides,
                 root: target.root,
@@ -174,7 +322,7 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission,
+                            result: initialization.candidateAdmission.result,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
@@ -201,7 +349,7 @@ export async function initializeAndRunUpdate(
               const runSelectedTarget = async () => {
                 assertUpdatePackageActivationAdmission(target.root, packageAdmission);
                 if (target.updateInstallKind !== "package") {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const metadata = await resolveFreshUpdateMetadata(target);
                 if (!metadata) {
@@ -209,18 +357,17 @@ export async function initializeAndRunUpdate(
                 }
                 const { version: targetVersion, schemaVersions: schemas } = metadata;
                 if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION && !artifact) {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
                 const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
                 const checkSchemas = async (phase?: "before" | "after") => {
-                  const { readUpdateChannelConfig } = await import("./update-command-config.js");
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
@@ -241,6 +388,7 @@ export async function initializeAndRunUpdate(
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
+                    callerLegacyConfigPlan,
                     shouldRestart: prepared.shouldRestart,
                     updateStepTimeoutMs: timeoutMs,
                     invocationCwd,
@@ -262,6 +410,7 @@ export async function initializeAndRunUpdate(
                   controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
                 });
                 initialization.downgradeConfirmed = true;
+                await captureOriginal();
                 const runtime = await preparePackageUpdateRuntime({
                   ...target,
                   managedService: schemaPreflight.service,
@@ -280,7 +429,7 @@ export async function initializeAndRunUpdate(
                 }
                 target.packageUpdateNodeRunner = runtime.value.nodeRunner;
                 if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION) {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const fence = await executor.enter(target.root, {
                   preflight: true,
@@ -333,12 +482,15 @@ export async function initializeAndRunUpdate(
                       () => (legacyFence ? legacyFence.run(initialize) : initialize()),
                       () => legacyFence?.release(),
                     );
-                    await runInitialized(initialization);
+                    await runCapturedInitialization();
                   },
                   () => initializationStage?.close(),
                 );
               };
               const runWithSelectedProfile = async () => {
+                if (!policy.needsInitialization) {
+                  return await runCapturedInitialization();
+                }
                 if (artifact) {
                   const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
                   return await runFreshUpdateArtifact(
@@ -384,5 +536,8 @@ export async function initializeAndRunUpdate(
     // The admitted run's prepared handler outlives both staged cleanup and the
     // executor, so no failure is reported while either mutation owner remains live.
     await handleFailure(error);
+  } finally {
+    // Terminal publication must flush the last committed phases before observation ends.
+    disposePresentation?.();
   }
 }

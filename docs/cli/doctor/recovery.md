@@ -32,7 +32,11 @@ preserves unknown operator edits and uncertain definitions for operator review.
 Other command or credential changes still require interactive confirmation.
 After successful standalone `openclaw doctor --fix`, an already stopped managed
 Gateway starts and verifies readiness when its service targets the current
-installation. Update-time Doctor leaves activation with the updater. A stopped
+installation and final inspection positively verifies its ownership and offline
+state. If that inspection fails, times out, or leaves ownership uncertain, Doctor
+records the reason and leaves the service stopped. Inspect it with
+`openclaw gateway status --deep` before starting it manually.
+Update-time Doctor leaves activation with the updater. A stopped
 service targeting another installation keeps its definition and stop state; run
 the reported profile-aware `openclaw gateway install --force` command from the
 intended installation to reconcile it (installation may start the service).
@@ -62,6 +66,10 @@ Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
+
+When maintenance cannot acquire state ownership, Doctor includes the underlying
+schema or filesystem error. A shared-state database from a newer OpenClaw build
+stays unchanged; rerun Doctor with a build that supports that database version.
 
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for

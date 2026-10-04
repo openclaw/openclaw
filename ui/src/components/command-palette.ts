@@ -178,9 +178,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           }
         }),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         this.clearSessionSearch();
         this.clearCatalogSearch();
@@ -504,6 +503,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     try {
       const result = await sessions.list({
         ...SESSION_SEARCH_SCOPE,
+        source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,
       });

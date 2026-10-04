@@ -2,10 +2,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Writable } from "node:stream";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   readWorkspaceSkillResources,
   resolveWorkspaceWorkerArgv,
 } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -15,6 +18,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { evaluateFileReadPolicySnapshot } from "../shared/policy.js";
 import { readWorkspaceMemoryRequest } from "../shared/workspace-memory-request.js";
 import { readWorkspaceSkillsRequest } from "../shared/workspace-skills-request.js";
+import { prepareSkillSource, retireSkillSource } from "./workspace-skill-source.js";
 
 /** Run the same packaged file worker used by SSH adapters; never run arbitrary argv. */
 export function createWorkspaceCommand(
@@ -31,8 +35,8 @@ export function createWorkspaceCommand(
         throw new Error("Workspace workers require node duplex transport");
       }
       const params = JSON.parse(paramsJSON ?? "{}");
-      const request =
-        kind === "memory" ? readWorkspaceMemoryRequest(params) : readWorkspaceSkillsRequest(params);
+      const skillRequest = kind === "skills" ? readWorkspaceSkillsRequest(params) : undefined;
+      const request = skillRequest ?? readWorkspaceMemoryRequest(params);
       const maxReplyBytes = params.maxReplyBytes;
       if (
         maxReplyBytes !== undefined &&
@@ -40,7 +44,7 @@ export function createWorkspaceCommand(
       ) {
         throw new Error("Invalid workspace response byte limit");
       }
-      const agents = api.config.agents?.list?.map((agent) => agent.id) ?? ["main"];
+      const agents = listAgentIds(api.config);
       const configured = agents.some(
         (agentId) =>
           path.resolve(api.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId)) ===
@@ -56,21 +60,46 @@ export function createWorkspaceCommand(
         }
       }
       io.signal.throwIfAborted();
-      let start!: () => void;
-      const started = new Promise<void>((resolve) => {
-        start = resolve;
-      });
+      const interactive =
+        kind === "skills" && ["applyRoot", "removeSkill"].includes(params.operation);
+      let childInput: Writable | undefined;
+      let hasStarted = false;
+      let source: Awaited<ReturnType<typeof prepareSkillSource>> | undefined;
+      const started = createDeferred<void>();
       const unsubscribe = io.frames.onMessage((message) => {
-        if (Buffer.from(message).toString("utf8") !== "start") {
+        if (io.signal.aborted) {
+          return;
+        }
+        if (!hasStarted && Buffer.from(message).toString("utf8") === "start") {
+          hasStarted = true;
+          started.resolve();
+          return;
+        }
+        if (!interactive || !childInput || message.byteLength > 1024 * 1024) {
           throw new Error("Unexpected workspace worker input");
         }
-        start();
+        const decision = asOptionalRecord(JSON.parse(Buffer.from(message).toString("utf8")));
+        if (!decision || !("decision" in decision)) {
+          throw new Error("Expected a Gateway Skill policy decision");
+        }
+        childInput.write(`${JSON.stringify(decision)}\n`);
       });
-      const abortStart = () => start();
+      const abortStart = () => started.resolve();
       io.signal.addEventListener("abort", abortStart, { once: true });
       try {
-        await started;
+        await started.promise;
         io.signal.throwIfAborted();
+        let workerRequest = request.request;
+        if (kind === "skills" && params.operation === "applyRoot") {
+          const input = JSON.parse(request.request);
+          source = await prepareSkillSource(request.workspaceDir, input.sourceArchive);
+          const { sourceArchive: _archive, ...files } = input;
+          workerRequest = JSON.stringify({
+            ...files,
+            extractedRoot: source.extractedRoot,
+            publicationCheckpoints: true,
+          });
+        }
         if (kind === "skills" && params.operation === "readResources") {
           const assertFileAccess = createSkillFileAccessAssertion(
             params.resourceReadPolicy,
@@ -97,9 +126,9 @@ export function createWorkspaceCommand(
           process.execPath,
           [
             ...resolveWorkspaceWorkerArgv(kind),
-            ...(kind === "memory"
-              ? [request.watch ? "--watch-files" : "--files", request.workspaceDir]
-              : [request.workspaceDir, os.homedir(), readWorkspaceSkillsRequest(params).operation]),
+            ...(skillRequest
+              ? [request.workspaceDir, os.homedir(), skillRequest.operation]
+              : [request.watch ? "--watch-files" : "--files", request.workspaceDir]),
           ],
           {
             cwd: request.workspaceDir,
@@ -117,23 +146,40 @@ export function createWorkspaceCommand(
         child.stderr.on("data", (bytes: Buffer) =>
           api.logger.warn(bytes.toString("utf8").trimEnd()),
         );
-        child.stdin.on("error", () => child.kill("SIGTERM"));
+        const allowRollback = kind === "skills" && params.operation === "applyRoot";
+        let stopTimer: ReturnType<typeof setTimeout> | undefined;
         const stop = () => {
-          child.kill("SIGTERM");
+          if (child.exitCode !== null || child.signalCode !== null) {
+            return;
+          }
+          if (allowRollback) {
+            // EOF refuses pending publication checkpoints. The native installer
+            // must restore its displaced target before we terminate the worker.
+            child.stdin.end();
+            stopTimer ??= setTimeout(() => child.kill("SIGKILL"), 30_000);
+            stopTimer.unref();
+          } else {
+            child.kill("SIGTERM");
+          }
         };
+        child.stdin.on("error", stop);
         io.signal.addEventListener("abort", stop, { once: true });
         try {
           io.signal.throwIfAborted();
-          if (request.watch) {
-            child.stdin.write(`${request.request.trimEnd()}\n`);
+          childInput = child.stdin;
+          if (request.watch || interactive) {
+            child.stdin.write(`${workerRequest.trimEnd()}\n`);
           } else {
-            child.stdin.end(request.request);
+            child.stdin.end(workerRequest);
           }
           const discoveryChunks: Buffer[] | undefined =
             kind === "skills" && params.operation === "discovery" ? [] : undefined;
           const replyLimit = discoveryChunks ? (maxReplyBytes ?? 100 * 1024 * 1024) : maxReplyBytes;
           let bytesSent = 0;
-          for await (const bytes of child.stdout) {
+          for await (const bytes of child.stdout.iterator({ destroyOnReturn: false })) {
+            if (allowRollback && io.signal.aborted) {
+              continue;
+            }
             io.signal.throwIfAborted();
             bytesSent += bytes.byteLength;
             if (!request.watch && replyLimit !== undefined && bytesSent > replyLimit) {
@@ -146,6 +192,7 @@ export function createWorkspaceCommand(
             }
           }
           await exited;
+          io.signal.throwIfAborted();
           if (discoveryChunks) {
             const bytes = Buffer.concat(discoveryChunks, bytesSent);
             const sources = asOptionalRecord(JSON.parse(bytes.toString("utf8")));
@@ -187,13 +234,28 @@ export function createWorkspaceCommand(
           return JSON.stringify({ ok: true });
         } finally {
           io.signal.removeEventListener("abort", stop);
-          child.stdin.destroy();
-          child.kill("SIGTERM");
+          childInput = undefined;
+          stop();
+          // Also drain when frame delivery fails: closing stdout can interrupt
+          // the installer's failure response before rollback has settled.
+          child.stdout.resume();
           await exited.catch(() => {});
+          clearTimeout(stopTimer);
+          child.stdin.destroy();
         }
       } finally {
         io.signal.removeEventListener("abort", abortStart);
         unsubscribe();
+        try {
+          await source?.cleanup();
+        } finally {
+          if (kind === "skills" && params.operation === "applyRoot") {
+            await retireSkillSource(
+              request.workspaceDir,
+              JSON.parse(request.request).sourceArchive,
+            );
+          }
+        }
       }
     },
   };

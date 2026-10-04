@@ -18,7 +18,7 @@ The `Install Smoke` workflow no longer runs on pull requests or `main` pushes. I
 
 The slow Bun global install and runtime smoke is separately gated by `run_bun_global_install_smoke`. It installs the candidate with trusted lifecycle scripts, then verifies representative CLI, local-agent, and Gateway paths under Bun 1.4 or newer. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
-The Bun-only runtime smoke reuses the verified candidate tarball with the checksum-pinned Bun fork from `setup-test-bun`. It masks system Node with recording sentinels in a private mount namespace, leaving the host unchanged, and uses child-PID-correlated spawn tracing to detect Node attempts across install, CLI, Gateway, node-host pairing, a mocked agent turn, Doctor, terminal, and browser steps. The lane first attempts a Node-less `bun install` and, while the listed preinstall blocker reproduces, completes installation with a preserved Node binary visible only on that install's PATH. Both installs put sentinels for the other Node launchers on PATH, leaving `node` absent from the install sentinel directory so Bun can inject its lifecycle shim during the first attempt. Node is also available for payload verification. The Bun-only lane runs only in Release Checks (Full Release Validation) through its own `run_bun_only_runtime_smoke` input, never on the nightly schedule or a manual `Install Smoke` dispatch, and skips frozen targets. It is advisory for now (`continue-on-error`): a failure is recorded on the run without blocking the release. Known Node requirements live in `scripts/e2e/lib/bun-only-runtime/expected-node-blockers.json`: an unlisted Node attempt fails, and a listed blocker that no longer reproduces fails until its entry is deleted.
+The Bun-only runtime smoke reuses the verified candidate tarball with the checksum-pinned Bun fork from `setup-test-bun`. It masks system Node with recording sentinels in a private mount namespace, leaving the host unchanged, and uses child-PID-correlated spawn tracing to detect Node attempts across install, CLI, Gateway, node-host pairing, a mocked agent turn, Doctor, terminal, and browser steps. The lane makes one Node-less `bun install` attempt with `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the pinned Bun executable; an install failure fails the lane without retrying with Node. The install puts sentinels for the other Node launchers on PATH, leaving `node` absent from the install sentinel directory so Bun can inject its lifecycle shim. Node remains available for payload preparation and verification before the smoke hides it. The Bun-only lane runs only in Release Checks (Full Release Validation) through its own `run_bun_only_runtime_smoke` input, never on the nightly schedule or a manual `Install Smoke` dispatch, and skips frozen targets. It is advisory for now (`continue-on-error`): a failure is recorded on the run without blocking the release. Known Node requirements live in `scripts/e2e/lib/bun-only-runtime/expected-node-blockers.json`: an unlisted Node attempt fails, and a listed blocker that no longer reproduces fails until its entry is deleted.
 
 ## Local Docker E2E
 
@@ -84,9 +84,9 @@ The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` wh
 Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk verifies and loads only the artifact-backed image kind it needs (or pulls it under explicit `existing-only` reuse) and executes multiple lanes through the same weighted scheduler:
 
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
-- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-onboarding | package-update-migrations | package-update-self-upgrade | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
+- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-restart-auth | package-update-onboarding | package-update-migrations | package-update-self-upgrade | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-onboarding`, `package-update-migrations`, `package-update-self-upgrade`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-restart-auth`, `package-update-onboarding`, `package-update-migrations`, `package-update-self-upgrade`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 The stable/full Docker `core` chunk includes `live-anthropic-cache`. It sends eight
 bounded requests through the candidate package's Anthropic provider and managed
@@ -99,19 +99,34 @@ The scheduler declares `anthropic-api-key` for this lane, and both full-chunk an
 targeted-lane preflights require `ANTHROPIC_API_KEY` specifically; OAuth credentials
 remain accepted for the other Anthropic lanes that support them.
 
-First-hop compatibility lanes share a 1,800-second inner container budget and a
-2,100-second outer lane budget. Hosted run `36465355074` measured candidate-driven
-hops at 280–310 seconds, published-driver hops at 103–118 seconds, and complete
-lanes at 1,140–1,168 seconds. Three 310-second candidate hops, a 130-second
-published hop, and 150 seconds of setup/assertions give about 1,210 seconds;
-a roughly 1.5× slow-host margin gives 1,800 seconds, with another 300 seconds for
-host-side work. The self-upgrade job allows 80 minutes: six first-hop source
-versions need two 35-minute waves under the unchanged npm weight limit of five;
-the 20-minute, weight-three survivor overlaps those waves, with ten minutes left
-for job setup and artifacts. Targeted first-hop jobs retain their 60-minute job
-budget. Phase and update-step durations are printed in the lane log.
+First-hop compatibility lanes share a 3,200-second inner container budget and a
+3,500-second outer lane budget. Hosted 4-vCPU run `36506342273` spent about 1,558
+seconds before its final candidate hop; another 560 seconds for that hop and about
+five seconds for assertions project roughly 2,125 seconds for a complete lane.
+A roughly 1.5× slow-host margin gives 3,200 seconds, with another 300 seconds for
+host-side work. Targeted runs measured roughly 540–720 seconds per update; each
+lane performs multiple updates, so that is not the complete lane duration.
+First-hop lanes have weight two under the unchanged npm weight limit of five,
+admitting at most two at once to reduce npm and disk contention. The 20-minute,
+weight-three survivor can overlap one first-hop lane. The self-upgrade job allows
+210 minutes: three 3,500-second waves plus a conservative 20 minutes for the
+survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
+Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
+durations are printed in the lane log.
 
-Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
+Authenticated update restart uses a 2,280-second container budget and a
+2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
+seconds, multiplied by roughly 1.5 with another 300 seconds for host-side work.
+Its restart command took 856 seconds in hosted run `36506210440` and 993 seconds
+on four-CPU Crabbox; 993 × 1.5 gives a lane-specific 1,500-second command timeout.
+The shared 900-second command default stays unchanged. The `package-update-openai`
+job allows 60 minutes for its OpenAI, Codex, onboarding, and root-managed upgrade
+lanes. The separate `package-update-restart-auth` job allows 55 minutes for the
+43-minute authenticated restart lane plus setup and artifacts. CI's 60-minute
+`docker-seed-e2e` job does not select
+`update-restart-auth`, so its budget stays unchanged.
+
+Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade; `package-update-restart-auth` owns authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 
 OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk Blacksmith runner whenever stable or full release-path coverage requests it, even when the reusable workflow routes supported jobs to GitHub-hosted runners. Keeping the external image pull separate prevents the large image from competing with the shared package and plugin images in `plugins-runtime-services`; legacy aggregate plugin/runtime chunks still include OpenWebUI for compatible manual reruns. Bundled-channel update lanes retry once for transient npm network failures.
 

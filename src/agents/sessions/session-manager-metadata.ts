@@ -10,7 +10,7 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { canonicalizeSessionEntry } from "./session-manager-persistence.js";
+import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerMetadata extends SessionManagerEntries {
@@ -24,7 +24,10 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         parentId: this.appendParentId,
         timestamp: new Date().toISOString(),
       };
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
+      if (
+        !admission ||
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
+      ) {
         // Volatile storage keeps its one native owner until its complete actor cutover.
         const appended = this.appendEntry(entry);
         return this.publishMetadataCommit(
@@ -32,6 +35,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
           publication.publish,
         );
       }
+      const assertNavigation = this.captureTranscriptNavigationAssertion();
       const canonical = canonicalizeSessionEntry(entry);
       const appendIntent =
         !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined;
@@ -39,7 +43,16 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
         : undefined;
       const committedTarget = publication.target;
-      const committed = await this.persistWorkerRecord(canonical, appendIntent, admission);
+      const committed = await this.persistWorkerRecord(
+        canonical,
+        appendIntent,
+        admission,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        assertNavigation,
+      );
       const { result, committedVersion, viewFailure } = committed;
       const commit: SessionMetadataCommit = {
         entry: {
@@ -67,6 +80,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
               )
             : rebound;
         }
+        assertNavigation();
         this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
       } catch (cause) {
         failure = { cause };

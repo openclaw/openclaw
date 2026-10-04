@@ -7,12 +7,12 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
+import { imessagePlugin } from "./channel.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
 import { probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
-import { probeIMessageStatusAccount } from "./status-core.js";
 
 const getIMessageSetupStatus = createPluginSetupWizardStatus({
   id: "imessage",
@@ -620,10 +620,10 @@ describe("probeIMessage", () => {
     } as const;
     const account = resolveIMessageAccount({ cfg, accountId: "work" });
 
-    await probeIMessageStatusAccount({
+    await imessagePlugin.status!.probeAccount!({
       account,
+      cfg,
       timeoutMs: 2500,
-      probeIMessageAccount: channelRuntimeModule.probeIMessageAccount,
     });
 
     expect(probeSpy).toHaveBeenCalledWith({
