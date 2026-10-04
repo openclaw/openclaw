@@ -101,7 +101,7 @@ const repoBundledChannelConfigsCache = new Map<
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
   repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
     rootDir: repoRoot,
-    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
   });
   return repoBundledPluginMetadataCache;
 }
@@ -243,7 +243,7 @@ describe("bundled plugin metadata", () => {
     () => {
       expect(listRepoBundledPluginMetadata()).toEqual(
         listBundledPluginMetadata({
-          includeChannelConfigs: false,
+          includeSyntheticChannelConfigs: false,
         }),
       );
     },

@@ -51,6 +51,7 @@ export function listBundledChannelPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
   includeChannelConfigs?: boolean;
+  includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledChannelPluginMetadata[] {
   const rootDir = params?.rootDir;
   const overrideDir = params?.scanDir

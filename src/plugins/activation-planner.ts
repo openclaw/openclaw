@@ -270,6 +270,7 @@ function matchesActivation(
           return record(plugin.hooks?.length, "manifest-hook-owner");
       }
   }
+  return false;
 }
 
 function normalizeActivationTrigger(trigger: PluginActivationPlannerTrigger): string {

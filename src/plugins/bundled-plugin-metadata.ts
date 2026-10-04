@@ -51,6 +51,7 @@ export function listBundledPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
   includeChannelConfigs?: boolean;
+  includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledPluginMetadata[] {
   const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
   const resolvedScanDir = params?.scanDir
@@ -60,6 +61,8 @@ export function listBundledPluginMetadata(params?: {
         runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
       });
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
+  const includeSyntheticChannelConfigs =
+    params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
   if (!resolvedScanDir || !fs.existsSync(resolvedScanDir)) {
     return Object.freeze([]);
   }
@@ -102,13 +105,14 @@ export function listBundledPluginMetadata(params?: {
     });
     const runtimeSidecarArtifacts =
       collectBundledPluginRuntimeSidecarArtifacts(publicSurfaceArtifacts);
-    const channelConfigs = includeChannelConfigs
-      ? collectBundledChannelConfigsCore({
-          pluginDir,
-          manifest: manifestResult.manifest,
-          packageManifest,
-        })
-      : manifestResult.manifest.channelConfigs;
+    const channelConfigs =
+      includeChannelConfigs && includeSyntheticChannelConfigs
+        ? collectBundledChannelConfigsCore({
+            pluginDir,
+            manifest: manifestResult.manifest,
+            packageManifest,
+          })
+        : manifestResult.manifest.channelConfigs;
 
     entries.push({
       dirName,
