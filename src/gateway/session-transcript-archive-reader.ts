@@ -43,10 +43,7 @@ import {
   type SessionTranscriptSourceSnapshot,
 } from "./session-transcript-source-pages.js";
 
-export type {
-  ReadRecentSessionMessagesOptions,
-  ReadSessionMessagesAsyncOptions,
-} from "./session-transcript-read.types.js";
+export type { ReadRecentSessionMessagesOptions } from "./session-transcript-read.types.js";
 
 type ReadSessionMessagesPageOptions = {
   offset: number;

@@ -4,6 +4,7 @@ import {
   isRealConversationMessage,
 } from "./compaction-real-conversation.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 type SummaryRole = "branchSummary" | "compactionSummary";
@@ -16,7 +17,9 @@ describe("compaction real conversation classification", () => {
   it("expires streaming tool-result anchors after the 20-message lookback", () => {
     const classify = createRealConversationClassifier();
     expect(classify({ role: "user", content: "Inspect the repo", timestamp: 1 })).toBe(true);
-    const silent = { role: "assistant", content: "NO_REPLY" } as AgentMessage;
+    const silent = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
     for (let index = 0; index < 19; index += 1) {
       expect(classify(silent)).toBe(false);
     }

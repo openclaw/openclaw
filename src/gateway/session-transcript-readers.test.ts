@@ -23,7 +23,6 @@ import {
   readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesWithSourceAsync,
-  type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
@@ -45,10 +44,7 @@ describe("session transcript reader facade", () => {
     await state.cleanup();
   });
 
-  async function writeTranscript(
-    sessionId: string,
-    events: unknown[],
-  ): Promise<SessionTranscriptReadScope> {
+  async function writeTranscript(sessionId: string, events: unknown[]) {
     const scope = {
       agentId: "main",
       sessionId,
