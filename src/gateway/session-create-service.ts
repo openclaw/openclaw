@@ -375,16 +375,17 @@ export async function createGatewaySession(
     cfg: params.cfg,
     targets: authorityTargets,
     getCurrentConfig: params.getCurrentConfig,
-    creation:
-      operatorReady && !incognito
-        ? {
+    ...(operatorReady && !incognito
+      ? {
+          creation: {
             ready: operatorReady,
             assertCurrent: () => commitGuard?.(),
             selectTargetInLifecycle: Boolean(
               explicitTargetKey && !initialTargetEntry && !params.initialEntry,
             ),
-          }
-        : undefined,
+          },
+        }
+      : {}),
   });
   let preparedCreation:
     | Awaited<ReturnType<typeof targetCustody.prepareCreationTargets>>
@@ -428,30 +429,35 @@ export async function createGatewaySession(
       const execCwd = normalizeOptionalString(params.execCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
-        agentId: parentSelectedAgentId,
-        requestingOperatorProfileId: params.requestingOperatorProfileId || undefined,
-        operatorRoleActor: params.operatorRoleActor,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        ...(params.requestingOperatorProfileId
+          ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
+          : {}),
+        ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
         reason: "new",
         commandSource: params.commandSource,
-        creation: params.creation,
-        spawnedCwd,
-        sessionRoot: params.sessionRoot || undefined,
-        permissionMode: params.permissionMode,
-        fastModeSelection:
-          params.fastMode !== undefined
-            ? {
+        ...(params.creation ? { creation: params.creation } : {}),
+        ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
+        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
+        ...(params.fastMode !== undefined
+          ? {
+              fastModeSelection: {
                 value: params.fastMode,
                 allowExistingChange: params.allowExistingModelSelection === true,
-              }
-            : undefined,
-        prepareLifecycle: params.prepareLifecycle,
-        onLifecycleCleanupError: params.onLifecycleCleanupError,
-        execNode: params.execNode || undefined,
-        execCwd,
-        clearExecBinding: params.clearExecBinding,
-        clearSpawnedCwd: params.clearSpawnedCwd && !spawnedCwd,
-        armSessionDiffBaselineCapture: params.armSessionDiffBaselineCapture,
-        assertAuthorizedInstance: commitGuard,
+              },
+            }
+          : {}),
+        ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
+        ...(params.onLifecycleCleanupError
+          ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
+          : {}),
+        ...(params.execNode ? { execNode: params.execNode } : {}),
+        ...(execCwd ? { execCwd } : {}),
+        ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
+        ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
+        ...(params.armSessionDiffBaselineCapture ? { armSessionDiffBaselineCapture: true } : {}),
+        ...(commitGuard ? { assertAuthorizedInstance: commitGuard } : {}),
       });
       if (!resetResult.ok) {
         return resetResult;
@@ -750,6 +756,7 @@ export async function createGatewaySession(
           const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
             agentId: target.agentId,
             cfg: params.cfg,
+            catalogModel,
             defaultModel: gateDefaultModel.model,
             defaultProvider: gateDefaultModel.provider,
             existingEntry,
@@ -925,10 +932,10 @@ export async function createGatewaySession(
           ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
             ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
             : {}),
-          ...(params.initialEntry?.initializationPending === true ||
-          params.atomicInitialization === true
+          ...(params.initialEntry?.initializationPending === true
             ? { initializationPending: true }
             : {}),
+          ...(params.atomicInitialization === true ? { initializationPending: true } : {}),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
             : {}),
@@ -1006,13 +1013,14 @@ export async function createGatewaySession(
           catalog: preparedModelCatalog?.entries,
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
-          placement:
-            params.agentRuntime !== undefined || params.model !== undefined
-              ? {
+          ...(params.agentRuntime !== undefined || params.model !== undefined
+            ? {
+                placement: {
                   context: resolveSessionWorkerPlacementContext(),
                   sessionKey: target.canonicalKey,
-                }
-              : undefined,
+                },
+              }
+            : {}),
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;
@@ -1041,13 +1049,14 @@ export async function createGatewaySession(
           await prepareSessionForkFromParent({
             parentEntry: currentParentSessionEntry,
             agentId: parentSessionTarget.agentId,
-            commitGuard:
-              commitGuard || assertSourceCurrent
-                ? () => {
+            ...(commitGuard || assertSourceCurrent
+              ? {
+                  commitGuard: () => {
                     commitGuard?.();
                     assertSourceCurrent?.();
-                  }
-                : undefined,
+                  },
+                }
+              : {}),
             parentSessionKey: forkParentSessionKey,
             sessionKey: target.canonicalKey,
             storePath: parentSessionTarget.storePath,
@@ -1099,18 +1108,22 @@ export async function createGatewaySession(
               requireWriteSuccess: true,
             }
           : {}),
-        commitGuard,
-        bindCreation: bindPreparedCreation
-          ? (operation) => {
-              commitGuard?.();
-              bindPreparedCreation?.(operation);
-              creationOperation = operation;
+        ...(commitGuard ? { commitGuard } : {}),
+        ...(bindPreparedCreation
+          ? {
+              bindCreation: (operation) => {
+                commitGuard?.();
+                bindPreparedCreation?.(operation);
+                creationOperation = operation;
+              },
             }
-          : undefined,
-        withCommit: preparedLifecycle?.withCommit,
-        resolveOwnerAssignment: inheritedSpawnOwner
-          ? () => (createdNewEntry ? inheritedSpawnOwner : undefined)
-          : undefined,
+          : {}),
+        ...(preparedLifecycle?.withCommit ? { withCommit: preparedLifecycle.withCommit } : {}),
+        ...(inheritedSpawnOwner
+          ? {
+              resolveOwnerAssignment: () => (createdNewEntry ? inheritedSpawnOwner : undefined),
+            }
+          : {}),
         afterCommitted: params.afterSessionCommitted,
         onLifecycleCommitted: (entry) => {
           onPhase?.("publication");
@@ -1126,7 +1139,7 @@ export async function createGatewaySession(
             });
           }
         },
-        cwd: runtimeCwd,
+        ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
       },
     ).catch((error: unknown) => {
       if (error instanceof Error && error.name === "SessionLabelConflictError") {
@@ -1292,7 +1305,7 @@ export async function createGatewaySession(
         {
           preserveActivity: true,
           requireWriteSuccess: true,
-          assertCommitAllowed: params.commitGuard,
+          ...(params.commitGuard ? { assertCommitAllowed: params.commitGuard } : {}),
         },
       );
       if (!finalized) {
