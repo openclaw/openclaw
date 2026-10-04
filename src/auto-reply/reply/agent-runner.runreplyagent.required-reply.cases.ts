@@ -85,33 +85,39 @@ export function registerRequiredReplyCompletionCases({
     },
   );
 
-  it("delivers a required queued answer fallback from a heartbeat-owned drain", async () => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({ payloads: [], meta: {} })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" },
+  it.each([false, true])(
+    "settles a required queued answer with explicit silence=%s",
+    async (silent) => {
+      state.runEmbeddedAgentMock
+        .mockResolvedValueOnce({ payloads: [], meta: {} })
+        .mockResolvedValueOnce({
+          payloads: [{ text: "NO_REPLY" }],
+          meta: silent ? { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" } : {},
+        });
+      const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+      const heartbeat = createMinimalRun({
+        opts: { isHeartbeat: true, onBlockReply },
+        runOverrides: { terminalReplyExpectation: "optional" },
       });
-    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    const heartbeat = createMinimalRun({
-      opts: { isHeartbeat: true, onBlockReply },
-      runOverrides: { terminalReplyExpectation: "optional" },
-    });
-    await expect(heartbeat.run()).resolves.toBeUndefined();
-    expect(onBlockReply).not.toHaveBeenCalled();
+      await expect(heartbeat.run()).resolves.toBeUndefined();
+      expect(onBlockReply).not.toHaveBeenCalled();
 
-    const queued = createMinimalRun({
-      currentInboundEventKind: "user_request",
-      runOverrides: { terminalReplyExpectation: "required" },
-    });
-    await requireScheduledFollowupRunner()(queued.followupRun);
+      const queued = createMinimalRun({
+        currentInboundEventKind: "user_request",
+        runOverrides: { terminalReplyExpectation: "required" },
+      });
+      await requireScheduledFollowupRunner()(queued.followupRun);
 
-    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ isError: true, text: expect.any(String) }),
-    );
-    expect(onBlockReply.mock.calls[0]?.[0].text).not.toContain("NO_REPLY");
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-  });
+      if (silent) {
+        expect(onBlockReply).not.toHaveBeenCalled();
+      } else {
+        expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ isError: true, text: expect.any(String) }),
+        );
+      }
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
     { label: "empty output", payloads: [] },
@@ -192,7 +198,7 @@ export function registerRequiredReplyCompletionCases({
         payloads: [{ text: "NO_REPLY" }],
         meta: { finalAssistantVisibleText: "NO_REPLY" },
       },
-      missing: true,
+      missing: false,
     },
     {
       label: "optional NO_REPLY",

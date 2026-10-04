@@ -42,31 +42,53 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       expectation: "required",
       delivery: "missing",
       phased: true,
+      terminalText: SILENT_REPLY_TOKEN,
     },
     {
       name: "confirmation committed during recovery",
       expectation: "required",
       delivery: "delivered-during-recovery",
       phased: false,
+      terminalText: "",
     },
     {
       name: "confirmation held during recovery",
       expectation: "required",
       delivery: "pending-during-recovery",
       phased: false,
+      terminalText: "",
     },
     {
       name: "delivered confirmation",
       expectation: "required",
       delivery: "delivered",
       phased: false,
+      terminalText: SILENT_REPLY_TOKEN,
     },
-    { name: "pending confirmation", expectation: "required", delivery: "pending", phased: false },
-    { name: "unconfirmed receipt", expectation: "required", delivery: "unknown", phased: false },
-    { name: "optional helper", expectation: "optional", delivery: "missing", phased: false },
+    {
+      name: "pending confirmation",
+      expectation: "required",
+      delivery: "pending",
+      phased: false,
+      terminalText: SILENT_REPLY_TOKEN,
+    },
+    {
+      name: "unconfirmed receipt",
+      expectation: "required",
+      delivery: "unknown",
+      phased: false,
+      terminalText: SILENT_REPLY_TOKEN,
+    },
+    {
+      name: "optional helper",
+      expectation: "optional",
+      delivery: "missing",
+      phased: false,
+      terminalText: SILENT_REPLY_TOKEN,
+    },
   ] as const)(
-    "settles $name followed by NO_REPLY without replaying tools",
-    async ({ expectation, delivery, phased }) => {
+    "settles $name with terminal text '$terminalText' without replaying tools",
+    async ({ expectation, delivery, phased, terminalText }) => {
       const earlierText = "## Result\n\n- **Saved** the note.";
       const attempt = makeEmbeddedRunnerAttempt({
         sessionIdUsed: "session-settled",
@@ -99,22 +121,22 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
               },
               {
                 type: "text",
-                text: SILENT_REPLY_TOKEN,
+                text: terminalText,
                 textSignature: JSON.stringify({ v: 1, id: "silent-answer", phase: "final_answer" }),
               },
             ]
-          : [{ type: "text", text: SILENT_REPLY_TOKEN }],
+          : [{ type: "text", text: terminalText }],
       });
       attempt.messagesSnapshot = [
         { role: "user", content: "Save the note and confirm when it is saved.", timestamp: 0 },
         toolAssistant,
         makeTextToolResult("reaction", "message", "Reaction added", false, 1),
-        earlierAnswer,
+        ...(terminalText ? [earlierAnswer] : []),
         assistant,
       ];
       attempt.toolMetas = [{ toolName: "message", meta: "react", replaySafe: false }];
       attempt.itemLifecycle = { startedCount: 1, completedCount: 1, activeCount: 0 };
-      attempt.assistantTexts = [earlierText, SILENT_REPLY_TOKEN];
+      attempt.assistantTexts = terminalText ? [earlierText, terminalText] : [];
       attempt.lastAssistant = assistant;
       attempt.currentAttemptAssistant = assistant;
       attempt.currentAttemptCompletedAssistant = assistant;
@@ -156,7 +178,7 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
 
       const deliveredDuringRecovery =
         delivery === "delivered-during-recovery" || delivery === "pending-during-recovery";
-      if (expectation === "required" && (delivery === "missing" || deliveredDuringRecovery)) {
+      if (deliveredDuringRecovery) {
         expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
         const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];
         expect(preparedAttempt).toMatchObject({
@@ -166,15 +188,9 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
           suppressNextUserMessagePersistence: true,
         });
         expect(result.finalizationOutcome).toBe("answered");
-        expect(result.prepared.payloadsWithToolMedia).toEqual(
-          deliveredDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
-        );
+        expect(result.prepared.payloadsWithToolMedia).toEqual([]);
         expect(result.prepared.replyDeliveryState).toBe(
-          deliveredDuringRecovery
-            ? delivery === "delivered-during-recovery"
-              ? "delivered"
-              : "pending"
-            : "missing",
+          delivery === "delivered-during-recovery" ? "delivered" : "pending",
         );
       } else {
         expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();
