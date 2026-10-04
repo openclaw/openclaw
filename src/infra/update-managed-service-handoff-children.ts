@@ -64,6 +64,18 @@ export function managedCommandAllowsBinding(
     : true;
 }
 
+export function releasedManagedCommandAction(action: ManagedHandoffLease["action"]) {
+  if (action.kind !== "update") {
+    return action;
+  }
+  return {
+    kind: "update" as const,
+    ...("mutationProtocol" in action && action.mutationProtocol
+      ? { mutationProtocol: action.mutationProtocol }
+      : {}),
+  };
+}
+
 export function createManagedHandoffChildReader(deps: {
   withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
   handle: ReturnType<typeof createManagedHandoffLeaseRows>["handle"];

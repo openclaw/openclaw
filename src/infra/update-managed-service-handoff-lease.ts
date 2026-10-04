@@ -15,6 +15,7 @@ import {
   managedCommandAllowsBinding,
   managedCommandCustody,
   managedCommandUnsettled,
+  releasedManagedCommandAction,
 } from "./update-managed-service-handoff-children.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -436,15 +437,7 @@ export function createManagedHandoffLeaseStore(
             version: 2,
             helper: lease.helper,
             executor,
-            action:
-              custody && lease.action.kind === "update"
-                ? {
-                    kind: "update",
-                    ...(lease.action.mutationProtocol
-                      ? { mutationProtocol: lease.action.mutationProtocol }
-                      : {}),
-                  }
-                : lease.action,
+            action: custody ? releasedManagedCommandAction(lease.action) : lease.action,
           });
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
