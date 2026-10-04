@@ -441,14 +441,15 @@ separate activation prerequisites.
 
 ### Existing worker flows
 
-Delegate-tool construction prepares sandbox classification and exec approvals
-through the existing readers before assembling its permission posture. Each
-construction and permission refresh reads current policy from its captured
-physical store; there is no run-wide approvals snapshot. Source and run authority
-are rechecked after preparation, and unavailable approval state remains fail-closed.
-Bundled tool factories await preparation; released synchronous harness factories
-remain deprecated SDK compatibility paths until the next Plugin SDK major.
-Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
+Remote model catalog refreshes capture the shared store before downloading and
+use its existing worker for reads, bundle replacement, and conditional HTTP 304
+metadata updates. The synchronous worker transaction rereads the current catalog
+and checks live host admission at transaction entry and commit. The update-check
+lifecycle joins accepted persistence before database teardown; download cancellation
+does not cancel an accepted write. Publication remains with the existing model
+catalog generation owner, and uncertain writes are not replayed. Synchronous reads
+remain for boot snapshot capture and offline inspection. Schemas, stored bytes,
+retention, and update behavior are unchanged.
 
 Shared-state transaction diagnostics inherit the executing worker command name
 when the store does not supply a more specific operation label. Slow holds and
@@ -622,6 +623,19 @@ target commit. Bundled child-entry patches use prepared data with exact parent
 and child comparisons. Private fork commands use the existing connection-bound
 domain envelope without expanding released SDK operation unions. Opaque SDK callbacks and process-held incognito retain
 their existing owners. These cutovers require no update migration.
+
+Lifecycle builders run once outside SQL, while their prepared upserts, resets,
+removals, and maintenance commit together in the existing agent executor.
+Creation continues to use its existing typed replacement operation.
+
+Artifact deletion and maintenance finalization reuse the native binding
+participant owner. Only rows actually removed settle their native companions;
+stale maintenance selections retain their bindings. Exact-message and terminal
+assistant rewrites prepare pure transformations outside SQL and compare the
+selected bytes and lifecycle again in the worker transaction. Committed facts
+publish through the existing owners, and uncertain writes never replay. Opaque
+transaction callbacks, Doctor transfers, and process-held incognito retain their
+explicit native contracts. These cutovers require no update migration.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
@@ -939,6 +953,15 @@ never replay. Database close joins accepted mutations. Workspace authoring guard
 retain their existing owner. Schemas, quotas, retention, publication security checks,
 and update behavior are unchanged.
 
+Delegate-tool construction prepares sandbox classification and exec approvals
+through the existing readers before assembling its permission posture. Each
+construction and permission refresh reads current policy from its captured
+physical store; there is no run-wide approvals snapshot. Source and run authority
+are rechecked after preparation, and unavailable approval state remains fail-closed.
+Bundled tool factories await preparation; released synchronous harness factories
+remain deprecated SDK compatibility paths until the next Plugin SDK major.
+Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
+
 Channel pairing allowlist preparation uses the existing shared-state reader.
 The async SDK reader captures the physical store before yielding and reads current
 rows outside inherited discovery snapshots. Ingress retains its channel and
@@ -1129,13 +1152,15 @@ callers use the worker APIs. Schemas, stored bytes, retention, and update behavi
 are unchanged.
 
 Per-turn restart admission, runtime selection, and initial placement routing read
-through the existing placement projection. Each read retains the original physical
-store and revocable placement observation until its caller consumes the facts.
+through the existing placement projection. Reads retain the original physical
+store; admission and initial routing also retain a revocable placement observation
+until their caller consumes the facts.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
-selection remains a prepared default; the placement claim writer still authorizes
-execution. Other placement lifecycle reads remain separate migration work; the
-released synchronous placement SDK contract is unchanged. No schema, retention,
+selection is a prepared default that tolerates setup and preceding-turn publications;
+the placement claim writer still authorizes execution. Other placement lifecycle
+reads remain separate migration work; the released synchronous placement SDK
+contract is unchanged. No schema, retention,
 durability, or update change is required.
 
 Session maintenance prepares placement preservation through the shared-state

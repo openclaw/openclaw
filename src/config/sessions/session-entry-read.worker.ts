@@ -75,6 +75,7 @@ import {
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
 } from "./session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 /** Private entry and transcript-target reads share the same admitted reader and error codec. */
 export async function readSessionEntryWorkerRequest(
@@ -419,6 +420,25 @@ export function readExactSessionEntriesWithLifecycle(
                   );
               if (!selected.ok) {
                 throw selected.error;
+              }
+              if (request.replyInitializationSessionKey) {
+                const parent = selected.value.find(
+                  ({ sessionKey }) => sessionKey === request.replyInitializationSessionKey,
+                )?.entry.parentSessionKey;
+                const parentKey = parent ? normalizeStoreSessionKey(parent) : undefined;
+                if (
+                  parentKey &&
+                  !selected.value.some(({ sessionKey }) => sessionKey === parentKey)
+                ) {
+                  const related = expectDefined(
+                    readExactSessionEntryCandidatesInDatabase(database, [[parentKey]], "full")[0],
+                    "reply initialization parent read result",
+                  );
+                  if (!related.ok) {
+                    throw related.error;
+                  }
+                  selected.value.push(...related.value);
+                }
               }
               if (request.projection === "sharing") {
                 const source = readOpenClawAgentDatabaseIdentity(database);

@@ -1,6 +1,7 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
@@ -108,7 +109,15 @@ it.each(
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
-          await reset();
+          const sql = writer === "batched" ? observeHostDataSql() : undefined;
+          try {
+            await reset();
+            if (sql) {
+              expect(sql.queries, "batched reset caller-thread SQL").toEqual([]);
+            }
+          } finally {
+            sql?.restore();
+          }
         }
       } finally {
         unsubscribe();

@@ -323,6 +323,8 @@ type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
   statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;
+  /** Reply initialization reads the current row's model parent in this same snapshot. */
+  replyInitializationSessionKey?: string;
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;

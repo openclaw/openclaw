@@ -17,10 +17,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
-    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
-    timeout_minutes: 160,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {

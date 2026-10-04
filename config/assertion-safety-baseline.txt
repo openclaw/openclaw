@@ -2518,7 +2518,6 @@ src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
-src/plugins/doctor-contract-registry-loader-state.ts	1
 src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1

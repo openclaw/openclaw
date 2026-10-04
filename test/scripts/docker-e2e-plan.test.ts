@@ -622,6 +622,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
   });
 
+  it("keeps restart auth exactly once in the legacy package/update aggregate", () => {
+    const aggregate = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+
+    expect(aggregate.lanes.filter((lane) => lane.name === "update-restart-auth")).toHaveLength(1);
+  });
+
   it("includes OpenWebUI exactly once in each legacy plugin aggregate", () => {
     for (const releaseChunk of [
       "plugins-runtime-core",
