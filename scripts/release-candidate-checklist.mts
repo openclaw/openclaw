@@ -1292,7 +1292,7 @@ function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): 
   return { status: "passed", command: "pnpm release:generated:check" };
 }
 
-export function parseRunIdFromDispatchOutput(output: string) {
+function parseRunIdFromDispatchOutput(output: string) {
   return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
 }
 

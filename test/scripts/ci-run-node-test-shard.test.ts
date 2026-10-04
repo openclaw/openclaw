@@ -1159,9 +1159,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       config: "test/vitest/vitest.plugins.config.ts",
       dir: "src/plugins",
-      targets: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      targets: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
       sibling: "src/plugins/plugin-module-generation.test.ts",
-      glob: "plugin-module-generation*.test.ts",
+      glob: "**/*.test.ts",
     },
     {
       config: "test/vitest/vitest.tooling.config.ts",

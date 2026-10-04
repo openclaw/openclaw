@@ -111,7 +111,10 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.plugins.config.ts",
     {
       dir: "src/plugins",
-      files: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      files: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
     },
   ],
   [
