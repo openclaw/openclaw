@@ -806,6 +806,7 @@ src/infra/fs-safe-env.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
+src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts

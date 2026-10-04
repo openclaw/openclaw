@@ -546,7 +546,7 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            owner.run(() =>
+            await owner.run(() =>
               assertGatewayOwnerLeaseStopped(
                 env,
                 role === "sqlite-maintenance" ? owner : undefined,
