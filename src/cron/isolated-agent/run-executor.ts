@@ -30,6 +30,7 @@ import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-pl
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { needsThinkHydration } from "../../agents/thinking-runtime.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { resolveProviderScopedAuthProfile } from "../../auto-reply/reply/agent-runner-auth-profile.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
@@ -113,6 +114,12 @@ function createCronPromptExecutor(
   },
 ) {
   const sessionFile = params.runSessionKey;
+  // A pin belongs to the provider it was resolved for. A successful fallback moves the route
+  // (liveSelection.provider) but not the pin; only a model switch replaces both together.
+  let authPinScope = {
+    authProfileId: params.liveSelection.authProfileId,
+    provider: params.liveSelection.provider,
+  };
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -303,6 +310,22 @@ function createCronPromptExecutor(
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
         params.lifecycle.beginAttempt();
+        if (authPinScope.authProfileId !== params.liveSelection.authProfileId) {
+          authPinScope = {
+            authProfileId: params.liveSelection.authProfileId,
+            provider: params.liveSelection.provider,
+          };
+        }
+        // A candidate of another provider selects its own credential, as the reply path does
+        // (resolveRunAuthProfile).
+        const candidateAuth = resolveProviderScopedAuthProfile({
+          provider: providerOverride,
+          primaryProvider: authPinScope.provider,
+          authProfileId: params.liveSelection.authProfileId,
+          authProfileIdSource: params.liveSelection.authProfileIdSource,
+          config: params.cfgWithAgentDefaults,
+          workspaceDir: params.workspaceDir,
+        });
         const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
           onExecutionStarted({
             ...info,
@@ -490,11 +513,11 @@ function createCronPromptExecutor(
                       config: params.cfgWithAgentDefaults,
                       agentDir: params.agentDir,
                       sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
+                      selected: candidateAuth.authProfileId
                         ? {
-                            authProfileId: params.liveSelection.authProfileId,
+                            authProfileId: candidateAuth.authProfileId,
                             authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
+                              candidateAuth.authProfileIdSource === "user" ? "user" : "auto",
                           }
                         : undefined,
                     })
@@ -604,10 +627,8 @@ function createCronPromptExecutor(
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
+          authProfileId: candidateAuth.authProfileId,
+          authProfileIdSource: candidateAuth.authProfileIdSource,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,
