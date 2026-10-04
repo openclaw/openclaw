@@ -5984,10 +5984,60 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
   });
 
-  it("limits the CodeQL transport exemption to its classified socket owner", () => {
+  it("keeps network CodeQL off unrelated source-only refactors", () => {
+    const workflow = readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+    const networkConfig = readFileSync(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+      "utf8",
+    );
     const rawSocketQuery = readFileSync(
       ".github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql",
       "utf8",
+    );
+    const networkSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
+      workflow.indexOf("network-runtime-boundary:"),
+    );
+    const broadCodeqlSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/*|.github/workflows/codeql-critical-quality.yml"),
+      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+    );
+
+    expect(broadCodeqlSelector).not.toContain("network_runtime=true");
+    expect(networkSelector).toContain(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+    );
+    expect(networkSelector).not.toContain("src/*.ts|src/**/*.ts");
+    expect(networkSelector).not.toContain("extensions/*.ts|extensions/**/*.ts");
+    expect(networkSelector).toContain("src/infra/net/*");
+    expect(networkSelector).toContain("src/infra/ssh-tunnel.ts");
+    expect(networkSelector).toContain("packages/net-policy/src/*");
+    expect(networkConfig).not.toContain("\n  - src\n");
+    expect(networkConfig).not.toContain("\n  - extensions\n");
+    expect(networkConfig).toContain("\n  - src/infra/net\n");
+    expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
+    expect(workflow).toContain("Fast PR network boundary diff scan");
+    expect(workflow).toContain(
+      '| select(.filename | test("(^|/)[^/]+\\\\.(?:e2e\\\\.)?test\\\\.tsx?$") | not)',
+    );
+    expect(workflow).toContain("Network runtime boundary-sensitive added lines");
+    expect(workflow).toContain(
+      'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
+    );
+    expect(workflow).toContain(
+      "network_codeql_contract_pattern='^\\.github/codeql/(codeql-network-runtime-boundary-critical-quality\\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\\.ql)$'",
+    );
+    expect(workflow).toContain(
+      'if grep -Eq "$network_codeql_contract_pattern" "$changed_files" ||',
+    );
+    expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
+    expect(workflow).toContain("packages/net-policy/src/");
+    expect(workflow).toContain(
+      "grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' \"$added_lines\"",
+    );
+    expect(workflow).toContain('echo "full_codeql=true" >> "$GITHUB_OUTPUT"');
+    expect(workflow).toContain(
+      "if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}",
     );
     expect(rawSocketQuery).toMatch(
       /allowedOwnerScope\(\s*call\s*,\s*"extensions\/codex\/src\/app-server\/transport-websocket\.ts"\s*,\s*"connectCodexAppServerUnixSocket"\s*\)/,
