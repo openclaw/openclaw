@@ -98,4 +98,5 @@ export const privateHarnessParamCases = [
   { field: "completionCheck", value: { unfinishedPlan: true, checked: false } },
   { field: "onContextAccountingEvent", value: () => undefined },
   { field: "onCompactionRequestBudget", value: () => undefined },
+  { field: "onCompletedSourceReplyDelivered", value: () => undefined },
 ] as const;

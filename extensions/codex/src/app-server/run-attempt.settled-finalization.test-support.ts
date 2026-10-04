@@ -1,16 +1,22 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
+  createCodexRuntimePlanFixture,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   tempDir,
   threadStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   type writeCodexAppServerBinding,
@@ -226,6 +232,85 @@ export function registerSettledFinalizationTests({
       }
     },
   );
+  it("preserves a projected canonical source reply when native binding retention fails", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const originalMutate = bindingStore.mutate.bind(bindingStore);
+    const sessionFile = path.join(tempDir, "session-source-reply-finalization.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-source-reply-finalization");
+    const params = createParams(sessionFile, workspaceDir);
+    const messageTool = createRuntimeDynamicTool("message");
+    messageTool.parameters = {
+      type: "object",
+      properties: {
+        action: { type: "string" },
+        message: { type: "string" },
+      },
+      required: ["action", "message"],
+    };
+    messageTool.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Sent." }],
+      details: {
+        messageId: "source-reply-1",
+        messageDelivery: {
+          status: "settled" as const,
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
+      },
+    }));
+    setCodexTestToolFactory(params, () => [messageTool]);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    setCodexTestModelSupportsTools(params, true);
+    let failBindingRetention = false;
+    const failingBindingStore: typeof bindingStore = {
+      ...bindingStore,
+      async mutate(...args: Parameters<typeof bindingStore.mutate>): Promise<boolean> {
+        if (failBindingRetention) {
+          throw new Error("binding retention failed after source delivery");
+        }
+        return await originalMutate(...args);
+      },
+    };
+    const harness = createStartedThreadHarness();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    try {
+      const run = runCodexAppServerAttempt(params, { bindingStore: failingBindingStore });
+      await harness.waitForMethod("turn/start");
+      await expect(
+        harness.handleServerRequest({
+          id: "source-reply-1",
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "source-reply-1",
+            namespace: null,
+            tool: "message",
+            arguments: { action: "send", message: "Visible source reply" },
+          },
+        }),
+      ).resolves.toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: "Sent." }],
+      });
+      expect(messageTool.execute).toHaveBeenCalledOnce();
+      failBindingRetention = true;
+      await harness.notify(turnCompleted({ id: "turn-1", status: "completed" }));
+
+      const result = await run;
+      expect(result.sourceReplyDelivered).toBe(true);
+      expect(readAttemptTerminal(result)).toMatchObject({
+        promptError: expect.objectContaining({
+          message:
+            "Native finalization failed after the source reply was delivered. Inspect the existing thread before continuing; do not repeat the completed reply.",
+        }),
+      });
+    } finally {
+      closeHostCapabilities();
+    }
+  });
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {
     const storePath = path.join(tempDir, "settled-compaction-failure.sqlite");
     const sessionId = "session-settled-compaction-failure";

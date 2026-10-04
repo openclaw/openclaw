@@ -53,6 +53,7 @@ export async function finalizeCodexAttempt(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
+  onResultProjected?: (result: EmbeddedRunAttemptResult) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, systemPromptReport } = prompt;
@@ -130,6 +131,10 @@ export async function finalizeCodexAttempt(
         ? turnRuntime.steeringQueueRef.current?.getAcceptedMessages()
         : undefined,
     });
+    // Publish canonical delivery evidence before binding retention and other
+    // finalization steps can fail. The caller can then preserve a completed
+    // source reply without exposing host-private callbacks to plugin harnesses.
+    onResultProjected?.(result);
     const projectedTerminal = attemptTerminal.project(result.terminal);
     // Transport loss aborts in-flight work mechanically, but its terminal outcome
     // must remain a failure unless the operator explicitly canceled the attempt.

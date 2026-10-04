@@ -93,7 +93,13 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"
-  >;
+  > &
+    Partial<
+      Pick<
+        Awaited<ReturnType<typeof prepareEmbeddedAttemptAgentSession>>,
+        "markCompletedSourceReplyDelivered"
+      >
+    >;
   applyPermissionMode?: (
     mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
     revokeApprovals: () => void,
@@ -345,6 +351,7 @@ function prepareStream(
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     hasDeliveredMessageToolOnlySourceReply: agentSession.hasDeliveredSourceReply,
     onDeliveredMessageToolOnlySourceReply: agentSession.markSourceReplyDelivered,
+    onCompletedMessageToolOnlySourceReply: agentSession.markCompletedSourceReplyDelivered,
     onAgentToolResult: attempt.onAgentToolResult,
     observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,

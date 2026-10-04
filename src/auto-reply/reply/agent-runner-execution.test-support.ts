@@ -387,6 +387,7 @@ export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
 export type FallbackRunnerParams = TestModelFallbackRunnerParams & {
   sessionId?: string;
   abortSignal?: AbortSignal;
+  canFallbackAfterError?: () => boolean;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -411,6 +412,7 @@ export type EmbeddedAgentParams = {
   currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onCompletedSourceReplyDelivered?: () => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {

@@ -52,6 +52,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   /** Reports source delivery observed through bridged tool lifecycle events. */
   onDeliveredMessageToolOnlySourceReply?: () => void;
+  /** Reports canonical completion after middleware publishes the final delivery receipt. */
+  onCompletedMessageToolOnlySourceReply?: () => void;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
