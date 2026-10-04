@@ -2,7 +2,7 @@ import type { BigIntStats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { RootCopyPublicationReceipt } from "@openclaw/fs-safe/root";
-import { FsSafeError, root } from "./fs-safe.js";
+import { FsSafeError, isCloneDeniedError, root } from "./fs-safe.js";
 
 /** Copy a physical SQLite file, not a coherent family. Its caller owns coherence and byte checks. */
 export async function copySqliteFile(
@@ -57,7 +57,9 @@ export async function copySqliteFile(
       if (
         published ||
         !(error instanceof FsSafeError) ||
-        (error.code !== "helper-unavailable" && error.code !== "unsupported-platform")
+        (error.code !== "helper-unavailable" &&
+          error.code !== "unsupported-platform" &&
+          !isCloneDeniedError(error))
       ) {
         throw error;
       }
@@ -65,7 +67,14 @@ export async function copySqliteFile(
       await copy("never");
     }
   } else {
-    await copy("auto");
+    try {
+      await copy("auto");
+    } catch (error) {
+      if (published || !isCloneDeniedError(error)) {
+        throw error;
+      }
+      await copy("never");
+    }
   }
   if (!published) {
     throw new Error(`SQLite copy was not published: ${targetPath}`);

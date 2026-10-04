@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { root as openRoot } from "./fs-safe.js";
+import { copyInPreferringClone, root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
@@ -659,22 +659,26 @@ export async function copyUpdateCandidatePluginTrees(
         const destination = destinationFor(entry.path);
         // copyIn owns portable create-only publication; no-replace move needs a
         // native binding. Recheck the inventory before its private stage is published.
-        await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
-          overwrite: false,
-          // Every destination parent is prepared before copies are admitted.
-          mkdir: false,
-          // Rehearsal payloads are disposable and never serve as recovery backups.
-          durable: false,
-          clone: "auto",
-          maxBytes: entry.size,
-          mode: entry.mode | 0o600,
-          sourceHardlinks: "allow",
-          assertBeforeMutation: () =>
-            assertUpdateCandidatePluginEntryStat(
-              entry,
-              fsSync.lstatSync(entry.path, { bigint: true }),
-            ),
-        });
+        await copyInPreferringClone(
+          destinationRoot,
+          path.relative(privateRoot, destination),
+          entry.path,
+          {
+            overwrite: false,
+            // Every destination parent is prepared before copies are admitted.
+            mkdir: false,
+            // Rehearsal payloads are disposable and never serve as recovery backups.
+            durable: false,
+            maxBytes: entry.size,
+            mode: entry.mode | 0o600,
+            sourceHardlinks: "allow",
+            assertBeforeMutation: () =>
+              assertUpdateCandidatePluginEntryStat(
+                entry,
+                fsSync.lstatSync(entry.path, { bigint: true }),
+              ),
+          },
+        );
         await assertEntry(entry);
       }),
   });
