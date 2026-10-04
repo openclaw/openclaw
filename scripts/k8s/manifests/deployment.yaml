@@ -50,6 +50,33 @@ spec:
               mountPath: /home/node/.openclaw
             - name: config
               mountPath: /config
+        - name: init-tmp
+          image: busybox:1.38
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /tmp-volume/gateway-tmp
+              chmod 1777 /tmp-volume/gateway-tmp
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: 8Mi
+              cpu: 10m
+            limits:
+              memory: 16Mi
+              cpu: 50m
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp-volume
       containers:
         - name: gateway
           # Bump this immutable versioned tag when upgrading OpenClaw.
@@ -146,6 +173,7 @@ spec:
               mountPath: /home/node/.openclaw
             - name: tmp-volume
               mountPath: /tmp
+              subPath: gateway-tmp
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
