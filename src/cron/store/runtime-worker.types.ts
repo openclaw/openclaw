@@ -152,7 +152,12 @@ export type CronRuntimeMutationInputs = {
     scheduleOwnershipAtMs: number;
     onExit: boolean;
   };
-  "cron.maintainHistory": Record<string, never>;
+  "cron.maintainHistory": {
+    /** Only a sweep's first batch reconciles; later batches skip rows it reconciled. */
+    reconcile: boolean;
+    exclude: string[];
+    limit: number;
+  };
   "cron.activateRun": {
     storeKey: string;
     handle: CronRunReceiptHandle;

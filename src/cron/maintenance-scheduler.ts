@@ -7,7 +7,7 @@ import {
 const CRON_SWEEP_INTERVAL_MS = 60_000;
 
 export function createCronMaintenanceScheduler(
-  run: () => Promise<void>,
+  run: (signal: AbortSignal) => Promise<void>,
   onError: (error: unknown) => void,
 ) {
   let scope: GatewaySchedulerScope | undefined;
@@ -21,7 +21,7 @@ export function createCronMaintenanceScheduler(
     scheduledSweep = runWithGatewayIndependentRootWorkAdmission(
       async () => {
         admitted = true;
-        await run();
+        await run(signal);
       },
       "cron:maintenance",
       signal,
