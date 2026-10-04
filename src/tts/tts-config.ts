@@ -47,6 +47,26 @@ function asTtsConfig(value: unknown): TtsConfig | undefined {
   return isPlainObject(value) ? (value as TtsConfig) : undefined;
 }
 
+function resolveChannelConfig(
+  cfg: OpenClawConfig,
+  channelId: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!isPlainObject(cfg.channels)) {
+    return undefined;
+  }
+  const normalizedChannelId = normalizeOptionalString(channelId);
+  if (!normalizedChannelId) {
+    return undefined;
+  }
+  return asObjectRecord(
+    resolveRecordEntry(
+      cfg.channels as Record<string, unknown>,
+      normalizedChannelId,
+      normalizeLowercaseStringOrEmpty,
+    ),
+  );
+}
+
 /** Resolve effective TTS config after applying global, agent, channel, and account layers. */
 export function resolveEffectiveTtsConfig(
   cfg: OpenClawConfig,
@@ -56,13 +76,7 @@ export function resolveEffectiveTtsConfig(
     typeof contextOrAgentId === "string" ? { agentId: contextOrAgentId } : (contextOrAgentId ?? {});
   const base = cfg.tts ?? {};
   const agentOverride = context.agentId ? resolveAgentConfig(cfg, context.agentId)?.tts : undefined;
-  const channelConfig = asObjectRecord(
-    resolveRecordEntry(
-      asObjectRecord(cfg.channels),
-      context.channelId,
-      normalizeLowercaseStringOrEmpty,
-    ),
-  );
+  const channelConfig = resolveChannelConfig(cfg, context.channelId);
   const channelOverride = asTtsConfig(channelConfig?.tts);
   const accounts = isPlainObject(channelConfig?.accounts) ? channelConfig.accounts : undefined;
   const accountConfig = resolveRecordEntry(accounts, context.accountId, normalizeAccountId);

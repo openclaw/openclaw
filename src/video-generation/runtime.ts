@@ -65,7 +65,7 @@ function validateProviderOptionsAgainstDeclaration(params: {
     const expected = declaration[key];
     const value = providerOptions[key];
     const actual = typeof value;
-    if (expected === "number" && (actual !== "number" || !Number.isFinite(value))) {
+    if (expected === "number" && (actual !== "number" || !Number.isFinite(value as number))) {
       return `${providerId}/${model} expects providerOptions.${key} to be a finite number, got ${actual}; skipping`;
     }
     if (expected === "boolean" && actual !== "boolean") {
