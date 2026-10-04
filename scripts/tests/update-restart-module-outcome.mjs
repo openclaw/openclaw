@@ -244,6 +244,10 @@ async function fixture({
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,
+    // This fixture has no Doctor settlement step or persisted Doctor result.
+    refuseUnsettledDoctorRecovery: () => false,
+    admitMigratedGatewayRecovery: async () => false,
+    collectUpdateDoctorFailureFacts: () => [],
   };
   const context = vm.createContext({
     process: { env: {}, stdin: { isTTY: false }, platform: "linux" },

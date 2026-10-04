@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
   commandCalls,
@@ -30,6 +31,7 @@ import {
   resolveGatewayInstallEntrypoint,
   resolveOpenClawPackageRoot,
   resolveUpdateInstallKind,
+  runCommandWithTimeout,
   runExec,
   runPostCorePluginConvergenceSpy,
   updateCommand,
@@ -242,9 +244,8 @@ describe("update-cli", () => {
     vi.mocked(updateGitCheckout).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
     );
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-      "/tmp/openclaw-updated-entry.mjs",
-    );
+    const updatedEntrypoint = "/tmp/openclaw-updated-entry.mjs";
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(updatedEntrypoint);
     mockNpmPluginOutcomes([], true);
     let strictValidationEnv: string | undefined;
     vi.mocked(readConfigFileSnapshot).mockImplementation(async (options) => {
@@ -263,7 +264,7 @@ describe("update-cli", () => {
     expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
     expect(runExec).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
-      [FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
+      [updatedEntrypoint, "config", "validate", "--json"],
       expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
     );
     expect(strictValidationEnv).toBe("0");
@@ -298,8 +299,9 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
-    vi.mocked(runExec).mockRejectedValueOnce(
-      Object.assign(new Error("Command failed: " + "long-argv-prefix ".repeat(100)), {
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
+      createCommandResult({
+        code: 1,
         stderr: "doctor process failed: optional plugin repair unavailable",
         stdout: "doctor diagnostic output",
       }),
@@ -312,7 +314,6 @@ describe("update-cli", () => {
     });
     expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
     expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
   });
 
   it("keeps an invalid config authoritative after a fresh plugin doctor failure", async () => {
@@ -320,9 +321,10 @@ describe("update-cli", () => {
       "/tmp/openclaw-updated-entry.mjs",
     );
     const issues = [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }];
-    vi.mocked(runExec)
-      .mockRejectedValueOnce(new Error("doctor process failed"))
-      .mockRejectedValueOnce(createConfigValidationFailure(issues));
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
+      createCommandResult({ code: 1, stderr: "doctor process failed" }),
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(createConfigValidationFailure(issues));
     vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
       configSnapshot(baseConfig, {
         valid: false,
