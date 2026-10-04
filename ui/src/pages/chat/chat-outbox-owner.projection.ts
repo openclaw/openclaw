@@ -49,6 +49,26 @@ export function projectChatOutboxAttention(
   );
 }
 
+export function chatOutboxProjectionNeedsReview(
+  states: Iterable<ChatOutboxHostProjection>,
+  key: string,
+  item: ChatQueueItem,
+): boolean {
+  for (const state of states) {
+    if (
+      state.byScope
+        .get(key)
+        ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
+    ) {
+      return false;
+    }
+  }
+  return (
+    !item.pendingRunId &&
+    (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
+  );
+}
+
 export function isActiveLocal(
   state: { durableSeen: ReadonlySet<string>; retryable: ReadonlySet<string> },
   item: ChatQueueItem,

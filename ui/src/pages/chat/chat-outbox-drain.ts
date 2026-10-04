@@ -249,6 +249,7 @@ async function drainStoredChatOutbox(
     if (
       !host.connected ||
       !host.client ||
+      chatOutboxOwner(host).admissions.has(scope) ||
       chatSendHoldReason(host, scope.sessionKey, false, scope.agentId)
     ) {
       return "blocked";

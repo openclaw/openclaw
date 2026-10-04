@@ -7,6 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCreationComposer } from "../new-session/creation-composer-render.ts";
 import { renderNewSessionBody } from "../new-session/draft-body.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
@@ -14,7 +15,7 @@ import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();
 
-/** Admission preview owns display only; real pane controllers mount after acceptance. */
+/** Draft-owned input stays local; real pane controllers mount after acceptance. */
 class PendingSessionCreate extends OpenClawLightDomElement {
   @property({ attribute: false }) context!: ApplicationContext;
   @property() sessionKey = "";
@@ -35,6 +36,10 @@ class PendingSessionCreate extends OpenClawLightDomElement {
           this.closeImage();
           notify();
         }),
+    )
+    .watch(
+      () => this.context?.chatSubmissions.readCreateComposer(this.sessionKey),
+      (composer, notify) => composer.subscribe(notify),
     )
     .watchStore(() => this.context?.placementStartup);
   private readonly closeImage = () => {
@@ -110,6 +115,13 @@ class PendingSessionCreate extends OpenClawLightDomElement {
             this.image = item;
           },
         })}
+        ${renderCreationComposer(
+          this.context.chatSubmissions.readCreateComposer(this.sessionKey),
+          (item) => {
+            this.closeImage();
+            this.image = item;
+          },
+        )}
       </section>
       ${renderChatImageLightbox(this.image, this.closeImage)}`;
   }

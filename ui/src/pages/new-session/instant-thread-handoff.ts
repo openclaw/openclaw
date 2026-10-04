@@ -5,6 +5,7 @@ import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { CreationComposer } from "./creation-composer.ts";
 import { beginInstantThreadNavigation } from "./instant-thread-navigation.ts";
 import {
   retainInstantThreadRestore,
@@ -23,6 +24,7 @@ export function prepareInstantThreadHandoff(options: {
   agentId: string;
   retainDraft: (() => RetainedNewSessionDraft | undefined) | undefined;
   message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"];
+  composer?: CreationComposer;
 }): (() => InstantThreadHandoff | undefined) | undefined {
   const { context, params, agentId, retainDraft } = options;
   if (!options.enabled || !context.gateway.snapshot.hello?.auth?.recoveryScope || !retainDraft) {
@@ -37,7 +39,7 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message)
+      ? new InstantThreadHandoff(context, key, agentId, draft, options.message, options.composer)
       : undefined;
   };
 }
@@ -71,6 +73,7 @@ export class InstantThreadHandoff {
     agentId: string,
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
+    composer?: CreationComposer,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -104,6 +107,7 @@ export class InstantThreadHandoff {
     this.clearPendingCreate = context.chatSubmissions.beginCreate({
       creation: this.creation,
       message,
+      composer,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),

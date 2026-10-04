@@ -334,8 +334,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       (catalogKey
         ? this.catalogSession?.canContinue === true
         : !disabledReason &&
-          !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
-          (!pendingReason || initialHistoryUnavailable));
+          !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend));
     const composerAvailability = {
       canCompose: composerAccess && composerAvailable,
       canSend: composerAccess && composerAvailable,
@@ -394,7 +393,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         : state.chatLoading || (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
-        (placementStartup !== null && placementStartup.phase !== "failed") ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,

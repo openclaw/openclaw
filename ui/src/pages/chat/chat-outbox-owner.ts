@@ -16,10 +16,12 @@ import {
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { ChatOutboxAdmissions } from "./chat-outbox-admissions.ts";
 import {
   projectChatOutboxItem,
   isActiveLocal,
   projectChatOutboxAttention,
+  chatOutboxProjectionNeedsReview,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
 import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
@@ -49,6 +51,7 @@ const storageIds = new WeakMap<Storage, number>();
 let nextStorageId = 0;
 // One gateway owner merges durable, live, and pane-local rows for every subscribed pane.
 class ChatOutboxGatewayOwner {
+  readonly admissions = new ChatOutboxAdmissions();
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
   private readonly live = new Map<string, Map<string, LiveProjection>>();
@@ -154,6 +157,7 @@ class ChatOutboxGatewayOwner {
     return live;
   }
   private observeDurable(id: string): void {
+    this.admissions.release(id);
     // Admission supersedes every retained copy, even an offscreen pane now using
     // another account. Subsequent canonical removal must not resurrect its bytes.
     for (const [pane, projection] of this.hosts) {
@@ -557,6 +561,7 @@ class ChatOutboxGatewayOwner {
       return null;
     }
     if (located) {
+      this.admissions.release(id);
       this.projectLive(host, located.scope, id);
       this.change(host, id);
     }
@@ -591,21 +596,9 @@ class ChatOutboxGatewayOwner {
   /** Inbox reads delivery state, not the reload-safe aliases stored during live work. */
   needsReview(scope: Scope, item: ChatQueueItem): boolean {
     const key = storedChatOutboxScopeKey(scope);
-    if (this.readLive(key, item.id, item)) {
-      return false;
-    }
-    for (const state of this.hosts.values()) {
-      if (
-        state.byScope
-          .get(key)
-          ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
-      ) {
-        return false;
-      }
-    }
     return (
-      !item.pendingRunId &&
-      (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
+      !this.readLive(key, item.id, item) &&
+      chatOutboxProjectionNeedsReview(this.hosts.values(), key, item)
     );
   }
   beginSubmission(
