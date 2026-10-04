@@ -135,12 +135,12 @@ it.each([false, true])(
   async (fail) => {
     let failClose = fail;
     const gate = createDeferredCore();
-    const resource = {
+    const held = {
       agentId: "worker",
       path: path.join(root, "selected", "worker.sqlite"),
       revoke: vi.fn(() => {
         expect(() =>
-          registerOpenClawAgentDatabaseAsyncResource({
+          registerKnown({
             agentId: "reentrant",
             path: path.join(root, "selected", "reentrant.sqlite"),
             revoke() {},
@@ -156,13 +156,13 @@ it.each([false, true])(
       revoke: vi.fn(),
       close: async () => {},
     };
-    registerOpenClawAgentDatabaseAsyncResource(resource);
-    registerOpenClawAgentDatabaseAsyncResource(sibling);
+    registerKnown(held);
+    registerKnown(sibling);
     const failure = new Error("independent resource close failed");
     const failureObserved = createDeferredCore();
     const failedPath = path.join(root, "selected", "failed.sqlite");
     if (fail) {
-      registerOpenClawAgentDatabaseAsyncResource({
+      registerKnown({
         agentId: "failed",
         path: failedPath,
         revoke() {},
@@ -190,11 +190,11 @@ it.each([false, true])(
         await failureObserved.promise;
       }
       expect(settled).toBe(false);
-      expect(resource.revoke).toHaveBeenCalledOnce();
+      expect(held.revoke).toHaveBeenCalledOnce();
       expect(sibling.revoke).not.toHaveBeenCalled();
       expect(() =>
-        registerOpenClawAgentDatabaseAsyncResource({
-          ...resource,
+        registerKnown({
+          ...held,
           path: path.join(root, "selected", "new.sqlite"),
         }),
       ).toThrow("are closing");
