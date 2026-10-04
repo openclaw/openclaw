@@ -181,7 +181,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      151,
+      // +1: openclaw/plugin-sdk/memory-recall records interactive recall for non-core memory plugins (PR #165054).
+      152,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -196,7 +197,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +4: executor controller, binding, context, and resolver.
       // +1: required session cleanup failure preserves native ownership before host reset.
-      3652,
+      // +2: openclaw/plugin-sdk/memory-recall exports recordMemoryRecall and MemoryRecallParams (PR #165054).
+      3654,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -209,7 +211,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +1: resolve the controller from the current invocation registry.
-      2113,
+      // +1: openclaw/plugin-sdk/memory-recall exports recordMemoryRecall callable (PR #165054).
+      2114,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
