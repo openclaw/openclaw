@@ -59,7 +59,7 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
-    activationWarning(message: string) {
+    activationWarning: (message: string) => {
       if (!warnings.includes(message)) {
         warnings.push(message);
       }
