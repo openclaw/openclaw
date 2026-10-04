@@ -60,11 +60,18 @@ describe("chat composer IME composition", () => {
       const container = document.createElement("div");
       render(renderChatComposer(props), container);
       const textarea = getComposerTextarea(container);
+      textarea.style.height = "42px";
       textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      for (const value of ["shi", "shichang"]) {
+        textarea.value = value;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+      }
+      expect(textarea.style.height).toBe("42px");
       textarea.value = "日本語";
       textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
       const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
       textarea.dispatchEvent(end);
+      expect(textarea.style.height).not.toBe("42px");
       render(renderChatComposer({ ...props, draft: "日本語" }), container);
 
       for (const offset of [confirmOffset, 99, 100]) {
@@ -143,28 +150,5 @@ describe("chat composer IME composition", () => {
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("does not force textarea resize during IME composition", () => {
-    const container = renderComposerFixture().container;
-    const textarea = getComposerTextarea(container);
-
-    // Set a sentinel height to detect unwanted overwrites
-    textarea.style.height = "42px";
-
-    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "shi";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-    textarea.value = "shichang";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-
-    // Height must stay untouched — no forced reflow during composition
-    expect(textarea.style.height).toBe("42px");
-
-    textarea.value = "市场";
-    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-
-    // After composition ends, adjustTextareaHeight runs via syncComposerValue
-    expect(textarea.style.height).not.toBe("42px");
   });
 });

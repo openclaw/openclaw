@@ -1,11 +1,7 @@
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import {
-  clampTimerTimeoutMs,
-  resolveIntegerOption as normalizeIntegerOption,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { clampTimerTimeoutMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { captureDiscordRequestAuthority } from "./request-authority.js";
@@ -24,12 +20,9 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
 export type RequestClientOptions = {
-  tokenHeader?: "Bot" | "Bearer";
   baseUrl?: string;
   /** Complete versioned REST base supplied by the Discord endpoint override. */
   apiBaseUrl?: string;
-  apiVersion?: number;
-  userAgent?: string;
   signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
@@ -38,7 +31,6 @@ export type RequestClientOptions = {
 
 type NormalizedRequestClientOptions = RequestClientOptions & {
   apiBaseUrl: string;
-  apiVersion: number;
   timeout: number;
 };
 
@@ -48,10 +40,7 @@ type RequestDispatchData = {
 };
 
 const defaultOptions = {
-  tokenHeader: "Bot" as const,
   baseUrl: "https://discord.com/api",
-  apiVersion: 10,
-  userAgent: "OpenClaw Discord",
   timeout: 15_000,
   queueRequests: true,
 };
@@ -205,14 +194,14 @@ export class RequestClient {
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
-      "User-Agent": this.options.userAgent ?? defaultOptions.userAgent,
+      "User-Agent": "OpenClaw Discord",
     });
     if (this.token !== "webhook") {
-      headers.set("Authorization", `${this.options.tokenHeader ?? "Bot"} ${this.token}`);
+      headers.set("Authorization", `Bot ${this.token}`);
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
     timeout.unref?.();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
@@ -225,7 +214,7 @@ export class RequestClient {
         this.customFetch && assertCurrent
           ? await this.customFetch(url, init, assertCurrent)
           : await (this.customFetch ?? fetch)(url, init);
-      const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
+      const text = await readResponseBodyText(response, this.options.timeout);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
@@ -263,10 +252,6 @@ export class RequestClient {
     return this.scheduler.queueSize;
   }
 
-  getSchedulerMetrics() {
-    return this.scheduler.getMetrics();
-  }
-
   abortAllRequests(): void {
     this.scheduler.abortPending();
     for (const controller of this.requestControllers) {
@@ -280,14 +265,9 @@ function normalizeRequestClientOptions(
   options?: RequestClientOptions,
 ): NormalizedRequestClientOptions {
   const merged = { ...defaultOptions, ...options };
-  const apiVersion = normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, {
-    min: 1,
-  });
   return {
     ...merged,
-    apiBaseUrl:
-      options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v${apiVersion}`,
-    apiVersion,
+    apiBaseUrl: options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v10`,
     timeout:
       clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
   };

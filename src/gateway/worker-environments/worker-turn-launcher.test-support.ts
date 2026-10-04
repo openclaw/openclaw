@@ -521,10 +521,20 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     ...(executionIdentity
       ? { logging: { audit: { enabled: true, executionIdentity: true } } }
       : {}),
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "synthetic-worker-api-key",
+          models: [],
+        },
+      },
+    },
     agents: {
       defaults: {
+        userTimezone: "UTC",
         models: {
-          "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
         },
       },
     },
@@ -555,7 +565,7 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     timeoutMs: 5_000,
     runId,
     provider: "openai",
-    model: "gpt-test",
+    model: "gpt-5.6-luna",
     modelHasVision: true,
     config,
   };

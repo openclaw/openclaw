@@ -7,6 +7,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import type { Logger } from "../service/state.js";
+import { prepareCronReceiptAuthorityPublication } from "./receipt-authority-publication.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import type { CronRuntimeMutationType } from "./runtime-worker.types.js";
@@ -57,7 +58,10 @@ export function retainCronRuntimeMutationOutcome<Type extends CronRuntimeMutatio
   outcome: CronRuntimeMutationContracts[Type]["outcome"],
 ): { nonce: string } {
   const bytes = ownedWorkerBytes(serialize(outcome));
-  deferSqliteWorkerCommitReceipt(db, { nonce });
+  deferSqliteWorkerCommitReceipt(db, {
+    nonce,
+    receiptAuthority: prepareCronReceiptAuthorityPublication(db),
+  });
   requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce, bytes } }, [
     bytes.buffer,
   ]);

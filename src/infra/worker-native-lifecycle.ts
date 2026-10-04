@@ -79,10 +79,13 @@ const lifetime = resolveGlobalSingleton(
     nextId: 0,
     sources: new WeakMap(),
   }),
-  async (state) => {
-    await state.defaultSource?.close();
-  },
+  closeDefaultRetainedNativeWorkerSource,
 );
+
+/** Terminal process cleanup joins the existing unbound owner without starting another. */
+export async function closeDefaultRetainedNativeWorkerSource(): Promise<void> {
+  await lifetime.defaultSource?.close();
+}
 
 function forgetNativeSource(source: NativeSource): void {
   if (source.runtimeGeneration) {

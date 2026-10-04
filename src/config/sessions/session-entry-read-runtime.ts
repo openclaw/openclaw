@@ -163,6 +163,19 @@ export async function withSessionEntryReadOnlyInWorker<T>(
   );
 }
 
+/** Return entry data only after the retained physical reader has finished its currentness checks. */
+export function readSessionEntryReadOnlyInWorker(
+  input: SessionEntryReadScope,
+  assertCallerCurrent: () => void = () => {},
+): Promise<SessionEntry | undefined> {
+  return withSessionEntryReadOnlyInWorker(input, assertCallerCurrent, async (read) => {
+    if (!read.ok) {
+      throw read.error;
+    }
+    return read.value;
+  });
+}
+
 /** Diagnostic identities name the default agent store, not a logical store locator. */
 export async function withSessionDiagnosticTextInWorker(
   input: { agentId: string; sessionKey: string; sessionId: string },
@@ -203,7 +216,7 @@ export async function withSessionDiagnosticTextInWorker(
 /** Preserve logical lookup and writable open semantics on the canonical file-backed actor. */
 export async function readSessionEntryInWorker(
   input: SessionAccessScope,
-  assertCallerCurrent: () => void,
+  assertCallerCurrent: () => void = () => {},
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
 ) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);

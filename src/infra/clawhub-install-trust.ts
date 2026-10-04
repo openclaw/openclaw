@@ -49,12 +49,11 @@ type ClawHubTrustFailure = {
 type ClawHubInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
-  terminalLinks?: boolean;
 };
 
 type ClawHubTrustSubject =
   | { kind: "plugin"; packageName: string }
-  | { kind: "skill"; packageName: string; workspaceDir: string; ownerHandle?: string };
+  | { kind: "skill"; packageName: string; ownerHandle?: string };
 
 type ClawHubFetchedSubjectSecurity = {
   security: ClawHubPackageSecurityResponse;

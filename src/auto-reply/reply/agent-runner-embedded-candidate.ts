@@ -120,6 +120,7 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
+        preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
         messageActionTurnCapability: params.messageActionTurnCapability,

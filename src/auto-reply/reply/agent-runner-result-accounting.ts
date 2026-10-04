@@ -453,7 +453,7 @@ export async function accountFollowupTurn(params: {
   }
   if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
     turn.session.publish(
-      refreshSessionEntryFromStore({
+      await refreshSessionEntryFromStore({
         storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
         sessionKey,
         fallbackEntry: turn.session.current(),

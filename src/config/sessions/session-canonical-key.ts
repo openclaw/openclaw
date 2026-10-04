@@ -15,7 +15,9 @@ import {
 } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
+  getSqliteReadOperationRevision,
   readSqliteDataVersion,
+  type SqliteReadOperationRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
@@ -80,6 +82,7 @@ type ReaderAdmission = {
 };
 type ReaderAdmissionCell = {
   proof?: ReaderAdmission;
+  policy?: SqliteReadOperationRevision & { mainKey: string };
   committed: boolean;
   continuations: Set<SharedArrayBuffer>;
 };
@@ -354,7 +357,22 @@ export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgent
 }
 
 export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): string {
-  return normalizeMainKey(mainKeyReader(database.db)()?.main_key);
+  const admission = readerAdmissions.get(database.db);
+  const revision = getSqliteReadOperationRevision(database.db);
+  const policy = admission?.policy;
+  if (
+    revision &&
+    policy?.schema === revision.schema &&
+    policy.dataVersion === revision.dataVersion &&
+    policy.mutationRevision === revision.mutationRevision
+  ) {
+    return policy.mainKey;
+  }
+  const mainKey = normalizeMainKey(mainKeyReader(database.db)()?.main_key);
+  if (admission && revision) {
+    admission.policy = { ...revision, mainKey };
+  }
+  return mainKey;
 }
 
 export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {

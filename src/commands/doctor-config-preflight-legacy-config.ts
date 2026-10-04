@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -12,11 +11,9 @@ import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
@@ -153,41 +150,13 @@ export async function prepareDoctorConfigRecovery(params: {
 }
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  const changes: string[] = [];
-  const home = resolveHomeDir();
-  if (!home) {
-    return changes;
+  if (
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.OPENCLAW_HOME?.trim() ||
+    process.env.OPENCLAW_CONFIG_PATH?.trim()
+  ) {
+    return [];
   }
-
-  const targetPath = resolveCanonicalConfigPath();
-  const targetDir = path.dirname(targetPath);
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
-  }
-
-  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
-  try {
-    await fs.access(legacyPath);
-  } catch {
-    return changes;
-  }
-
-  await fs.mkdir(targetDir, { recursive: true });
-  try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
-    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch (error) {
-    // A concurrently created target wins; every other failure must remain actionable.
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    if (code !== "EEXIST") {
-      throw new Error(
-        `Failed to migrate legacy config ${legacyPath} -> ${targetPath}: ${formatErrorMessage(error)}`,
-        { cause: error },
-      );
-    }
-  }
-  return changes;
+  const { renameLegacyConfigFile } = await import("../infra/state-migrations.state-dir.js");
+  return renameLegacyConfigFile(path.dirname(resolveCanonicalConfigPath()));
 }

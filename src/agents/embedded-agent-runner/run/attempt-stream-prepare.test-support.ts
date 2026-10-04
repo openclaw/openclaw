@@ -77,6 +77,7 @@ export function prepareCatalogExecutor(options?: {
       hasDeliveredSourceReply: () => false,
       markSourceReplyDelivered: vi.fn(),
       builtinToolNames: new Set(),
+      sourceReplyCapableToolNames: new Set(),
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
       codeModeExecToolNames: new Set(),

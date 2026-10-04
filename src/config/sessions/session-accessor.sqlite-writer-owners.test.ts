@@ -397,18 +397,12 @@ it("coalesces automatic maintenance through native planning and finalization", a
       expect(operations).toEqual([
         "session.maintenance.plan",
         "session.reclamation.retain",
-        "session.maintenance.plan",
         "session.reclamation.retain",
         "session.reclamation.retain",
         "session.reclamation.worker-commit",
         "session.reclamation.retain",
       ]);
-      expect(workerOutcomes.map(({ kind }) => kind)).toEqual([
-        "maintenance-plan",
-        "maintenance-plan",
-        "maintenance-finalize",
-        "maintenance-age",
-      ]);
+      expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
       for (const outcome of workerOutcomes) {
         expect(outcome.outcome).toBe("resolved");
         expect(outcome.workerThreadId).toBeGreaterThan(0);

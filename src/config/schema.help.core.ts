@@ -10,6 +10,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
     "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
+  worktreeMaxCount:
+    "Maximum live managed worktrees across all agents and repositories (default: 4096). Evicts merged or squashed branches first, then oldest idle worktrees, including unsaved data. Live runs are protected; raise this value if they occupy the cap. Disk-space admission still applies.",
   ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":

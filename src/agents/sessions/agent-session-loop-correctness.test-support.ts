@@ -123,6 +123,7 @@ export function mockInvalidThenTextSummary(recoveredText: string) {
 
 export async function createTestSession(
   options: {
+    systemPrompt?: string;
     model?: Model;
     settingsManager?: SettingsManager;
     sessionManager?: SessionManager;
@@ -152,24 +153,22 @@ export async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const sessionOptions = {
+  const result = await createAgentSession({
+    systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
     thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
-    authStorage,
-    noTools: "builtin" as const,
+    tools: options.customTools?.map((tool) => tool.name) ?? [],
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
-  };
-  const result = await createAgentSession({
-    ...sessionOptions,
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
     resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
-    cleanupProviderSessionResourcesOnDispose:
-      !options.contextOverflowRecoveryOwner && !options.resolveCompactionThinkingLevel,
+    cleanupProviderSessionResourcesOnDispose: !(
+      options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
+    ),
   });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };

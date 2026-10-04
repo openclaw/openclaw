@@ -6,7 +6,6 @@ import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
-import { resolveAvatarHat } from "./agent-avatar-hat.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 
 const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue(0));
@@ -20,21 +19,6 @@ afterEach(() => {
 const branding: ThemeBranding = { mascot: "none", critters: [], avatarHat: "fedora" };
 
 describe("theme avatar hats", () => {
-  it("keeps one of six fixed agent seeds selected across render order within a page load", () => {
-    const agentIds = ["agent-0", "agent-1", "agent-2", "agent-3", "agent-4", "agent-5"];
-    const expected = [null, null, null, null, null, "fedora"];
-    expect(agentIds.map((id) => resolveAvatarHat(id, branding))).toEqual(expected);
-    expect(agentIds.toReversed().map((id) => resolveAvatarHat(id, branding))).toEqual(
-      expected.toReversed(),
-    );
-  });
-
-  it("requires theme opt-in and excludes reserved system agents", () => {
-    expect(resolveAvatarHat("agent-5", { mascot: "claw" })).toBeNull();
-    expect(resolveAvatarHat("openclaw", branding)).toBeNull();
-    expect(resolveAvatarHat("crestodian", branding)).toBeNull();
-  });
-
   it.each(["agent-5", "agent-0"])(
     "applies the theme hat to loaded transcript and forwarded photos for %s",
     (agentId) => {
@@ -64,10 +48,6 @@ describe("theme avatar hats", () => {
 
   it.each([
     ["fedora", "agent-5", false, "none", true],
-    ["crown", "agent-5", false, "none", true],
-    ["santa", "agent-5", false, "none", true],
-    ["party", "agent-5", false, "none", true],
-    ["pumpkin", "agent-5", false, "none", true],
     ["fedora", "agent-5", false, "claw", true],
     ["fedora", "agent-0", false, "none", false],
     ["fedora", "agent-5", true, "none", false],

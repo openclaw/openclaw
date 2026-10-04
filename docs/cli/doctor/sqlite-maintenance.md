@@ -129,6 +129,14 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Older V2 migration receipts can record completed index moves without file identity.
+Doctor compares a surviving archive with the current `sessions.json`: different
+content imports as a new legacy index. If the archive is identical or missing,
+Doctor imports history while preserving current SQLite session metadata. It does
+not invent identity fields in the old receipt or delete its archive. The current
+index follows normal verification and archival after import. This repair runs in
+Doctor before runtime readiness, including during upgrades.
+
 When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
 with the same identity and byte checks as indexed transcripts. A transcript's

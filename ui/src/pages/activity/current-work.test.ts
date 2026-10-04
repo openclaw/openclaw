@@ -14,6 +14,7 @@ it("loads a bounded current-work query independently of chat, people, and recenc
     "sessions.list",
     {
       rowMode: "compact",
+      source: "activity",
       activeOnly: true,
       archived: "all",
       includeGlobal: true,

@@ -1,3 +1,5 @@
+import type { OpenClawStateLeaseContext } from "../../state/openclaw-state-lease-context.js";
+
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
 export type ManagedWorktreeRunEndCleanupOutcome =
@@ -39,8 +41,46 @@ export type ManagedWorktreeRecord = {
   gcProtection?: string;
 };
 
+export type WorktreeRegistryPredicate =
+  | { kind: "activity"; id: string; lastActiveAt: number }
+  | { kind: "session-owner"; id: string; sessionKey: string }
+  | { kind: "record" | "binding" | "exact-snapshot"; record: ManagedWorktreeRecord }
+  | {
+      kind: "exact-owner";
+      record: Pick<
+        ManagedWorktreeRecord,
+        | "id"
+        | "ownerKind"
+        | "ownerId"
+        | "createdAt"
+        | "lastActiveAt"
+        | "path"
+        | "branch"
+        | "repoRoot"
+      >;
+    }
+  | { kind: "removal-claim"; id: string; token: string }
+  | { kind: "removal-claims"; ids: readonly string[]; token: string }
+  | { kind: "projection"; id: string; ownerId: string; path: string; repoRoot: string }
+  | { kind: "source-owner"; ownerId: string; id: string; path: string; repoRoot: string }
+  | {
+      kind: "source-record";
+      id: string;
+      ownerId?: string;
+      repoRoot: string;
+      repoFingerprint: string;
+    };
+
+/** Explicit worker authority replaces the native guard, including predicate-only authority. */
+export type WorktreeWorkerAuthority = {
+  lease?: OpenClawStateLeaseContext;
+  assertCurrent?: () => void;
+  predicates?: readonly WorktreeRegistryPredicate[];
+};
+
 type WorktreeSourceCurrent = {
   assertCurrent: () => void;
+  workerAuthority?: Omit<WorktreeWorkerAuthority, "lease">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
   assertCheckoutCurrent?: () => void;
   signal?: AbortSignal;
@@ -134,6 +174,15 @@ export type ManagedWorktreeGcResult = {
   protectionReasons: Record<string, number>;
   /** Null when incomplete inventory or size measurements prevent a conclusion. */
   limitsSatisfied: boolean | null;
+  evictions?: Partial<Record<"merged" | "squashed" | "idle-age" | "dirty-purged", number>>;
+};
+
+export type ManagedWorktreeGcReceipt = ManagedWorktreeGcResult & {
+  jobId: string;
+  state: "queued" | "running" | "completed" | "failed";
+  startedAt: number | null;
+  completedAt: number | null;
+  error: string | null;
 };
 
 /** Explicit early retirement only for a snapshot whose source remains retained. */

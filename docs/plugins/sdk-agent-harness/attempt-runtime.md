@@ -285,12 +285,14 @@ snapshots and persisted billing usage separate from this live counter.
 
 ## Agent-end side effects
 
-Native harnesses must call `runAgentEndSideEffects(...)` from
+Native harnesses must await `runAgentEndSideEffectsAsync(...)` from
 `openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
-dispatches the portable `agent_end` hook and OpenClaw's research capture
-without delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for
-local, non-interactive runs where the attempt must not resolve until those
-side effects finish. Both helpers accept the same `{ event, ctx }` payload as
+prepares transcript anchors through the history reader before releasing the
+turn lease, then starts the portable `agent_end` hook without waiting for it.
+Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
+also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
+remains deprecated until the next Plugin SDK major. These helpers accept the
+same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 

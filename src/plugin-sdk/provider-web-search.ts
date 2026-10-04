@@ -1,7 +1,6 @@
 // Public web-search registration helpers for provider plugins.
 
 export type {
-  WebSearchCredentialResolutionSource,
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
@@ -42,12 +41,9 @@ export {
 } from "../agents/tools/web-search-provider-common.js";
 export {
   getScopedCredentialValue,
-  getTopLevelCredentialValue,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
-  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
-  setTopLevelCredentialValue,
 } from "../agents/tools/web-search-provider-config.js";
 export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
@@ -55,13 +51,9 @@ export {
   withSelfHostedWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "../agents/tools/web-guarded-fetch.js";
-export {
-  markdownToText,
-  truncateWebFetchText as truncateText,
-} from "../agents/tools/web-fetch-utils.js";
+export { truncateWebFetchText as truncateText } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
-  DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
   readResponseText,

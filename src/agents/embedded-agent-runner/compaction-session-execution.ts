@@ -23,7 +23,6 @@ import {
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
@@ -198,17 +197,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const resourceLoader = new DefaultResourceLoader({
       cwd: effectiveCwd,
       agentDir,
-      settingsManager,
       extensionFactories,
     });
     await resourceLoader.reload();
-    // Reloading settings discards prepared compaction overrides and restores
-    // runtime auto-compaction, so reapply both guards after reload.
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: params.config,
-      contextTokenBudget,
-    });
     // contextEngineInfo is intentionally omitted: this guard runs inside the
     // compaction LLM session, which is not the user-facing agent session and
     // has no associated context engine.
@@ -256,9 +247,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let resetCompactionTimeout: (() => void) | undefined;
       try {
         const createdSession = await createAgentSession({
+          cleanupProviderSessionResourcesOnDispose: false,
+          systemPrompt: systemPromptText,
           cwd: effectiveCwd,
-          agentDir,
-          authStorage,
           modelRegistry,
           model: effectiveModel,
           thinkingLevel: mapThinkingLevel(mapThinkingLevelForProvider(thinkLevel, effectiveModel)),
@@ -267,7 +258,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           sessionManager,
           settingsManager,
           resourceLoader,
-          cleanupProviderSessionResourcesOnDispose: false,
         });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
@@ -275,7 +265,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
           assertActive,
         );
-        session.setActiveToolsByName(sessionToolAllowlist);
         session.setBaseSystemPrompt(systemPromptText.trim());
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.

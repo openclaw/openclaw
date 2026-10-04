@@ -4,6 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import {
+  beginGatewayShutdownCleanup,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -29,6 +35,51 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("certifies idle handles after grace and borrowed handles only after their final release", async () => {
+  vi.useFakeTimers();
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-cleanup-idle-") };
+  const options = { agentId: "idle", env };
+  const heldOptions = { agentId: "held", env };
+  const idle = openOpenClawAgentDatabase(options);
+  const held = openOpenClawAgentDatabase(heldOptions);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const borrowed = withOpenClawAgentDatabaseAsync(heldOptions, async (database) => {
+    entered.resolve();
+    await release.promise;
+    expect(database.db.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
+  });
+  try {
+    await entered.promise;
+    markGatewayRestartDraining();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(idle.db.isOpen).toBe(true);
+    beginGatewayShutdownCleanup();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(idle.db.isOpen).toBe(false);
+    expect(readOpenClawAgentIntegrityVerification(idle.path, env)?.clean_close).toBe(1);
+    expect(held.db.isOpen).toBe(true);
+    expect(readOpenClawAgentIntegrityVerification(held.path, env)?.clean_close).toBe(0);
+    release.resolve();
+    await borrowed;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held.db.isOpen).toBe(false);
+    expect(readOpenClawAgentIntegrityVerification(held.path, env)?.clean_close).toBe(1);
+    await withOpenClawAgentDatabaseAsync(options, async (reopened) => {
+      await Promise.resolve();
+      expect(reopened.db.isOpen).toBe(true);
+      expect(readOpenClawAgentIntegrityVerification(idle.path, env)?.clean_close).toBe(0);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readOpenClawAgentIntegrityVerification(idle.path, env)?.clean_close).toBe(1);
+  } finally {
+    release.resolve();
+    await borrowed;
+    resetGatewayWorkAdmission();
+    vi.useRealTimers();
+  }
 });
 
 it("retains admission through pinned WAL eviction and certifies the final checkpointed close", async () => {

@@ -36,6 +36,9 @@ describe("retained chat submissions", () => {
       }
       expect(read(0)).toBeFalsy();
       expect(read(1)?.message?.content).toEqual([{ type: "text", text: "1" }]);
+      expect(read(1)?.pendingRunId).toBe("1");
+      expect(read(limit)?.pendingRunId).toBe(String(limit));
+      expect(read(1, {})).toBeFalsy();
       const replacement = expectDefined(retain(1), "retained submission");
       const replacementMessage = expectDefined(replacement.message, "pending display");
       expect(
@@ -66,31 +69,6 @@ describe("retained chat submissions", () => {
       expect(read(limit)).toBeFalsy();
     },
   );
-  it("stores run ownership and preserves client privacy until clearing", () => {
-    const handoff = createChatSubmissions();
-    const owner = {};
-    const replacementOwner = {};
-    const first = message("first");
-    handoff.retain({
-      kind: "initial",
-      sessionKey: "agent:main:main",
-      message: first,
-      owner,
-      pendingRunId: "initial-run",
-    });
-
-    expect(handoff.readInitial("main", owner)).toEqual({
-      kind: "initial",
-      pending: true,
-      sessionKey: "agent:main:main",
-      message: first,
-      owner,
-      pendingRunId: "initial-run",
-    });
-    expect(handoff.readInitial("main", replacementOwner)).toBeNull();
-    handoff.clear();
-    expect(handoff.readInitial("main", owner)).toBeNull();
-  });
 });
 
 const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
@@ -146,41 +124,14 @@ describe("initial user message handoff", () => {
       },
     });
   });
-
-  it("retains independent reconnect handoffs without exposing them to a replacement client", () => {
-    const client = {};
-    const replacementClient = {};
-    const handoff = createChatSubmissions();
-    for (const [sessionKey, runId] of [
-      ["agent:main:first", "first-run"],
-      ["agent:main:second", "second-run"],
-    ] as const) {
-      handoff.retain(
-        buildInitialChatSubmission(sessionKey, { text: runId, createdAt: 123 }, client, runId),
-      );
-      expect(handoff.readInitial(sessionKey, client)?.pendingRunId).toBe(runId);
-      expect(handoff.readInitial(sessionKey, replacementClient)).toBeNull();
-    }
-  });
 });
 
 describe("pending create display authority", () => {
-  it("retains unadmitted route metadata after private display disposal", () => {
-    const submissions = createChatSubmissions();
-    const creation = { sessionKey: "agent:main:dashboard:pending", admitted: false };
-    const release = submissions.beginCreate({ creation, message: null, canDisplay: () => true });
-    const routeCreation = submissions.creation;
-    release();
-    expect(submissions.readCreateMessage(creation.sessionKey)).toBeNull();
-    expect(submissions.creation).toBeUndefined();
-    expect(routeCreation?.admitted).toBe(false);
-  });
-
-  it("checks the live transaction owner before exposing pre-admission bytes", () => {
+  it("exposes pre-admission bytes only to the live owner and retains route metadata after disposal", () => {
     const submissions = createChatSubmissions();
     const key = "agent:main:dashboard:private";
     let authorized = true;
-    submissions.beginCreate({
+    const release = submissions.beginCreate({
       creation: { sessionKey: key, admitted: false },
       message: message("private synthetic draft"),
       canDisplay: () => authorized,
@@ -191,6 +142,11 @@ describe("pending create display authority", () => {
     expect(submissions.readCreateMessage("agent:main:dashboard:other")).toBeNull();
     authorized = false;
     expect(submissions.readCreateMessage(key)).toBeNull();
+    const routeCreation = submissions.creation;
+    release();
+    expect(submissions.readCreateMessage(key)).toBeNull();
+    expect(submissions.creation).toBeUndefined();
+    expect(routeCreation?.admitted).toBe(false);
   });
 
   it.each(["agent:main:dashboard:resumed", "agent:main:dashboard:newer"])(

@@ -20,7 +20,6 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -195,14 +194,25 @@ function fixture() {
 
 type Fixture = ReturnType<typeof fixture>;
 
-function closeForIntegrityAdmission(f: Fixture) {
-  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+async function closeForIntegrityAdmission(f: Fixture) {
+  expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
   await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
+
+function evictCachedHandleForIntegrityAdmission(f: Fixture) {
+  const database = getOpenClawAgentDatabaseIfOpen(f.options);
+  if (!database) {
+    throw new Error("Fixture lost its cached handle before eviction");
+  }
+  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
@@ -231,9 +241,19 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
+    const workerProbe =
+      owner === "lifecycle"
+        ? observePreparedWorkerAdmission({
+            databasePath: f.databasePath,
+            mode: "warm",
+            hooks,
+            releases,
+            expectParentHealthy: () => probe.expectHealthy(0),
+          })
+        : undefined;
     const entered = createDeferred();
     const release = createDeferred();
     releases.push(() => release.resolve());
@@ -245,7 +265,11 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        await closeWorkerForIntegrityAdmission(f);
+        if (owner === "lifecycle") {
+          evictCachedHandleForIntegrityAdmission(f);
+        } else {
+          await closeWorkerForIntegrityAdmission(f);
+        }
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
@@ -305,7 +329,15 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
+    if (workerProbe) {
+      await workerProbe.expectHealthy({
+        executor: mode === "cold-preparation" ? 1 : 0,
+        reclamation: mode === "cold-commit" ? 1 : 0,
+        other: 0,
+      });
+    } else {
+      probe.expectHealthy(0);
+    }
   },
 );
 
@@ -389,13 +421,13 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
   });
   const committed = vi.fn();
   const buildEntry = vi.fn(
-    ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
+    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
       replaceSessionEntrySync(f.input, {
         sessionId: "original",
         label: "newer",
         updatedAt: Date.now(),
       });
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -431,7 +463,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const probe = observeAdmission(f.databasePath);
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      closeForIntegrityAdmission(f);
+      evictCachedHandleForIntegrityAdmission(f);
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -661,7 +693,11 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        await closeWorkerForIntegrityAdmission(f);
+        if (owner === "lifecycle") {
+          evictCachedHandleForIntegrityAdmission(f);
+        } else {
+          await closeWorkerForIntegrityAdmission(f);
+        }
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
@@ -719,7 +755,11 @@ it.each(
     expect(preparationWriterRan).toBe(true);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
-    await probe.expectHealthy({ executor: cold ? 1 : 0, reclamation: cold ? 1 : 0, other: 0 });
+    await probe.expectHealthy({
+      executor: cold && owner === "replacement" ? 1 : 0,
+      reclamation: cold ? 1 : 0,
+      other: 0,
+    });
   },
 );
 
@@ -783,7 +823,7 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const plan = maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
-    closeForIntegrityAdmission(f);
+    await closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -817,7 +857,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        closeForIntegrityAdmission(f);
+        await closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },

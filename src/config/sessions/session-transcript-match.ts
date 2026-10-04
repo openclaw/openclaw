@@ -20,17 +20,12 @@ import {
   prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
-  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-
-export type SessionTranscriptEventMatchRequest = {
-  target: ResolvedTranscriptReadScope;
-  match: SessionTranscriptEventMatch;
-};
 
 /** Select one record inside the caller's existing SQLite snapshot. */
 export function findTranscriptEventMatchingInDatabase(

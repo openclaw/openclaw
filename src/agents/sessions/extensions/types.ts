@@ -55,7 +55,7 @@ import type {
 } from "../session-manager.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import type { BashOperations } from "../tools/bash-operations.js";
 import type {
   BashToolDetails,

@@ -7,6 +7,7 @@ import type {
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
@@ -236,6 +237,26 @@ export function resolvePlacementIdentity(
   };
 }
 
+export async function resolveWorkerPlacementRuntimeOverride(
+  placements: Pick<WorkerSessionPlacementStore, "prepareRuntimeRefresh">,
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+): Promise<string | undefined> {
+  const prepared = await placements.prepareRuntimeRefresh(identity.sessionId);
+  try {
+    prepared.assertCurrent();
+    const placement = prepared.placement;
+    return placement &&
+      placement.state !== "local" &&
+      placement.executionMode === "worker-turn" &&
+      (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+      (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+      ? "openclaw"
+      : undefined;
+  } finally {
+    prepared.release();
+  }
+}
+
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
@@ -271,10 +292,11 @@ export async function executeLocalTurn<T>(params: {
   );
   params.assertCurrent?.();
   const identity = resolvePlacementIdentity(params.claim, current);
-  const sessionEntry = loadSessionEntryReadOnly({
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
     ...identity,
     storePath: resolveSessionStorePathForScope(identity),
   });
+  params.assertCurrent?.();
   if (sessionEntry?.repositoryWorkspaceId) {
     throw new Error(
       "This repository session needs a cloud worker. Choose a cloud environment and retry.",

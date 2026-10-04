@@ -13,6 +13,7 @@ import type {
   IncognitoHistoryOperations,
   IncognitoHistoryTarget,
 } from "../config/sessions/session-incognito-history-contract.js";
+import type { PendingInputHistoryQuery } from "../config/sessions/session-pending-input-history.types.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import {
   projectChatDisplayMessagesWithState,
@@ -210,7 +211,7 @@ export function createIncognitoSessionComputeReader(
 
 /** Inactive composition: callers retain the actor and supply already-prepared display facts. */
 export function createIncognitoSessionHistoryReader(params: {
-  actor: Pick<IncognitoAgentDatabaseExecution, "sessions" | "assertCurrent">;
+  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget & { agentId: string; storePath: string };
   subagentCoordination: SubagentCoordinationDisplayResolver;
@@ -313,8 +314,27 @@ export function createIncognitoSessionHistoryReader(params: {
     resolveCurrentUserProfileDisplay: params.resolveCurrentUserProfileDisplay,
     resolveCronJobName: params.resolveCronJobName ?? (() => undefined),
   };
+  const pendingInputs = async () => {
+    const { createIncognitoPendingInputHistoryReader } =
+      await import("../config/sessions/session-pending-input-history.js");
+    assertCurrent();
+    return createIncognitoPendingInputHistoryReader({ actor, authority, target });
+  };
   return {
     readers,
+    listPendingInputs(query: Pick<PendingInputHistoryQuery, "limit" | "before"> = {}) {
+      const captured = { ...query };
+      assertCurrent();
+      return actor.sessions.withSharedState(async () =>
+        disclose(await (await pendingInputs()).list(captured)),
+      );
+    },
+    readPendingInput(id: string) {
+      assertCurrent();
+      return actor.sessions.withSharedState(async () =>
+        disclose(await (await pendingInputs()).read(id)),
+      );
+    },
     async rpc(request: ChatHistoryPageParams) {
       const captured = structuredClone(request);
       assertScope({

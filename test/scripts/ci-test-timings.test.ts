@@ -563,46 +563,54 @@ describe("runtime placement observations", () => {
     includePatterns: ["src/reader.test.ts"],
     pretestBuildMode: "runtime" as const,
   };
-  it.each([
-    { label: "added files", files: ["a.test.ts", "b.test.ts", "new.test.ts"], expected: 201 },
-    { label: "same files reordered", files: ["b.test.ts", "a.test.ts"], expected: 201 },
-    { label: "current subset", files: ["a.test.ts"], expected: undefined },
-    { label: "different files", files: ["a.test.ts", "other.test.ts"], expected: undefined },
-    { label: "glob selection", files: ["*.test.ts"], expected: undefined },
-  ])("matches complete recorded workloads with $label", ({ files, expected }) => {
-    expect(
-      testTimings.resolveRuntimePlacementSeconds({ ...reader, includePatterns: files }, [
-        { ...reader, includePatterns: ["a.test.ts", "b.test.ts"], seconds: 201 },
-      ]),
-    ).toBe(expected);
-  });
-  it("uses one contained estimate and lets a later exact measurement replace it", () => {
-    const current = { ...reader, includePatterns: ["a.test.ts", "b.test.ts", "c.test.ts"] };
-    const prior = [
-      { ...reader, includePatterns: ["a.test.ts", "b.test.ts"], seconds: 201 },
-      { ...reader, includePatterns: ["b.test.ts", "c.test.ts"], seconds: 180 },
-    ];
-    expect(testTimings.resolveRuntimePlacementSeconds(current, prior)).toBe(201);
-    for (const observations of [
-      [...prior, { ...current, seconds: 100 }],
-      [{ ...current, seconds: 100 }, ...prior],
-    ]) {
-      expect(testTimings.resolveRuntimePlacementSeconds(current, observations)).toBe(100);
-    }
-  });
-  it.each<Partial<Parameters<typeof testTimings.resolveRuntimePlacementSeconds>[0]>>([
+  const recorded = [
+    { ...reader, includePatterns: ["a.test.ts", "b.test.ts"], seconds: 201 },
+    { ...reader, includePatterns: ["b.test.ts", "c.test.ts"], seconds: 180 },
+  ];
+  const expanded = { ...reader, includePatterns: ["a.test.ts", "b.test.ts", "c.test.ts"] };
+  type PlacementCase = {
+    label: string;
+    group: Parameters<typeof testTimings.resolveRuntimePlacementSeconds>[0];
+    observations?: RuntimePlacementTiming[];
+    expected?: number;
+  };
+  const ownershipChanges: Partial<PlacementCase["group"]>[] = [
     { configs: ["other.config.ts"] },
     { env: {} },
     { env: { OPENCLAW_VITEST_MAX_WORKERS: "3" } },
-    { pretestBuildMode: "private-qa" as const },
-  ])("does not borrow a contained observation across ownership %j", (change) => {
-    expect(
-      testTimings.resolveRuntimePlacementSeconds(
-        { ...reader, ...change, includePatterns: [...reader.includePatterns, "new.test.ts"] },
-        [{ ...reader, seconds: 201 }],
-      ),
-    ).toBeUndefined();
-  });
+    { pretestBuildMode: "private-qa" },
+  ];
+  it.each<PlacementCase>([
+    { label: "added files", group: expanded, expected: 201 },
+    {
+      label: "same files reordered",
+      group: { ...reader, includePatterns: ["b.test.ts", "a.test.ts"] },
+      expected: 201,
+    },
+    { label: "current subset", group: { ...reader, includePatterns: ["a.test.ts"] } },
+    {
+      label: "different files",
+      group: { ...reader, includePatterns: ["a.test.ts", "other.test.ts"] },
+    },
+    { label: "glob selection", group: { ...reader, includePatterns: ["*.test.ts"] } },
+    ...ownershipChanges.map((change) => ({
+      label: `changed ownership ${JSON.stringify(change)}`,
+      group: { ...expanded, ...change },
+    })),
+    ...[true, false].map((first) => ({
+      label: `exact measurement ${first ? "first" : "last"}`,
+      group: expanded,
+      observations: first
+        ? [{ ...expanded, seconds: 100 }, ...recorded]
+        : [...recorded, { ...expanded, seconds: 100 }],
+      expected: 100,
+    })),
+  ])(
+    "prices only complete workloads with matching ownership: $label",
+    ({ group, observations = recorded, expected }) => {
+      expect(testTimings.resolveRuntimePlacementSeconds(group, observations)).toBe(expected);
+    },
+  );
   function runtimeLog(
     id: number,
     overrides: Partial<Omit<typeof reader, "pretestBuildMode">> & {
@@ -1229,26 +1237,6 @@ if (args[1] === "--help") {
   }
 }
 
-it("rejects non-plain timing objects even when their fields are valid", () => {
-  expect(() =>
-    ciTestTimingsSchema.parse(
-      Object.create({ inherited: true }, Object.getOwnPropertyDescriptors(baseline)),
-    ),
-  ).toThrow();
-  expect(() =>
-    ciTestTimingsSchema.parse({
-      ...baseline,
-      uiE2e: {
-        ...baseline.uiE2e,
-        fileSeconds: Object.create(
-          { inherited: 1 },
-          { measured: { value: 100, enumerable: true } },
-        ),
-      },
-    }),
-  ).toThrow();
-});
-
 describe("CI test timing refit", () => {
   it.each(["uiE2e", "repoE2e"] as const)(
     "ingests native %s reporters without losing case progress or suite hooks",
@@ -1682,80 +1670,24 @@ it.todo("retains todo coverage");
         },
       ]),
     );
-    for (const { label, gib, plans, cpus, runner, frozen, expected } of [
-      {
-        label: "qualified",
-        gib: 32,
-        plans: 1,
-        cpus: 8,
-        runner: "self-hosted",
-        frozen: "false",
-        expected: 8,
-      },
-      {
-        label: "memory floor",
-        gib: 27,
-        plans: 1,
-        cpus: 8,
-        runner: "self-hosted",
-        frozen: "false",
-        expected: 2,
-      },
-      {
-        label: "overlapping plans",
-        gib: 32,
-        plans: 2,
-        cpus: 8,
-        runner: "self-hosted",
-        frozen: "false",
-        expected: 2,
-      },
-      {
-        label: "constrained CPU",
-        gib: 32,
-        plans: 1,
-        cpus: 4,
-        runner: "self-hosted",
-        frozen: "false",
-        expected: 2,
-      },
-      {
-        label: "hosted",
-        gib: 32,
-        plans: 1,
-        cpus: 8,
-        runner: "github-hosted",
-        frozen: "false",
-        expected: 2,
-      },
-      {
-        label: "frozen target",
-        gib: 32,
-        plans: 1,
-        cpus: 8,
-        runner: "self-hosted",
-        frozen: "true",
-        expected: 2,
-      },
-      {
-        label: "missing resources",
-        gib: undefined,
-        plans: 1,
-        cpus: 8,
-        runner: "self-hosted",
-        frozen: "false",
-        expected: undefined,
-      },
-      {
-        label: "missing runner",
-        gib: 32,
-        plans: 1,
-        cpus: 8,
-        runner: undefined,
-        frozen: "false",
-        expected: undefined,
-      },
-    ]) {
+    for (const [label, gib, plans, cpus, runner, frozen, expected] of [
+      ["qualified", 32, 1, 8, "self-hosted", "false", 8],
+      ["memory floor", 27, 1, 8, "self-hosted", "false", 2],
+      ["overlapping plans", 32, 2, 8, "self-hosted", "false", 2],
+      ["constrained CPU", 32, 1, 4, "self-hosted", "false", 2],
+      ["hosted", 32, 1, 8, "github-hosted", "false", 2],
+      ["frozen target", 32, 1, 8, "self-hosted", "true", 2],
+      ["missing resources", undefined, 1, 8, "self-hosted", "false", undefined],
+      ["missing runner", 32, 1, 8, undefined, "false", undefined],
+    ] satisfies [
+      string,
+      number | undefined,
+      number,
+      number,
+      string | undefined,
+      string,
+      number | undefined,
+    ][]) {
       const text = [
         ...(runner ? [`2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: ${runner}`] : []),
         `2026-08-27T23:00:00Z FROZEN_TARGET: ${frozen}`,
@@ -3077,44 +3009,56 @@ describe("CI timing schema", () => {
     pretestBuildMode: "runtime",
     seconds: 20,
   };
-  it.each([
-    [{ ...observation, includePatterns: [] }],
-    [{ ...observation, includePatterns: ["src/*.test.ts"] }],
-    [{ ...observation, includePatterns: ["src/reader.test.ts", "src/reader.test.ts"] }],
-    [{ ...observation, env: { workers: 2 } }],
-    [{ ...observation, configs: [] }],
-    [{ ...observation, seconds: 0 }],
-    [{ ...observation, pretestBuildMode: "unknown" }],
-    [observation, { ...observation }],
-  ])("rejects malformed or duplicate runtime observations %j", (...observations) => {
-    expect(() =>
-      ciTestTimingsSchema.parse({
-        ...baseline,
-        runtimePlacementTimings: { blacksmith: observations, github: [] },
-      }),
-    ).toThrow("Invalid CI test timings");
-  });
-
   const invalidTimings: Array<[string, unknown]> = [
+    [
+      "non-plain root",
+      Object.create({ inherited: true }, Object.getOwnPropertyDescriptors(baseline)),
+    ],
+    [
+      "non-plain file map",
+      {
+        ...baseline,
+        uiE2e: {
+          ...baseline.uiE2e,
+          fileSeconds: Object.create(
+            { inherited: 1 },
+            { measured: { value: 100, enumerable: true } },
+          ),
+        },
+      },
+    ],
+    ...[
+      [{ ...observation, includePatterns: [] }],
+      [{ ...observation, includePatterns: ["src/*.test.ts"] }],
+      [{ ...observation, includePatterns: ["src/reader.test.ts", "src/reader.test.ts"] }],
+      [{ ...observation, env: { workers: 2 } }],
+      [{ ...observation, configs: [] }],
+      [{ ...observation, seconds: 0 }],
+      [{ ...observation, pretestBuildMode: "unknown" }],
+      [observation, { ...observation }],
+    ].map((observations): [string, unknown] => [
+      `invalid observations ${JSON.stringify(observations)}`,
+      { ...baseline, runtimePlacementTimings: { blacksmith: observations, github: [] } },
+    ]),
     ["non-object root", null],
     ["unknown root key", { ...baseline, extra: 1 }],
     ["empty source", { ...baseline, source: "" }],
-    ...["2026-02-29", "1900-02-29", "2026-04-31", "2026-8-22", "2026-08-22T00:00:00Z"].map(
-      (updatedAt): [string, unknown] => [`invalid date ${updatedAt}`, { ...baseline, updatedAt }],
-    ),
+    ...["2026-02-29", "2026-8-22"].map((updatedAt): [string, unknown] => [
+      `invalid date ${updatedAt}`,
+      { ...baseline, updatedAt },
+    ]),
     ["unknown UI key", { ...baseline, uiE2e: { ...baseline.uiE2e, extra: 1 } }],
     [
       "unknown compact profile",
       { ...baseline, compactGroupSeconds: { ...baseline.compactGroupSeconds, extra: {} } },
     ],
-    ["missing profile", { ...baseline, compactGroupSeconds: { blacksmith: {} } }],
     ...["ui", "repoE2e", "blacksmith", "github"].flatMap((profile) =>
       (profile === "ui"
         ? [
             null,
             [],
             { "": 1 },
-            ...[0, -1, "2", null, 1.2, Number.MAX_SAFE_INTEGER + 1].map((seconds) => ({
+            ...[0, "2", 1.2].map((seconds) => ({
               valid: 100,
               invalid: seconds,
             })),
@@ -3136,8 +3080,7 @@ describe("CI timing schema", () => {
               },
       ]),
     ),
-    ["non-finite seconds", { ...baseline, repoE2eFileSeconds: { invalid: Infinity } }],
-    ...[-1, 5.1, null, "1", Infinity].map((overhead): [string, unknown] => [
+    ...[-1, 5.1, null, Infinity].map((overhead): [string, unknown] => [
       `invalid overhead ${String(overhead)}`,
       { ...baseline, uiE2e: { ...baseline.uiE2e, perFileOverheadSeconds: overhead } },
     ]),

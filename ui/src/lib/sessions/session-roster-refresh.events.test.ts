@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { SessionsListParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-list.js";
+import type { SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { session } from "../../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import { createGatewayHarness } from "../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapability } from "./index.ts";
-import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness as createSessionGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 describe("session roster event traffic", () => {
   it.each([false, true])(
@@ -93,10 +100,12 @@ describe("session roster event traffic", () => {
     },
   );
 
-  it.each(["enter", "unpin", "archive", "owner-prefix"])(
-    "refills a limited window after %s changes its boundary",
+  it.each(["enter", "unpin", "archive", "owner-prefix", "create", "unknown-mutation"])(
+    "refreshes membership after %s changes its boundary",
     async (change) => {
       vi.useFakeTimers();
+      const limited = change !== "create" && change !== "unknown-mutation";
+      const entering = change === "enter" || !limited;
       const held = session("main", change === "unpin" || change === "owner-prefix" ? 10 : 40, {
         key: "agent:main:held",
         sessionId: "held",
@@ -105,28 +114,27 @@ describe("session roster event traffic", () => {
       const recent = session("main", 30, { key: "agent:main:recent", sessionId: "recent" });
       const boundary = session("main", 20, { key: "agent:main:boundary", sessionId: "boundary" });
       const incoming = session("main", 50, { key: "agent:main:incoming", sessionId: "incoming" });
-      const next =
-        change === "enter"
-          ? incoming
-          : {
-              ...held,
-              updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
-              ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
-              ...(change === "archive" ? { archived: true } : {}),
-            };
-      const initialRows = change === "owner-prefix" ? [held, recent, boundary] : [held, recent];
-      const finalRows =
-        change === "enter"
-          ? [next, held]
-          : change === "owner-prefix"
-            ? [next, recent]
-            : [recent, boundary];
+      const next = entering
+        ? incoming
+        : {
+            ...held,
+            updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
+            ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+            ...(change === "archive" ? { archived: true } : {}),
+          };
+      const initialRows = !limited
+        ? [held]
+        : change === "owner-prefix"
+          ? [held, recent, boundary]
+          : [held, recent];
+      const finalRows = entering
+        ? [next, held]
+        : change === "owner-prefix"
+          ? [next, recent]
+          : [recent, boundary];
       const page = (rows: typeof initialRows) => ({
         ...sessionsResult(rows, 1),
-        totalCount: 4,
-        limitApplied: 2,
-        nextOffset: 2,
-        hasMore: true,
+        ...(limited ? { totalCount: 4, limitApplied: 2, nextOffset: 2, hasMore: true } : {}),
       });
       const request = vi
         .fn()
@@ -137,22 +145,29 @@ describe("session roster event traffic", () => {
       try {
         await sessions.refresh({
           agentId: "main",
-          limit: 2,
+          ...(limited ? { limit: 2 } : {}),
           ownerFirst: change === "owner-prefix",
           force: true,
         });
-        for (let index = 0; index < 10; index += 1) {
+        for (let index = 0; index < (limited ? 10 : 1); index += 1) {
           gatewayHarness.publishEvent("sessions.changed", {
-            reason: "patch",
+            reason: limited ? "patch" : change,
             sessionKey: next.key,
-            pinnedAt: null,
+            ...(limited ? { pinnedAt: null } : { ancestorSessions: [] }),
             session: next,
           });
         }
-        await vi.advanceTimersByTimeAsync(20_000);
+        if (!limited) {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(initialRows);
+        }
+        await vi.advanceTimersByTimeAsync(limited ? 20_000 : 5_000);
         expect(request).toHaveBeenCalledTimes(2);
         expect(sessions.state.result?.sessions).toEqual(finalRows);
-        expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        if (limited) {
+          expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        } else {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(finalRows);
+        }
       } finally {
         sessions.dispose();
         vi.useRealTimers();
@@ -163,20 +178,16 @@ describe("session roster event traffic", () => {
   it.each([
     "snapshot",
     "patch",
-    "subagent-status",
-    "title",
-    "involvement",
-    "swarm-note",
-    "update",
-    "updated",
     "active-message",
     "terminal-message",
     "invalidation",
     "filtered",
     "all",
+    "sessions-page",
+    "dashboard",
   ])("bounds requests during a continuous %s stream for existing members", async (stream) => {
     vi.useFakeTimers();
-    const row = session("main", 1, { sessionId: "tracked", hasActiveRun: true });
+    const row = session("main", 1, { sessionId: "tracked", hasActiveRun: true, hasBoard: true });
     let reads = 0;
     const client = createTestGatewayClient(async (method, params) => {
       expect(method).toBe("sessions.list");
@@ -198,16 +209,20 @@ describe("session roster event traffic", () => {
       agentId: "main",
       ...(stream === "filtered" ? { search: "tracked" } : {}),
       ...(stream === "all" ? { archivedFilter: "all" as const } : {}),
+      ...(stream === "sessions-page"
+        ? { includeDerivedTitles: false, includeLastMessage: false, includeUnknown: false }
+        : {}),
+      ...(stream === "dashboard" ? { hasBoard: true, archivedFilter: "all" as const } : {}),
     };
-    const stop = ["filtered", "all"].includes(stream)
+    const stop = ["filtered", "all", "sessions-page", "dashboard"].includes(stream)
       ? sessions.subscribeList(query, () => {})
       : () => {};
     try {
-      if (stream === "all") {
+      if (["all", "sessions-page", "dashboard"].includes(stream)) {
         await sessions.refresh({ agentId: "main", force: true });
       }
       const initial = sessions.refreshList({ ...query, force: true });
-      if (stream === "all") {
+      if (["all", "sessions-page", "dashboard"].includes(stream)) {
         await vi.advanceTimersByTimeAsync(1_000);
       }
       await initial;
@@ -343,34 +358,163 @@ describe("session roster event traffic", () => {
     },
   );
 
-  it.each(["create", "unknown-mutation"])(
-    "refreshes unheld membership for a %s snapshot",
-    async (reason) => {
-      vi.useFakeTimers();
-      const row = session("main", 1, { sessionId: "tracked" });
-      const added = session("main", 2, { key: "agent:main:new", sessionId: "added" });
-      const request = vi
-        .fn(async () => sessionsResult([added, row], 2))
-        .mockResolvedValueOnce(sessionsResult([row], 1));
-      const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
-      const { gateway } = gatewayHarness;
-      const sessions = createTestSessionCapability(gateway);
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        gatewayHarness.publishEvent("sessions.changed", {
-          reason,
-          sessionKey: added.key,
-          session: added,
-          ancestorSessions: [],
+  it("keeps child windows on row events but refills when the Gateway retires an owner", async () => {
+    vi.useFakeTimers();
+    const parent = session("main", 1, {
+      key: "agent:main:parent",
+      sessionId: "parent",
+      isMain: false,
+      childOwnerSessionKeys: [],
+      childSessions: ["agent:main:child"],
+    });
+    const child = session("main", 1, {
+      key: "agent:main:child",
+      sessionId: "child",
+      isMain: false,
+      parentSessionKey: parent.key,
+      childOwnerSessionKeys: [parent.key],
+    });
+    let retired = false;
+    const reads: Record<string, number> = {};
+    const client = createTestGatewayClient(async (method, params) => {
+      expect(method).toBe("sessions.list");
+      const value = Reflect.get(params ?? {}, "spawnedBy");
+      const owner = typeof value === "string" ? value : undefined;
+      reads[owner ?? "primary"] = (reads[owner ?? "primary"] ?? 0) + 1;
+      const rows = !owner ? [parent, child] : owner === parent.key && !retired ? [child] : [];
+      return { ...sessionsResult(rows, 1), hasMore: false, totalCount: rows.length };
+    });
+    const harness = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(harness.gateway);
+    const children = { spawnedBy: parent.key, includeGlobal: false, includeUnknown: false };
+    const empty = { ...children, spawnedBy: child.key };
+    const stops = [children, empty].map((query) => sessions.subscribeList(query, () => {}));
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList(children);
+      await sessions.refreshList(empty);
+      const emit = (updatedAt: number) =>
+        harness.publishEvent("sessions.changed", {
+          reason: "patch",
+          sessionKey: child.key,
+          session: { ...child, updatedAt, childOwnerSessionKeys: retired ? [] : [parent.key] },
+          ancestorSessions: [{ ...parent, updatedAt, childSessions: retired ? [] : [child.key] }],
         });
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([row]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([added, row]);
-      } finally {
-        sessions.dispose();
-        vi.useRealTimers();
+      emit(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reads[parent.key]).toBe(1);
+      expect(reads[child.key]).toBe(1);
+      expect(sessions.listSnapshot(children).result?.sessions[0]?.updatedAt).toBe(2);
+      retired = true;
+      emit(3);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reads[parent.key]).toBe(2);
+      expect(reads[child.key]).toBe(1);
+      expect(sessions.listSnapshot(children).result?.sessions).toEqual([]);
+    } finally {
+      stops.forEach((stop) => stop());
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it("retains owner counts for title updates but refreshes changed run contributions", async () => {
+    vi.useFakeTimers();
+    const row = {
+      key: "agent:main:owned",
+      sessionId: "owned-session",
+      kind: "direct" as const,
+      label: "Owned session",
+      updatedAt: 1,
+      hasActiveRun: false,
+      status: "done" as const,
+    };
+    const other = { ...row, key: "agent:main:off-facet", sessionId: "off-facet" };
+    const query = {
+      includeOwnerSessionCounts: true,
+      limit: 1,
+      excludeCron: true,
+      excludeSystem: true,
+    };
+    let running = 0;
+    const summaryRequest = vi.fn();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      expect(method).toBe("sessions.list");
+      if (!Value.Check(SessionsListParamsSchema, params)) {
+        throw new Error("Invalid sessions.list request");
       }
-    },
-  );
+      if (!params.includeOwnerSessionCounts) {
+        return sessionsResult([row, other], 1);
+      }
+      summaryRequest(params);
+      return {
+        ...sessionsResult([row], 1),
+        ownerSessionCounts: [{ profileId: "ada", open: 8, running }],
+        totalCount: 8,
+        hasMore: true,
+        nextOffset: 1,
+      } satisfies SessionsListResult;
+    });
+    const { gateway, emitEvent } = createSessionGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+    const listener = vi.fn();
+    const observation = sessions.observeList(query, listener);
+    try {
+      await observation.refresh();
+      expect(sessions.state.result).toBeNull();
+      expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
+        { profileId: "ada", open: 8, running: 0 },
+      ]);
+      await sessions.refresh({ agentId: "main", force: true });
+      for (let index = 0; index < 5; index += 1) {
+        for (const held of [row, other]) {
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
+              sessionKey: held.key,
+              agentId: "main",
+              reason: "patch",
+              ancestorSessions: [],
+              session: { ...held, label: `Renamed ${index}`, updatedAt: index + 2 },
+            },
+          });
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      await vi.advanceTimersByTimeAsync(54_999);
+      expect(summaryRequest).toHaveBeenCalledOnce();
+      running = 1;
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: row.key,
+          agentId: "main",
+          reason: "agent.run.started",
+          phase: "start",
+          runId: "new-run",
+          ts: 50,
+          session: {
+            ...row,
+            updatedAt: 50,
+            hasActiveRun: true,
+            status: "running",
+            activeRunIds: ["new-run"],
+          },
+        },
+      });
+      expect(summaryRequest).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(summaryRequest).toHaveBeenCalledTimes(2);
+      expect(summaryRequest).toHaveBeenLastCalledWith(expect.objectContaining(query));
+      expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
+        { profileId: "ada", open: 8, running: 1 },
+      ]);
+      expect(sessions.state.result?.ownerSessionCounts).toBeUndefined();
+    } finally {
+      observation.dispose();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
 });

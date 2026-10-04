@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -82,6 +83,10 @@ function seedPrevious() {
 
 const prior = [
   { role: "user", text: "previous request" },
+  { role: "assistant", text: "previous answer" },
+];
+const priorAtModelBoundary = [
+  { role: "user", text: "[Thu 1970-01-01 00:00 UTC] previous request" },
   { role: "assistant", text: "previous answer" },
 ];
 
@@ -298,7 +303,7 @@ describe("worker detached model-context branch parity", () => {
               suppressNextUserMessagePersistence: true,
             }),
         );
-        expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
+        expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
         expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
         if (sideAppend) {
           const after = SessionManager.open(sessionTarget);
@@ -330,7 +335,7 @@ describe("worker detached model-context branch parity", () => {
       expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
       expect(result.launch).toEqual({
         baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-        history: state === "in-flight" ? prior : [],
+        history: state === "in-flight" ? priorAtModelBoundary : [],
       });
       if (state === "first transcript") {
         expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
@@ -385,7 +390,10 @@ describe("worker detached model-context branch parity", () => {
 
         expect(result.launch).toEqual({
           baseLeafId: receipt.entryId,
-          history: [...prior, { role: "user", text: "earlier unanswered input" }],
+          history: [
+            ...priorAtModelBoundary,
+            { role: "user", text: "[Thu 1970-01-01 00:00 UTC] earlier unanswered input" },
+          ],
         });
         expect(appendedRows).toBeDefined();
         expect(appendedRows?.slice(0, originalRows.length)).toEqual(originalRows);
@@ -444,7 +452,7 @@ describe("worker detached model-context branch parity", () => {
         if (change === "current") {
           expect(result.launch).toEqual({
             baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-            history: prior,
+            history: priorAtModelBoundary,
           });
         } else {
           expect(result.credentialCalls).toBe(0);
@@ -531,7 +539,9 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it("retains the initial-setup writer fence across the asynchronous context read", async () => {
+  it("retains the initial-setup writer fence across the asynchronous context read", async ({
+    signal,
+  }) => {
     seedPrevious();
     const paused = createDeferredCore();
     const finishSetup = createDeferredCore();
@@ -561,7 +571,13 @@ describe("worker detached model-context branch parity", () => {
     });
     void setup.catch(() => undefined);
     const callerCurrent = vi.fn();
-    const waitForInitialPlacement = vi.fn(dispatch.waitForInitialPlacement);
+    const setupWaitStarted = createDeferredCore();
+    const waitForInitialPlacement = vi.fn(
+      (...args: Parameters<typeof dispatch.waitForInitialPlacement>) => {
+        setupWaitStarted.resolve();
+        return dispatch.waitForInitialPlacement(...args);
+      },
+    );
     try {
       await paused.promise;
       const observed = await withAsyncReadHook(
@@ -581,14 +597,23 @@ describe("worker detached model-context branch parity", () => {
             expect(placements.validateTurnClaim(claim)).toBe(true);
           },
         },
-        () => {
+        async () => {
           const pending = launchProbe(
             {
               ...request("writer-after-initial-setup"),
+              abortSignal: signal,
               suppressNextUserMessagePersistence: true,
             },
             callerCurrent,
             waitForInitialPlacement,
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              setupWaitStarted.promise,
+              pending,
+              "turn skipped the initial-setup admission wait",
+            ),
+            signal,
           );
           finishSetup.resolve();
           return pending;

@@ -183,6 +183,12 @@ export function prepareProjectedSessionPresentation(
     }
     const run = active(record.key, record.entry, record.agentId);
     const preparedFacts = record.facts?.present();
+    const childOwnerSessionKeys = resolveSessionChildOwners({
+      key: record.key,
+      entry: record.entry,
+      now,
+      subagentRuns,
+    });
     let excludedChildKeys = options.excludedChildKeys;
     if (!excludedChildKeys && client !== undefined) {
       let excluded: Set<string> | undefined;
@@ -229,6 +235,7 @@ export function prepareProjectedSessionPresentation(
         record.fallbackModel,
         sourceSwarm,
         subagentRuns.revision,
+        childOwnerSessionKeys,
         temporal.subagentRun,
         temporal.fields.hasActiveSubagentRun,
         temporal.fields.runtimeMs,
@@ -318,6 +325,7 @@ export function prepareProjectedSessionPresentation(
       excludedChildKeys,
       preparedFacts,
     });
+    row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
     if (sourceSwarm) {

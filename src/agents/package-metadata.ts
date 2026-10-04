@@ -47,10 +47,6 @@ export function getDocsPath(): string {
   return resolve(join(getPackageDir(), "docs"));
 }
 
-export function getExamplesPath(): string {
-  return resolve(join(getPackageDir(), "examples"));
-}
-
 interface PackageJson {
   name?: string;
   version?: string;

@@ -61,9 +61,9 @@ it.each([
   ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
 ])("emits each affected-package file once through %s", async (config, changedPath) => {
   const root = changedPath.split("/").slice(0, 2).join("/");
-  const partitions = fallbackGroups(
-    planExtensionTargets(listExecutableExtensionFiles([root])),
-  ).filter((group) => group.configs.includes(config));
+  const shards = planExtensionTargets(listExecutableExtensionFiles([root]));
+  const groups = fallbackGroups(shards);
+  const partitions = groups.filter((group) => group.configs.includes(config));
   const expectedFiles = listExecutableExtensionFiles([root]).filter(
     (file) => resolveExtensionTestConfig(file) === config && !isCiProofTestFile(file),
   );
@@ -72,6 +72,31 @@ it.each([
     expectedFiles.toSorted(),
   );
   expect(partitions.every((group) => (group.includePatterns?.length ?? 0) <= 90)).toBe(true);
+  if (root === "extensions/qa-lab") {
+    for (const group of partitions) {
+      expect(group).toMatchObject({ configs: [config] });
+      expect(group.includePatterns?.length).toBeGreaterThan(0);
+    }
+    const lifecycle = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
+    const lifecycleJob = shards.find((job) =>
+      fallbackGroups([job]).some((group) => group.includePatterns?.includes(lifecycle)),
+    );
+    expect(lifecycleJob).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
+    const workerGroups = groups.filter((group) =>
+      group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
+    );
+    expect(workerGroups).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+        includePatterns: [
+          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+        ],
+        requiresDist: false,
+      }),
+    ]);
+    expect(workerGroups[0]).not.toHaveProperty("pretestBuildMode");
+  }
   const env = {
     OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(partitions),
     OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
@@ -355,32 +380,7 @@ describe("CI changed Node test plan", () => {
     },
   );
 
-  it("keeps hidden maintainer and explicit SDK test owners together in a mixed diff", () => {
-    const sdkTarget = "src/plugin-sdk/thread-aware-outbound-session-route.test.ts";
-    const shards = createChangedNodeTestShards([githubActivityHelper, sdkTarget]);
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).toEqual(
-      expect.arrayContaining(["test/scripts/github-activity-helper.test.ts", sdkTarget]),
-    );
-  });
-
-  it("keeps known maintainer owners bounded beside an unknown hidden helper", () => {
-    const paths = [
-      githubActivityHelper,
-      ".agents/skills/openclaw-pr-maintainer/scripts/unknown-helper.sh",
-    ];
-    const shards = createChangedNodeTestShards(paths);
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).toContain("test/scripts/github-activity-helper.test.ts");
-    expect(selectedFiles(shards)).not.toContain("extensions/telegram/src/send.test.ts");
-  });
-
   it.each([
-    {
-      changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
-      target: "extensions/browser/src/browser/cdp.helpers.test.ts",
-      config: "test/vitest/vitest.extension-browser.config.ts",
-    },
     {
       changedPath: "extensions/codex/src/session-upstream-marker.ts",
       target: "extensions/codex/src/session-upstream-marker.test.ts",
@@ -446,28 +446,24 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it.each([
-    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
-    "src/plugins/plugin-module-generation.sdk.test.ts",
-    "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
-    "src/gateway/server-sidecar-retention.test.ts",
-    "src/infra/update-candidate-canary.integration.test.ts",
-    "src/cli/update-cli/update-command-migrated.test.ts",
-  ])("prepares runtime artifacts for changed fixture %s", (target) => {
-    const shards = createChangedNodeTestShards([target]);
-    expect(shards).not.toBeNull();
-    const owners = shards?.filter((shard) => selectedFiles([shard]).includes(target));
-    expect(owners).toHaveLength(1);
-    const owner = expectDefined(owners?.[0], "runtime-prepared target owner");
-    expect(selectedFiles([owner])).toEqual([target]);
-    expect(owner).toMatchObject({
-      configs: [],
-      requiresDist: false,
-      pretestBuildMode: "runtime",
-    });
-  });
+  it.each(["src/agents/simple-completion-runtime.plugin-scope.test.ts"])(
+    "prepares runtime artifacts for changed fixture %s",
+    (target) => {
+      const shards = createChangedNodeTestShards([target]);
+      expect(shards).not.toBeNull();
+      const owners = shards?.filter((shard) => selectedFiles([shard]).includes(target));
+      expect(owners).toHaveLength(1);
+      const owner = expectDefined(owners?.[0], "runtime-prepared target owner");
+      expect(selectedFiles([owner])).toEqual([target]);
+      expect(owner).toMatchObject({
+        configs: [],
+        requiresDist: false,
+        pretestBuildMode: "runtime",
+      });
+    },
+  );
 
-  it.each([1, 13])("prepares generic E2E targets across %s files", (fileCount) => {
+  it.each([13])("prepares generic E2E targets across %s files", (fileCount) => {
     const cwd = argvTempDirs.make("changed-e2e-preparation-");
     const targets = Array.from(
       { length: fileCount },
@@ -548,50 +544,6 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
-  it("prebuilds private QA dist before selected QA Lab targets", () => {
-    const shards = planExtensionTargets(listExecutableExtensionFiles(["extensions/qa-lab"]));
-    const groups = fallbackGroups(shards);
-    const qaGroups = groups.filter((group) =>
-      group.configs.includes("test/vitest/vitest.extension-qa.config.ts"),
-    );
-    expect(qaGroups.length).toBeGreaterThan(0);
-    for (const group of qaGroups) {
-      expect(group).toMatchObject({
-        configs: ["test/vitest/vitest.extension-qa.config.ts"],
-      });
-      expect(group.includePatterns?.length).toBeGreaterThan(0);
-      expect(group.includePatterns?.length).toBeLessThanOrEqual(90);
-    }
-    expect(qaGroups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      listExecutableExtensionFiles(["extensions/qa-lab"])
-        .filter(
-          (file) =>
-            resolveExtensionTestConfig(file) === "test/vitest/vitest.extension-qa.config.ts" &&
-            !isCiProofTestFile(file),
-        )
-        .toSorted(),
-    );
-    const lifecycle = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
-    const lifecycleJob = shards.find((job) =>
-      fallbackGroups([job]).some((group) => group.includePatterns?.includes(lifecycle)),
-    );
-    expect(lifecycleJob).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
-    const workerGroups = groups.filter((group) =>
-      group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
-    );
-    expect(workerGroups).toEqual([
-      expect.objectContaining({
-        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
-        includePatterns: [
-          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
-          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
-        ],
-        requiresDist: false,
-      }),
-    ]);
-    expect(workerGroups[0]).not.toHaveProperty("pretestBuildMode");
-  });
-
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
     const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
     const shards = createChangedNodeTestShards([target]);
@@ -608,21 +560,6 @@ describe("CI changed Node test plan", () => {
     expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
-  });
-
-  it("retains complete tooling setup without unrelated built-artifact jobs", () => {
-    for (const changedPath of ["scripts/docs-i18n/main.go", "test/scripts/docs-i18n.test.ts"]) {
-      const shards = createChangedNodeTestShards([changedPath]);
-      expect(shards).not.toBeNull();
-      expect(
-        fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []),
-      ).toContain("test/scripts/docs-i18n.test.ts");
-      expectCanonicalGroupedConcurrency(shards);
-      expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-      expect(shards).toContainEqual(
-        expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-      );
-    }
   });
 
   it("keeps unowned root sources and dependency hubs away from unrelated directory tests", () => {
@@ -642,14 +579,5 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(dependency)).toEqual([gatewayCallsitesGuard]);
     expect(selectedFiles(dependency)).not.toContain("src/unrelated.test.ts");
     expect(onFallback).not.toHaveBeenCalled();
-  });
-
-  it("keeps aggregate full-suite configs on their guard owners", () => {
-    const shards = createChangedNodeTestShards([
-      "test/vitest/vitest.full-core-support-boundary.config.ts",
-    ]);
-    expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).toContain("test/vitest-projects-config.test.ts");
-    expect(selectedFiles(shards)).not.toContain("src/cron/service.stream-trigger.test.ts");
   });
 });

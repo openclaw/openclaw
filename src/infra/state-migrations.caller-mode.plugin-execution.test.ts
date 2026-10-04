@@ -419,11 +419,10 @@ module.exports = { stateMigrations: [{
       const legacyStateDir = legacyRoot
         ? path.join(fixture.homeDir, ".clawdbot")
         : fixture.stateDir;
-      const stateDir = legacyRoot ? path.join(fixture.homeDir, ".openclaw") : fixture.stateDir;
       const pluginId = "relocated-owner";
       const pluginRoot = fromInstallIndex
         ? path.join(fixture.root, pluginId)
-        : path.join(legacyRoot ? fixture.root : stateDir, "extensions", pluginId);
+        : path.join(legacyStateDir, "extensions", pluginId);
       const markerPath = path.join(fixture.root, "relocated-action-ran");
       const doctorOnlyMarkerPath = path.join(fixture.root, "doctor-only-action-ran");
       fs.mkdirSync(legacyStateDir, { recursive: true });
@@ -497,7 +496,10 @@ module.exports = { stateMigrations: [{
         agents: { entries: { main: {} } },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
-      fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
+      fs.writeFileSync(
+        legacyRoot ? path.join(legacyStateDir, "openclaw.json") : fixture.configPath,
+        `${JSON.stringify(cfg)}\n`,
+      );
       const env: NodeJS.ProcessEnv = {
         ...fixture.env,
         OPENCLAW_HOME: fixture.homeDir,
@@ -506,6 +508,8 @@ module.exports = { stateMigrations: [{
       };
       if (legacyRoot) {
         delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_HOME;
+        delete env.OPENCLAW_CONFIG_PATH;
       }
       if (legacySchema) {
         const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -571,7 +575,7 @@ module.exports = { stateMigrations: [{
       expect(preludeReceipt, JSON.stringify(preludeReceipt)).toMatchObject({
         outcome: legacyRoot ? "completed" : "skipped",
       });
-      expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
+      expect(fs.existsSync(legacyStateDir)).toBe(!legacyRoot);
       expect(result.warnings).toEqual([]);
       if (legacySchema) {
         expect(result.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({

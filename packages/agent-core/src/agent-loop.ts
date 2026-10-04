@@ -27,6 +27,7 @@ import {
   createRejectedToolCallLauncher,
   toToolBatchCalls,
 } from "./tool-batch-admission.js";
+import { combineExecutedToolBatches } from "./tool-batch-completion.js";
 import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
@@ -311,14 +312,7 @@ async function runLoop(
           : undefined;
       const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
       const executedToolBatch: ExecutedToolCallBatch | undefined = batches.length
-        ? {
-            messages: batches.flatMap((batch) => batch.messages),
-            steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
-            terminate: batches.every((batch) => batch.terminate),
-            terminateRun: batches.some((batch) => batch.terminateRun),
-            intervention: batches.find((batch) => batch.intervention)?.intervention,
-            fatal: batches.find((batch) => batch.fatal)?.fatal,
-          }
+        ? combineExecutedToolBatches(config, message, batches)
         : undefined;
       const toolResults = executedToolBatch?.messages ?? [];
       turnTainted ||= toolResults.some(toolResultTaintsTurn);

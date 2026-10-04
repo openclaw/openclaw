@@ -257,17 +257,35 @@ vi.mock("../../media-understanding/file-context.js", async () => {
   };
 });
 
+function loadFixtureSessionEntry(rawKey: string, opts?: { agentId?: string }) {
+  mockState.loadSessionEntryCalls.push({ rawKey, opts });
+  return suiteResources.loadSessionEntry(mockState, rawKey, opts);
+}
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
-    mockState.loadSessionEntryCalls.push({ rawKey, opts });
-    return suiteResources.loadSessionEntry(mockState, rawKey, opts);
-  };
   return {
     ...original,
-    loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: loadSessionEntry,
+    loadSessionEntry: loadFixtureSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadFixtureSessionEntry,
+  };
+});
+
+vi.mock("../session-utils-store-worker.js", async () => {
+  const original = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
+    "../session-utils-store-worker.js",
+  );
+  return {
+    ...original,
+    loadGatewaySessionEntryReadOnlyInWorker: async (
+      params: Parameters<typeof original.loadGatewaySessionEntryReadOnlyInWorker>[0],
+    ) => {
+      params.assertActive?.();
+      const loaded = loadFixtureSessionEntry(params.key, { agentId: params.agentId });
+      params.assertActive?.();
+      return loaded;
+    },
   };
 });
 

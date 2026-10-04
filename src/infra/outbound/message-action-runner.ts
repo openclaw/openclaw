@@ -666,7 +666,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             channel,
             channelPlugin,
             mediaAccess,
-            extraActionMediaSourceParamKeys,
             accountId,
             dryRun,
             gateway,
