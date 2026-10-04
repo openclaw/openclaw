@@ -228,7 +228,10 @@ export function startGatewayConfigReloader(
         installRecords: PluginInstallRecords;
       }
     | undefined;
-  const pluginDrain = createConfigPluginDrainTracker();
+  const pluginDrain = createConfigPluginDrainTracker({
+    signal: lifecycle.signal,
+    onWorkSettled: () => schedule(),
+  });
   const readPluginInstallRecords = opts.readPluginInstallRecords ?? readCurrentInstallRecords;
   const appliedRevision = createConfigAppliedRevisionTracker({
     onConfigApplied: opts.onConfigApplied,
@@ -1051,7 +1054,7 @@ export function startGatewayConfigReloader(
       } else if (pluginDrain.shouldReport(err)) {
         opts.log.error(`config reload failed: ${String(err)}`);
       } else {
-        opts.log.info("config reload deferred: retry the failed plugin reload with --wait");
+        opts.log.info("config reload deferred: retries when the failed plugin's work settles");
       }
     } finally {
       running = false;

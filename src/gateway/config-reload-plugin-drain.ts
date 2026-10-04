@@ -3,7 +3,10 @@ import {
   PluginRuntimeApplicationError,
   type PluginRuntimeApplication,
 } from "../plugins/lifecycle.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
+import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
 export function isConfigReloadSuperseded(error: unknown): boolean {
@@ -16,11 +19,26 @@ export function isConfigReloadSuperseded(error: unknown): boolean {
   return cause instanceof GatewayConfigReloadSupersededError;
 }
 
-/** Retain a failed automatic drain until its generation or pending settings settle. */
-export function createConfigPluginDrainTracker() {
+/**
+ * Retain a failed automatic drain until its generation or pending settings settle,
+ * and schedule the replacement again once the failed plugins' work settles.
+ */
+export function createConfigPluginDrainTracker(params: {
+  signal: AbortSignal;
+  onWorkSettled: () => void;
+}) {
   let failure:
-    | { error: PluginRuntimeApplicationError; paths: readonly string[]; reported: boolean }
+    | {
+        error: PluginRuntimeApplicationError;
+        paths: readonly string[];
+        observation: AbortController;
+        reported: boolean;
+      }
     | undefined;
+  const clear = () => {
+    failure?.observation.abort();
+    failure = undefined;
+  };
   const hasPendingFailure = (plan?: GatewayReloadPlan) =>
     failure?.paths.some((failedPath) =>
       plan?.changedPaths.some(
@@ -33,7 +51,7 @@ export function createConfigPluginDrainTracker() {
   return {
     assertCanApply(plan: GatewayReloadPlan) {
       if (failure && failure.error.details.generation !== getPluginRuntimeGeneration()) {
-        failure = undefined;
+        clear();
       }
       if (
         plan.reloadPlugins &&
@@ -53,13 +71,40 @@ export function createConfigPluginDrainTracker() {
         !error.details.committed &&
         !isConfigReloadSuperseded(error)
       ) {
-        failure = { error, paths: plan.reloadPluginPaths ?? [], reported: false };
+        clear();
+        const current = {
+          error,
+          paths: plan.reloadPluginPaths ?? [],
+          observation: new AbortController(),
+          reported: false,
+        };
+        failure = current;
+        if (!(error.cause instanceof PluginAdmittedWorkTimeoutError)) {
+          return;
+        }
+        // The rolled-back generation keeps serving and accepting work. Retry a timed-out
+        // drain when it would pass immediately; other drain failures need an operator.
+        const pluginIds = new Set(error.details.pluginIds);
+        const signal = AbortSignal.any([params.signal, current.observation.signal]);
+        void Promise.all(
+          (getActivePluginRegistry()?.plugins ?? []).map((record) =>
+            pluginIds.has(record.id) ? getPluginInstance(record)?.waitForIdle(signal) : undefined,
+          ),
+        ).then(
+          () => {
+            if (failure === current) {
+              clear();
+              params.onWorkSettled();
+            }
+          },
+          () => {},
+        );
       }
     },
     applied(plan?: GatewayReloadPlan, runtime?: PluginRuntimeApplication) {
       // Clear reverted settings only after the candidate applies, including unrelated plugin edits.
       if (!plan?.reloadPlugins || runtime || !hasPendingFailure(plan)) {
-        failure = undefined;
+        clear();
       }
     },
     shouldReport(error: unknown) {

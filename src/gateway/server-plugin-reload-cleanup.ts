@@ -24,7 +24,7 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generati
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-class PluginAdmittedWorkTimeoutError extends Error {
+export class PluginAdmittedWorkTimeoutError extends Error {
   constructor(pluginIds: ReadonlySet<string>, cause: PluginHostCleanupTimeoutError) {
     const ids = [...pluginIds].join(", ");
     super(
