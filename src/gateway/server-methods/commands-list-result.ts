@@ -20,6 +20,7 @@ import {
   listChatCommandsForConfig,
   supportsNativeProvider,
 } from "../../auto-reply/commands-registry.js";
+import type { CommandArgChoice } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -119,16 +120,18 @@ export async function buildCommandsListResult(params: {
               ...(arg.required ? { required: true } : {}),
               ...(Array.isArray(arg.choices)
                 ? {
-                    choices: arg.choices.slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS).map((choice) => ({
-                      value: truncateUtf16Safe(
-                        typeof choice === "string" ? choice : choice.value,
-                        COMMAND_CHOICE_VALUE_MAX_LENGTH,
-                      ),
-                      label: truncateUtf16Safe(
-                        typeof choice === "string" ? choice : choice.label,
-                        COMMAND_CHOICE_LABEL_MAX_LENGTH,
-                      ),
-                    })),
+                    choices: arg.choices
+                      .slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS)
+                      .map((choice: CommandArgChoice) => ({
+                        value: truncateUtf16Safe(
+                          typeof choice === "string" ? choice : choice.value,
+                          COMMAND_CHOICE_VALUE_MAX_LENGTH,
+                        ),
+                        label: truncateUtf16Safe(
+                          typeof choice === "string" ? choice : choice.label,
+                          COMMAND_CHOICE_LABEL_MAX_LENGTH,
+                        ),
+                      })),
                   }
                 : {}),
               ...(typeof arg.choices === "function" ? { dynamic: true } : {}),

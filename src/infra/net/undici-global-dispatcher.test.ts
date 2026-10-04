@@ -138,6 +138,7 @@ vi.mock("node:net", () => ({
   setDefaultAutoSelectFamily,
 }));
 
+// mock-isolation: dispatcher policy uses fixture proxy settings, not the host environment.
 vi.mock("./proxy-env.js", () => ({
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
   resolveEnvHttpProxyUrl: vi.fn(() => undefined),
