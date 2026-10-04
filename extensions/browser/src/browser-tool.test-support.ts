@@ -323,8 +323,6 @@ vi.mock("./browser-tool.runtime.js", async () => {
         supportsEmulation: !existingSession,
       };
     },
-    describeImageFile: toolCommonMocks.describeImageFile,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
     stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     jsonResult: (result: unknown) => ({

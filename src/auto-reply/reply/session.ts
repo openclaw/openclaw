@@ -1084,15 +1084,12 @@ async function initSessionStateAttemptLocked(
     sessionKey,
     sessionStore,
   });
-  const previousSessionTranscript = committed.previousSessionTranscript;
   if (previousSessionEntry?.sessionId) {
     emitSessionAutoResetHook({
       cfg,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       reason: previousSessionEndReason,
-      sessionFile: previousSessionTranscript.sessionFile,
-      transcriptArchived: previousSessionTranscript.transcriptArchived,
       nextSessionId: sessionId,
       nextSessionKey: sessionKey,
       agentId,
@@ -1161,8 +1158,6 @@ async function initSessionStateAttemptLocked(
           agentId,
           storePath,
           reason: previousSessionEndReason,
-          sessionFile: previousSessionTranscript.sessionFile,
-          transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
           resetBoundaryId: resetBoundary?.boundaryId,
         });

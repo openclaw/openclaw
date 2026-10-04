@@ -11,8 +11,6 @@ import type {
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import {
-  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   NODE_WORKSPACE_DRAIN_COMMAND,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -716,8 +714,6 @@ export class NodeWorkerWorkspaceRuntime {
         const result = await this.processes.executeForeground({
           ...processContext,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          stdoutLimit: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-          stderrLimit: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
         });
         return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });

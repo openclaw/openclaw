@@ -359,7 +359,7 @@ export class ChatTurnRouter {
     approvalArmed: boolean,
     uiContext?: SystemAgentChatParams["context"],
   ): Promise<SystemAgentChatReply> {
-    const overview = await this.callbacks.loadOverview();
+    await this.callbacks.requireVerifiedInference();
     const agentTurn = this.options.runAgentTurn ?? runSystemAgentTurn;
     const resolutionMarker = this.proposalResolution
       ? `[proposal-resolved] The previously pending proposal was ${this.proposalResolution}. Do not present it as pending.\n`
@@ -379,7 +379,6 @@ export class ChatTurnRouter {
     const runTurn = () =>
       agentTurn({
         input: loopInput,
-        overview,
         surface: this.options.surface ?? "cli",
         approvalArmed,
         ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),

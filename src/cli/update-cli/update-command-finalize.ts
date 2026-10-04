@@ -443,7 +443,6 @@ async function updateFinalizeCommandInternal(
           nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
-          freshDoctorRequired: initialPluginUpdate.changed,
           yes: opts.yes === true,
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),

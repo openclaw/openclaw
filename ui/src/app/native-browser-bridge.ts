@@ -82,9 +82,6 @@ const STATE_EVENT = "openclaw:native-browser-state";
 function nativeWindow(): NativeBrowserWindow | undefined {
   return typeof window === "undefined" ? undefined : window;
 }
-function handler() {
-  return nativeWindow()?.webkit?.messageHandlers?.openclawBrowser;
-}
 function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
@@ -213,7 +210,7 @@ function isNode(value: unknown): value is BrowserInspectedNode | null {
 export async function postNativeBrowserMessage(
   message: NativeBrowserMessage,
 ): Promise<NativeBrowserReply | null> {
-  const bridge = handler();
+  const bridge = nativeWindow()?.webkit?.messageHandlers?.openclawBrowser;
   if (typeof bridge?.postMessage !== "function") {
     return null;
   }

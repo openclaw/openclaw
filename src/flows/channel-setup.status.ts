@@ -2,7 +2,6 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
@@ -31,9 +30,6 @@ import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 type ChannelStatusSummary = {
-  installedPlugins: ChannelSetupPlugin[];
-  catalogEntries: ChannelPluginCatalogEntry[];
-  installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };
@@ -377,9 +373,6 @@ export async function collectChannelStatus(params: {
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
-    installedPlugins,
-    catalogEntries: installableCatalogEntries,
-    installedCatalogEntries,
     statusByChannel: mergedStatusByChannel,
     statusLines,
   };

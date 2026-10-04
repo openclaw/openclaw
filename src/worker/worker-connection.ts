@@ -390,7 +390,7 @@ export class WorkerConnection {
     try {
       const response = await this.frames.request("heartbeat", {
         sentAtMs: Date.now(),
-        status: this.options.heartbeatStatus?.() ?? "ready",
+        status: "ready",
       });
       if (response.ok) {
         if (response.payload.ownerEpoch !== this.options.connectParams.admission.ownerEpoch) {

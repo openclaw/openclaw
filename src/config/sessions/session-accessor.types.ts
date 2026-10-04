@@ -519,11 +519,6 @@ export type SessionAbortTargetResult = SessionAbortTargetIdentity & {
   persistenceError?: string;
 };
 
-export type SessionLifecycleTranscriptInfo = {
-  sessionFile?: string;
-  transcriptArchived?: boolean;
-};
-
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
@@ -540,7 +535,6 @@ export type ReplySessionInitializationCommitContext = Omit<
 export type ReplySessionInitializationCommitResult =
   | {
       ok: true;
-      previousSessionTranscript: SessionLifecycleTranscriptInfo;
       sessionEntry: SessionEntry;
       sessionStoreView: Record<string, SessionEntry>;
     }

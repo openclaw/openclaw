@@ -534,7 +534,7 @@ export async function stopStartupEntry(
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
@@ -549,7 +549,7 @@ export async function terminateInstalledStartupRuntime(
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
 }
 
@@ -561,7 +561,7 @@ export async function restartStartupEntry(
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
+    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
     onMutation?.("stop");
   }
   await launchFallbackTaskScript(env, undefined, assertCurrent);

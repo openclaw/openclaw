@@ -130,7 +130,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
       continue;
     }
     await maybeRepairWorkspaceMemoryHealth({
-      ...params,
+      prompter: params.prompter,
       scope: {
         agentId: scope.agentId,
         workspaceDir: scope.workspaceDir,

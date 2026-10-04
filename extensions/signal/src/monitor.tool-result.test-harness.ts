@@ -189,16 +189,13 @@ export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
     exited?: Promise<SignalDaemonExitEvent>;
-    isExited?: () => boolean;
   } = {},
 ): SignalDaemonHandle {
   const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
-  const isExited = overrides.isExited ?? (() => false);
   return {
     stop: stop as unknown as () => Promise<void>,
     exited,
-    isExited,
   };
 }
 

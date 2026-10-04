@@ -11,7 +11,6 @@ import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
 type SwarmDot = {
-  key: string;
   label: string;
   status: SwarmDotStatus;
   duration: string;
@@ -61,7 +60,6 @@ function collectSwarmTasks(
     entries.push({
       phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
       dot: {
-        key: row.key,
         label: resolveSessionDisplayName(row.key, row),
         status,
         duration: swarmDuration(row, status),

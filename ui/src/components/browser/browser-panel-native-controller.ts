@@ -398,7 +398,7 @@ export class BrowserPanelNativeController {
       this.controller.mode === "inspect";
     this.controller.setState("inspectPointer", normalized);
     this.controller.setState("inspected", null);
-    this.controller.pendingInput.queueInspection(120, current, () => {
+    this.controller.pendingInput.queueInspection(current, () => {
       void postNativeBrowserMessage({
         type: "inspect",
         tabId: tab.id,

@@ -74,14 +74,8 @@ export type MonitorIMessageOpts = {
   scheduler: PluginServiceSchedulerV1;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  cliPath?: string;
-  dbPath?: string;
   accountId?: string;
   config?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  includeAttachments?: boolean;
-  mediaMaxMb?: number;
   requireMention?: boolean;
   /**
    * Surface for registering channel runtime contexts (e.g. the approval native

@@ -48,7 +48,6 @@ type SetupAppCandidate = {
   displayName: string;
   summary: string;
   source: SetupAppCandidateSource;
-  downloads?: number;
 };
 
 type SetupAppCandidateGroup = {

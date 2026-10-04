@@ -35,7 +35,8 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): GatewayLogPaths 
   };
 }
 
-function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
+/** launchd supervisors write outside the state directory in ~/Library/Logs. */
+export function resolveGatewaySupervisorLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
   const home = resolveDaemonHomeDir(env).replaceAll("\\", "/");
   const logDir = path.posix.join(home, "Library", "Logs", "openclaw");
   const prefix =
@@ -46,17 +47,6 @@ function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths 
     stdoutPath: path.posix.join(logDir, `${prefix}.log`),
     stderrPath: path.posix.join(logDir, `${prefix}.err.log`),
   };
-}
-
-export function resolveGatewaySupervisorLogPaths(
-  env: GatewayServiceEnv,
-  options?: { platform?: NodeJS.Platform },
-): GatewayLogPaths {
-  // launchd supervisors write to ~/Library/Logs; systemd and schtasks use the
-  // OpenClaw state dir so generated service users can create the directory.
-  return (options?.platform ?? process.platform) === "darwin"
-    ? resolveMacLaunchAgentLogPaths(env)
-    : resolveGatewayLogPaths(env);
 }
 
 export function resolveGatewayRestartLogPath(env: GatewayServiceEnv): string {

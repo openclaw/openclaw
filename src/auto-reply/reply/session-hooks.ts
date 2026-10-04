@@ -134,8 +134,6 @@ export function emitReplySessionEndHook(params: {
   agentId: string;
   storePath: string;
   reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
   nextSessionId?: string;
   resetBoundaryId?: string;
 }): void {

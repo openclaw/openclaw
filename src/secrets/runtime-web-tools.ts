@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -33,7 +34,7 @@ import {
   warnDegradedSecretOwner,
 } from "./runtime-owner-assignments.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
-import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import { pushWarning, type ResolverContext, type SecretDefaults } from "./runtime-shared.js";
 import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import type {
@@ -43,7 +44,7 @@ import type {
   SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import {
-  resolveRuntimeWebProviderSurface,
+  readConfiguredProviderCredential,
   resolveRuntimeWebProviderSelection,
 } from "./runtime-web-tools.shared.js";
 import type {
@@ -422,7 +423,6 @@ async function resolveSecretInputWithEnvFallback(params: {
   envVars: string[];
   contractDigest: string;
   providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
-  restrictEnvRefsToEnvVars?: boolean;
   forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
   // Provider credential callbacks retain their shipped unknown-valued input contract.
@@ -455,11 +455,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   let resolvedFromRef: string | undefined;
   let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
 
-  if (
-    params.restrictEnvRefsToEnvVars === true &&
-    ref.source === "env" &&
-    !params.envVars.includes(ref.id)
-  ) {
+  if (params.kind === "fetch" && ref.source === "env" && !params.envVars.includes(ref.id)) {
     throw new Error(`${params.path} SecretRef is not allowed for this provider.`);
   } else {
     try {
@@ -705,46 +701,99 @@ export async function resolveRuntimeWebTools(params: {
       continue;
     }
     const metadata = kind === "search" ? searchMetadata : fetchMetadata;
-    const surface = await resolveRuntimeWebProviderSurface({
-      contract,
-      rawProvider,
-      providerPath: `tools.web.${kind}.provider`,
-      toolConfig,
-      diagnostics,
-      metadataDiagnostics: metadata.diagnostics,
-      invalidAutoDetectCode:
-        kind === "search"
-          ? "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
-          : "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
-      sourceConfig: params.sourceConfig,
-      context: params.context,
-      configuredBundledPluginIdHint,
-      resolveProviders: async ({ configuredBundledPluginId }) =>
-        resolveBundledWebProviders({
+    const isSearch = kind === "search";
+    let configuredBundledPluginId = configuredBundledPluginIdHint;
+    const resolveManifestOwner = async () => {
+      const { resolveManifestContractOwnerPluginId } = await loadRuntimeWebToolsManifest();
+      return resolveManifestContractOwnerPluginId({
+        contract,
+        value: rawProvider,
+        origin: "bundled",
+        config: params.sourceConfig,
+        env: { ...process.env, ...params.context.env },
+        manifestRecords: params.context.manifestRegistry?.plugins,
+      });
+    };
+    const resolveProviders = async () =>
+      sortPluginEntriesForAutoDetect(
+        await resolveBundledWebProviders({
           kind,
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
           hasCustomPluginRisk: await getHasCustomWebProviderRisk(contract),
         }),
-      ignoreKeylessProvidersForConfiguredSurface: kind === "search",
-      emptyProvidersWhenSurfaceMissing: kind === "search",
-      normalizeConfiguredProviderAgainstActiveProviders: kind === "search",
-    });
+      );
+    if (!configuredBundledPluginId && rawProvider) {
+      configuredBundledPluginId = await resolveManifestOwner();
+    }
+    let allProviders = await resolveProviders();
+    if (
+      rawProvider &&
+      configuredBundledPluginIdHint &&
+      configuredBundledPluginId &&
+      !allProviders.some((provider) => provider.id === rawProvider)
+    ) {
+      configuredBundledPluginId = undefined;
+    }
+    if (
+      rawProvider &&
+      !configuredBundledPluginId &&
+      !allProviders.some((provider) => provider.id === rawProvider)
+    ) {
+      configuredBundledPluginId = await resolveManifestOwner();
+      allProviders = await resolveProviders();
+    }
+    const hasConfiguredSurface =
+      Boolean(toolConfig) ||
+      allProviders.some(
+        (provider) =>
+          !(isSearch && provider.requiresCredential === false) &&
+          (readConfiguredProviderCredential({
+            provider,
+            config: params.sourceConfig,
+            toolConfig,
+          }) !== undefined ||
+            provider.getConfiguredCredentialFallback?.(params.sourceConfig)?.value !== undefined),
+      );
+    const providers = hasConfiguredSurface || !isSearch ? allProviders : [];
+    const configuredProvider =
+      rawProvider &&
+      (isSearch ? providers : allProviders).some((provider) => provider.id === rawProvider)
+        ? rawProvider
+        : undefined;
+    const invalidConfiguredProvider = isSearch && Boolean(rawProvider) && !configuredProvider;
+    if (rawProvider && !configuredProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: isSearch
+          ? "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
+          : "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
+        message: invalidConfiguredProvider
+          ? `tools.web.${kind}.provider is "${rawProvider}". No provider will be selected.`
+          : `tools.web.${kind}.provider is "${rawProvider}". Falling back to auto-detect precedence.`,
+        path: `tools.web.${kind}.provider`,
+      };
+      diagnostics.push(diagnostic);
+      metadata.diagnostics.push(diagnostic);
+      pushWarning(params.context, {
+        code: diagnostic.code,
+        path: diagnostic.path,
+        message: diagnostic.message,
+      });
+    }
 
     const selection = await resolveRuntimeWebProviderSelection({
       kind,
       toolConfig,
-      enabled: surface.enabled,
-      providers: surface.providers,
-      configuredProvider: surface.configuredProvider,
+      enabled: hasConfiguredSurface && !invalidConfiguredProvider && toolConfig?.enabled !== false,
+      providers,
+      configuredProvider,
       metadata,
       diagnostics,
       sourceConfig: params.sourceConfig,
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
-      allowKeylessAutoSelect: kind === "fetch",
       allowUnavailableProviders: params.allowUnavailableSecretOwners,
       onUnavailableProviders: (error) => {
         attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
@@ -756,12 +805,6 @@ export async function resolveRuntimeWebTools(params: {
           unavailableProviders: error.unavailableProviders,
         });
       },
-      noFallbackCode:
-        kind === "search"
-          ? "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK"
-          : "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
-      autoDetectSelectedCode:
-        kind === "search" ? "WEB_SEARCH_AUTODETECT_SELECTED" : "WEB_FETCH_AUTODETECT_SELECTED",
       resolveSecretInput: (input) =>
         resolveSecretInputWithEnvFallback({
           ...input,
@@ -770,18 +813,9 @@ export async function resolveRuntimeWebTools(params: {
           context: params.context,
           defaults,
           providerFailuresByRefKey,
-          restrictEnvRefsToEnvVars: kind === "fetch",
           forceColdRefKeys: params.forceColdRefKeys,
         }),
       setResolvedCredential: (credential) => setResolvedWebProviderApiKey({ ...credential, kind }),
-      inactivePathsForProvider: (provider) =>
-        kind === "search" && provider.requiresCredential === false
-          ? []
-          : provider.inactiveSecretPaths?.length
-            ? provider.inactiveSecretPaths
-            : kind === "search" || provider.credentialPath
-              ? [provider.credentialPath]
-              : [],
     });
     attachWebProviderFailures(selection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({

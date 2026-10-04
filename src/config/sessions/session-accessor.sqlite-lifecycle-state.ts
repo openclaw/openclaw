@@ -255,8 +255,6 @@ export function deleteMaterializedSessionStatePlans(
   plans: readonly MaterializedSessionStateDeletePlan[],
   protectedSessionIds?: ReadonlySet<string>,
   excludedSessionKeys?: ReadonlySet<string>,
-  /** Synchronous mutation notification; durable completion still belongs to COMMIT. */
-  onDeleted?: () => void,
   diskBudget?: { preserveRecentMs?: number | null },
 ): SessionLifecycleArchivedTranscript[] {
   if (plans.length === 0) {
@@ -286,9 +284,7 @@ export function deleteMaterializedSessionStatePlans(
     if (plan.archive) {
       persistSessionTranscriptArchive(database, plan);
     }
-    if (deleteSqliteSessionStateRows(database, plan.sessionId)) {
-      onDeleted?.();
-    }
+    deleteSqliteSessionStateRows(database, plan.sessionId);
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
     }
@@ -619,17 +615,16 @@ export function collectProjectedReferencedSessionIds(params: {
 
 export { collectSessionStateIdsForEntry };
 
-function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): boolean {
+function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
   assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  const deleted = executeSqliteQuerySync(
+  executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_windows").where("session_id", "=", sessionId),
   );
-  return Number(deleted.numAffectedRows ?? 0n) > 0;
 }
 
 export function deletePlannedLifecycleArtifactEntries(

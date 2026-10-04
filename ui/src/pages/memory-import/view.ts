@@ -29,7 +29,6 @@ import { renderBackfillConfirmation } from "./backfill-confirmation.ts";
 registerMemoryImportEnglish();
 
 type MemoryCollection = {
-  id: string;
   label: string;
   items: MemoryMigrationItem[];
 };
@@ -107,7 +106,7 @@ function groupMemoryItems(items: readonly MemoryMigrationItem[]): MemoryCollecti
       detailString(item, "collectionLabel") ??
       detailString(item, "sourceLabel") ??
       t("memoryImport.unknownCollection");
-    const group = groups.get(id) ?? { id, label, items: [] };
+    const group = groups.get(id) ?? { label, items: [] };
     group.items.push(item);
     groups.set(id, group);
   }

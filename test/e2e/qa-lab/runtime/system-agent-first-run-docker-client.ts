@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-main.js";
 import { runGuidedOnboarding } from "../../../../dist/commands/onboard-guided.js";
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
@@ -326,10 +325,10 @@ async function main() {
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.mkdir(stateDir, { recursive: true });
 
-  clearConfigCache();
+  const firstRun = await runPackagedCli([]);
   assert(
-    await shouldStartOnboardingForFreshInstall(["node", "openclaw"]),
-    "fresh bare OpenClaw invocation did not route to onboarding",
+    firstRun.code === 1 && firstRun.stderr.includes("Onboarding needs an interactive TTY."),
+    `fresh bare OpenClaw invocation did not route to onboarding: ${firstRun.stdout}\n${firstRun.stderr}`,
   );
 
   const blocked = await runPackagedCli(["setup", "--message", "overview"]);

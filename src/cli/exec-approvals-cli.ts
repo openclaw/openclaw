@@ -178,29 +178,29 @@ function parseNativeAction(value: unknown, label: string): NativeExecApprovalAct
   if (value === "allow" || value === "deny" || value === "prompt") {
     return value;
   }
-  return exitWithError(`${label} must be allow, deny, or prompt.`);
+  throw new Error(`${label} must be allow, deny, or prompt.`);
 }
 
 function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
   if (!isRecord(value)) {
-    exitWithError("Host-native exec approvals JSON must be an object.");
+    throw new Error("Host-native exec approvals JSON must be an object.");
   }
   const unknownKeys = Object.keys(value).filter(
     (key) => key !== "defaultAction" && key !== "rules",
   );
   if (unknownKeys.length > 0) {
-    exitWithError(`Unknown host-native exec approvals field: ${unknownKeys[0]}.`);
+    throw new Error(`Unknown host-native exec approvals field: ${unknownKeys[0]}.`);
   }
   const defaultAction =
     value.defaultAction === undefined
       ? undefined
       : parseNativeAction(value.defaultAction, "defaultAction");
   if (!Array.isArray(value.rules)) {
-    exitWithError("Host-native exec approvals rules must be an array.");
+    throw new Error("Host-native exec approvals rules must be an array.");
   }
   const rules = value.rules.map((entry, index) => {
     if (!isRecord(entry)) {
-      exitWithError(`Host-native exec approval rule ${index + 1} must be an object.`);
+      throw new Error(`Host-native exec approval rule ${index + 1} must be an object.`);
     }
     const unknownRuleKeys = Object.keys(entry).filter(
       (key) =>
@@ -211,13 +211,13 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
         key !== "enabled",
     );
     if (unknownRuleKeys.length > 0) {
-      exitWithError(
+      throw new Error(
         `Unknown host-native exec approval rule ${index + 1} field: ${unknownRuleKeys[0]}.`,
       );
     }
     const pattern = normalizeOptionalString(entry.pattern);
     if (!pattern) {
-      exitWithError(`Host-native exec approval rule ${index + 1} requires pattern.`);
+      throw new Error(`Host-native exec approval rule ${index + 1} requires pattern.`);
     }
     const action = parseNativeAction(
       entry.action,
@@ -226,12 +226,12 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
     let shells: string[] | undefined;
     if (entry.shells !== undefined) {
       if (!Array.isArray(entry.shells)) {
-        exitWithError(`Host-native exec approval rule ${index + 1} shells must be an array.`);
+        throw new Error(`Host-native exec approval rule ${index + 1} shells must be an array.`);
       }
       shells = entry.shells.map((shell) => {
         const normalized = typeof shell === "string" ? shell.trim() : "";
         if (!normalized) {
-          exitWithError(
+          throw new Error(
             `Host-native exec approval rule ${index + 1} shells must be non-empty strings.`,
           );
         }
@@ -239,10 +239,10 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
       });
     }
     if (entry.description !== undefined && typeof entry.description !== "string") {
-      exitWithError(`Host-native exec approval rule ${index + 1} description must be a string.`);
+      throw new Error(`Host-native exec approval rule ${index + 1} description must be a string.`);
     }
     if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
-      exitWithError(`Host-native exec approval rule ${index + 1} enabled must be a boolean.`);
+      throw new Error(`Host-native exec approval rule ${index + 1} enabled must be a boolean.`);
     }
     return {
       pattern,
@@ -271,14 +271,10 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   return { snapshot, nodeId, source: nodeId ? "node" : "gateway" };
 }
 
-function exitWithError(message: string): never {
-  throw new Error(message);
-}
-
 function requireTrimmedNonEmpty(value: string, message: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    exitWithError(message);
+    throw new Error(message);
   }
   return trimmed;
 }
@@ -294,13 +290,13 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
   if (isNativeApprovalsSnapshot(snapshot) && !snapshot.enabled) {
-    exitWithError(
+    throw new Error(
       "Host-native exec approvals are disabled on this node and cannot be configured remotely.",
     );
   }
   const baseHash = "hash" in snapshot ? snapshot.hash : undefined;
   if (!baseHash) {
-    exitWithError("Exec approvals hash missing; reload and retry.");
+    throw new Error("Exec approvals hash missing; reload and retry.");
   }
   return { snapshot, nodeId, source, targetLabel, baseHash };
 }
@@ -317,7 +313,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
   let next: ExecApprovalsSnapshot;
   if ("native" in params) {
     if (params.source !== "node" || !params.nodeId) {
-      exitWithError("Host-native exec approvals can only target a node.");
+      throw new Error("Host-native exec approvals can only target a node.");
     }
     await callGatewayFromCli("exec.approvals.node.set", params.opts, {
       nodeId: params.nodeId,
@@ -637,16 +633,16 @@ async function resolvePendingApproval(
   // whitespace-bearing id fed back through a script must target exactly that
   // approval, not its trimmed sibling.
   if (idInput.length === 0) {
-    exitWithError("Approval id required.");
+    throw new Error("Approval id required.");
   }
   const rawId = idInput;
   const decision = requireTrimmedNonEmpty(decisionInput, "Decision required.");
   if (!isApprovalDecision(decision)) {
-    exitWithError(`Decision must be one of: ${APPROVAL_DECISIONS.join(", ")}.`);
+    throw new Error(`Decision must be one of: ${APPROVAL_DECISIONS.join(", ")}.`);
   }
   const reason = opts.reason === undefined ? null : normalizeOptionalString(opts.reason);
   if (opts.reason !== undefined && !reason) {
-    exitWithError("Reason must not be empty.");
+    throw new Error("Reason must not be empty.");
   }
 
   // No explicit device identity: operator.admin authorizes resolution on its
@@ -685,7 +681,7 @@ async function resolvePendingApproval(
       lookupOne(decodedId, true),
     ]);
     if (rawLookup && decodedLookup) {
-      exitWithError(
+      throw new Error(
         "Approval id is ambiguous: it matches both a raw id and a displayed id token. This CLI cannot resolve it safely.",
       );
     }
@@ -695,7 +691,7 @@ async function resolvePendingApproval(
       id = decodedId;
       lookup = decodedLookup;
     } else {
-      exitWithError("Approval not found.");
+      throw new Error("Approval not found.");
     }
   } else {
     lookup = expectDefined(await lookupOne(rawId), "approval lookup result");
@@ -705,7 +701,7 @@ async function resolvePendingApproval(
   if (current.status === "pending") {
     const allowedDecisions = current.presentation.allowedDecisions as readonly ApprovalDecision[];
     if (!allowedDecisions.includes(decision)) {
-      exitWithError(
+      throw new Error(
         `Decision ${decision} is not allowed for ${current.presentation.kind} approvals; allowed decisions: ${allowedDecisions.join(", ")}.`,
       );
     }
@@ -713,10 +709,10 @@ async function resolvePendingApproval(
 
   const expiresInDays = parseStrictPositiveInteger(opts.expiresInDays);
   if (opts.expiresInDays !== undefined && (expiresInDays === undefined || expiresInDays > 3650)) {
-    exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
+    throw new Error("--expires-in-days must be a whole number of days between 1 and 3650.");
   }
   if (expiresInDays !== undefined && decision !== "allow-always") {
-    exitWithError("--expires-in-days only applies to allow-always.");
+    throw new Error("--expires-in-days only applies to allow-always.");
   }
   const result = (await callGatewayFromCli(
     "approval.resolve",
@@ -731,10 +727,10 @@ async function resolvePendingApproval(
   )) as ApprovalResolveResult;
   const recordedDecision = approvalRecordedDecision(result.approval);
   if (!recordedDecision) {
-    exitWithError(describeTerminalApprovalFailure(result.approval));
+    throw new Error(describeTerminalApprovalFailure(result.approval));
   }
   if (recordedDecision !== decision) {
-    exitWithError(
+    throw new Error(
       `Approval ${displayId} was already resolved with ${recordedDecision} by ${formatResolver(result.approval)}.`,
     );
   }
@@ -1094,14 +1090,14 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
     const source = !opts.gateway && !opts.node ? "local" : opts.gateway ? "gateway" : "node";
     const { config } = await loadConfigForApprovalsTarget({ opts, source });
     if (!config) {
-      exitWithError("Config unavailable; cannot validate --agent.");
+      throw new Error("Config unavailable; cannot validate --agent.");
     }
     resolveConfiguredAgentId(config, agentKey);
   }
   const target = await loadWritableSnapshotTarget(opts);
   const { snapshot } = target;
   if (isNativeApprovalsSnapshot(snapshot) || !isFileApprovalsSnapshot(snapshot)) {
-    exitWithError(
+    throw new Error(
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
     );
   }
@@ -1124,7 +1120,7 @@ function registerAllowlistMutationCommand(params: {
   name: "add" | "remove";
   description: string;
   mutate: AllowlistMutation;
-}): Command {
+}): void {
   const command = params.allowlist
     .command(`${params.name} <pattern>`)
     .description(params.description)
@@ -1146,7 +1142,6 @@ function registerAllowlistMutationCommand(params: {
       });
     });
   nodesCallOpts(command);
-  return command;
 }
 
 export function registerExecApprovalsCli(program: Command) {
@@ -1200,7 +1195,7 @@ export function registerExecApprovalsCli(program: Command) {
       await runApprovalsAction(opts, async () => {
         const limit = parseStrictPositiveInteger(opts.limit);
         if (opts.limit !== undefined && limit === undefined) {
-          exitWithError("--limit must be a positive integer.");
+          throw new Error("--limit must be a positive integer.");
         }
         const result = (await callGatewayFromCli(
           "exec.approval.grants.list",
@@ -1232,7 +1227,7 @@ export function registerExecApprovalsCli(program: Command) {
         } else if (result.outcome === "already-revoked") {
           defaultRuntime.log(`Grant ${grantId} was already revoked.`);
         } else {
-          exitWithError(`Grant ${grantId} not found.`);
+          throw new Error(`Grant ${grantId} not found.`);
         }
       });
     });
@@ -1287,10 +1282,10 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       await runApprovalsAction(opts, async () => {
         if (!opts.file && !opts.stdin) {
-          exitWithError("Provide --file or --stdin.");
+          throw new Error("Provide --file or --stdin.");
         }
         if (opts.file && opts.stdin) {
-          exitWithError("Use either --file or --stdin (not both).");
+          throw new Error("Use either --file or --stdin (not both).");
         }
         const { source, nodeId, targetLabel, baseHash, snapshot } =
           await loadWritableSnapshotTarget(opts);
@@ -1299,7 +1294,7 @@ export function registerExecApprovalsCli(program: Command) {
         try {
           input = JSON5.parse(raw);
         } catch (err) {
-          exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
+          throw new Error(`Failed to parse approvals JSON: ${String(err)}`);
         }
         if (isNativeApprovalsSnapshot(snapshot)) {
           const native = normalizeNativePolicyInput(input);
@@ -1314,7 +1309,7 @@ export function registerExecApprovalsCli(program: Command) {
           return;
         }
         if (!isRecord(input)) {
-          exitWithError("Exec approvals JSON must be an object.");
+          throw new Error("Exec approvals JSON must be an object.");
         }
         const file = input as ExecApprovalsFile;
         file.version = 1;
