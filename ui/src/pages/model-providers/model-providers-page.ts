@@ -31,7 +31,6 @@ import {
   readModelBehaviorConfig,
   runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
-  type ModelProviderConfigMutation,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
@@ -431,31 +430,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private setMessage = (key: string, message: ModelProviderRowMessage | null) =>
     (this.messages = updateRecordEntry(this.messages, key, message));
 
-  private async patchConfig(params: ModelProviderConfigMutation): Promise<void> {
-    const client = this.context.gateway.snapshot.client;
-    // Global defaults remain editable when the configured roster is empty.
-    if (
-      !client ||
-      modelProviderConfigMutationBlockedReason(this.context) ||
-      modelProviderConfigBusy(this.context) ||
-      this.busy[params.key]
-    ) {
-      return;
-    }
-    const clientEpoch = this.gateway.epoch;
-    const agentEpoch = this.agentEpoch;
-    return runModelProviderConfigMutation(
-      {
-        runtimeConfig: this.context.runtimeConfig,
-        isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
-        isCurrentAgent: () => this.agentEpoch === agentEpoch,
-        setBusy: (busy) => this.setBusy(params.key, busy),
-        setMessage: (message) => this.setMessage(params.key, message),
-      },
-      params,
-    );
-  }
-
   private openKeyEditor(provider: string) {
     this.keyEditorProvider = provider;
     this.keyDraft = "";
@@ -560,16 +534,38 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private async saveDefaults(defaults = this.defaultsDraft) {
+  private async saveDefaults() {
+    const defaults = this.defaultsDraft;
     if (!defaults) {
       return;
     }
-    await this.patchConfig({
-      key: "defaults",
-      raw: buildDefaultsPatch(defaults),
-      note: t("modelProviders.notes.defaultModel"),
-      replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
-    });
+    const client = this.context.gateway.snapshot.client;
+    let mutation: Promise<void> | undefined;
+    // Global defaults remain editable when the configured roster is empty.
+    if (
+      client &&
+      !modelProviderConfigMutationBlockedReason(this.context) &&
+      !modelProviderConfigBusy(this.context) &&
+      !this.busy.defaults
+    ) {
+      const clientEpoch = this.gateway.epoch;
+      const agentEpoch = this.agentEpoch;
+      mutation = runModelProviderConfigMutation(
+        {
+          runtimeConfig: this.context.runtimeConfig,
+          isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
+          isCurrentAgent: () => this.agentEpoch === agentEpoch,
+          setBusy: (busy) => this.setBusy("defaults", busy),
+          setMessage: (message) => this.setMessage("defaults", message),
+        },
+        {
+          raw: buildDefaultsPatch(defaults),
+          note: t("modelProviders.notes.defaultModel"),
+          replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
+        },
+      );
+    }
+    await mutation;
     // Global defaults outlive agent selection. Connection resets clear the draft;
     // object identity protects newer edits.
     if (this.defaultsDraft === defaults) {
@@ -605,7 +601,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
       this.defaultsDraft = { ...(this.defaultsDraft ?? configuredDefaults), ...patch };
       this.setMessage("defaults", null);
-      void this.saveDefaults(this.defaultsDraft);
+      void this.saveDefaults();
     };
     const cards = buildModelProviderCards({
       ...data,

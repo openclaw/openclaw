@@ -1,6 +1,6 @@
 /** Shared parsing helpers for secrets migration/runtime code. */
-import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+export { resolvePositiveTimerTimeoutMs as normalizePositiveTimerMs } from "@openclaw/normalization-core/number-coercion";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
 export { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
@@ -26,13 +26,6 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
     return Math.max(1, Math.floor(value));
   }
   return Math.max(1, Math.floor(fallback));
-}
-
-/**
- * Normalizes timer values with the shared timeout coercion rules used by secret providers.
- */
-export function normalizePositiveTimerMs(value: unknown, fallback: number): number {
-  return resolvePositiveTimerTimeoutMs(value, fallback);
 }
 
 /**

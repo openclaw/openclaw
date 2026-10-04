@@ -68,7 +68,7 @@ function detailLevel(value: string): DetailLevel {
 }
 
 type InheritChoice = "inherit" | "on" | "off";
-type QuietHoursWindow = { startMinute: number; endMinute: number; timeZone: string };
+type QuietHoursWindow = WebPushNotificationPreferences["quietHours"];
 
 function detailLevelOptions(): Array<{ value: DetailLevel; label: string }> {
   return [
@@ -88,9 +88,9 @@ function inheritChoiceOptions(
   ];
 }
 
-function renderQuietHoursWindowRows<T extends QuietHoursWindow>(
-  quietHours: T,
-  onChange: (quietHours: T) => void,
+function renderQuietHoursWindowRows(
+  quietHours: QuietHoursWindow,
+  onChange: (quietHours: QuietHoursWindow) => void,
 ) {
   const rows = html`
     ${renderSettingsRow({

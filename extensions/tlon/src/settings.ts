@@ -112,12 +112,7 @@ function isChannelRulesObject(val: unknown): val is NonNullable<TlonSettingsStor
   if (!val || typeof val !== "object" || Array.isArray(val)) {
     return false;
   }
-  for (const [, rule] of Object.entries(val)) {
-    if (!rule || typeof rule !== "object") {
-      return false;
-    }
-  }
-  return true;
+  return Object.values(val).every((rule) => rule && typeof rule === "object");
 }
 
 function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {

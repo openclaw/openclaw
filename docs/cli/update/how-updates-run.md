@@ -227,6 +227,11 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+Before each candidate check starts, the updater names the check and command.
+These progress messages go to stderr with `--json`, leaving stdout for the JSON
+result. The installed updater owns these announcements, so an older updater gains
+them on its next update after installing this version.
+
 Plugin dependency inventory skips incidental Git runtime transaction directories
 named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
 contents stay untouched; explicitly referenced dependencies still undergo normal

@@ -268,28 +268,17 @@ it("retains only live checkout rollback authority after cancellation inside the 
   expect(() => escaped?.assertCurrent()).toThrow();
 });
 
-it.each(["completed", "not-entered"] as const)(
-  "preserves the exact callback failure for known %s settlement",
-  async (kind) => {
-    const failure = new Error("Known setup failure");
-    fixture.settlement.mockResolvedValue(
-      kind === "completed" ? { kind } : { kind, error: failure },
-    );
-    const selected = await select();
-    await expect(
-      selected.withCurrent(async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    expect(fixture.release).toHaveBeenCalledOnce();
-  },
-);
-
-it.each(["completed", "not-entered", "unknown"] as const)(
-  "joins retained %s settlement and observes cancellation after the callback exits",
-  async (kind) => {
+it.each([
+  { kind: "completed", cancel: false },
+  { kind: "not-entered", cancel: false },
+  { kind: "completed", cancel: true },
+  { kind: "not-entered", cancel: true },
+  { kind: "unknown", cancel: true },
+] as const)(
+  "joins $kind settlement before choosing the callback or cancellation failure (cancel=$cancel)",
+  async ({ kind, cancel }) => {
     const caller = new AbortController();
-    const selected = await select(caller.signal);
+    const selected = await select(cancel ? caller.signal : undefined);
     const retained = createDeferredCore<SqliteWorkerOperationSettlement>();
     const callbackExited = createDeferredCore();
     const failure = new Error("Callback failed before native settlement arrived");
@@ -326,7 +315,9 @@ it.each(["completed", "not-entered", "unknown"] as const)(
       expect(escaped).toBeDefined();
       expect(() => escaped?.assertCheckoutCurrent()).toThrow();
       expect(() => escaped?.assertCurrent()).toThrow();
-      caller.abort(abortCause);
+      if (cancel) {
+        caller.abort(abortCause);
+      }
       await nextMessageTurn();
       expect(observed).toBe(false);
       retained.resolve(
@@ -339,11 +330,15 @@ it.each(["completed", "not-entered", "unknown"] as const)(
       if (result.ok) {
         throw new Error("Selector unexpectedly succeeded");
       }
-      expect(result.error).toMatchObject({
-        code: kind === "unknown" ? "outcome-unknown" : "OPENCLAW_STATE_LEASE_ABORTED",
-      });
       const causes = collectNestedErrorCandidates(result.error);
-      expect(causes).toContain(abortCause);
+      if (cancel) {
+        expect(result.error).toMatchObject({
+          code: kind === "unknown" ? "outcome-unknown" : "OPENCLAW_STATE_LEASE_ABORTED",
+        });
+        expect(causes).toContain(abortCause);
+      } else {
+        expect(result.error).toBe(failure);
+      }
       if (kind === "unknown") {
         expect(causes).toContain(failure);
         expect(causes).toContain(settlementError);

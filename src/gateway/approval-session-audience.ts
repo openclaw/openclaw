@@ -9,51 +9,42 @@ import {
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
-type SubagentApprovalLineage = {
-  controllerSessionKey?: string | null;
-  requesterSessionKey?: string | null;
-};
-
-type StoredApprovalLineage = Pick<SessionEntry, "parentSessionKey" | "spawnedBy">;
-
-type ApprovalSessionAudienceSources = {
-  canonicalizeSessionKey: (
-    sessionKey: string,
-    relativeToSessionKey?: string,
-  ) => string | null | undefined;
-  getLatestSubagentLineage: (sessionKey: string) => SubagentApprovalLineage | null | undefined;
-  getStoredSessionLineage: (sessionKey: string) => StoredApprovalLineage | null | undefined;
-};
-
-function canonicalizeAudienceSessionKey(
-  sources: ApprovalSessionAudienceSources,
-  sessionKey: string | null | undefined,
-  relativeToSessionKey?: string,
-): string | null {
-  const raw = sessionKey?.trim();
-  if (!raw) {
-    return null;
-  }
-  return sources.canonicalizeSessionKey(raw, relativeToSessionKey)?.trim() || null;
-}
-
 /** Resolves the source session and its operator-visible ancestor audience. */
-function resolveApprovalSessionAudienceFromSources(params: {
-  sourceSessionKey: string;
-  sources: ApprovalSessionAudienceSources;
-}): string[] {
-  const sourceSessionKey = canonicalizeAudienceSessionKey(params.sources, params.sourceSessionKey);
+function resolveApprovalSessionAudience(
+  cfg: OpenClawConfig,
+  persisted: boolean,
+  source: string,
+  sourceAgentId?: string | null,
+): string[] {
+  const canonicalize = (sessionKey: string | null | undefined, relativeToSessionKey?: string) => {
+    const raw = sessionKey?.trim();
+    if (!raw) {
+      return null;
+    }
+    if (!relativeToSessionKey) {
+      return canonicalizeApprovalSourceStreamKey(cfg, raw, sourceAgentId).trim() || null;
+    }
+    const relativeAgentId = resolveSessionStoreAgentId(cfg, relativeToSessionKey);
+    const canonical = resolveSessionStoreKey({
+      cfg,
+      sessionKey: raw,
+      storeAgentId: relativeAgentId,
+    });
+    return (
+      (canonical ? resolveApprovalSourceStreamKey(canonical, relativeAgentId) : canonical).trim() ||
+      null
+    );
+  };
+  const sourceSessionKey = canonicalize(source);
   if (!sourceSessionKey) {
     return [];
   }
-
   const queued = new Set<string>([sourceSessionKey]);
   const pending = [sourceSessionKey];
   const enqueue = (sessionKey: string | null) => {
@@ -67,14 +58,15 @@ function resolveApprovalSessionAudienceFromSources(params: {
     queued.add(sessionKey);
     pending.push(sessionKey);
   };
-
   for (const sessionKey of pending) {
-    const subagentLineage = params.sources.getLatestSubagentLineage(sessionKey);
+    const subagentLineage = persisted
+      ? buildLatestSubagentSessionListReadIndex([sessionKey]).getLatestSubagentRun(sessionKey)
+      : getLatestLiveSubagentRunByChildSessionKey(sessionKey);
     const registryParents = [
       subagentLineage?.controllerSessionKey,
       subagentLineage?.requesterSessionKey,
     ]
-      .map((parent) => canonicalizeAudienceSessionKey(params.sources, parent, sessionKey))
+      .map((parent) => canonicalize(parent, sessionKey))
       .filter((candidate): candidate is string => Boolean(candidate));
     if (registryParents.length > 0) {
       // Current registry ownership supersedes session metadata, whose spawnedBy
@@ -84,59 +76,22 @@ function resolveApprovalSessionAudienceFromSources(params: {
       }
       continue;
     }
-
-    const storedLineage = params.sources.getStoredSessionLineage(sessionKey);
+    const parsed = parseAgentSessionKey(sessionKey);
+    const target =
+      parsed?.rest.toLowerCase() === "global"
+        ? { agentId: normalizeAgentId(parsed.agentId), sessionKey: "global" }
+        : { agentId: resolveSessionStoreAgentId(cfg, sessionKey), sessionKey };
+    const storedLineage = loadSessionEntryReadOnly({
+      ...target,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+    });
     const parentSessionKey = storedLineage?.parentSessionKey?.trim()
       ? storedLineage.parentSessionKey
       : storedLineage?.spawnedBy;
-    enqueue(canonicalizeAudienceSessionKey(params.sources, parentSessionKey, sessionKey));
+    enqueue(canonicalize(parentSessionKey, sessionKey));
   }
-
   return pending;
-}
-
-function createRuntimeApprovalSessionAudienceSources(
-  cfg: OpenClawConfig,
-  persisted: boolean,
-  sourceAgentId?: string | null,
-): ApprovalSessionAudienceSources {
-  const resolveStorageTarget = (sessionKey: string): { agentId: string; sessionKey: string } => {
-    const parsed = parseAgentSessionKey(sessionKey);
-    if (parsed?.rest.toLowerCase() === "global") {
-      return { agentId: normalizeAgentId(parsed.agentId), sessionKey: "global" };
-    }
-    return {
-      agentId: resolveSessionStoreAgentId(cfg, sessionKey),
-      sessionKey,
-    };
-  };
-  return {
-    canonicalizeSessionKey: (sessionKey, relativeToSessionKey) => {
-      if (!relativeToSessionKey) {
-        return canonicalizeApprovalSourceStreamKey(cfg, sessionKey, sourceAgentId);
-      }
-      const relativeAgentId = resolveSessionStoreAgentId(cfg, relativeToSessionKey);
-      const canonical = resolveSessionStoreKey({
-        cfg,
-        sessionKey,
-        storeAgentId: relativeAgentId,
-      });
-      return canonical ? resolveApprovalSourceStreamKey(canonical, relativeAgentId) : canonical;
-    },
-    getLatestSubagentLineage: (sessionKey) =>
-      persisted
-        ? buildLatestSubagentSessionListReadIndex([sessionKey]).getLatestSubagentRun(sessionKey)
-        : getLatestLiveSubagentRunByChildSessionKey(sessionKey),
-    getStoredSessionLineage: (sessionKey) => {
-      const target = resolveStorageTarget(sessionKey);
-      return loadSessionEntryReadOnly({
-        agentId: target.agentId,
-        clone: false,
-        hydrateSkillPromptRefs: false,
-        sessionKey: target.sessionKey,
-      });
-    },
-  };
 }
 
 /** Canonicalize one source key against config: agent scoping, main-key aliases, global sentinel. */
@@ -171,14 +126,12 @@ export async function resolveApprovalSessionAudienceWithFallback(
     getAsyncWorkSignal()?.throwIfAborted();
   } while (persisted && !getSubagentSessionListReadSnapshotIdentity());
   try {
-    return resolveApprovalSessionAudienceFromSources({
+    return resolveApprovalSessionAudience(
+      getRuntimeConfig(),
+      persisted,
       sourceSessionKey,
-      sources: createRuntimeApprovalSessionAudienceSources(
-        getRuntimeConfig(),
-        persisted,
-        sourceAgentId,
-      ),
-    });
+      sourceAgentId,
+    );
   } catch {
     return [resolveApprovalFallbackAudienceSessionKey(sourceSessionKey, sourceAgentId)];
   }

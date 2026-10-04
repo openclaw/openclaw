@@ -212,27 +212,6 @@ function resolveAnthropicSnapshotModel(
   return template ? { ...template, id: modelId, name: modelId } : undefined;
 }
 
-/** Newest Claude generation whose request contract this plugin encodes. */
-const ANTHROPIC_NEWEST_KNOWN_GENERATION = { major: 5, minor: 0 } as const;
-
-/**
- * Read the generation from either Claude id order: `claude-<family>-<major>[-<minor>]`
- * (4.6 onward) and `claude-<major>[-<minor>]-<family>` (through 3.7). The minor
- * capture is bounded to two digits so a trailing snapshot date such as
- * `claude-opus-4-20250514` does not parse as a minor version.
- */
-function resolveAnthropicModelGeneration(
-  modelId: string,
-): { major: number; minor: number } | undefined {
-  const match =
-    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
-    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
-  if (!match) {
-    return undefined;
-  }
-  return { major: Number(match[1]), minor: match[2] === undefined ? 0 : Number(match[2]) };
-}
-
 /**
  * Claude ids from a generation newer than anything this plugin encodes. Request
  * shaping is selected by version predicates in `@openclaw/llm-core`, so such an
@@ -243,15 +222,16 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
   if (matchesAnthropicModernModel(modelId)) {
     return false;
   }
-  const generation = resolveAnthropicModelGeneration(modelId);
-  if (!generation) {
+  // Accept either Claude id order; two-digit minors exclude trailing snapshot dates.
+  const match =
+    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
+    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
+  if (!match) {
     return false;
   }
-  return (
-    generation.major > ANTHROPIC_NEWEST_KNOWN_GENERATION.major ||
-    (generation.major === ANTHROPIC_NEWEST_KNOWN_GENERATION.major &&
-      generation.minor > ANTHROPIC_NEWEST_KNOWN_GENERATION.minor)
-  );
+  const major = Number(match[1]);
+  // Claude 5.0 is the newest generation whose request contract this plugin encodes.
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) > 0);
 }
 
 /**

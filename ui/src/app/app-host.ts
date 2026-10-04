@@ -372,11 +372,7 @@ class OpenClawShell
       )
       .watchStore(
         () => this.context?.placementStartup,
-        () => {
-          if (this.context) {
-            this.recoverDeletedActiveSession(this.context.sessions.state);
-          }
-        },
+        () => this.recoverDeletedActiveSession(),
       )
       .watch(
         () => this.context?.runtimeConfig,
