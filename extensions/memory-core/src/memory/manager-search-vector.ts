@@ -1,11 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import {
-  cosineSimilarity,
-  decodeMemoryEmbedding,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
+import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import {
   buildMemoryModelFilter,
   projectMemorySearchRow,
@@ -103,6 +100,7 @@ export async function searchChunksByEmbedding(params: {
   const payloadStmt = params.db.prepare(
     `SELECT id, path, start_line, end_line, ${snippet.sql} AS text, source FROM memory_index_chunks WHERE rowid = ?`,
   );
+  const scoreEmbedding = createEmbeddingScorer(params.queryVec);
   const topResults: SearchRowResult[] = [];
   let lastRowid: bigint | undefined;
   while (true) {
@@ -125,7 +123,7 @@ export async function searchChunksByEmbedding(params: {
     for (const row of batch) {
       batchSize += 1;
       lastRowid = row.rowid;
-      const score = cosineSimilarity(params.queryVec, decodeMemoryEmbedding(row.embedding));
+      const score = scoreEmbedding(row.embedding);
       const lowest = topResults.at(-1);
       if (
         Number.isFinite(score) &&
