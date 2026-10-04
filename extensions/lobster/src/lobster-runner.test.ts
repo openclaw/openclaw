@@ -623,6 +623,21 @@ describe("createEmbeddedLobsterRunner", () => {
       return Buffer.from(JSON.stringify(reordered, null, 1), "utf8").toString("base64url");
     }
 
+    // Toggle the decoded stateKey's case: Lobster's keyToPath lowercases, so this
+    // names the same checkpoint behind a storage-equivalent token.
+    function caseMutateToken(token: string): string {
+      const payload = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as Record<
+        string,
+        unknown
+      >;
+      const stateKey = payload.stateKey;
+      if (typeof stateKey !== "string") {
+        throw new Error("expected a resume token stateKey");
+      }
+      payload.stateKey = stateKey === stateKey.toUpperCase() ? stateKey : stateKey.toUpperCase();
+      return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+    }
+
     const embeddedProvenance = {
       version: 1,
       stages: [{ provider: "embedded", command: "llm.invoke" }],
@@ -713,6 +728,38 @@ describe("createEmbeddedLobsterRunner", () => {
       // The producer record was resolved, not missed, so no stage ran again.
       expect(f.checkpointChecks).toEqual([embeddedProvenance]);
       expect(f.calls()).toBe(1);
+    });
+
+    it("resolves a storage-equivalent token to the producer record", async () => {
+      const f = fixture();
+      const paused = await f.run(embedded + " | approve --emit --prompt case");
+      const token = approvalToken(paused);
+      const mutated = caseMutateToken(token);
+      expect(mutated).not.toBe(token);
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token: mutated, approve: true })).rejects.toThrow(
+        "checkpoint not authorized",
+      );
+      // The refusal came from the real producer record, not a missed lookup.
+      expect(f.checkpointChecks).toEqual([embeddedProvenance]);
+      f.setCheckpointAllowed(true);
+      await expect(f.resume({ token: mutated, approve: true })).resolves.toMatchObject({
+        ok: true,
+        status: "ok",
+      });
+      expect(f.calls()).toBe(1);
+    });
+
+    it("re-runs the checkpoint authorization at the downstream dispatch boundary", async () => {
+      const f = fixture();
+      const paused = await f.run("approve --emit | " + embedded);
+      const token = approvalToken(paused);
+      await expect(f.resume({ token, approve: true })).resolves.toMatchObject({ ok: true });
+      // The resume authorized once, and the resumed embedded stage authorized again at dispatch.
+      expect(f.checkpointChecks).toEqual([
+        { version: 1, stages: [] },
+        { version: 1, stages: [] },
+      ]);
     });
 
     it("refuses a resume whose authority was revoked mid-flight, before consuming it", async () => {
@@ -936,5 +983,41 @@ describe("createEmbeddedLobsterRunner", () => {
     );
 
     await expect(runner.run(runParams({ timeoutMs: 200 }))).rejects.toThrow(/timed out|aborted/);
+  });
+
+  it("stops a resume when the request is cancelled during the consume wait", async () => {
+    const { runtime, runner } = createRunner();
+    const controller = new AbortController();
+    const reason = new Error("client gone");
+    let observed: unknown;
+    runtime.resumeToolRequest.mockImplementation(async ({ ctx }) => {
+      controller.abort(reason);
+      await new Promise<void>((_resolve, reject) => {
+        const signal = ctx?.signal;
+        const onAbort = () => {
+          observed = signal?.reason;
+          reject(toLintErrorObject(signal?.reason ?? new Error("aborted"), "Non-Error rejection"));
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+      return success;
+    });
+    await expect(
+      runner.run(
+        runParams({
+          action: "resume",
+          token: "resume-token",
+          approve: true,
+          signal: controller.signal,
+        }),
+      ),
+    ).rejects.toThrow(/client gone/);
+    // The request's cancellation reached Lobster's context, and nothing ran after it.
+    expect(observed).toBe(reason);
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
   });
 });

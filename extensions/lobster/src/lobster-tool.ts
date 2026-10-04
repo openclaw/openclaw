@@ -1,8 +1,15 @@
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import {
+  CHECKPOINT_PROVENANCE_MAX_ENTRIES,
+  CHECKPOINT_PROVENANCE_NAMESPACE,
+  configureCheckpointProvenanceStore,
+  type LobsterCheckpointProvenance,
+} from "./lobster-checkpoint-provenance.js";
 import {
   assertEmbeddedRouteRunsInGateway,
   authorizeCheckpointForCaller,
@@ -139,7 +146,25 @@ function createOpenClawLlmAdapter(api: OpenClawPluginApi, callerAgentId: string 
   };
 }
 
+/**
+ * Opens the plugin's SQLite-backed provenance store from the host runtime: the
+ * durable owner the repository requires for plugin-scoped state. Without a host
+ * state surface (unit tests), provenance stays on the legacy sidecar path.
+ */
+function openCheckpointProvenanceStore(api: OpenClawPluginApi) {
+  const state = api.runtime.state;
+  if (!state) {
+    return undefined;
+  }
+  return state.openKeyedStore<LobsterCheckpointProvenance>({
+    namespace: CHECKPOINT_PROVENANCE_NAMESPACE,
+    maxEntries: CHECKPOINT_PROVENANCE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+}
+
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
+  configureCheckpointProvenanceStore(openCheckpointProvenanceStore(api));
   const runner =
     options?.runner ??
     createEmbeddedLobsterRunner({
@@ -193,6 +218,9 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       const cwd = resolveLobsterCwd(params.cwd);
       const timeoutMs = readPositiveIntegerParam(params, "timeoutMs") ?? 20_000;
       const maxStdoutBytes = readPositiveIntegerParam(params, "maxStdoutBytes") ?? 512_000;
+      // The request's own cancellation, threaded into the runner so a resume that
+      // is waiting on Lobster's state lock stops when the client goes away.
+      const requestSignal = getPluginRuntimeGatewayRequestScope()?.signal;
 
       if (api.runtime?.version && api.logger?.debug) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
@@ -210,6 +238,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         cwd,
         timeoutMs,
         maxStdoutBytes,
+        ...(requestSignal ? { signal: requestSignal } : {}),
       };
 
       const envelope = await runner.run(runnerParams);

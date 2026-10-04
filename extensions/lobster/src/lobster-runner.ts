@@ -58,6 +58,12 @@ export type LobsterRunnerParams = {
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
+  /**
+   * The live gateway request's abort signal. Linked into the runner's controller,
+   * so Lobster's state-lock waits and resume-state consumption observe request
+   * cancellation instead of running to completion after the client is gone.
+   */
+  signal?: AbortSignal;
 };
 
 export type LobsterRunner = {
@@ -358,6 +364,7 @@ function wrapLlmCommands(
   base: LobsterRegistry,
   authorizeReplay: (request: LobsterReplayRequest) => Promise<void>,
   onStage: (stage: LobsterLlmStage) => void,
+  beforeStage: () => Promise<void>,
 ): LobsterRegistry {
   const drain = async (
     result: { output?: AsyncIterable<unknown> } & Record<string, unknown>,
@@ -380,6 +387,7 @@ function wrapLlmCommands(
       return {
         ...command,
         async run({ input, args, ctx }) {
+          await beforeStage();
           const env = ctx.env ?? {};
           if (embeddedRouteWasRequested(args, env)) {
             const result = await command.run({
@@ -439,6 +447,9 @@ export function createEmbeddedLobsterRunner(options?: {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
       let registry: LobsterRegistry | undefined;
+      // Re-runs the resumed checkpoint's producer check at each downstream LLM
+      // dispatch boundary; undefined for a fresh run.
+      let reauthorizeResume: (() => Promise<void>) | undefined;
       let checkpoints:
         | {
             authorize: (provenance: LobsterCheckpointProvenance | undefined) => Promise<void>;
@@ -459,140 +470,166 @@ export function createEmbeddedLobsterRunner(options?: {
         }
         const trace: LlmStageTrace = { stages: [] };
         checkpoints = { authorize: authorizeCheckpoint, trace };
-        registry = wrapLlmCommands(runtime.createDefaultRegistry(), authorizeReplay, (stage) => {
-          trace.stages.push(stage);
-          if (stage.provider === "embedded") {
-            trace.caller = mergeCaller(trace.caller, describeCaller());
-          }
-        });
+        registry = wrapLlmCommands(
+          runtime.createDefaultRegistry(),
+          authorizeReplay,
+          (stage) => {
+            trace.stages.push(stage);
+            if (stage.provider === "embedded") {
+              trace.caller = mergeCaller(trace.caller, describeCaller());
+            }
+          },
+          async () => await reauthorizeResume?.(),
+        );
       }
       const controller = new AbortController();
-      return await raceWithTimeout(
-        async () => {
-          const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
-          const ctx: EmbeddedToolContext = {
-            cwd: params.cwd,
-            env: { ...process.env },
-            ...(registry ? { registry } : {}),
-            mode: "tool",
-            stdin: Readable.from([]),
-            stdout: createLimitedSink(maxStdoutBytes, "stdout"),
-            stderr: createLimitedSink(maxStdoutBytes, "stderr"),
-            signal: controller.signal,
-            ...(options?.llmAdapters ? { llmAdapters: options.llmAdapters } : {}),
-          };
-          let envelope: EmbeddedToolEnvelope;
-          let resumed:
-            | { handle: LobsterCheckpointHandle; provenance?: LobsterCheckpointProvenance }
-            | undefined;
+      const externalSignal = params.signal;
+      const forwardAbort = () => controller.abort(externalSignal?.reason);
+      if (externalSignal) {
+        if (externalSignal.aborted) {
+          controller.abort(externalSignal.reason);
+        } else {
+          externalSignal.addEventListener("abort", forwardAbort, { once: true });
+        }
+      }
+      try {
+        return await raceWithTimeout(
+          async () => {
+            const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
+            const ctx: EmbeddedToolContext = {
+              cwd: params.cwd,
+              env: { ...process.env },
+              ...(registry ? { registry } : {}),
+              mode: "tool",
+              stdin: Readable.from([]),
+              stdout: createLimitedSink(maxStdoutBytes, "stdout"),
+              stderr: createLimitedSink(maxStdoutBytes, "stderr"),
+              signal: controller.signal,
+              ...(options?.llmAdapters ? { llmAdapters: options.llmAdapters } : {}),
+            };
+            let envelope: EmbeddedToolEnvelope;
+            let resumed:
+              | { handle: LobsterCheckpointHandle; provenance?: LobsterCheckpointProvenance }
+              | undefined;
 
-          if (params.action === "run") {
-            const pipeline = params.pipeline?.trim() ?? "";
-            if (!pipeline) {
-              throw new Error("pipeline required");
-            }
+            if (params.action === "run") {
+              const pipeline = params.pipeline?.trim() ?? "";
+              if (!pipeline) {
+                throw new Error("pipeline required");
+              }
 
-            const filePath = await detectWorkflowFile(pipeline, params.cwd);
-            if (filePath) {
-              const parsedArgsJson = params.argsJson?.trim() ?? "";
-              let args: Record<string, unknown> | undefined;
-              if (parsedArgsJson) {
+              const filePath = await detectWorkflowFile(pipeline, params.cwd);
+              if (filePath) {
+                const parsedArgsJson = params.argsJson?.trim() ?? "";
+                let args: Record<string, unknown> | undefined;
+                if (parsedArgsJson) {
+                  try {
+                    args = JSON.parse(parsedArgsJson) as Record<string, unknown>;
+                  } catch {
+                    throw new Error("run --args-json must be valid JSON");
+                  }
+                }
+                envelope = await runtime.runToolRequest({ filePath, args, ctx });
+              } else {
+                envelope = await runtime.runToolRequest({ pipeline, ctx });
+              }
+            } else {
+              const token = params.token?.trim() ?? "";
+              const approvalId = params.approvalId?.trim() ?? "";
+              if (!token && !approvalId) {
+                throw new Error("token or approvalId required");
+              }
+              if (token && approvalId && checkpoints) {
+                // Lobster's resumeToolRequest gives the approval ID precedence, so a
+                // token that names one checkpoint could carry authorization for a
+                // different one. Refuse the ambiguous pair rather than authorize the
+                // wrong checkpoint.
+                throw new Error(
+                  "resume accepts either token or approvalId, not both: the approval ID takes precedence, so the two can select different checkpoints",
+                );
+              }
+              const hasApproval = typeof params.approve === "boolean";
+              const hasResponse = params.responseJson !== undefined;
+              const hasCancel = params.cancel !== undefined;
+              if (Number(hasApproval) + Number(hasResponse) + Number(hasCancel) !== 1) {
+                throw new Error(
+                  "resume requires exactly one of approve, responseJson, or cancel: true",
+                );
+              }
+              if (hasCancel && params.cancel !== true) {
+                throw new Error("cancel must be true");
+              }
+              let response: unknown;
+              if (params.responseJson !== undefined) {
                 try {
-                  args = JSON.parse(parsedArgsJson) as Record<string, unknown>;
+                  response = JSON.parse(params.responseJson);
                 } catch {
-                  throw new Error("run --args-json must be valid JSON");
+                  throw new Error("responseJson must be valid JSON");
                 }
               }
-              envelope = await runtime.runToolRequest({ filePath, args, ctx });
-            } else {
-              envelope = await runtime.runToolRequest({ pipeline, ctx });
+              if (checkpoints && hasCancel) {
+                // Cancelling discloses nothing and deletes the stored output.
+                resumed = { handle: { token, approvalId } };
+              } else if (checkpoints) {
+                // Lobster hands a checkpoint's stored stage output to the remaining
+                // stages, or back to the caller, without running those stages again, so
+                // the LLM command wrapper never sees it. Authorize the caller against
+                // what the checkpoint carries before Lobster claims or consumes it; a
+                // refusal leaves the checkpoint intact for a caller who may resume it.
+                // A rejected approval is gated too: a workflow continues past one.
+                const handle = { token, approvalId };
+                const provenance = await readCheckpointProvenance(ctx.env ?? {}, handle);
+                await checkpoints.authorize(provenance);
+                // Armed before Lobster consumes: a later LLM stage re-runs the
+                // producer check at its dispatch boundary, so authority revoked while
+                // the state lock was held cannot drive a downstream model call.
+                reauthorizeResume = async () => await checkpoints.authorize(provenance);
+                resumed = { handle, ...(provenance ? { provenance } : {}) };
+              }
+              // Re-check the live request at the consumption boundary: an await since
+              // the authorization may have carried a cancellation, and Lobster's
+              // consume is gated by this same signal.
+              controller.signal.throwIfAborted();
+              envelope = await runtime.resumeToolRequest({
+                ...(token ? { token } : {}),
+                ...(approvalId ? { approvalId } : {}),
+                ...(hasApproval ? { approved: params.approve } : {}),
+                ...(hasResponse ? { response } : {}),
+                ...(hasCancel ? { cancel: true } : {}),
+                ctx,
+              });
             }
-          } else {
-            const token = params.token?.trim() ?? "";
-            const approvalId = params.approvalId?.trim() ?? "";
-            if (!token && !approvalId) {
-              throw new Error("token or approvalId required");
-            }
-            if (token && approvalId && checkpoints) {
-              // Lobster's resumeToolRequest gives the approval ID precedence, so a
-              // token that names one checkpoint could carry authorization for a
-              // different one. Refuse the ambiguous pair rather than authorize the
-              // wrong checkpoint.
-              throw new Error(
-                "resume accepts either token or approvalId, not both: the approval ID takes precedence, so the two can select different checkpoints",
-              );
-            }
-            const hasApproval = typeof params.approve === "boolean";
-            const hasResponse = params.responseJson !== undefined;
-            const hasCancel = params.cancel !== undefined;
-            if (Number(hasApproval) + Number(hasResponse) + Number(hasCancel) !== 1) {
-              throw new Error(
-                "resume requires exactly one of approve, responseJson, or cancel: true",
-              );
-            }
-            if (hasCancel && params.cancel !== true) {
-              throw new Error("cancel must be true");
-            }
-            let response: unknown;
-            if (params.responseJson !== undefined) {
-              try {
-                response = JSON.parse(params.responseJson);
-              } catch {
-                throw new Error("responseJson must be valid JSON");
+            if (checkpoints) {
+              const next = checkpointHandle(envelope);
+              if (next) {
+                await writeCheckpointProvenance(
+                  ctx.env ?? {},
+                  next,
+                  nextProvenance(resumed?.provenance, Boolean(resumed), checkpoints.trace),
+                );
+              }
+              if (
+                resumed &&
+                envelope.ok &&
+                (envelope.status === "ok" || envelope.status === "cancelled")
+              ) {
+                await deleteCheckpointProvenance(ctx.env ?? {}, resumed.handle);
               }
             }
-            if (checkpoints && hasCancel) {
-              // Cancelling discloses nothing and deletes the stored output.
-              resumed = { handle: { token, approvalId } };
-            } else if (checkpoints) {
-              // Lobster hands a checkpoint's stored stage output to the remaining
-              // stages, or back to the caller, without running those stages again, so
-              // the LLM command wrapper never sees it. Authorize the caller against
-              // what the checkpoint carries before Lobster claims or consumes it; a
-              // refusal leaves the checkpoint intact for a caller who may resume it.
-              // A rejected approval is gated too: a workflow continues past one.
-              const handle = { token, approvalId };
-              const provenance = await readCheckpointProvenance(ctx.env ?? {}, handle);
-              await checkpoints.authorize(provenance);
-              resumed = { handle, ...(provenance ? { provenance } : {}) };
-            }
-            envelope = await runtime.resumeToolRequest({
-              ...(token ? { token } : {}),
-              ...(approvalId ? { approvalId } : {}),
-              ...(hasApproval ? { approved: params.approve } : {}),
-              ...(hasResponse ? { response } : {}),
-              ...(hasCancel ? { cancel: true } : {}),
-              ctx,
-            });
-          }
-          if (checkpoints) {
-            const next = checkpointHandle(envelope);
-            if (next) {
-              await writeCheckpointProvenance(
-                ctx.env ?? {},
-                next,
-                nextProvenance(resumed?.provenance, Boolean(resumed), checkpoints.trace),
-              );
-            }
-            if (
-              resumed &&
-              envelope.ok &&
-              (envelope.status === "ok" || envelope.status === "cancelled")
-            ) {
-              await deleteCheckpointProvenance(ctx.env ?? {}, resumed.handle);
-            }
-          }
-          return normalizeEnvelope(envelope, maxStdoutBytes);
-        },
-        Math.max(200, params.timeoutMs),
-        () => {
-          const error = new Error("lobster runtime timed out");
-          controller.abort(error);
-          throw error;
-        },
-      ).catch((error: unknown) => {
-        throw toLintErrorObject(error, "Non-Error rejection");
-      });
+            return normalizeEnvelope(envelope, maxStdoutBytes);
+          },
+          Math.max(200, params.timeoutMs),
+          () => {
+            const error = new Error("lobster runtime timed out");
+            controller.abort(error);
+            throw error;
+          },
+        ).catch((error: unknown) => {
+          throw toLintErrorObject(error, "Non-Error rejection");
+        });
+      } finally {
+        externalSignal?.removeEventListener("abort", forwardAbort);
+      }
     },
   };
 }
