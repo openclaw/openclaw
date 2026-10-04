@@ -250,9 +250,6 @@ export async function runSessionStartupMigration(params: {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
     const databasePath = resolveOpenClawAgentSqlitePath(options);
-    if (!isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)) {
-      return;
-    }
     if (databases.has(databasePath) || !fs.existsSync(databasePath)) {
       return;
     }
@@ -275,13 +272,20 @@ export async function runSessionStartupMigration(params: {
           "database",
           "runtime",
         )(databasePath, options.agentId);
-        if (typeof retained !== "object") {
-          return operation().then(() => true);
+        if (typeof retained === "object") {
+          params.log.info(
+            `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+          );
+          return false;
         }
-        params.log.info(
-          `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
-        );
-        return false;
+        // Missing registry entries still need recovery before runtime can discover their lineage.
+        if (
+          registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
+          !isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)
+        ) {
+          return false;
+        }
+        return operation().then(() => true);
       });
     const deletion = await readAgentDeletionJournalStatusInWorker(options.agentId, { env });
     params.assertCurrent?.();
