@@ -247,6 +247,27 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "word",
 ]);
 
+const QUOTED_TEXT_NODE_TYPES = new Set([
+  "ansi_c_string",
+  "heredoc_body",
+  "raw_string",
+  "string",
+  "string_content",
+]);
+
+function hasUnreliableShellParse(root: TreeSitterNode, source: string): boolean {
+  if (root.hasError) {
+    return true;
+  }
+  for (const match of source.matchAll(/[\v\f\r]/g)) {
+    const node = root.descendantForIndex(match.index, match.index + 1);
+    if (!node || !QUOTED_TEXT_NODE_TYPES.has(node.type)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasEscapedLineContinuation(text: string): boolean {
   return /\\(?:\r\n|[\r\n])/.test(text);
 }
@@ -940,7 +961,7 @@ async function visitNode(
               source: wrapperPayload.command,
               spanBase: wrapperSpanBase,
             });
-            if (wrapperTree.rootNode.hasError) {
+            if (hasUnreliableShellParse(wrapperTree.rootNode, wrapperPayload.command)) {
               output.hasParseError = true;
               output.risks.push({
                 kind: "syntax-error",
@@ -1163,7 +1184,7 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       commands: [],
       operatorSources: [],
       risks: [],
-      hasParseError: tree.rootNode.hasError,
+      hasParseError: hasUnreliableShellParse(tree.rootNode, source),
       nextCommandIndex: 0,
       remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
