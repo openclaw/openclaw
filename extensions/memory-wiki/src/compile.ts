@@ -67,13 +67,16 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
+import {
+  buildRelatedPageIndex,
+  selectRelatedPages,
+  type RelatedPageIndex,
+} from "./related-pages.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
-const MAX_RELATED_PAGES_PER_SECTION = 12;
-const MAX_SHARED_SOURCE_FANOUT = 24;
 
 type DashboardPageDefinition = {
   id: string;
@@ -669,41 +672,6 @@ function formatClaimContradictionClusterLine(
   return `- \`${cluster.label}\`: ${entries.join(" | ")}`;
 }
 
-function normalizeComparableTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(
-    value
-      .trim()
-      .replace(/\\/g, "/")
-      .replace(/\.md$/i, "")
-      .replace(/^\.\/+/, "")
-      .replace(/\/+$/, ""),
-  );
-}
-
-function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
-  const seen = new Set<string>();
-  const unique: WikiPageSummary[] = [];
-  for (const page of pages) {
-    const key = page.id ?? page.relativePath;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    unique.push(page);
-  }
-  return unique;
-}
-
-function buildPageLookupKeys(page: WikiPageSummary): Set<string> {
-  const keys = new Set<string>();
-  keys.add(normalizeComparableTarget(page.relativePath));
-  keys.add(normalizeComparableTarget(page.title));
-  if (page.id) {
-    keys.add(normalizeComparableTarget(page.id));
-  }
-  return keys;
-}
-
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
@@ -718,83 +686,15 @@ function renderWikiPageLinks(params: {
     .join("\n");
 }
 
-function sharedSourceFanout(
-  page: WikiPageSummary,
-  allPages: WikiPageSummary[],
-): Map<string, number> {
-  const sourceIds = new Set(page.sourceIds);
-  const counts = new Map<string, number>();
-  for (const candidate of allPages) {
-    if (candidate.relativePath === page.relativePath) {
-      continue;
-    }
-    for (const sourceId of candidate.sourceIds) {
-      if (!sourceIds.has(sourceId)) {
-        continue;
-      }
-      counts.set(sourceId, (counts.get(sourceId) ?? 0) + 1);
-    }
-  }
-  return counts;
-}
-
 function buildRelatedBlockBody(params: {
   config: ResolvedMemoryWikiConfig;
   page: WikiPageSummary;
-  allPages: WikiPageSummary[];
+  index: RelatedPageIndex;
 }): string {
-  const candidatePages = params.allPages.filter((candidate) => candidate.kind !== "report");
-  const sourceFanout = sharedSourceFanout(params.page, candidatePages);
-  const pagesById = new Map(
-    candidatePages.flatMap((candidate) =>
-      candidate.id ? [[candidate.id, candidate] as const] : [],
-    ),
+  const { sourcePages, backlinkPages, relatedPages } = selectRelatedPages(
+    params.page,
+    params.index,
   );
-  const sourcePages = uniquePages(
-    params.page.sourceIds.flatMap((sourceId) => {
-      const page = pagesById.get(sourceId);
-      return page ? [page] : [];
-    }),
-  );
-  const backlinkKeys = buildPageLookupKeys(params.page);
-  const backlinks = uniquePages(
-    candidatePages.filter((candidate) => {
-      if (candidate.relativePath === params.page.relativePath) {
-        return false;
-      }
-      if (candidate.sourceIds.includes(params.page.id ?? "")) {
-        return true;
-      }
-      return candidate.linkTargets.some((target) =>
-        backlinkKeys.has(normalizeComparableTarget(target)),
-      );
-    }),
-  );
-  const backlinkPages =
-    backlinks.length <= MAX_SHARED_SOURCE_FANOUT
-      ? backlinks.slice(0, MAX_RELATED_PAGES_PER_SECTION)
-      : [];
-  const relatedPages = uniquePages(
-    candidatePages.filter((candidate) => {
-      if (candidate.relativePath === params.page.relativePath) {
-        return false;
-      }
-      if (sourcePages.some((sourcePage) => sourcePage.relativePath === candidate.relativePath)) {
-        return false;
-      }
-      if (backlinkPages.some((backlink) => backlink.relativePath === candidate.relativePath)) {
-        return false;
-      }
-      if (params.page.sourceIds.length === 0 || candidate.sourceIds.length === 0) {
-        return false;
-      }
-      return params.page.sourceIds.some(
-        (sourceId) =>
-          candidate.sourceIds.includes(sourceId) &&
-          (sourceFanout.get(sourceId) ?? 0) <= MAX_SHARED_SOURCE_FANOUT,
-      );
-    }),
-  ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
 
   const sections: string[] = [];
   const groups: Array<[string, WikiPageSummary[]]> = [
@@ -830,6 +730,7 @@ async function refreshPageRelatedBlocks(params: {
   }
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
+  const index = buildRelatedPageIndex(params.pages);
   for (const page of params.pages) {
     params.signal?.throwIfAborted();
     if (page.kind === "report") {
@@ -849,7 +750,7 @@ async function refreshPageRelatedBlocks(params: {
         body: buildRelatedBlockBody({
           config: params.config,
           page,
-          allPages: params.pages,
+          index,
         }),
       }),
     );
