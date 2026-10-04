@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
+import * as sdkProactive from "./sdk-proactive.js";
 import { deleteMessageMSTeams, editAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
 
 const regionalClientState = vi.hoisted(() => ({
@@ -726,6 +727,62 @@ describe("sendMessageMSTeams", () => {
     expect(regionalClientState.created).toEqual(["https://smba.trafficmanager.net/emea"]);
     expect(regionalClientState.getById).toHaveBeenCalledWith("team-1");
     expect(appGetById).not.toHaveBeenCalled();
+  });
+
+  it("does not call getById when delivery authority closes during client preparation", async () => {
+    const getById = vi.fn(async () => ({ aadGroupId: "regional-group" }));
+    const preparationStarted = Promise.withResolvers<void>();
+    const releasePreparation = Promise.withResolvers<void>();
+    const authorityError = new Error("Teams send authority closed");
+    let open = true;
+    const spy = vi
+      .spyOn(sdkProactive, "resolveReferenceScopedTeamsGetById")
+      .mockImplementation(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return getById;
+      });
+    mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      await params.getTeamDetails?.(params.teamId);
+      return "resolved-site";
+    });
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:channel@thread.tacv2",
+        siteId: "unused",
+      }),
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: {
+        teamId: "team-1",
+        serviceUrl: "https://smba.trafficmanager.net/emea/",
+      },
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 50,
+      fileName: "report.pdf",
+      itemId: "item-revoked",
+      uniqueId: "{GUID-REVOKED}",
+    });
+
+    const send = sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+      assertDirectAdapterHandoff: () => {
+        if (!open) {
+          throw authorityError;
+        }
+      },
+    });
+    await preparationStarted.promise;
+    open = false;
+    releasePreparation.resolve();
+
+    await expect(send).rejects.toMatchObject({ cause: authorityError });
+    expect(getById).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("keeps the app team lookup when the stored service URL matches", async () => {

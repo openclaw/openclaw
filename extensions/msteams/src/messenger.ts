@@ -37,10 +37,7 @@ import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  resolveReferenceScopedTeamsGetById,
-  sendMSTeamsActivityWithReference,
-} from "./sdk-proactive.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 import {
@@ -48,6 +45,7 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
+import { lookupReferenceScopedTeamDetails } from "./team-lookup.js";
 
 type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
@@ -316,16 +314,13 @@ export async function sendMSTeamsMessages(
             {
               feedbackLoopEnabled: params.feedbackLoopEnabled,
               assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-              getTeamDetails: async (teamId) => {
-                const getById = await resolveReferenceScopedTeamsGetById(
-                  params.app,
-                  params.conversationRef.serviceUrl,
-                );
-                if (!getById) {
-                  throw new Error("Teams team lookup unavailable");
-                }
-                return await getById(teamId);
-              },
+              getTeamDetails: (teamId) =>
+                lookupReferenceScopedTeamDetails({
+                  app: params.app,
+                  serviceUrl: params.conversationRef.serviceUrl,
+                  teamId,
+                  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+                }),
             },
           );
 

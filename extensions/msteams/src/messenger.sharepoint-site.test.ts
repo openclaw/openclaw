@@ -167,7 +167,6 @@ describe("msteams messenger sharepoint site", () => {
       const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: createMockApp(),
-        appId: "app123",
         conversationRef: {
           ...baseRef,
           conversation: {
@@ -227,7 +226,6 @@ describe("msteams messenger sharepoint site", () => {
       await sendMSTeamsMessages({
         replyStyle: "top-level",
         app: createMockApp({ getById }),
-        appId: "app123",
         conversationRef: {
           ...baseRef,
           teamId: "team-1",
@@ -284,7 +282,6 @@ describe("msteams messenger sharepoint site", () => {
       await sendMSTeamsMessages({
         replyStyle: "top-level",
         app: createMockApp({ getById: appGetById }),
-        appId: "app123",
         conversationRef: {
           ...baseRef,
           serviceUrl: "https://smba.trafficmanager.net/emea/",

@@ -39,12 +39,12 @@ import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import {
   deleteMSTeamsActivityWithReference,
-  resolveReferenceScopedTeamsGetById,
   sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
+import { lookupReferenceScopedTeamDetails } from "./team-lookup.js";
 
 type MSTeamsSendOptions = MSTeamsSendHandoff & {
   onDeliveryResult?: (result: SendMSTeamsMessageResult) => Promise<void> | void;
@@ -288,13 +288,13 @@ export async function sendMessageMSTeams(
         channelId: conversationType === "channel" ? conversationId : undefined,
         tokenProvider,
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-        getTeamDetails: async (teamId) => {
-          const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
-          if (!getById) {
-            throw new Error("Teams team lookup unavailable");
-          }
-          return await getById(teamId);
-        },
+        getTeamDetails: (teamId) =>
+          lookupReferenceScopedTeamDetails({
+            app: ctx.app,
+            serviceUrl: ctx.ref.serviceUrl,
+            teamId,
+            assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+          }),
       });
       log.debug?.("uploading to SharePoint for native file card", {
         fileName,
