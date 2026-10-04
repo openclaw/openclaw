@@ -65,14 +65,6 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
-import {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  createChatHistoryActivityProjection,
-  createChatHistoryByteCounter,
-  replaceOversizedChatHistoryMessages,
-} from "../gateway/server-methods/chat-history-budget.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
-import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -80,7 +72,6 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
-import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
@@ -125,6 +116,7 @@ import {
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
+import { readEmbeddedHistoryPage } from "./embedded-history-page.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
 import {
   buildLocalQueuedPrompt,
@@ -492,7 +484,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
-    const historyPage = await readChatHistoryPage({
+    const { messages, activity, assertCurrent } = await readEmbeddedHistoryPage({
       entry,
       provider: resolvedSessionModel.provider,
       sessionId,
@@ -505,20 +497,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       offset: undefined,
       messageId: undefined,
     });
-    const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
-    const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
-    const byteCounter = createChatHistoryByteCounter(activity);
-    const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
-    const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
-      byteCounter,
-      maxSingleMessageBytes: perMessageHardCap,
-    });
-    const messages = capArrayByJsonBytes(
-      replaced.messages,
-      maxHistoryBytes - byteCounter.framingBytes(replaced.messages),
-      byteCounter.messageBytes,
-    ).items;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.question &&
@@ -588,12 +566,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionInfo.verboseLevel = verboseLevel;
     }
 
+    assertCurrent();
+
     return {
       sessionKey: opts.sessionKey,
       sessionId,
       messages,
       defaults,
-      activity: messages.flatMap((message) => activity.get(message) ?? []),
+      activity,
       ...(sessionInfo ? { sessionInfo } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,

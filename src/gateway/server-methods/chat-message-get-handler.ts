@@ -52,6 +52,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
+    let isNativeHistoryCurrent: (() => boolean) | undefined;
     const canReadSession = (
       current: typeof session = loadGatewaySessionEntryReadOnly(sessionKey, {
         agentId: requestedAgentId,
@@ -61,6 +62,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     ): boolean => {
       sessionMutationAuthorization?.assertCurrent();
       if (
+        (isNativeHistoryCurrent && !isNativeHistoryCurrent()) ||
         !current.entry ||
         current.agentId !== session.agentId ||
         current.canonicalKey !== canonicalKey ||
@@ -138,23 +140,28 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = await readChatHistoryMessageById({
-      entry,
-      provider: getCliSessionBinding(entry, "claude-cli")?.sessionId
-        ? resolveSessionModelRef(cfg, entry, sessionAgentId, {
-            allowPluginNormalization: false,
-          }).provider
-        : undefined,
-      sessionAgentId,
-      sessionId,
-      canonicalKey,
-      storePath,
-      messageId,
-      max: 1,
-      maxHistoryBytes: MAX_PAYLOAD_BYTES,
-      effectiveMaxChars,
-      offset: undefined,
-    });
+    const resolved = await readChatHistoryMessageById(
+      {
+        entry,
+        provider: getCliSessionBinding(entry, "claude-cli")?.sessionId
+          ? resolveSessionModelRef(cfg, entry, sessionAgentId, {
+              allowPluginNormalization: false,
+            }).provider
+          : undefined,
+        sessionAgentId,
+        sessionId,
+        canonicalKey,
+        storePath,
+        messageId,
+        max: 1,
+        maxHistoryBytes: MAX_PAYLOAD_BYTES,
+        effectiveMaxChars,
+        offset: undefined,
+      },
+      (isCurrent) => {
+        isNativeHistoryCurrent = isCurrent;
+      },
+    );
     // Async transcript/archive reads cannot publish under a stale sharing or
     // physical-session snapshot.
     if (!canReadSession()) {

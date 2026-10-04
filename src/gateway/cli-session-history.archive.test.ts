@@ -60,6 +60,7 @@ it("observes newly available reset archives and refuses changed archive bodies u
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
+        cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
         cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 10,
         maxHistoryBytes: 64 * 1024,

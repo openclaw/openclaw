@@ -653,6 +653,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   run: (
     prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
     inputBytes: number,
+    onRequest?: (value: unknown) => void | Promise<void>,
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;

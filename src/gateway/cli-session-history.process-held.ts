@@ -6,6 +6,11 @@ import type {
   ChatHistoryMessageParams,
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
+  NativeHistoryAuthorizationRequest,
+} from "../config/sessions/session-history-types.js";
+import {
+  NATIVE_HISTORY_AUTHORIZATION_REQUEST,
+  isNativeHistoryAuthorizationRequest,
 } from "../config/sessions/session-history-types.js";
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import type { CliHistoryReaders } from "./cli-session-history.js";
@@ -16,6 +21,7 @@ import type {
 } from "./session-transcript-read.types.js";
 
 type Request =
+  | NativeHistoryAuthorizationRequest
   | {
       kind: "by-id";
       messageId: string;
@@ -29,20 +35,34 @@ type Request =
       >[1];
     };
 
+type NativeHistoryAuthorityAssertion = () => Promise<void>;
+
 /** Keep process-held SQLite custody on its existing owner; move matching and projection off-loop. */
 export async function readProcessHeldCliHistory(
   params: ChatHistoryPageParams,
   signal?: AbortSignal,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
 ): Promise<ChatHistoryPage> {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal);
+  const result = await readProcessHeldCliHistoryQuery(
+    { kind: "rpc", params },
+    signal,
+    assertNativeHistoryAuthorized,
+  );
   if (result.kind !== "rpc") {
     throw new Error("Unexpected process-held history page");
   }
   return result.page;
 }
 
-export async function readProcessHeldCliHistoryMessage(params: ChatHistoryMessageParams) {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc-message", params });
+export async function readProcessHeldCliHistoryMessage(
+  params: ChatHistoryMessageParams,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
+) {
+  const result = await readProcessHeldCliHistoryQuery(
+    { kind: "rpc-message", params },
+    undefined,
+    assertNativeHistoryAuthorized,
+  );
   if (result.kind !== "rpc-message") {
     throw new Error("Unexpected process-held history message");
   }
@@ -52,6 +72,7 @@ export async function readProcessHeldCliHistoryMessage(params: ChatHistoryMessag
 async function readProcessHeldCliHistoryQuery(
   input: ChatHistoryDisplayRequest,
   signal?: AbortSignal,
+  assertNativeHistoryAuthorized?: NativeHistoryAuthorityAssertion,
 ): Promise<ChatHistoryDisplayResult> {
   const history = structuredClone(input);
   const params = history.params;
@@ -92,8 +113,15 @@ async function readProcessHeldCliHistoryQuery(
     async (value) => {
       signal?.throwIfAborted();
       assertCurrent();
-      // SAFETY: The paired worker constructs this closed protocol; the host fixes and validates the source target.
-      const request = value as Request;
+      if (isNativeHistoryAuthorizationRequest(value)) {
+        if (!assertNativeHistoryAuthorized) {
+          throw new Error("Process-held native history requires Gateway authorization");
+        }
+        await assertNativeHistoryAuthorized();
+        assertCurrent();
+        return { input: null, timeoutMs: 60_000 };
+      }
+      const request = decodeProcessHeldHistoryRequest(value);
       const readResult =
         request.kind === "page"
           ? await readers.readSessionMessagesPageWithStatsAsync(scope, request.options)
@@ -144,6 +172,9 @@ export async function readProcessHeldCliHistoryInWorker(
     }
   };
   const readers: CliHistoryReaders = {
+    assertNativeHistoryAuthorized: async () => {
+      await request<null>(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
+    },
     readSessionMessageByIdAsync: (_scope, messageId, options) =>
       request({ kind: "by-id", messageId, options }),
     readRecentSessionMessagesWithStatsAsync: (_scope, options) =>
@@ -177,4 +208,22 @@ export async function readProcessHeldCliHistoryInWorker(
   } finally {
     cli?.dispose();
   }
+}
+
+function decodeProcessHeldHistoryRequest(
+  value: unknown,
+): Exclude<Request, NativeHistoryAuthorizationRequest> {
+  const record = asOptionalRecord(value);
+  if (!record || !asOptionalRecord(record.options)) {
+    throw new Error("Unsupported process-held history request");
+  }
+  if (record.kind === "by-id" && typeof record.messageId === "string") {
+    // SAFETY: the closed worker request has validated this variant and its required fields.
+    return record as Exclude<Request, NativeHistoryAuthorizationRequest>;
+  }
+  if (record.kind === "page" || record.kind === "around") {
+    // SAFETY: the closed worker request has validated this variant and its options record.
+    return record as Exclude<Request, NativeHistoryAuthorizationRequest>;
+  }
+  throw new Error("Unsupported process-held history request");
 }

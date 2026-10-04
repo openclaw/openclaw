@@ -524,10 +524,14 @@ serveOwnedWorkerTasks(
           if (request.kind === "history-page") {
             const { readSessionHistoryRequest } =
               await import("../../gateway/session-history-worker-reader.js");
-            return readSessionHistoryRequest(request.request, {
-              ...request.target,
-              database: request.database,
-            });
+            return readSessionHistoryRequest(
+              request.request,
+              {
+                ...request.target,
+                database: request.database,
+              },
+              channel,
+            );
           }
           if (request.kind === "session-reset-recall") {
             const { readSessionResetRecallCutoffInProcess } =

@@ -7,8 +7,10 @@ import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
+import { NATIVE_HISTORY_AUTHORIZATION_REQUEST } from "../config/sessions/session-history-types.js";
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
 import { resolveCronJobsStorePath } from "../cron/store/paths.js";
+import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { getUserProfileDisplays } from "../state/user-profile-list.js";
 import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
@@ -26,6 +28,7 @@ import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sou
 export async function readSessionHistoryRequest(
   request: SessionHistoryWorkerRequest,
   readTarget: PreparedSessionHistoryReadTarget,
+  channel?: WorkerTaskChannel,
 ): Promise<SessionHistoryWorkerResult> {
   const { sourceDiscovery, ...readerTarget } = readTarget;
   const options = {
@@ -34,6 +37,13 @@ export async function readSessionHistoryRequest(
       sourceDiscovery
         ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
         : undefined,
+      async () => {
+        if (!channel) {
+          throw new Error("Native Claude history requires its host reader channel");
+        }
+        const response = await channel.request(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
+        response.consumed();
+      },
     ),
     readOnly: true,
     deferProfileDisplay: true,

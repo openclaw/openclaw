@@ -34,7 +34,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
+import { resolveAuthorizedClaudeCliBinding } from "../cli-runner/child-env.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
@@ -78,11 +78,11 @@ import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-ma
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
+import { prepareCliSessionBinding } from "./attempt-execution.cli-session.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   resolveCompletionToolPolicy,
   isClaudeCliProvider,
-  claudeCliSessionTranscriptHasContent,
   resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
@@ -242,13 +242,30 @@ export function runAgentAttempt(
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
     isRuntimeToolAllowed("message", params.opts.toolsAllow);
+  const claudeCliBinding =
+    !isRawModelRun &&
+    params.isFallbackRetry &&
+    isClaudeCliProvider(params.originalProvider) &&
+    !isClaudeCliProvider(params.providerOverride)
+      ? resolveAuthorizedClaudeCliBinding({
+          entry: params.sessionEntry,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          skillsSnapshot: params.skillsSnapshot,
+          cwd: params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir,
+        })
+      : undefined;
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
     isClaudeCliProvider(params.originalProvider) &&
     !isClaudeCliProvider(params.providerOverride)
       ? buildClaudeCliFallbackContextPrelude({
-          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
+          cliSessionId: claudeCliBinding?.sessionId,
+          cwd:
+            claudeCliBinding?.cwd ??
+            (params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir),
+          projectsRoot: claudeCliBinding?.transcriptRoot,
         })
       : "";
   const resolvedPrompt = resolveFallbackRetryPrompt({
@@ -559,43 +576,6 @@ export function runAgentAttempt(
                 assertCommitAllowed: assertSettlementCurrent,
               }
             : undefined;
-        const prepareCliSessionBinding = async () => {
-          const hasManagedClaudeLiveSession = Boolean(
-            isClaudeCliProvider(cliExecutionProvider) &&
-            cliSessionBinding?.sessionId &&
-            hasCliLiveSession({
-              backendId: cliExecutionProvider,
-              agentAccountId: params.runContext.accountId,
-              agentId: params.sessionAgentId,
-              authProfileId: cliSessionBinding.authProfileId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-            }),
-          );
-          if (
-            !isClaudeCliProvider(cliExecutionProvider) ||
-            !cliSessionBinding?.sessionId ||
-            hasManagedClaudeLiveSession ||
-            (await claudeCliSessionTranscriptHasContent({
-              sessionId: cliSessionBinding.sessionId,
-              workspaceDir: cliProcessCwd,
-            }))
-          ) {
-            return;
-          }
-
-          log.warn(
-            `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
-          );
-
-          if (mutableCliSessionStore) {
-            params.sessionEntry =
-              (await clearCliSessionInStore({
-                provider: cliExecutionProvider,
-                ...mutableCliSessionStore,
-              })) ?? params.sessionEntry;
-          }
-        };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
           params.sessionKey,
           params.sessionAgentId,
@@ -606,7 +586,20 @@ export function runAgentAttempt(
             mediaTaskIdsBefore,
             params.sessionAgentId,
           );
-        await prepareCliSessionBinding();
+        params.sessionEntry = await prepareCliSessionBinding({
+          provider: cliExecutionProvider,
+          sessionEntry: params.sessionEntry,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          skillsSnapshot: params.skillsSnapshot,
+          cwd: cliProcessCwd,
+          cliSessionBinding,
+          accountId: params.runContext.accountId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          mutableCliSessionStore,
+          warn: (message) => log.warn(message),
+        });
         const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.

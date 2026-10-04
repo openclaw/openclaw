@@ -205,19 +205,26 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const max = Math.min(1000, limit ?? 200);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
-  const page = await rt.readChatHistoryPage({
-    entry: historyEntry,
-    provider: resolvedSessionModel.provider,
-    sessionId,
-    storePath,
-    sessionAgentId,
-    canonicalKey,
-    max,
-    maxHistoryBytes,
-    effectiveMaxChars,
-    offset: params.offset === undefined ? undefined : offset,
-    messageId,
-  });
+  let isNativeHistoryCurrent: (() => boolean) | undefined;
+  const page = await rt.readChatHistoryPage(
+    {
+      entry: historyEntry,
+      provider: resolvedSessionModel.provider,
+      sessionId,
+      storePath,
+      sessionAgentId,
+      canonicalKey,
+      max,
+      maxHistoryBytes,
+      effectiveMaxChars,
+      offset: params.offset === undefined ? undefined : offset,
+      messageId,
+    },
+    undefined,
+    (isCurrent) => {
+      isNativeHistoryCurrent = isCurrent;
+    },
+  );
 
   // Keep transport-level byte limits identical after the shared reader projects the page.
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
@@ -248,6 +255,10 @@ async function handleChatHistory(params: Record<string, unknown>) {
         })
       : 0;
   const hasMore = pagination !== undefined && nextOffset < pagination.totalMessages;
+
+  if (isNativeHistoryCurrent && !isNativeHistoryCurrent()) {
+    throw new Error("session changed while reading history; reload the conversation");
+  }
 
   return {
     sessionKey,

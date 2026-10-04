@@ -237,7 +237,7 @@ export function retainSessionHistoryWorkerDatabase(
               ? async (value, context) => {
                   context.signal.throwIfAborted();
                   assertCurrent();
-                  onRequest(value);
+                  await onRequest(value);
                   assertCurrent();
                   const remaining = deadline - performance.now();
                   if (remaining <= 0) {

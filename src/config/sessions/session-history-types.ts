@@ -82,8 +82,10 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cwd?: string;
   cliHistoryHomeDir?: string;
   cliHistoryRedaction?: TranscriptRedactionSnapshot;
+  cliHistoryProjectsRoot?: string;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -159,6 +161,32 @@ export type ChatHistoryDisplayRequest =
 export type ChatHistoryDisplayResult =
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
+
+export const NATIVE_HISTORY_AUTHORIZATION_REQUEST = {
+  kind: "assert-native-history-authorized",
+} as const;
+export const NATIVE_HISTORY_AUTHORIZATION_DENIED = "Native Claude history authorization denied";
+
+export type NativeHistoryAuthorizationRequest = typeof NATIVE_HISTORY_AUTHORIZATION_REQUEST;
+
+export function isNativeHistoryAuthorizationRequest(
+  value: unknown,
+): value is NativeHistoryAuthorizationRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  // SAFETY: the checks above narrow the input to a non-array object before reading its fields.
+  const record = value as Record<string, unknown>;
+  return (
+    record.kind === NATIVE_HISTORY_AUTHORIZATION_REQUEST.kind && Object.keys(record).length === 1
+  );
+}
+
+export function isNativeHistoryAuthorizationDenied(error: unknown): boolean {
+  return error instanceof Error && error.message === NATIVE_HISTORY_AUTHORIZATION_DENIED;
+}
+
+export type SessionHistoryWorkerHostRequestHandler = (value: unknown) => void | Promise<void>;
 
 export type SessionHistoryWorkerRequest =
   | {

@@ -60,6 +60,10 @@ import {
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
 } from "./attempt-execution.announce.test-support.js";
 import {
+  makeClaudeCliSessionEntry,
+  registerClaudeConfigDirAttemptTests,
+} from "./attempt-execution.claude-config-dir.test-support.js";
+import {
   cliRuntimeConfig,
   createCliImageCapabilityPlugins,
   makeCliResult,
@@ -1016,21 +1020,14 @@ describe("CLI attempt execution", () => {
     }
   });
 
-  function makeClaudeCliSessionEntry(
-    openclawSessionId: string,
-    cliSessionId: string,
-  ): SessionEntry {
+  function getClaudeConfigDirAttemptFixture() {
     return {
-      sessionId: openclawSessionId,
-      updatedAt: Date.now(),
-      cliSessionBindings: {
-        "claude-cli": {
-          sessionId: cliSessionId,
-          authProfileId: "anthropic:claude-cli",
-        },
-      },
-      cliSessionIds: { "claude-cli": cliSessionId },
-      claudeCliSessionId: cliSessionId,
+      getTmpDir: () => tmpDir,
+      readSessionStore,
+      createCliSession,
+      runFallbackAttempt: runOpenClawEmbeddedAttemptForTest,
+      setRunCliAgentImplementation: runCliAgentMock.mockImplementationOnce.bind(runCliAgentMock),
+      firstRunCliAgentArg,
     };
   }
 
@@ -1392,6 +1389,8 @@ describe("CLI attempt execution", () => {
     expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(concurrentCliSessionId);
     expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(concurrentCliSessionId);
   });
+
+  registerClaudeConfigDirAttemptTests(getClaudeConfigDirAttemptFixture);
 
   it("clears the persisted Claude CLI binding but still forwards the candidate when the stored transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";

@@ -45,6 +45,8 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-hash",
       messageToolPolicyHash: "message-policy-hash",
       promptToolNamesHash: "prompt-tools-hash",
+      cwd: "/workspace/ child ",
+      transcriptRoot: "/tmp/child-claude/projects",
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
@@ -165,12 +167,18 @@ describe("cli-session helpers", () => {
     setCliSessionBinding(entry, "claude-cli", {
       sessionId: "cli-session-1",
       reseedReceipt: receipt,
+      cwd: "/workspace/first",
     });
-    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "cli-session-1",
+      cwd: "/workspace/second ",
+    });
+    expect(getCliSessionBinding(entry, "claude-cli")?.cwd).toBe("/workspace/second ");
     expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
 
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
     expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toBeUndefined();
+    expect(getCliSessionBinding(entry, "claude-cli")?.cwd).toBeUndefined();
   });
 
   it("force-reuses explicitly attached CLI sessions despite metadata drift", () => {
@@ -674,7 +682,10 @@ describe("cli-session helpers", () => {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
     };
-    setCliSessionBinding(entry, "claude-cli", { sessionId: "claude-session" });
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "claude-session",
+      cwd: "/workspace/child",
+    });
     setCliSessionBinding(entry, "codex-cli", { sessionId: "codex-session" });
 
     clearCliSession(entry, "codex-cli");

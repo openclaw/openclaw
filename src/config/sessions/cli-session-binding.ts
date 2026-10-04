@@ -84,6 +84,12 @@ export function getCliSessionBinding(
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       messageToolPolicyHash: normalizeOptionalString(fromBindings?.messageToolPolicyHash),
       promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),
+      ...(typeof fromBindings?.cwd === "string" && fromBindings.cwd
+        ? { cwd: fromBindings.cwd }
+        : {}),
+      ...(typeof fromBindings?.transcriptRoot === "string" && fromBindings.transcriptRoot
+        ? { transcriptRoot: fromBindings.transcriptRoot }
+        : {}),
       cwdHash: normalizeOptionalString(fromBindings?.cwdHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
