@@ -68,16 +68,6 @@ function parseNpmPackageTargetMetadata(
   };
 }
 
-function formatNpmViewError(res: { stdout: string; stderr: string }): string {
-  const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
-  return raw ? `npm view failed: ${raw}` : "npm view failed";
-}
-
-function packageTargetSpec(params: { target: string; spec?: string }): string {
-  const spec = params.spec?.trim();
-  return spec || `openclaw@${params.target.trim() || "latest"}`;
-}
-
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
 
@@ -157,7 +147,7 @@ export async function fetchNpmPackageTargetStatus(params: {
       };
     }
     const runCommand = params.runCommand ?? runCommandWithTimeout;
-    const spec = packageTargetSpec(params);
+    const spec = params.spec?.trim() || `openclaw@${params.target.trim() || "latest"}`;
     const res = await runCommand(
       [
         params.command ?? "npm",
@@ -177,18 +167,17 @@ export async function fetchNpmPackageTargetStatus(params: {
       },
     );
     if (res.code !== 0) {
+      const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
       return {
         version: null,
         nodeEngine: null,
-        error: formatNpmViewError(res),
+        error: raw ? `npm view failed: ${raw}` : "npm view failed",
       };
     }
-    return {
-      ...parseNpmPackageTargetMetadata(
-        res.stdout,
-        spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
-      ),
-    };
+    return parseNpmPackageTargetMetadata(
+      res.stdout,
+      spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
+    );
   } catch (err) {
     return {
       version: null,

@@ -1,7 +1,4 @@
-import type {
-  ConversationListItem,
-  ConversationListResult,
-} from "../../packages/gateway-protocol/src/schema/agent.js";
+import type { ConversationListResult } from "../../packages/gateway-protocol/src/schema/agent.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 import {
@@ -13,8 +10,6 @@ import {
   registerConversationAddresses,
   prepareConversationRegistryScope,
   runConversationDatabaseWrite,
-  type ConversationRecord,
-  type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -40,20 +35,6 @@ const defaultDeps: ConversationListDeps = {
   resolveOutboundSessionRoute,
 };
 
-function presentConversation(conversation: ConversationRecord): ConversationListItem {
-  return {
-    conversationRef: conversation.conversationRef,
-    channel: conversation.channel,
-    accountId: conversation.accountId,
-    kind: conversation.kind,
-    target: conversation.target,
-    ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
-    ...(conversation.label ? { label: conversation.label } : {}),
-    firstSeenAt: conversation.firstSeenAt,
-    lastSeenAt: conversation.lastSeenAt,
-  };
-}
-
 async function listLiveDirectoryEntries(params: {
   channel: string;
   accountId: string;
@@ -73,160 +54,6 @@ async function listLiveDirectoryEntries(params: {
   }
 }
 
-async function listDirectoryEntries(params: {
-  config: OpenClawConfig;
-  accountId: string;
-  query?: string;
-  limit: number;
-  plugin: NonNullable<ReturnType<typeof resolveOutboundChannelPlugin>>;
-}): Promise<ChannelDirectoryEntry[]> {
-  const input = {
-    cfg: params.config,
-    accountId: params.accountId,
-    ...(params.query ? { query: params.query } : {}),
-    limit: params.limit,
-    runtime: defaultRuntime,
-  };
-  const directory = params.plugin.directory;
-  const listPeersLive = directory?.listPeersLive;
-  const listGroupsLive = directory?.listGroupsLive;
-  const [configuredPeers, livePeers, configuredGroups, liveGroups] = await Promise.all([
-    directory?.listPeers?.(input) ?? [],
-    listPeersLive
-      ? listLiveDirectoryEntries({
-          channel: params.plugin.id,
-          accountId: params.accountId,
-          kind: "peers",
-          run: () => listPeersLive(input),
-        })
-      : [],
-    directory?.listGroups?.(input) ?? [],
-    listGroupsLive
-      ? listLiveDirectoryEntries({
-          channel: params.plugin.id,
-          accountId: params.accountId,
-          kind: "groups",
-          run: () => listGroupsLive(input),
-        })
-      : [],
-  ]);
-  const entries = new Map<string, ChannelDirectoryEntry>();
-  for (const entry of [...configuredPeers, ...livePeers, ...configuredGroups, ...liveGroups]) {
-    // Live results replace config-only metadata without dropping configured addresses when a
-    // transport's live adapter is search-only and returns nothing for an unfiltered listing.
-    entries.set(`${entry.kind}\u0000${entry.id.trim()}`, entry);
-  }
-  return [...entries.values()];
-}
-
-async function discoverChannelAddresses(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  channel: string;
-  query?: string;
-  limit: number;
-  scope: ConversationRegistryScope;
-  deps: ConversationListDeps;
-  readCurrentConfig?: () => OpenClawConfig;
-}): Promise<{ channel: string; discoveredConversationRefs: ReadonlySet<string> }> {
-  const plugin = params.deps.resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.config,
-  });
-  if (!plugin?.directory) {
-    return {
-      channel: params.channel.trim().toLowerCase(),
-      discoveredConversationRefs: new Set(),
-    };
-  }
-  const identities = new Map<string, ConversationIdentity>();
-  for (const accountId of new Set(plugin.config.listAccountIds(params.config).filter(Boolean))) {
-    const account = await resolveChannelAccount({ plugin, cfg: params.config, accountId });
-    if (plugin.config.isEnabled?.(account, params.config) === false) {
-      continue;
-    }
-    if (plugin.config.isConfigured && !(await plugin.config.isConfigured(account, params.config))) {
-      continue;
-    }
-    const entries = await listDirectoryEntries({
-      config: params.config,
-      accountId,
-      ...(params.query ? { query: params.query } : {}),
-      limit: params.limit,
-      plugin,
-    });
-    for (const entry of entries) {
-      const target = entry.id.trim();
-      if (!target) {
-        continue;
-      }
-      const display = entry.name?.trim() || entry.handle?.trim() || undefined;
-      const route = await params.deps.resolveOutboundSessionRoute({
-        cfg: params.config,
-        channel: plugin.id,
-        plugin,
-        agentId: params.agentId,
-        accountId,
-        target,
-        resolvedTarget: {
-          to: target,
-          kind: entry.kind,
-          ...(display ? { display } : {}),
-          source: "directory",
-          resolutionSource: "directory",
-        },
-      });
-      if (!route) {
-        continue;
-      }
-      const identity = buildConversationIdentity({
-        channel: plugin.id,
-        accountId,
-        kind: route.chatType,
-        // Match inbound MsgContext.From; the identity builder removes transport prefixes.
-        peerId: route.from,
-        deliveryTarget: route.to,
-        ...(route.threadId !== undefined ? { threadId: route.threadId } : {}),
-        ...(route.peer.kind === "direct"
-          ? { nativeDirectUserId: route.peer.id }
-          : { nativeChannelId: route.peer.id }),
-        ...(display ? { label: display } : {}),
-      });
-      if (identity) {
-        identities.set(identity.conversationRef, identity);
-      }
-    }
-  }
-  const eligibleIdentities = await runConversationDatabaseWrite(params.scope, (scope) => {
-    const currentConfig = params.readCurrentConfig?.() ?? params.config;
-    const eligible = [...identities.values()].filter((identity) => {
-      const eligibility = resolveConversationRouteEligibilityForAgent({
-        config: currentConfig,
-        agentId: params.agentId,
-        conversation: { ...identity, target: identity.deliveryTarget },
-      });
-      if (eligibility === "unavailable") {
-        throw new Error("Conversation route ownership is temporarily unavailable");
-      }
-      return eligibility === "eligible";
-    });
-    params.deps.registerConversationAddresses(scope, eligible);
-    return eligible;
-  });
-  return {
-    channel: plugin.id,
-    discoveredConversationRefs: new Set(
-      eligibleIdentities.map((identity) => identity.conversationRef),
-    ),
-  };
-}
-
-function matchesConversationQuery(conversation: ConversationRecord, query: string): boolean {
-  return [conversation.conversationRef, conversation.target, conversation.label].some((value) =>
-    value?.toLowerCase().includes(query),
-  );
-}
-
 /** Lists persisted and channel-directory addresses from the Gateway's live plugin runtime. */
 export async function runGatewayConversationList(
   params: {
@@ -241,21 +68,136 @@ export async function runGatewayConversationList(
 ): Promise<ConversationListResult> {
   const scope = await prepareConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
-  const discovery = params.channel
-    ? await discoverChannelAddresses({
-        config: params.config,
-        agentId: params.agentId,
-        channel: params.channel,
-        ...(query ? { query } : {}),
-        limit: params.limit,
-        scope,
-        deps,
-        ...(params.readCurrentConfig ? { readCurrentConfig: params.readCurrentConfig } : {}),
-      })
-    : undefined;
+  let discoveryChannel: string | undefined;
+  const discoveredConversationRefs = new Set<string>();
+  if (params.channel) {
+    const plugin = deps.resolveOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.config,
+    });
+    discoveryChannel = plugin?.directory ? plugin.id : params.channel.trim().toLowerCase();
+    if (plugin?.directory) {
+      const identities = new Map<string, ConversationIdentity>();
+      for (const accountId of new Set(
+        plugin.config.listAccountIds(params.config).filter(Boolean),
+      )) {
+        const account = await resolveChannelAccount({ plugin, cfg: params.config, accountId });
+        if (plugin.config.isEnabled?.(account, params.config) === false) {
+          continue;
+        }
+        if (
+          plugin.config.isConfigured &&
+          !(await plugin.config.isConfigured(account, params.config))
+        ) {
+          continue;
+        }
+        const input = {
+          cfg: params.config,
+          accountId,
+          ...(query ? { query } : {}),
+          limit: params.limit,
+          runtime: defaultRuntime,
+        };
+        const directory = plugin.directory;
+        const listPeersLive = directory?.listPeersLive;
+        const listGroupsLive = directory?.listGroupsLive;
+        const [configuredPeers, livePeers, configuredGroups, liveGroups] = await Promise.all([
+          directory?.listPeers?.(input) ?? [],
+          listPeersLive
+            ? listLiveDirectoryEntries({
+                channel: plugin.id,
+                accountId,
+                kind: "peers",
+                run: () => listPeersLive(input),
+              })
+            : [],
+          directory?.listGroups?.(input) ?? [],
+          listGroupsLive
+            ? listLiveDirectoryEntries({
+                channel: plugin.id,
+                accountId,
+                kind: "groups",
+                run: () => listGroupsLive(input),
+              })
+            : [],
+        ]);
+        const entries = new Map<string, ChannelDirectoryEntry>();
+        for (const entry of [
+          ...configuredPeers,
+          ...livePeers,
+          ...configuredGroups,
+          ...liveGroups,
+        ]) {
+          // Live results replace config-only metadata without dropping configured addresses when a
+          // transport's live adapter is search-only and returns nothing for an unfiltered listing.
+          entries.set(`${entry.kind}\u0000${entry.id.trim()}`, entry);
+        }
+        for (const entry of entries.values()) {
+          const target = entry.id.trim();
+          if (!target) {
+            continue;
+          }
+          const display = entry.name?.trim() || entry.handle?.trim() || undefined;
+          const route = await deps.resolveOutboundSessionRoute({
+            cfg: params.config,
+            channel: plugin.id,
+            plugin,
+            agentId: params.agentId,
+            accountId,
+            target,
+            resolvedTarget: {
+              to: target,
+              kind: entry.kind,
+              ...(display ? { display } : {}),
+              source: "directory",
+              resolutionSource: "directory",
+            },
+          });
+          if (!route) {
+            continue;
+          }
+          const identity = buildConversationIdentity({
+            channel: plugin.id,
+            accountId,
+            kind: route.chatType,
+            // Match inbound MsgContext.From; the identity builder removes transport prefixes.
+            peerId: route.from,
+            deliveryTarget: route.to,
+            ...(route.threadId !== undefined ? { threadId: route.threadId } : {}),
+            ...(route.peer.kind === "direct"
+              ? { nativeDirectUserId: route.peer.id }
+              : { nativeChannelId: route.peer.id }),
+            ...(display ? { label: display } : {}),
+          });
+          if (identity) {
+            identities.set(identity.conversationRef, identity);
+          }
+        }
+      }
+      const eligibleIdentities = await runConversationDatabaseWrite(scope, (scope) => {
+        const currentConfig = params.readCurrentConfig?.() ?? params.config;
+        const eligible = [...identities.values()].filter((identity) => {
+          const eligibility = resolveConversationRouteEligibilityForAgent({
+            config: currentConfig,
+            agentId: params.agentId,
+            conversation: { ...identity, target: identity.deliveryTarget },
+          });
+          if (eligibility === "unavailable") {
+            throw new Error("Conversation route ownership is temporarily unavailable");
+          }
+          return eligibility === "eligible";
+        });
+        deps.registerConversationAddresses(scope, eligible);
+        return eligible;
+      });
+      for (const identity of eligibleIdentities) {
+        discoveredConversationRefs.add(identity.conversationRef);
+      }
+    }
+  }
   const conversations = await deps.listConversations(
     scope,
-    discovery ? { channel: discovery.channel } : {},
+    discoveryChannel !== undefined ? { channel: discoveryChannel } : {},
   );
   const currentConfig = params.readCurrentConfig?.() ?? params.config;
   const normalizedQuery = query?.toLowerCase() ?? "";
@@ -267,8 +209,10 @@ export async function runGatewayConversationList(
     .filter((entry) => {
       if (
         query &&
-        discovery?.discoveredConversationRefs.has(entry.conversationRef) !== true &&
-        !matchesConversationQuery(entry, searchQuery)
+        !discoveredConversationRefs.has(entry.conversationRef) &&
+        ![entry.conversationRef, entry.target, entry.label].some((value) =>
+          value?.toLowerCase().includes(searchQuery),
+        )
       ) {
         return false;
       }
@@ -283,5 +227,17 @@ export async function runGatewayConversationList(
       return eligibility === "eligible";
     })
     .slice(0, params.limit);
-  return { conversations: selected.map(presentConversation) };
+  return {
+    conversations: selected.map((conversation) => ({
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      kind: conversation.kind,
+      target: conversation.target,
+      ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+      ...(conversation.label ? { label: conversation.label } : {}),
+      firstSeenAt: conversation.firstSeenAt,
+      lastSeenAt: conversation.lastSeenAt,
+    })),
+  };
 }
