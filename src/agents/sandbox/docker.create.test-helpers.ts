@@ -30,6 +30,8 @@ const spawnState = vi.hoisted(() => ({
   podmanInfo: "true\tfalse\t\t5.0.0\n",
   podmanConnections: "[]\n",
   podmanMachines: "[]\n",
+  /** Holds the next `podman info` target probe open until it resolves. */
+  holdPodmanProbe: undefined as undefined | (() => Promise<void>),
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -151,6 +153,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   ) {
     stdout = JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs });
   } else if (command === "podman" && args[0] === "info") {
+    const hold = spawnState.holdPodmanProbe;
+    spawnState.holdPodmanProbe = undefined;
+    await hold?.();
     stdout = spawnState.podmanInfo;
   } else if (command === "podman" && args[0] === "system") {
     stdout = spawnState.podmanConnections;
@@ -325,6 +330,7 @@ export function createSandboxContainerTestHarness() {
     spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
     spawnState.podmanConnections = "[]\n";
     spawnState.podmanMachines = "[]\n";
+    spawnState.holdPodmanProbe = undefined;
     registryMocks.readRegistryEntry.mockClear();
     registryMocks.removeRegistryEntry.mockClear();
     registryMocks.removeRegistryEntry.mockResolvedValue(undefined);

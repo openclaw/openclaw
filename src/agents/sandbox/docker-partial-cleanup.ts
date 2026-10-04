@@ -1,18 +1,24 @@
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import { removeRegistryEntry } from "./registry.js";
 
-export async function throwAfterPartialSandboxCleanup(params: {
+/**
+ * Remove one allocated generation by its immutable ID, then forget its registry row
+ * unless management already published removal intent. Returns every cleanup failure.
+ */
+export async function removeAllocatedSandboxGeneration(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   containerId: string;
-  creationError: unknown;
   onRemoved?: () => void;
-}): Promise<never> {
+  /** An aborted removal stays unconfirmed, so the registry row is kept. */
+  signal?: AbortSignal;
+}): Promise<unknown[]> {
   const cleanupErrors: unknown[] = [];
   let removalConfirmed = false;
   try {
     const removal = await execContainer(params.engine, ["rm", "-f", params.containerId], {
       allowFailure: true,
+      signal: params.signal,
     });
     const detail = removal.stderr.trim() || removal.stdout.trim() || `exit ${removal.code}`;
     removalConfirmed =
@@ -33,6 +39,17 @@ export async function throwAfterPartialSandboxCleanup(params: {
       cleanupErrors.push(cleanupError);
     }
   }
+  return cleanupErrors;
+}
+
+export async function throwAfterPartialSandboxCleanup(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  containerId: string;
+  creationError: unknown;
+  onRemoved?: () => void;
+}): Promise<never> {
+  const cleanupErrors = await removeAllocatedSandboxGeneration(params);
   if (cleanupErrors.length > 0) {
     throw new AggregateError(
       [params.creationError, ...cleanupErrors],

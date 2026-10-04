@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { captureSandboxSetupScope } from "../../sandbox/setup-rollback.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import {
   cleanupTempPaths,
@@ -140,4 +141,57 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
   });
+
+  it.each(["setup", "preparation", "dispatch"] as const)(
+    "keeps sandbox setup allocations rollback-owned until dispatch (%s exit)",
+    async (exit) => {
+      const worktree = dirs.make("openclaw-sandbox-worktree-");
+      // A failing removal must never replace the attempt's own outcome.
+      const allocation = {
+        retire: vi.fn(async () => {
+          throw new Error("sandbox removal failed");
+        }),
+        release: vi.fn(),
+      };
+      hoisted.resolveSandboxContextMock.mockImplementationOnce(async () => {
+        // Stands in for the container lifecycle owner recording a fresh generation.
+        const scope = captureSandboxSetupScope();
+        if (!scope) {
+          throw new Error("sandbox setup ran outside its rollback scope");
+        }
+        scope.allocations.push(allocation);
+        return { enabled: true, workspaceAccess: "rw", workspaceDir: worktree };
+      });
+      if (exit === "preparation") {
+        hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() => {
+          throw new Error("tool preparation failed");
+        });
+      }
+      let handedOffBeforePrompt: boolean | undefined;
+      const attempt = createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:subagent:child",
+        tempPaths,
+        sessionPrompt: async () => {
+          handedOffBeforePrompt = allocation.release.mock.calls.length === 1;
+        },
+        attemptOverrides: {
+          workspaceDir: worktree,
+          cwd: exit === "setup" ? "/tmp/task-repo" : worktree,
+          disableTools: false,
+        },
+      });
+      if (exit === "dispatch") {
+        await attempt;
+        expect(handedOffBeforePrompt).toBe(true);
+        expect(allocation.retire).not.toHaveBeenCalled();
+      } else {
+        await expect(attempt).rejects.toThrow(
+          exit === "setup" ? "cwd override is not supported" : "tool preparation failed",
+        );
+        expect(allocation.retire).toHaveBeenCalledOnce();
+        expect(allocation.release).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

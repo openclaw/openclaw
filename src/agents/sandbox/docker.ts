@@ -22,12 +22,16 @@ import {
 import {
   admitSandboxContainerSource,
   bindSandboxContainerSource,
+  recordSandboxSetupAllocation,
   releaseSandboxContainerSource,
   withSandboxContainerLifecycle,
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
-import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
+import {
+  removeAllocatedSandboxGeneration,
+  throwAfterPartialSandboxCleanup,
+} from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
   sandboxMountPlanMatchesContainer,
@@ -40,6 +44,7 @@ import {
   resolvePodmanSandboxContainerPrefix,
   resolvePodmanSandboxCreatePolicy,
   resolvePodmanSandboxRuntimeInfo,
+  validateSandboxContainerEngineTarget,
   type PodmanSandboxRuntimeInfo,
 } from "./podman-runtime.js";
 import {
@@ -52,6 +57,7 @@ import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
+import { captureSandboxSetupScope, type SandboxSetupScope } from "./setup-rollback.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
@@ -421,11 +427,17 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
     params.operatorAuthority?.assertCurrent();
     params.assertCurrent?.();
   };
+  const setupScope = captureSandboxSetupScope();
   return await withSandboxContainerLifecycle(
     containerName,
     params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
     (source) =>
-      ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, source),
+      ensureSandboxContainerLifecycle(
+        { ...params, assertCurrent },
+        containerName,
+        source,
+        setupScope,
+      ),
   );
 }
 
@@ -433,6 +445,7 @@ async function ensureSandboxContainerLifecycle(
   params: EnsureSandboxContainerParams,
   containerName: string,
   source: ContainerSourceLease | undefined,
+  setupScope: SandboxSetupScope | undefined,
 ) {
   const configuredEngine = params.engine ?? DOCKER_SANDBOX_ENGINE;
   const podmanRuntimeInfo =
@@ -632,6 +645,47 @@ async function ensureSandboxContainerLifecycle(
         await updateRegistry(readyEntry);
       }
       params.assertCurrent?.();
+      // Only session-scoped generations accumulate when setup fails; agent and shared
+      // ones are adopted by the next run. Managed worktrees keep their own mount custody.
+      if (
+        setupScope &&
+        params.cfg.scope === "session" &&
+        params.workspaceSource !== "managed-worktree"
+      ) {
+        const allocatedId = containerId;
+        const operatorAuthority = params.operatorAuthority;
+        recordSandboxSetupAllocation({
+          scope: setupScope,
+          name: containerName,
+          retire: async () => {
+            // As for a failed allocation, revocation keeps the writable layer.
+            const revoked = () => operatorAuthority?.signal?.aborted === true;
+            if (revoked()) {
+              return;
+            }
+            // A new sequence: the active Podman connection may have changed since allocation.
+            await validateSandboxContainerEngineTarget(engine, podmanRuntimeInfo?.target);
+            // Revocation can land while the probe is pending; recheck right before removal.
+            if (revoked()) {
+              return;
+            }
+            const cleanupErrors = await removeAllocatedSandboxGeneration({
+              engine,
+              containerName,
+              containerId: allocatedId,
+              onRemoved: () => releaseSandboxContainerSource(engine, containerName, allocatedId),
+              // Bounded like a revocation stop, so a wedged engine cannot hold the failure.
+              signal: AbortSignal.timeout(30_000),
+            });
+            if (cleanupErrors.length > 0) {
+              throw new AggregateError(
+                cleanupErrors,
+                `Sandbox ${containerName} setup rollback failed.`,
+              );
+            }
+          },
+        });
+      }
       return { containerName, containerId };
     } catch (creationError) {
       if (!allocated) {

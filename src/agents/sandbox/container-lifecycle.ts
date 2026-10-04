@@ -7,9 +7,16 @@ import {
 } from "../admitted-run-context.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import { containerHasTerminated } from "./container-inspect.js";
+import type { SandboxSetupScope } from "./setup-rollback.js";
 
 const log = createSubsystemLogger("docker");
 const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
+// Setup rollback custody by container name. Admission, replacement, and removal run on
+// the lifecycle queue and revoke it before acting, so a setup can retire only a
+// generation no other lifecycle operation has observed. A revocation stop needs no
+// revocation here: it implies the allocating authority was revoked, and retire keeps
+// any generation whose authority was revoked.
+const setupCustody = new Map<string, object>();
 
 export type ContainerSourceLease = {
   authority: AdmittedRunOperatorAuthority;
@@ -207,12 +214,54 @@ export async function withSandboxContainerLifecycle<T>(
 ): Promise<T> {
   const source = retainContainerSource(authority);
   try {
-    return await sandboxContainerLifecycleQueue.enqueue(name, () => operation(source));
+    return await sandboxContainerLifecycleQueue.enqueue(name, () => {
+      // This turn may adopt, restart, or replace the generation; setup loses it first.
+      setupCustody.delete(name);
+      return operation(source);
+    });
   } finally {
     if (source && !source.adopted) {
       source.release();
     }
   }
+}
+
+/**
+ * Called under the lifecycle lock once a fresh generation is published: the setup
+ * that allocated `name` may retire it until another lifecycle operation for the name runs.
+ */
+export function recordSandboxSetupAllocation(params: {
+  scope: SandboxSetupScope;
+  name: string;
+  retire: () => Promise<void>;
+}): void {
+  const { scope, name } = params;
+  if (scope.state !== "collecting") {
+    return;
+  }
+  const custody = {};
+  setupCustody.set(name, custody);
+  const isCurrent = () => setupCustody.get(name) === custody;
+  scope.allocations.push({
+    // A turn that has started already revoked custody; never wait behind it to do nothing.
+    retire: async () => {
+      if (!isCurrent()) {
+        return;
+      }
+      await sandboxContainerLifecycleQueue.enqueue(name, async () => {
+        if (!isCurrent()) {
+          return;
+        }
+        setupCustody.delete(name);
+        await params.retire();
+      });
+    },
+    release: () => {
+      if (isCurrent()) {
+        setupCustody.delete(name);
+      }
+    },
+  });
 }
 
 /** Called under the lifecycle lock after the incoming admission is revalidated. */
@@ -290,6 +339,7 @@ export async function removeSandboxContainerRuntime(
   generation?: { id: string | null; assertCurrent: () => void },
 ): Promise<void> {
   await sandboxContainerLifecycleQueue.enqueue(name, async () => {
+    setupCustody.delete(name);
     generation?.assertCurrent();
     const key = containerAuthorityKey(engine, name);
     const retained = privateContainers.get(key);

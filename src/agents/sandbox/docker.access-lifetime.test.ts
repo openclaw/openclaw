@@ -10,6 +10,7 @@ import {
 import { createDockerSandboxBackend } from "./docker-backend.js";
 import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
+import { createSandboxSetupRollback } from "./setup-rollback.js";
 
 type Container = { id: string; name: string; hash: string; running: boolean };
 const fixture = vi.hoisted(() => ({
@@ -663,3 +664,107 @@ it.each(["partial-creation", "replacement", "manager"] as const)(
     expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual(retainedKills);
   },
 );
+
+it.each(["reserved setup", "plain publish", "management removal intent"] as const)(
+  "rolls back only the generation its failed setup allocated (%s)",
+  async (path) => {
+    const owner = source();
+    const params = provision(owner);
+    if (path === "plain publish") {
+      delete params.cfg.docker.setupCommand;
+    }
+    const setup = createSandboxSetupRollback();
+    const { containerName: name } = await setup.run(() => ensureSandboxContainer(params));
+    const id = fixture.containers.get(name)!.id;
+    const { containerName: otherName } = await ensureSandboxContainer(provision(source(), "other"));
+    if (path === "management removal intent") {
+      // Management publishes its removal fence before it waits for this owner queue.
+      fixture.registry.set(name, { ...fixture.registry.get(name)!, runtimeState: "removing" });
+    }
+    await setup.rollback();
+    expect(fixture.calls.filter(([operation]) => operation === "rm")).toEqual([["rm", "-f", id]]);
+    expect(fixture.containers.has(name)).toBe(false);
+    expect(fixture.registry.get(name)?.runtimeState).toBe(
+      path === "management removal intent" ? "removing" : undefined,
+    );
+    expect(fixture.containers.get(otherName)?.running).toBe(true);
+    expect(owner.release).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  "adopted while queued",
+  "removed by management",
+  "replaced after removal",
+  "existing before setup",
+  "handed off",
+  "revoked",
+  "managed worktree",
+  "agent scope",
+  "shared scope",
+] as const)("keeps a generation its setup does not own: %s", async (kind) => {
+  // Without retained custody, revocation stops nothing; only the rollback policy keeps it.
+  const owner = source(kind === "revoked" ? { retain: false } : undefined);
+  const params = provision(owner);
+  if (kind === "agent scope" || kind === "shared scope") {
+    // Reusable names are adopted by the next run instead of accumulating.
+    params.cfg.scope = kind === "agent scope" ? "agent" : "shared";
+  }
+  const setup = createSandboxSetupRollback();
+  if (kind === "existing before setup") {
+    await ensureSandboxContainer(params);
+  }
+  if (kind === "adopted while queued") {
+    const entered = createDeferred();
+    const finish = createDeferred();
+    fixture.setup = async () => {
+      entered.resolve();
+      await finish.promise;
+    };
+    const creating = setup.run(() => ensureSandboxContainer(params));
+    await entered.promise;
+    fixture.setup = undefined;
+    const adopting = ensureSandboxContainer(provision(source()));
+    finish.resolve();
+    await Promise.all([creating, adopting]);
+  } else {
+    await setup.run(() =>
+      ensureSandboxContainer(
+        kind === "managed worktree" ? { ...params, workspaceSource: "managed-worktree" } : params,
+      ),
+    );
+  }
+  const [container] = fixture.containers.values();
+  if (!container) {
+    throw new Error("Expected the provisioned generation");
+  }
+  if (kind === "removed by management" || kind === "replaced after removal") {
+    await removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, container.name);
+  }
+  if (kind === "replaced after removal") {
+    await ensureSandboxContainer(provision(source()));
+    expect(fixture.containers.get(container.name)?.id).not.toBe(container.id);
+  } else if (kind === "handed off") {
+    setup.handOff();
+  } else if (kind === "revoked") {
+    owner.controller.abort(new Error("access revoked"));
+  }
+  const kept = fixture.containers.get(container.name);
+  const entry = fixture.registry.get(container.name);
+  const removals = fixture.calls.filter(([operation]) => operation === "rm").length;
+  await setup.rollback();
+  expect(fixture.calls.filter(([operation]) => operation === "rm")).toHaveLength(removals);
+  expect(fixture.containers.get(container.name)).toBe(kept);
+  expect(fixture.registry.get(container.name)).toEqual(entry);
+});
+
+it("rejects a failed rollback without forgetting the generation it could not remove", async () => {
+  const setup = createSandboxSetupRollback();
+  const { containerName: name } = await setup.run(() =>
+    ensureSandboxContainer(provision(source())),
+  );
+  fixture.removalFails = true;
+  await expect(setup.rollback()).rejects.toThrow(`Sandbox ${name} setup rollback failed.`);
+  expect(fixture.containers.has(name)).toBe(true);
+  expect(fixture.registry.get(name)?.runtimeState).toBe("ready");
+});
