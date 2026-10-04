@@ -44,8 +44,8 @@ import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
   pairedDeviceHasNonOperatorRole,
-  requestsNonOperatorDeviceRole,
   resolveDeviceManagementAuthz,
+  resolveDevicePairingApprovalDenial,
   resolveDeviceSessionAuthz,
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz, DeviceSessionAuthz } from "./device-management-authz.js";
@@ -281,13 +281,13 @@ function authorizePairingDecision(
   authz: DeviceSessionAuthz,
   { respond, context }: Pick<GatewayRequestHandlerOptions, "respond" | "context">,
 ): boolean {
-  const reason = pending
-    ? authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId
-      ? "device-ownership-mismatch"
-      : operation === "approve" && requestsNonOperatorDeviceRole(pending)
-        ? "role-management-requires-admin"
-        : undefined
-    : undefined;
+  const reason = !pending
+    ? undefined
+    : operation === "approve"
+      ? resolveDevicePairingApprovalDenial(authz, pending)
+      : authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId
+        ? "device-ownership-mismatch"
+        : undefined;
   if (pending && !reason) {
     return true;
   }

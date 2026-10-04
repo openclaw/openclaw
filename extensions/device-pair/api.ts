@@ -5,6 +5,7 @@ export {
   issueDeviceBootstrapToken,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   listDevicePairing,
+  resolveDevicePairingApprovalDenial,
   resolvePairingGatewayUrl,
   revokeDeviceBootstrapToken,
   type DeviceBootstrapProfile,

@@ -55,6 +55,19 @@ export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: st
   });
 }
 
+export function resolveDevicePairingApprovalDenial(
+  authz: Pick<DeviceSessionAuthz, "callerDeviceId" | "isAdminCaller">,
+  pending: { deviceId: string; role?: string; roles?: string[] },
+): "device-ownership-mismatch" | "role-management-requires-admin" | undefined {
+  if (authz.isAdminCaller) {
+    return undefined;
+  }
+  if (authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId) {
+    return "device-ownership-mismatch";
+  }
+  return requestsNonOperatorDeviceRole(pending) ? "role-management-requires-admin" : undefined;
+}
+
 export function pairedDeviceHasNonOperatorRole(device: {
   role?: string;
   roles?: string[];
