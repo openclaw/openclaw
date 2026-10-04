@@ -2087,6 +2087,12 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
+.sidebar-session-empty-hint--startup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }
@@ -3271,6 +3277,16 @@ a:is(
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.nav-item__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item--child {
+  padding-inline-start: calc(var(--space-2) + var(--space-4));
 }
 
 .nav-item__icon {

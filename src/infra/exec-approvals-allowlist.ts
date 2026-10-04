@@ -108,18 +108,13 @@ async function explainShellPolicySegments(params: {
   }
 }
 
-function normalizeSafeBins(entries?: readonly string[]): Set<string> {
-  if (!Array.isArray(entries)) {
-    return new Set();
-  }
-  const normalized = entries
-    .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-    .filter((entry) => entry.length > 0);
-  return new Set(normalized);
-}
-
 export function resolveSafeBins(entries?: readonly string[] | null): Set<string> {
-  return normalizeSafeBins(entries === undefined ? DEFAULT_SAFE_BINS : (entries ?? []));
+  const bins = entries === undefined ? DEFAULT_SAFE_BINS : entries;
+  return new Set(
+    Array.isArray(bins)
+      ? bins.map((entry) => normalizeLowercaseStringOrEmpty(entry)).filter(Boolean)
+      : [],
+  );
 }
 
 function isSafeBinUsage(params: {
@@ -807,13 +802,9 @@ export function evaluateExecAllowlist(
   return result;
 }
 
-export type ExecAllowlistAnalysis = {
+export type ExecAllowlistAnalysis = ExecAllowlistEvaluation & {
   analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
-  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
-  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan?: ExecAuthorizationPlan;
 };
 
@@ -1081,17 +1072,6 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
   });
 }
 
-function resolveAllowAlwaysPatternArgv(
-  argv: string[],
-  platform: NodeJS.Platform = process.platform,
-): string[] | null {
-  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
-  if (packageManagerTarget.kind === "blocked") {
-    return null;
-  }
-  return packageManagerTarget.argv;
-}
-
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -1105,15 +1085,15 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const patternArgv = resolveAllowAlwaysPatternArgv(
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(
     params.segment.argv,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );
-  if (!patternArgv) {
+  if (packageManagerTarget.kind === "blocked") {
     return;
   }
   const trustPlan = resolveExecWrapperTrustPlan(
-    patternArgv,
+    packageManagerTarget.argv,
     undefined,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );

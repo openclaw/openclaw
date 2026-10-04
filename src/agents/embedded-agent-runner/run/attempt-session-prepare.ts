@@ -31,6 +31,7 @@ import {
   type CreateAgentSessionOptions,
   SessionManager,
 } from "../../sessions/index.js";
+import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
 import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
@@ -39,7 +40,6 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
@@ -134,7 +134,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,
   });
-  const resourceLoader = createEmbeddedAgentResourceLoader({
+  const resourceLoader = new DefaultResourceLoader({
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
     settingsManager,

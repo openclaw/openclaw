@@ -4,17 +4,10 @@
 // later same-lane members. Cover them together — a lane regression breaks both at once.
 import path from "node:path";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import {
-  createChannelIngressQueueForTests,
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,11 +16,12 @@ import {
 } from "./bot-media-timers.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
-import type { TelegramTransport } from "./fetch.js";
-import type { TelegramRuntime } from "./runtime.types.js";
+import type {
+  TelegramIngressMonitorOptions,
+  TelegramIngressResources,
+} from "./telegram-ingress-coalescing-fixture.test-support.js";
 import {
   createBotApiTransport,
-  createTelegramDeps,
   holdForwardWindow,
   photoUpdate,
   forwardedPhotoUpdate,
@@ -47,7 +41,6 @@ const downstreamTurns = vi.hoisted(() =>
     }),
   ),
 );
-const runtimeErrors: unknown[] = [];
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-album-ingress-");
 const saveRemoteMedia = vi.hoisted(() =>
   vi.fn(async (params: { filePathHint?: string }) => ({
@@ -107,70 +100,40 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
-const { createTelegramBot } = await import("./bot.js");
-const { resetInboundDedupe } = await import("openclaw/plugin-sdk/reply-runtime");
-const { createTelegramTransportIngressMonitor } =
-  await import("./telegram-ingress-drain-factory.js");
-const { setTelegramRuntime } = await import("./runtime.js");
-const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
-const { openTelegramIngressQueue, telegramQueueEventId } =
-  await import("./telegram-ingress-spool.js");
+// Preserve production initialization order before the fixture imports those modules.
+await import("./bot.js");
+await import("openclaw/plugin-sdk/reply-runtime");
+await import("./telegram-ingress-drain-factory.js");
+await import("./runtime.js");
+await import("./runtime.test-support.js");
+const ingressSpool = await import("./telegram-ingress-spool.js");
+const { openTelegramIngressQueue, telegramQueueEventId } = ingressSpool;
 const { writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.test-support.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const processingOutcome = await import("./bot-processing-outcome.js");
-
-const cfg = {
-  messages: { inbound: { debounceMs: 0 } },
-  channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-} as OpenClawConfig;
-
-/** Both members must land in one turn; a second turn is the split this file guards. */
-async function awaitSingleDownstreamTurn(): Promise<MsgContext & Record<string, unknown>> {
-  await vi.waitFor(
-    () => {
-      expect(downstreamTurns, runtimeErrors.map(String).join("\n")).toHaveBeenCalledTimes(1);
-    },
-    { timeout: 5_000, interval: 5 },
-  );
-  return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
-}
-
-async function assertSpoolTombstoned(params: { stateDir: string; updateIds: number[] }) {
-  const queue = openTelegramIngressQueue(params);
-  expect(await queue.listClaims()).toEqual([]);
-  expect(await queue.listPending({ limit: "all" })).toEqual([]);
-  expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-  // Every member tombstones independently, so a replayed update cannot re-enter.
-  for (const updateId of params.updateIds) {
-    await expect(queue.enqueue(telegramQueueEventId(updateId), {} as never)).resolves.toMatchObject(
-      { kind: "completed" },
-    );
-  }
-}
-
-async function assertAlbumTurnAndTombstones(params: {
-  stateDir: string;
-  updateIds: number[];
-  monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-}) {
-  await params.monitor.waitForDeferredClaims();
-  const turn = await awaitSingleDownstreamTurn();
-  expect(turn.Body).toContain("Two photo album");
-  expect(turn.media).toMatchObject([
-    { path: "/tmp/photo-1.jpg", kind: "image" },
-    { path: "/tmp/photo-2.jpg", kind: "image" },
-  ]);
-  await assertSpoolTombstoned(params);
-}
+const {
+  admitAlbum,
+  assertSpoolTombstoned,
+  createDownstreamTurnFixture,
+  createIngressMonitor,
+  flushHeldQuietWindow,
+  resetTelegramIngressRuntime,
+  runtimeErrors,
+  stopIngressResources,
+  useIngressTimers,
+} = await import("./telegram-ingress-coalescing-fixture.test-support.js");
+const {
+  captureNextDownstreamTurn,
+  awaitSingleDownstreamTurn,
+  assertAlbumTurnAndTombstones,
+  holdFirstDownstreamTurn,
+  holdDownstreamLane,
+} = createDownstreamTurnFixture(downstreamTurns);
 
 describe("Telegram durable ingress coalescing", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDir: string;
-  let activeResources: Array<{
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-    telegramTransport: TelegramTransport;
-    abortController: AbortController;
-  }>;
+  let activeResources: TelegramIngressResources[];
 
   beforeEach(async () => {
     stateDir = sessionDirs.make();
@@ -181,35 +144,12 @@ describe("Telegram durable ingress coalescing", () => {
       .mockReset()
       .mockResolvedValue({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
     saveRemoteMedia.mockReset();
-    resetInboundDedupe();
-    resetPluginStateStoreForTests({ closeDatabase: false });
-    resetTelegramAccountThrottlersForTest();
-    setTelegramRuntime({
-      state: {
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
-        ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
-        // Command-menu locale ledger reads the keyed store during hydration;
-        // an absent store degrades with a warning that breaks watchdog asserts.
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-      },
-      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
-    } as TelegramRuntime);
+    resetTelegramIngressRuntime();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    await Promise.all(
-      activeResources.map(async ({ monitor, telegramTransport, abortController }) => {
-        abortController.abort(new Error("test cleanup"));
-        await monitor.stop();
-        await telegramTransport.close();
-      }),
-    );
+    await stopIngressResources(activeResources);
     resetPluginStateStoreForTests({ closeDatabase: false });
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -218,49 +158,8 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  async function createMonitor(
-    options: {
-      telegramTransport?: TelegramTransport;
-      adoptionStallTimeoutMs?: number;
-      onRuntimeError?: (error: unknown) => void;
-    } = {},
-  ) {
-    const telegramTransport = options.telegramTransport ?? createBotApiTransport();
-    const abortController = new AbortController();
-    const bot = await createTelegramBot({
-      token: "tok",
-      botInfo: telegramBotInfoForTest,
-      config: cfg,
-      telegramDeps: createTelegramDeps(stateDir, cfg),
-      telegramTransport,
-      fetchAbortSignal: abortController.signal,
-      mediaAbortSignal: abortController.signal,
-      testTimings: { mediaGroupFlushMs: 40, textFragmentGapMs: 20 },
-      runtime: {
-        log: () => {},
-        error:
-          options.onRuntimeError ??
-          ((error) => {
-            runtimeErrors.push(error);
-            throw error instanceof Error ? error : new Error(String(error));
-          }),
-        getRuntimeConfig: () => cfg,
-        exit: () => {
-          throw new Error("unexpected runtime exit");
-        },
-      } as RuntimeEnv,
-    });
-    const monitor = createTelegramTransportIngressMonitor({
-      stateDir,
-      bot,
-      accountId: "default",
-      botInfo: telegramBotInfoForTest,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
-      pollIntervalMs: 10,
-    });
-    const resources = { monitor, telegramTransport, abortController };
+  async function createMonitor(options: TelegramIngressMonitorOptions = {}) {
+    const resources = await createIngressMonitor(stateDir, options);
     activeResources.push(resources);
     return resources;
   }
@@ -321,55 +220,10 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  async function admitAlbum(
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>,
-    name: "A" | "B",
-    firstId: number,
-  ) {
-    for (let index = 0; index < 2; index += 1) {
-      const update = photoUpdate({
-        updateId: firstId + index,
-        messageId: firstId + index,
-        ...(index === 0 ? { caption: `Album ${name}` } : {}),
-      });
-      update.message.media_group_id = `album-${name}`;
-      await monitor.admit(update);
-      await monitor.waitForIdle();
-    }
-    await vi.advanceTimersByTimeAsync(40);
-  }
-
   it("keeps a later album alive and ordered behind a slowly adopting album", async () => {
-    const headDispatched = createDeferred<void>();
-    const releaseHead = createDeferred<void>();
-    const headFinished = createDeferred<void>();
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (downstreamTurns.mock.calls.length === 1) {
-        if (!lifecycle?.deferredHeartbeatIntervalMs) {
-          throw new Error("Expected the deferred turn's heartbeat cadence");
-        }
-        lifecycle.onDeferred?.();
-        const heartbeat = setInterval(
-          () => lifecycle.onDeferredHeartbeat?.(),
-          lifecycle.deferredHeartbeatIntervalMs,
-        );
-        headDispatched.resolve();
-        try {
-          await releaseHead.promise;
-          if (!abortSignal?.aborted) {
-            await lifecycle.onAdopted();
-          }
-        } finally {
-          clearInterval(heartbeat);
-          headFinished.resolve();
-        }
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    const { headDispatched, releaseHead, headFinished } = holdFirstDownstreamTurn();
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_001);
@@ -395,40 +249,9 @@ describe("Telegram durable ingress coalescing", () => {
   });
 
   it("keeps a later same-sender forward batch alive behind a deferred batch", async () => {
-    const releaseHead = createDeferred<void>();
-    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
-    const turnsFinished: Promise<void>[] = [];
-    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
-    let laneTail: Promise<void> = releaseHead.promise;
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 3_000 });
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (!lifecycle?.deferredHeartbeatIntervalMs) {
-        throw new Error("Expected the deferred turn's heartbeat cadence");
-      }
-      const ahead = laneTail;
-      const finished = createDeferred<void>();
-      laneTail = finished.promise;
-      const turnIndex = turnsFinished.push(finished.promise) - 1;
-      lifecycle.onDeferred?.();
-      const heartbeat = setInterval(
-        () => lifecycle.onDeferredHeartbeat?.(),
-        lifecycle.deferredHeartbeatIntervalMs,
-      );
-      turnsDeferred[turnIndex]?.resolve();
-      try {
-        await ahead;
-        if (!abortSignal?.aborted) {
-          await lifecycle.onAdopted();
-        }
-      } finally {
-        clearInterval(heartbeat);
-        finished.resolve();
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    const { releaseHead, turnsDeferred, turnsFinished } = holdDownstreamLane();
+    useIngressTimers();
     monitor.start();
     try {
       await monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" }));
@@ -490,9 +313,7 @@ describe("Telegram durable ingress coalescing", () => {
       followerDispatched.resolve();
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_101);
@@ -582,9 +403,7 @@ describe("Telegram durable ingress coalescing", () => {
       adoptionStallTimeoutMs: 1_000,
       onRuntimeError: (error) => runtimeErrors.push(error),
     });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_201);
@@ -608,9 +427,7 @@ describe("Telegram durable ingress coalescing", () => {
 
   it("dispatches interleaved albums in first-member arrival order", async () => {
     const { monitor } = await createMonitor();
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       for (const [index, name] of ["A", "B", "A"].entries()) {
@@ -639,6 +456,192 @@ describe("Telegram durable ingress coalescing", () => {
       expect(runtimeErrors).toEqual([]);
     } finally {
       await monitor.stop();
+    }
+  });
+
+  it.each([
+    {
+      buffer: "album",
+      delayMs: 40,
+      first: photoUpdate({ updateId: 1_101, messageId: 1, caption: "Buffered context" }),
+      second: photoUpdate({ updateId: 1_102, messageId: 2 }),
+      media: [
+        { path: "/tmp/photo-1.jpg", kind: "image" },
+        { path: "/tmp/photo-2.jpg", kind: "image" },
+      ],
+    },
+    {
+      buffer: "forward",
+      delayMs: 1_000,
+      first: forwardedTextUpdate({ updateId: 1_201, messageId: 1, text: "Buffered context" }),
+      second: forwardedPhotoUpdate({ updateId: 1_202, messageId: 2 }),
+      media: [{ path: "/tmp/photo-1.jpg", kind: "image" }],
+    },
+  ])("holds the $buffer quiet flush while the next member is durably pending", async (testCase) => {
+    const { monitor } = await createMonitor();
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const quietTimers = holdTelegramMediaTimeouts(testCase.delayMs);
+    const dispatched = captureNextDownstreamTurn();
+    const queue = openTelegramIngressQueue({ stateDir });
+    try {
+      monitor.start();
+      await monitor.admit(testCase.first);
+      await monitor.waitForIdle();
+      await monitor.pause();
+
+      // Pause the pump, not durable admission: the next member has not reached the buffer.
+      await writeTelegramSpooledUpdate({ stateDir, update: testCase.second });
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(testCase.second.update_id) },
+      ]);
+      const held = createDeferred<void>();
+      const scheduleHeldTimer = quietTimers.getMockImplementation();
+      if (!scheduleHeldTimer) {
+        throw new Error("Expected the held quiet-timer implementation");
+      }
+      quietTimers.mockImplementation((callback, delay, ...args) => {
+        const timer = scheduleHeldTimer(callback, delay, ...args);
+        if (delay === testCase.delayMs) {
+          held.resolve();
+        }
+        return timer;
+      });
+      flushHeldQuietWindow(quietTimers, testCase.delayMs);
+      expect(
+        await Promise.race([held.promise.then(() => "held"), dispatched.then(() => "dispatched")]),
+      ).toBe("held");
+      quietTimers.mockImplementation(scheduleHeldTimer);
+      expect(downstreamTurns).not.toHaveBeenCalled();
+
+      monitor.start();
+      await monitor.waitForIdle();
+      flushHeldQuietWindow(quietTimers, testCase.delayMs);
+      const turn = await dispatched;
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(turn.Body).toContain("Buffered context");
+      expect(turn).toMatchObject({ media: testCase.media });
+      await assertSpoolTombstoned({
+        stateDir,
+        updateIds: [testCase.first.update_id, testCase.second.update_id],
+      });
+    } finally {
+      quietTimers.mockRestore();
+    }
+  });
+
+  it.each([
+    { readState: "pending", holdBeforeDeadline: false },
+    { readState: "holding just before the deadline", holdBeforeDeadline: true },
+  ])("flushes the album at its deadline with a $readState backlog read", async (testCase) => {
+    const queue = openTelegramIngressQueue({ stateDir });
+    const openQueue = vi.spyOn(ingressSpool, "openTelegramIngressQueue").mockReturnValue(queue);
+    const { monitor } = await createMonitor();
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const albumTimers = holdTelegramMediaTimeouts(40);
+    const readStarted = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    const dispatched = captureNextDownstreamTurn();
+    try {
+      monitor.start();
+      await monitor.admit(
+        photoUpdate({ updateId: 1_401, messageId: 1, caption: "Deadline photo album" }),
+      );
+      await monitor.waitForIdle();
+      await monitor.pause();
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        update: photoUpdate({ updateId: 1_402, messageId: 2 }),
+      });
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(1_402) },
+      ]);
+      const listUnsettled = queue.listUnsettled?.bind(queue);
+      if (!listUnsettled) {
+        throw new Error("Expected the ingress queue's coherent backlog reader");
+      }
+      vi.spyOn(queue, "listUnsettled").mockImplementationOnce(async (options) => {
+        const rows = await listUnsettled(options);
+        readStarted.resolve();
+        await releaseRead.promise;
+        return rows;
+      });
+      const quietFlush = resolveFlushTimerForDelay(albumTimers, 40);
+      if (!quietFlush) {
+        throw new Error("Expected the buffered album's quiet timer");
+      }
+      albumTimers.mockRestore();
+      vi.useFakeTimers({
+        toFake: ["performance", "setTimeout", "clearTimeout"],
+        shouldClearNativeTimers: true,
+      });
+      vi.advanceTimersByTime(40);
+      quietFlush();
+      await readStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(19_959);
+      if (testCase.holdBeforeDeadline) {
+        releaseRead.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(downstreamTurns).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      const turn = await dispatched;
+      await monitor.waitForDeferredClaims();
+      expect(turn.Body).toContain("Deadline photo album");
+      expect(turn).toMatchObject({ media: [{ path: "/tmp/photo-1.jpg", kind: "image" }] });
+
+      releaseRead.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(1_402) },
+      ]);
+    } finally {
+      releaseRead.resolve();
+      albumTimers.mockRestore();
+      openQueue.mockRestore();
+    }
+  });
+
+  it("flushes an album while unrelated plain text is durably pending on the same lane", async () => {
+    const { monitor } = await createMonitor();
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const albumTimers = holdTelegramMediaTimeouts(40);
+    const dispatched = captureNextDownstreamTurn();
+    const queue = openTelegramIngressQueue({ stateDir });
+    try {
+      monitor.start();
+      await monitor.admit(
+        photoUpdate({ updateId: 1_301, messageId: 1, caption: "Single photo album" }),
+      );
+      await monitor.waitForIdle();
+      await monitor.pause();
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        update: textUpdate({ updateId: 1_302, messageId: 2, text: "Unrelated plain text" }),
+      });
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(1_302) },
+      ]);
+
+      flushHeldQuietWindow(albumTimers, 40);
+      const turn = await dispatched;
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(turn.Body).toContain("Single photo album");
+      expect(turn).toMatchObject({ media: [{ path: "/tmp/photo-1.jpg", kind: "image" }] });
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: telegramQueueEventId(1_302) },
+      ]);
+
+      monitor.start();
+      await monitor.waitForIdle();
+      expect(downstreamTurns).toHaveBeenCalledTimes(2);
+      expect(downstreamTurns.mock.calls[1]?.[0].Body).toContain("Unrelated plain text");
+      await assertSpoolTombstoned({ stateDir, updateIds: [1_301, 1_302] });
+    } finally {
+      albumTimers.mockRestore();
     }
   });
 

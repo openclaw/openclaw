@@ -43,6 +43,12 @@ type RemoteRefState = {
 const REF_PREFIX = "refs/openclaw/mobile-releases";
 const VERSION_RE = /^20\d{2}\.(?:[1-9]\d?)\.(?:[1-9]\d*)$/u;
 const POSITIVE_INTEGER_RE = /^[1-9]\d*$/u;
+const GIT_RETRY_DELAYS_MS = [5_000, 10_000, 20_000];
+const TRANSIENT_GIT_ERRORS = [
+  /Unable to determine if workflow can be created or updated due to timeout/iu,
+  /The requested URL returned error: (?:408|500|502|503|504)\b/iu,
+  /\b(?:connection timed out|operation timed out|connection (?:was )?reset|could not resolve host|temporary failure in name resolution|remote end hung up unexpectedly|unexpected disconnect while reading sideband packet)\b/iu,
+];
 
 function git(args: string[], rootDir: string, deps: GitDeps = {}): string {
   const exec = deps.execFileSync ?? execFileSync;
@@ -80,6 +86,28 @@ function gitAllowFailure(
     const stderr = errorOutput(e.stderr);
     return { ok: false, stdout, stderr };
   }
+}
+
+function waitForGitRetry(
+  result: ReturnType<typeof gitAllowFailure>,
+  retry: number,
+  operation: string,
+): boolean {
+  const delayMs = GIT_RETRY_DELAYS_MS[retry];
+  const detail = `${result.stderr}\n${result.stdout}`;
+  if (
+    result.ok ||
+    delayMs === undefined ||
+    !TRANSIENT_GIT_ERRORS.some((pattern) => pattern.test(detail))
+  ) {
+    return false;
+  }
+  process.stderr.write(
+    `Transient Git failure while ${operation}; retrying in ${delayMs / 1_000}s (attempt ${retry + 2}/${GIT_RETRY_DELAYS_MS.length + 1}).\n`,
+  );
+  // This one-shot CLI already performs Git operations synchronously.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+  return true;
 }
 
 function parsePlatform(raw: string | null): MobileReleasePlatform {
@@ -287,7 +315,11 @@ function readRemoteRefs(
   rootDir: string,
   deps: GitDeps = {},
 ): RemoteRefState[] {
-  const result = gitAllowFailure(["ls-remote", "--refs", remote, pattern], rootDir, deps);
+  const args = ["ls-remote", "--refs", remote, pattern];
+  let result = gitAllowFailure(args, rootDir, deps);
+  for (let retry = 0; waitForGitRetry(result, retry, `reading ${pattern}`); retry += 1) {
+    result = gitAllowFailure(args, rootDir, deps);
+  }
   if (!result.ok) {
     const detail = (result.stderr || result.stdout).trim();
     throw new Error(`Failed to inspect remote release ref ${pattern}: ${detail}`);
@@ -332,25 +364,36 @@ function createRemoteRef(
   },
   deps: GitDeps,
 ): RemoteRefState & { status: "created" | "already-recorded" } {
-  const result = gitAllowFailure(
-    ["push", `--force-with-lease=${options.ref}:`, options.remote, `${options.sha}:${options.ref}`],
-    options.rootDir,
-    deps,
-  );
-  // A transport failure can follow an accepted push. Read back before offering recovery.
-  const recorded = readRemoteRef(options.remote, options.ref, options.rootDir, deps);
-  if (recorded && (recorded.sha === options.sha || options.acceptExistingSha)) {
-    return { ...recorded, status: result.ok ? "created" : "already-recorded" };
-  }
-  if (recorded) {
+  for (let retry = 0; ; retry += 1) {
+    // The empty lease atomically requires absence, including after a retry delay.
+    const result = gitAllowFailure(
+      [
+        "push",
+        `--force-with-lease=${options.ref}:`,
+        options.remote,
+        `${options.sha}:${options.ref}`,
+      ],
+      options.rootDir,
+      deps,
+    );
+    // A transport failure can follow an accepted push. Reconcile before retrying.
+    const recorded = readRemoteRef(options.remote, options.ref, options.rootDir, deps);
+    if (recorded && (recorded.sha === options.sha || options.acceptExistingSha)) {
+      return { ...recorded, status: result.ok ? "created" : "already-recorded" };
+    }
+    if (recorded) {
+      throw new Error(
+        `Mobile release ref ${options.ref} already points at ${recorded.sha}; refusing to record ${options.sha}.`,
+      );
+    }
+    if (waitForGitRetry(result, retry, `recording ${options.ref}`)) {
+      continue;
+    }
+    const detail = (result.stderr || result.stdout).trim();
     throw new Error(
-      `Mobile release ref ${options.ref} already points at ${recorded.sha}; refusing to record ${options.sha}.`,
+      `Failed to create mobile release ref ${options.ref}. Recovery command:\n${recoveryCommand(options)}\n${detail}`,
     );
   }
-  const detail = (result.stderr || result.stdout).trim();
-  throw new Error(
-    `Failed to create mobile release ref ${options.ref}. Recovery command:\n${recoveryCommand(options)}\n${detail}`,
-  );
 }
 
 function readAndroidCutoverMarker(

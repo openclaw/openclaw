@@ -1,8 +1,8 @@
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
 } from "../../config/runtime-snapshot.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -23,8 +23,7 @@ export function createSystemAgentGatewayRuntime(): RuntimeEnv {
   };
 }
 
-const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
-const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
+const withSystemAgentExecution = createAsyncLock();
 
 export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> {
   // Track every accepted RPC as active, never queued: restart draining snapshots
@@ -34,7 +33,7 @@ export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Prom
     // Bound expensive detection, activation, and agent turns without hiding
     // accepted work from restart draining. This also makes session eviction and
     // setup writes atomic with respect to other OpenClaw gateway requests.
-    systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
+    withSystemAgentExecution(task),
   );
 }
 

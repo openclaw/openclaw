@@ -164,6 +164,24 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
+    const example = '[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]';
+    for (const sourceReplyDeliveryMode of ["automatic", "message_tool_only"] as const) {
+      const params = { toolNames: ["message"], sourceReplyDeliveryMode };
+      const web = buildPromptParts({ ...params, runtimeInfo: { channel: "webchat" } });
+      const other = buildPromptParts({ ...params, runtimeInfo: { channel: "telegram" } });
+
+      expect(web.suffix).toContain(example);
+      expect(web.suffix).toContain("Only hosted Canvas refs/URLs or YouTube video URLs.");
+      expect(other.suffix).not.toContain(example);
+      expect(web.prefix).toBe(other.prefix);
+      expect(web.prefix).not.toContain(example);
+      expect(
+        renderPrompt({ ...params, promptMode: "minimal", runtimeInfo: { channel: "webchat" } }),
+      ).not.toContain(example);
+    }
+  });
+
   it.each([
     { channel: undefined, promptSurface: "openclaw_main" as const, silent: false },
     { channel: "webchat", promptSurface: "openclaw_main" as const, silent: false },

@@ -67,9 +67,6 @@ export function buildPersistedMediaImageLayout(params: {
       slots.push({ kind: "offloaded", factIndex });
     }
   }
-  if (slots.length === 0 && suppressedFactIndexes.length === 0) {
-    return undefined;
-  }
   return {
     slots,
     ...(suppressedFactIndexes.length > 0 ? { suppressedFactIndexes } : {}),

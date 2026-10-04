@@ -1,3 +1,4 @@
+import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -56,13 +57,6 @@ export type ResolvedToolPromptFinalizer = (params: {
   prompt: string;
   messageToolAvailable: boolean;
 }) => string;
-
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
 
 export type RunEmbeddedAgentParams = {
   /** Host-minted parent audience inherited by a trusted internal child run. */

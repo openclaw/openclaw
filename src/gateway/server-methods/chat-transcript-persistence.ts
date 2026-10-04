@@ -16,11 +16,9 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
-import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
@@ -40,10 +38,7 @@ import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
-import {
-  appendInjectedAssistantMessageToTranscript,
-  type GatewayInjectedTranscriptAppendResult,
-} from "./chat-transcript-inject.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
 type AssistantTranscriptScopeParams = {
   sessionId: string;
@@ -328,43 +323,6 @@ function findSourceReplyTranscriptMirrorByMetadataInEvents(
   return transcriptMessageTarget(target);
 }
 
-async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boolean> {
-  const sessionId = scope.sessionId;
-  if (!sessionId) {
-    return false;
-  }
-  // Existence probe: the newest-first matcher returns on the first record, so
-  // this reads one transcript line instead of materializing the whole file.
-  const found = await findTranscriptEvent({ ...scope, sessionId }, { kind: "latest" }).catch(
-    () => undefined,
-  );
-  return found !== undefined;
-}
-
-export async function appendAssistantTranscriptMessage(
-  params: Omit<
-    Parameters<typeof appendInjectedAssistantMessageToTranscript>[0],
-    "config" | "now" | "transcriptPath"
-  > &
-    AssistantTranscriptScopeParams & {
-      createIfMissing?: boolean;
-      cfg?: OpenClawConfig;
-    },
-): Promise<GatewayInjectedTranscriptAppendResult> {
-  const { createIfMissing, cfg, ...append } = params;
-  const scope = assistantTranscriptScope(params);
-  if (!scope) {
-    return { ok: false, error: "transcript identity not resolved" };
-  }
-  if (!createIfMissing && !(await transcriptExists(scope))) {
-    return { ok: false, error: "transcript not found" };
-  }
-  return appendInjectedAssistantMessageToTranscript({
-    ...append,
-    config: cfg,
-  });
-}
-
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
@@ -392,7 +350,7 @@ export async function persistAbortedPartial(params: {
   if (!snapshot.ok) {
     throw snapshot.error;
   }
-  const appended = await appendAssistantTranscriptMessage({
+  const appended = await appendInjectedAssistantMessageToTranscript({
     ...snapshot.value,
     abortMeta: {
       ...snapshot.value.abortMeta,

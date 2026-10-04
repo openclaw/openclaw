@@ -86,11 +86,6 @@ function countBatchSources(items: Array<{ source: MemorySource }>): Record<strin
   return counts;
 }
 
-function formatBatchSourceLabel(counts: Record<string, number>): string {
-  const sources = Object.keys(counts).toSorted();
-  return sources.length > 0 ? sources.join("+") : "unknown";
-}
-
 function formatBatchSourceCounts(counts: Record<string, number>): string {
   return (
     Object.entries(counts)
@@ -98,48 +93,6 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
       .map(([source, count]) => `${source}=${count}`)
       .join(",") || "none"
   );
-}
-
-function resolveEmbeddingTimeoutMs(params: {
-  kind: "query" | "batch";
-  providerId?: string;
-  providerRuntime?: Pick<
-    MemoryEmbeddingProviderRuntime,
-    "inlineQueryTimeoutMs" | "inlineBatchTimeoutMs"
-  >;
-  configuredBatchTimeoutSeconds?: number;
-}): number {
-  const configuredTimeoutSeconds = params.configuredBatchTimeoutSeconds;
-  if (
-    params.kind === "batch" &&
-    typeof configuredTimeoutSeconds === "number" &&
-    configuredTimeoutSeconds > 0
-  ) {
-    return resolveTimerTimeoutMs(configuredTimeoutSeconds * 1000, MAX_TIMER_TIMEOUT_MS);
-  }
-  const defaults = EMBEDDING_TIMEOUTS_MS[params.kind];
-  const runtimeTimeoutMs =
-    params.kind === "query"
-      ? params.providerRuntime?.inlineQueryTimeoutMs
-      : params.providerRuntime?.inlineBatchTimeoutMs;
-  return typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0
-    ? resolveTimerTimeoutMs(runtimeTimeoutMs, defaults.remote)
-    : defaults[params.providerId === "local" ? "local" : "remote"];
-}
-
-function resolveMemoryIndexConcurrency(params: {
-  batch: { enabled: boolean; concurrency: number };
-  configuredNonBatchConcurrency?: number;
-  providerId?: string;
-}): number {
-  if (params.batch.enabled) {
-    return params.batch.concurrency;
-  }
-  const configured = params.configuredNonBatchConcurrency;
-  if (typeof configured === "number" && Number.isFinite(configured)) {
-    return Math.max(1, Math.floor(configured));
-  }
-  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
 async function runEmbeddingOperationWithTimeout<T>(params: {
@@ -202,7 +155,7 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   }
   try {
     const operation = params.run(signal);
-    const result = (await Promise.race([operation, timeoutPromise])) as T;
+    const result = await Promise.race([operation, timeoutPromise]);
     params.signal?.throwIfAborted();
     // An overdue watchdog can run after provider success following an event-loop stall.
     if (!paused && Date.now() - segmentStartedAt >= remainingMs) {
@@ -354,8 +307,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = await this.runBatchWithFallback({
       provider: provider.id,
-      run: async () =>
-        await batchEmbed({
+      run: () =>
+        batchEmbed({
           agentId: this.agentId,
           chunks: missingChunks,
           wait: this.batch.wait,
@@ -365,8 +318,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           debug: (message, data) =>
             log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
         }),
-      fallback: async () =>
-        await this.embedChunksInBatches(missingCandidates, generation, EMBEDDING_BATCH_MAX_TOKENS),
+      fallback: () =>
+        this.embedChunksInBatches(missingCandidates, generation, EMBEDDING_BATCH_MAX_TOKENS),
     });
     const batchEmbeddings = batchResult.value;
     if (!batchEmbeddings) {
@@ -490,12 +443,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     provider: EmbeddingProvider | null = this.provider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined = this.providerRuntime,
   ): number {
-    return resolveEmbeddingTimeoutMs({
-      kind,
-      providerId: provider?.id,
-      providerRuntime,
-      configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
-    });
+    const configuredTimeoutSeconds = this.settings.sync.embeddingBatchTimeoutSeconds;
+    if (
+      kind === "batch" &&
+      typeof configuredTimeoutSeconds === "number" &&
+      configuredTimeoutSeconds > 0
+    ) {
+      return resolveTimerTimeoutMs(configuredTimeoutSeconds * 1000, MAX_TIMER_TIMEOUT_MS);
+    }
+    const defaults = EMBEDDING_TIMEOUTS_MS[kind];
+    const runtimeTimeoutMs =
+      kind === "query"
+        ? providerRuntime?.inlineQueryTimeoutMs
+        : providerRuntime?.inlineBatchTimeoutMs;
+    return typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0
+      ? resolveTimerTimeoutMs(runtimeTimeoutMs, defaults.remote)
+      : defaults[provider?.id === "local" ? "local" : "remote"];
   }
 
   protected async embedQueryWithRetry(
@@ -616,13 +579,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   }
 
   protected getIndexConcurrency(): number {
-    return resolveMemoryIndexConcurrency({
-      batch: this.batch,
-      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
-      providerId: this.syncProviderGeneration
-        ? this.syncProviderGeneration.provider?.id
-        : this.provider?.id,
-    });
+    if (this.batch.enabled) {
+      return this.batch.concurrency;
+    }
+    const configured = this.settings.remote?.nonBatchConcurrency;
+    if (typeof configured === "number" && Number.isFinite(configured)) {
+      return Math.max(1, Math.floor(configured));
+    }
+    const provider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private async writeChunks(
@@ -870,7 +837,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       );
       const chunkCount = candidates.length;
       const sourceCounts = countBatchSources(current);
-      const source = formatBatchSourceLabel(sourceCounts);
+      const source = Object.keys(sourceCounts).toSorted().join("+") || "unknown";
       sourceWideBatchGroup += 1;
       const chunkBatches = chunkItems(candidates, SOURCE_WIDE_BATCH_MAX_REQUESTS);
       log.debug(
@@ -920,7 +887,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     };
 
     for (const item of items) {
-      if ("kind" in item.entry && item.entry.kind === "multimodal") {
+      if (item.entry.kind === "multimodal") {
         await this.indexFileWithGeneration(item.entry, { source: item.source }, generation);
         continue;
       }
@@ -970,7 +937,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     generation: MemorySyncProviderGeneration | null,
   ): Promise<void> {
     // Multimodal files require an embedding provider; skip in FTS-only mode.
-    if (generation?.kind !== "semantic" && "kind" in entry && entry.kind === "multimodal") {
+    if (generation?.kind !== "semantic" && entry.kind === "multimodal") {
       return;
     }
     const prepared = await this.prepareIndexEntry(entry, options, generation);
@@ -995,7 +962,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (err) {
       const message = formatErrorMessage(err);
       if (
-        "kind" in entry &&
         entry.kind === "multimodal" &&
         /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
           message,

@@ -5472,7 +5472,9 @@ process.exit(73);
     expect(runner).not.toContain("chown");
     expect(runner).not.toContain("chmod");
     expect(runner).not.toContain('rm -rf "$CAPABILITIES_DIR"');
-    expect(runner).not.toContain("frozen-target");
+    expect(runner).not.toContain("frozen-target-compat.sh");
+    expect(runner).not.toContain("openclaw_frozen_target_omissions_authorized");
+    expect(runner).not.toContain("LEGACY_GATEWAY_LIB");
 
     const parseIndex = runner.indexOf('SUSPENSION_CAPABILITY="$(');
     const ownershipIndex = runner.indexOf('if [[ ! -O "$CAPABILITIES_PATH" ]]');

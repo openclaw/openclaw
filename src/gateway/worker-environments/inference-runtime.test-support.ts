@@ -188,6 +188,7 @@ export function providerStream(message = finalMessage(), options: { omitToolEnd?
 export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    config?: OpenClawConfig;
     catalogOnlyModel?: boolean;
     accountCatalog?: PreparedAccountCatalogAccess;
     pluginRegistry?: PluginRegistry;
@@ -214,8 +215,8 @@ export function setup(
     activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
     isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),

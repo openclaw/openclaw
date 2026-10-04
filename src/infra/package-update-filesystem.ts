@@ -301,8 +301,29 @@ export async function copyPackagePathEntry(
           }
         } else {
           // Launcher metadata is best effort, but must never follow its target.
+          const ownership = destinationIdentity?.isSymbolicLink() ? destinationIdentity : identity;
+          const preserveOwnership = async () => {
+            try {
+              await fs.lchown(to, Number(ownership.uid), Number(ownership.gid));
+            } catch (error) {
+              if (
+                (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) ||
+                !process.geteuid ||
+                !process.getegid
+              ) {
+                throw error;
+              }
+              // macOS inherits the bin directory's group even for a non-root
+              // updater. Do not leave that unrepeatable ownership on a new link.
+              assertLink();
+              await fs.lchown(to, process.geteuid(), process.getegid());
+              log.warn(
+                `Could not preserve launcher symlink ownership from ${source}; using updater ownership`,
+              );
+            }
+          };
           for (const [field, preserve] of [
-            ["ownership", () => fs.lchown(to, Number(identity.uid), Number(identity.gid))],
+            ["ownership", preserveOwnership],
             ...(process.platform === "darwin"
               ? ([["mode", () => fs.lchmod(to, Number(identity.mode))]] as const)
               : []),
@@ -476,7 +497,7 @@ export async function capturePackageLaunchers(
         : reader.exists(destination)))
         ? path.join(snapshot.backupDir, entry)
         : null;
-      let fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
+      const fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
       if (backup) {
         await copyPackagePathEntry(destination, backup);
         if (fingerprint) {
@@ -490,7 +511,6 @@ export async function capturePackageLaunchers(
             );
           }
           snapshot.failedCopy = undefined;
-          fingerprint = actual;
         }
       }
       snapshot.entries.push({

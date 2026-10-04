@@ -295,26 +295,22 @@ export function installRequestBodyLimitGuard(
     cleanup();
   };
 
-  const respond = (error: RequestBodyLimitError) => {
-    const text = customText[error.code] ?? requestBodyErrorToText(error.code);
+  const trip = (code: RequestBodyLimitErrorCode) => {
+    if (reason !== null) {
+      return;
+    }
+    reason = code;
+    finish();
+    const text = customText[code] ?? requestBodyErrorToText(code);
     const body = responseFormat === "text" ? text : JSON.stringify({ error: text });
     const contentType = responseFormat === "text" ? "text/plain" : "application/json";
     void sendHttpRequestRejection(
       req,
       res,
-      error.statusCode,
+      DEFAULT_ERROR_STATUS_CODE[code],
       body,
       `${contentType}; charset=utf-8`,
     );
-  };
-
-  const trip = (error: RequestBodyLimitError) => {
-    if (reason !== null) {
-      return;
-    }
-    reason = error.code;
-    finish();
-    respond(error);
   };
 
   const onData = (chunk: Buffer | string) => {
@@ -323,12 +319,12 @@ export function installRequestBodyLimitGuard(
     }
     totalBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
     if (totalBytes > maxBytes) {
-      trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
+      trip("PAYLOAD_TOO_LARGE");
     }
   };
 
   const timer = setNodeTimeout(() => {
-    trip(new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" }));
+    trip("REQUEST_BODY_TIMEOUT");
   }, timeoutMs);
 
   req.on("data", onData);
@@ -343,7 +339,7 @@ export function installRequestBodyLimitGuard(
   } else if (req.destroyed && !req.readableEnded) {
     finish();
   } else if (declaredLength !== null && declaredLength > maxBytes) {
-    trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
+    trip("PAYLOAD_TOO_LARGE");
   }
 
   return {

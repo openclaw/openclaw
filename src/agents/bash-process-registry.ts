@@ -208,7 +208,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  session.pendingOutput.push({ stream, text: chunk });
+  // Producer chunks may themselves be slices of a much larger decoded callback.
+  const ownedChunk = copyOutputText(chunk);
+  session.pendingOutput.push({ stream, text: ownedChunk });
   let pendingChars = streamChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
@@ -221,7 +223,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + ownedChunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -418,12 +420,17 @@ function moveToFinished(session: ProcessSession) {
   scheduleSweeper();
 }
 
+function copyOutputText(text: string): string {
+  // Own code units without replacing lone surrogates as UTF-8 would.
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 /** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return sliceUtf16Safe(text, text.length - max);
+  return copyOutputText(sliceUtf16Safe(text, text.length - max));
 }
 
 function capPendingStream(
@@ -450,7 +457,7 @@ function capPendingStream(
       pendingChars -= chunk.text.length;
       continue;
     }
-    const trimmed = sliceUtf16Safe(chunk.text, overflow);
+    const trimmed = tail(chunk.text, chunk.text.length - overflow);
     const removedChars = chunk.text.length - trimmed.length;
     pendingChars -= removedChars;
     chunk.text = trimmed;

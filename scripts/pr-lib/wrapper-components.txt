@@ -130,6 +130,20 @@ packages/terminal-core/src/progress-line.ts
 packages/terminal-core/src/restore.ts
 packages/terminal-core/src/safe-text.ts
 packages/terminal-core/src/theme.ts
+packages/worker-runtime/package.json
+packages/worker-runtime/src/index.ts
+packages/worker-runtime/src/lifecycle.ts
+packages/worker-runtime/src/retained-operation.ts
+packages/worker-runtime/src/worker-task-capacity.ts
+packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-completion.ts
+packages/worker-runtime/src/worker-task-pool-core.ts
+packages/worker-runtime/src/worker-task-pool-owned.ts
+packages/worker-runtime/src/worker-task-pool-resources.ts
+packages/worker-runtime/src/worker-task-pool-retirement.ts
+packages/worker-runtime/src/worker-task-pool-worker.ts
+packages/worker-runtime/src/worker-task-server.ts
+packages/worker-runtime/src/worker.ts
 scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
@@ -613,6 +627,7 @@ src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
 src/config/zod-schema.channel-bot-loop.ts
+src/config/zod-schema.channel-messaging-common.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
@@ -874,7 +889,6 @@ src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
-src/infra/retained-operation.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -939,6 +953,7 @@ src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-error.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
@@ -1036,14 +1051,8 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-task-capacity.ts
-src/infra/worker-task-native-sections.ts
-src/infra/worker-task-pool-completion.ts
-src/infra/worker-task-pool-core.ts
-src/infra/worker-task-pool-owned.ts
+src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
-src/infra/worker-task-pool-resources.ts
-src/infra/worker-task-pool-retirement.ts
-src/infra/worker-task-pool-worker.ts
 src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
 src/infra/worker-transfer-bytes.ts
@@ -1060,7 +1069,6 @@ src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
-src/logging/logger-hostname-state.ts
 src/logging/logger-settings-internal.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
@@ -1290,6 +1298,7 @@ src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-source-admission-store.ts
+src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts

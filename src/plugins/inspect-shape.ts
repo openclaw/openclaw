@@ -9,7 +9,7 @@ export type PluginInspectShape =
   | "hybrid-capability"
   | "non-capability";
 
-export type PluginCapabilityEntry = {
+type PluginCapabilityEntry = {
   kind: PluginCapabilityKind;
   ids: string[];
 };

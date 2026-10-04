@@ -350,7 +350,6 @@ describe("Codex attempt subscription recovery", () => {
         "thread/read",
         "thread/resume",
         "thread/inject_items",
-        "model/list",
         "turn/start",
         ...(!nativeOwned ? ["thread/unsubscribe"] : []),
       ]);

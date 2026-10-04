@@ -4,6 +4,7 @@
  * and removes background exec sessions.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Static } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -325,18 +326,7 @@ export function createProcessTool(
           `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
         );
       }
-      const params = args as {
-        action: ProcessToolAction;
-        sessionId?: string;
-        data?: string;
-        keys?: string[];
-        hex?: string[];
-        literal?: string;
-        text?: string;
-        bracketed?: boolean;
-        eof?: boolean;
-        offset?: number;
-        limit?: number;
+      const params = args as Omit<Static<typeof processSchema>, "timeout"> & {
         timeout?: unknown;
       };
 

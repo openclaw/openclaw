@@ -1,17 +1,12 @@
-/** Normalizes slash-command text aliases and builds command detection caches. */
+/** Normalizes and detects slash commands through their canonical aliases. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
-import { escapeRegExp } from "../utils.js";
 import { getChatCommands } from "./commands-registry.data.js";
-import type {
-  ChatCommandDefinition,
-  CommandDetection,
-  CommandNormalizeOptions,
-} from "./commands-registry.types.js";
+import type { ChatCommandDefinition, CommandNormalizeOptions } from "./commands-registry.types.js";
 
 type TextAliasSpec = {
   command: ChatCommandDefinition;
@@ -19,12 +14,7 @@ type TextAliasSpec = {
   acceptsArgs: boolean;
 };
 
-type CommandRegistryLookup = {
-  aliases: Map<string, TextAliasSpec>;
-  detection: CommandDetection;
-};
-
-let cachedRegistryLookup: CommandRegistryLookup | undefined;
+let cachedTextAliases: Map<string, TextAliasSpec> | undefined;
 
 // Commands whose free-text argument becomes agent input keep every line and its spacing.
 const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set(["goal", "steer"]);
@@ -50,13 +40,11 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
   return head;
 }
 
-function getCommandRegistryLookup(): CommandRegistryLookup {
-  if (cachedRegistryLookup) {
-    return cachedRegistryLookup;
+function getTextAliases(): Map<string, TextAliasSpec> {
+  if (cachedTextAliases) {
+    return cachedTextAliases;
   }
   const aliases = new Map<string, TextAliasSpec>();
-  const exact = new Set<string>();
-  const patterns: string[] = [];
   for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
@@ -70,23 +58,10 @@ function getCommandRegistryLookup(): CommandRegistryLookup {
       if (!aliases.has(normalized)) {
         aliases.set(normalized, { command, canonical, acceptsArgs });
       }
-      exact.add(normalized);
-      const escaped = escapeRegExp(normalized);
-      patterns.push(
-        acceptsArgs
-          ? `${escaped}(?:\\s+[\\s\\S]+|\\s*:\\s*[\\s\\S]*)?`
-          : `${escaped}(?:\\s*:\\s*)?`,
-      );
     }
   }
-  cachedRegistryLookup = {
-    aliases,
-    detection: {
-      exact,
-      regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
-    },
-  };
-  return cachedRegistryLookup;
+  cachedTextAliases = aliases;
+  return aliases;
 }
 
 /** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
@@ -97,9 +72,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   }
 
   const commandAlias = trimmed.match(/^\/[^\s@:]+/u)?.[0]?.toLowerCase();
-  const commandSpec = commandAlias
-    ? getCommandRegistryLookup().aliases.get(commandAlias)
-    : undefined;
+  const commandSpec = commandAlias ? getTextAliases().get(commandAlias) : undefined;
   const preserveArguments =
     options?.preserveArguments ||
     (commandSpec !== undefined && ARGUMENT_PRESERVING_COMMAND_KEYS.has(commandSpec.command.key));
@@ -132,7 +105,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
       : normalized;
 
   const lowered = normalizeLowercaseStringOrEmpty(commandBody);
-  const textAliasMap = getCommandRegistryLookup().aliases;
+  const textAliasMap = getTextAliases();
   const exact = textAliasMap.get(lowered);
   if (exact) {
     return appendMultilineTail(exact.canonical, multilineTail, exact);
@@ -166,20 +139,19 @@ export function maybeResolveTextAlias(raw: string, _cfg?: OpenClawConfig) {
   if (!trimmed.startsWith("/")) {
     return null;
   }
-  const detection = getCommandRegistryLookup().detection;
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (detection.exact.has(normalized)) {
-    return normalized;
-  }
-  if (!detection.regex.test(normalized)) {
-    return null;
-  }
+  const aliases = getTextAliases();
   const tokenMatch = normalized.match(/^\/([^\s:]+)(?:\s|$)/);
   if (!tokenMatch) {
     return null;
   }
   const tokenKey = `/${tokenMatch[1]}`;
-  return getCommandRegistryLookup().aliases.has(tokenKey) ? tokenKey : null;
+  const spec = aliases.get(tokenKey);
+  if (!spec) {
+    return null;
+  }
+  const tail = normalized.slice(tokenKey.length);
+  return !tail || spec.acceptsArgs || /^\s*:\s*$/.test(tail) ? tokenKey : null;
 }
 
 /** Resolves a raw text command into its command definition and raw argument tail. */
@@ -195,7 +167,7 @@ export function resolveTextCommand(
   if (!alias) {
     return null;
   }
-  const spec = getCommandRegistryLookup().aliases.get(alias);
+  const spec = getTextAliases().get(alias);
   if (!spec) {
     return null;
   }

@@ -534,7 +534,7 @@ describe("tool-card outcomes", () => {
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
+    "reconciles prepared $status outcomes through live items and history attachment",
     ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
@@ -589,7 +589,7 @@ describe("tool-card outcomes", () => {
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();
-        expect(card.completed).not.toBe(true);
+        expect(card.completed === true).toBe(message === live);
       }
       expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
       expect(saved).not.toHaveProperty("activity");

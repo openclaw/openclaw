@@ -42,6 +42,32 @@ Gateway uses this metadata for native-owned picker rows; authored host routes,
 credentials, and profile locks still use host readiness. This is not execution
 authorization, and all run-time compatibility and permission checks still apply.
 
+### Service-tier picker policy
+
+An optional synchronous `filterModelServiceTiers` hook narrows the tiers shown for
+the harness runtime:
+
+```ts
+filterModelServiceTiers(params: {
+  config: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId: string;
+  serviceTiers: readonly string[];
+}): readonly string[];
+```
+
+Gateway calls this hook after resolving account and route service-tier evidence,
+for both the selected model row and alternative runtime choices. The supplied
+config is the prepared catalog's snapshot. Interpret plugin-specific policy in
+the harness; core does not read private plugin config.
+
+Return a subset without mutating the input or doing I/O or discovery. Core
+intersects the result with the resolved tiers, preserving their order and
+ignoring added tiers. Without the hook, tiers are unchanged. Unknown tier
+availability remains unknown and does not invoke the hook. This affects picker
+metadata only; the harness must still enforce its policy when executing a turn.
+
 ## Native MCP inventory
 
 A harness that owns MCP connections outside OpenClaw's in-process MCP runtime

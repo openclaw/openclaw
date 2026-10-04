@@ -310,7 +310,6 @@ export async function projectInferenceRoute(
           modelId: route?.model,
           rawModel,
         }),
-        agentRuntime: structuredClone(agent.agentRuntime),
       }
     : undefined;
   const hasAgentRouteOverrides =

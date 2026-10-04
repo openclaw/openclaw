@@ -16,6 +16,18 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
+  it.each(["gateway", "daemon"])("defers only %s installs with a runtime expectation", (parent) => {
+    const commandPath = [parent, "install"];
+    expect(resolvePolicy({ commandPath }).skipConfigGuard).toBe(false);
+    expect(
+      resolveCliStartupPolicy({
+        commandPath,
+        options: { expectedRuntimePin: "{}" },
+        jsonOutputMode: true,
+      }).skipConfigGuard,
+    ).toBe(true);
+  });
+
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],

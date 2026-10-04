@@ -7,21 +7,13 @@ import {
 import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 
-export type ResolvedOpenShellPluginConfig = {
-  mode: "mirror" | "remote";
-  command: string;
-  gateway?: string;
-  gatewayEndpoint?: string;
-  workspace?: string;
-  from: string;
-  policy?: string;
-  providers: string[];
-  gpu: boolean;
-  autoProviders: boolean;
-  remoteWorkspaceDir: string;
-  remoteAgentWorkspaceDir: string;
-  timeoutMs: number;
-};
+type ProducedOpenShellPluginConfig = ReturnType<typeof resolveOpenShellPluginConfig>;
+type OptionalOpenShellFields = "gateway" | "gatewayEndpoint" | "workspace" | "policy";
+export type ResolvedOpenShellPluginConfig = Omit<
+  ProducedOpenShellPluginConfig,
+  OptionalOpenShellFields
+> &
+  Partial<Pick<ProducedOpenShellPluginConfig, OptionalOpenShellFields>>;
 
 const DEFAULT_COMMAND = "openshell";
 const DEFAULT_MODE = "mirror";
@@ -117,7 +109,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
   });
 }
 
-export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellPluginConfig {
+export function resolveOpenShellPluginConfig(value: unknown) {
   const parsed = OpenShellPluginConfigSchema.safeParse(value === undefined ? {} : value);
   if (!parsed.success) {
     const message = formatPluginConfigIssue(parsed.error.issues[0]);

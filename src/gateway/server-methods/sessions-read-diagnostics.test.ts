@@ -90,20 +90,36 @@ function expectedPreparationCpu(trace?: DiagnosticTraceContext) {
 
 function controlProjectionClock(afterRow?: () => void) {
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const prepare = sessionPresentation.prepareProjectedSessionPresentation;
-  vi.spyOn(sessionPresentation, "prepareProjectedSessionPresentation").mockImplementation(
-    (...args) => {
-      try {
-        return prepare(...args);
-      } finally {
-        cpu.user += 1_250;
-        cpu.system += 250;
-        // Readiness can repeat selection; each trace must account for all of its injected work.
-        const trace = getActiveDiagnosticTraceContext()?.traceId;
-        preparationCpuByTrace.set(trace, (preparationCpuByTrace.get(trace) ?? 0) + 1.5);
-      }
-    },
-  );
+  const presented = vi.fn();
+  const prepare = sessionPresentation.prepareSessionRowPublication;
+  vi.spyOn(sessionPresentation, "prepareSessionRowPublication").mockImplementation((...args) => {
+    try {
+      const recipient = prepare(...args);
+      return (...viewer) => {
+        const presentation = recipient(...viewer);
+        return {
+          ...presentation,
+          present(...rowArgs: Parameters<typeof presentation.present>) {
+            try {
+              return presentation.present(...rowArgs);
+            } finally {
+              presented();
+              clock += 20;
+              cpu.user += 750;
+              cpu.system += 250;
+              afterRow?.();
+            }
+          },
+        };
+      };
+    } finally {
+      cpu.user += 1_250;
+      cpu.system += 250;
+      // Readiness can repeat selection; each trace must account for all of its injected work.
+      const trace = getActiveDiagnosticTraceContext()?.traceId;
+      preparationCpuByTrace.set(trace, (preparationCpuByTrace.get(trace) ?? 0) + 1.5);
+    }
+  });
   const defaults = sessionModels.getSessionDefaults;
   vi.spyOn(sessionModels, "getSessionDefaults").mockImplementation((...args) => {
     try {
@@ -113,17 +129,7 @@ function controlProjectionClock(afterRow?: () => void) {
       cpu.system += 125;
     }
   });
-  const present = sessionRows.presentSessionRow;
-  return vi.spyOn(sessionRows, "presentSessionRow").mockImplementation((...args) => {
-    try {
-      return present(...args);
-    } finally {
-      clock += 20;
-      cpu.user += 750;
-      cpu.system += 250;
-      afterRow?.();
-    }
-  });
+  return presented;
 }
 
 test.each(["channel-only", "slow-warning"])("attributes %s operations", async (mode) => {

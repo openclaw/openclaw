@@ -4,6 +4,7 @@ import type {
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
@@ -285,6 +286,20 @@ export function createControlUiPluginHost(
       invalidate: () => runtime.invalidate(owner),
       registerPage: (value) => runtime.register(owner, "pages", value),
       registerNavigation: (value) => runtime.register(owner, "navigation", value),
+      pinNavigation(id) {
+        const context = current();
+        if (!owner.contributions.navigation.has(id)) {
+          return;
+        }
+        const entry = serializeSidebarEntry({
+          type: "plugin",
+          key: `${owner.descriptor.pluginId}/${id}`,
+        });
+        const entries = context.navigation.snapshot.sidebarEntries;
+        if (!entries.includes(entry)) {
+          context.navigation.update({ sidebarEntries: [...entries, entry] });
+        }
+      },
       registerPanel: (value) => runtime.register(owner, "panels", value),
       openPanel(id, session) {
         const context = current();

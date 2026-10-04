@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "./zod-schema.channel-messaging-common.js";
 import type {
@@ -75,7 +76,7 @@ type SessionSchemaInput = NonNullable<z.input<typeof SessionSchema>>;
 export type SessionResetConfig = NonNullable<SessionSchemaInput["reset"]>;
 export type SessionResetMode = NonNullable<SessionResetConfig["mode"]>;
 
-export type SessionThreadBindingsConfig = NonNullable<SessionSchemaInput["threadBindings"]>;
+export type SessionThreadBindingsConfig = z.input<typeof ChannelThreadBindingsSchema>;
 
 export type SessionConfig = SessionSchemaInput;
 

@@ -30,18 +30,9 @@ const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
-type OpenAITtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  speed?: number;
-  instructions?: string;
-  responseFormat?: OpenAiSpeechResponseFormat;
-  extraBody?: Record<string, unknown>;
-};
-
-function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+function resolveOpenAISpeechApiKey(
+  config: Partial<Pick<ReturnType<typeof normalizeOpenAIProviderConfig>, "apiKey">>,
+): string | undefined {
   return (
     normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.OPENAI_API_KEY)
   );
@@ -99,9 +90,7 @@ function normalizeOpenAISpeechSpeed(value: unknown, baseUrl?: string): number | 
   return speed >= 0.25 && speed <= 4 ? speed : undefined;
 }
 
-function normalizeOpenAIProviderConfig(
-  rawConfig: Record<string, unknown>,
-): OpenAITtsProviderConfig {
+function normalizeOpenAIProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveOpenAIProviderConfigRecord(rawConfig);
   const extraBody = readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body);
   const baseUrl = normalizeOpenAITtsBaseUrl(
@@ -124,7 +113,7 @@ function normalizeOpenAIProviderConfig(
   };
 }
 
-function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProviderConfig {
+function readOpenAIProviderConfig(config: SpeechProviderConfig) {
   const normalized = normalizeOpenAIProviderConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,

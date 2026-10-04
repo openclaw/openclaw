@@ -20,6 +20,10 @@ and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries.
 
+A tool stops showing **Running** when its completion arrives, even while the
+parent turn continues. If that completion does not establish success or failure,
+the row shows **Outcome unknown**. Partial output alone does not finish a tool.
+
 When the parent turn has ended but subagents are still active, the chat shows
 **Waiting on subagents**. A single active child already loaded in the pane can
 be opened from its name beside the indicator. Elapsed time appears when the
@@ -79,6 +83,8 @@ Side chat answers questions about the selected session and its project without e
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
 Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
+
+Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
 
 Editing a Side chat draft does not interrupt loading its earlier answers. **Clear side chat** removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
@@ -644,13 +650,42 @@ Assistant messages can render hosted web content inline with the `[embed ...]` s
 Use `trusted` only when the embedded document genuinely needs same-origin behavior. For most agent-generated games and interactive canvases, `scripts` is the safer choice.
 </Warning>
 
-Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed url="https://..."]` load third-party pages, set `gateway.controlUi.allowExternalEmbedUrls: true`.
+Absolute external `http(s)` embed URLs stay blocked by default, except for the dedicated [YouTube video card](/web/control-ui/chat#youtube-videos). To let `[embed url="https://..."]` load other third-party pages, set `gateway.controlUi.allowExternalEmbedUrls: true`.
 
 Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled.
 
 While a widget loads, a subtle shimmer reserves its space without displaying loading text. With reduced motion enabled, the placeholder stays still.
 
 The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel plugins such as Discord Activities can register contextual presenters behind that same tool. Channel-originated runs without an eligible presenter or inline client do not receive it.
+
+### YouTube videos
+
+An assistant can embed a YouTube video directly in its reply:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+The Control UI shows a thumbnail and **Play** button. The player loads only after
+the user presses **Play**; no HTML widget or media download is needed. An **Open
+on YouTube** link remains available when a video cannot play inline.
+
+Supported HTTPS links include `youtube.com/watch?v=...`, `youtu.be/...`, YouTube
+`shorts`, `live`, and `embed` URLs, and `youtube-nocookie.com/embed/...`. A start
+time in `start`, `t`, or `#t` is preserved; unrelated URL parameters are discarded.
+
+The dedicated card recognizes YouTube video URLs independently of
+`gateway.controlUi.allowExternalEmbedUrls`. It does not enable arbitrary nested
+iframes in `show_widget`. With `gateway.controlUi.embedSandbox: "strict"`, the card
+offers the watch link without loading a player. Other chat surfaces should use a
+regular YouTube link; the card is a Control UI feature, separate from native inline
+widgets.
+
+Thumbnails load from `i.ytimg.com`, which contacts Google before playback. After
+activation, the player loads from `www.youtube-nocookie.com`. Its frame sends only
+the Control UI origin as the referrer, never the chat URL or query string; YouTube
+requires that origin to permit embedded playback. Direct video attachments and
+HTML widget media keep their existing behavior.
 
 ## Chat transcript layout
 

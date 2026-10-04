@@ -416,7 +416,6 @@ describe("provider-owned memory flush", () => {
     async ({ evidence, outcome, kind }) => {
       registerToolsFlushPlan();
       const { entry, overrides } = await createToolsFlushFixture();
-      const onVisibleErrorPayloads = vi.fn();
       runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         if (evidence === "tool") {
           await executePersistenceTool(params);
@@ -438,17 +437,10 @@ describe("provider-owned memory flush", () => {
         };
       });
 
-      const result = await runDefaultMemoryFlush(entry, { ...overrides, onVisibleErrorPayloads });
+      const result = await runDefaultMemoryFlush(entry, overrides);
 
       expect(result.outcome).toBe(outcome);
       expect(loadSessionEntry(overrides)?.memoryFlush).toMatchObject({ kind });
-      if (outcome === "failed") {
-        expect(onVisibleErrorPayloads).toHaveBeenCalledWith([
-          expect.objectContaining({
-            text: expect.stringContaining("no persistence tool call succeeded"),
-          }),
-        ]);
-      }
     },
   );
 

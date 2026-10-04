@@ -85,6 +85,11 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+For selected official npm plugins, Full Release Validation packs and qualifies
+the exact tarballs intended for publication and records their immutable artifact
+descriptors. Publication consumes those same bytes. Unpacked source fixtures do
+not participate unless npm includes them in a shipped tarball.
+
 Dependency advisories never block or delay a release. Release dependency
 evidence records every advisory finding, at any severity, and CI dispatched by
 release validation or publication reports a failing dependency audit as a

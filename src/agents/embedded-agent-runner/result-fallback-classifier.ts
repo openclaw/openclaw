@@ -15,11 +15,6 @@ import {
 } from "./embedded-cyber-failover.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-type ProviderErrorPayloadFailoverReason = Extract<
-  FailoverReason,
-  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded" | "timeout"
->;
-
 function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
   return asOptionalObjectRecord(asOptionalObjectRecord(value)?.meta) !== undefined;
 }
@@ -149,9 +144,7 @@ function classifyHarnessResult(params: {
   }
 }
 
-function providerErrorPayloadReason(
-  failoverReason: FailoverReason | null,
-): ProviderErrorPayloadFailoverReason | null {
+function providerErrorPayloadReason(failoverReason: FailoverReason | null) {
   switch (failoverReason) {
     case "auth":
     case "auth_permanent":

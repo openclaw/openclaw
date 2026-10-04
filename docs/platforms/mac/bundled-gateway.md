@@ -321,6 +321,22 @@ for recovery. Pausing and relaunching before migration finishes preserves the
 Node resume path; it does not skip the version update or enable the hosting
 toggle early.
 
+Before an app-owned install through the bundled CLI, the app reads runtime intent
+with that same CLI, runtime, and environment using `gateway status --deep --json`.
+It passes the observed revision and service definition to the installer after its
+final local custody checks. Failed or unknown inspection stops the install. If an
+operator changes the service or runtime pin before installation begins, the CLI
+preserves that selection and the app reports it without retrying or rolling it
+back. Older installed CLIs keep their existing invocation contract.
+
+Node rollback and restoration of a prior bundled build still run the retained
+CLI, which cannot be assumed to accept this expectation. An operator change
+between the app's final custody check and that CLI's initial snapshot is not yet
+fenced. The app cannot substitute its current bundled CLI: the installer derives
+the service entrypoint from its own package, which would change what recovery
+restores. A narrow core installer capability for selecting the retained service
+entrypoint is the follow-up needed to close this recovery window.
+
 Channel-policy installs, independently managed services, and services with
 saved operator runtime pins are not migrated. This includes a saved pin pointing
 at the app's Node tools. This registered-service migration does not run
