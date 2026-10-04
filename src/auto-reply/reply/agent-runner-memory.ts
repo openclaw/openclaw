@@ -910,10 +910,9 @@ export async function runMemoryFlushIfNeeded(params: {
         classificationSessionKey: params.runtimePolicySessionKey,
       },
       { env: process.env, cwd: process.cwd(), assertCurrent: assertMemoryFlushCurrent },
-      async ({ sandboxed, workspaceAccess, classificationAgentId: agentId }) =>
+      async ({ sandboxed, workspaceAccess: access, classificationAgentId: agentId }) =>
         !sandboxed ||
-        (workspaceAccess ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) ===
-          "rw",
+        (access ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) === "rw",
     ));
 
   let entry =
