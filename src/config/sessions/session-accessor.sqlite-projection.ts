@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
@@ -78,12 +77,66 @@ import {
   commitSessionLifecycleProjectionInWorker,
   projectSessionEntryLifecycleMutationInWorker,
 } from "./session-lifecycle-projection.js";
+import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import { normalizeResolvedMaintenanceConfigInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+
+function assertMaintenancePreservationCompatible(
+  sent: SessionMaintenancePreservationSnapshot,
+  current: SessionMaintenancePreservationSnapshot,
+  plans?: readonly SessionEntryMaintenancePlan[],
+): void {
+  const added = (before: string[], after: string[]) => {
+    const previous = new Set(before.map((identity) => identity.trim()));
+    return new Set(
+      after.map((identity) => identity.trim()).filter((id) => id && !previous.has(id)),
+    );
+  };
+  const providerKeys = added(sent.providerKeys, current.providerKeys);
+  const work = added(sent.workIdentities, current.workIdentities);
+  const lifecycle = added(sent.lifecycleIdentities, current.lifecycleIdentities);
+  // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
+  if (providerKeys.size + work.size + lifecycle.size === 0) {
+    return;
+  }
+  // Reclamation/native bindings cannot refresh a plan already sent to their worker.
+  if (!plans) {
+    throw new SessionMaintenancePreservationConflictError();
+  }
+  const workKeys = new Set([...work].map(normalizeStoreSessionKey));
+  const protectsSessionId = (sessionId: string | undefined) =>
+    Boolean(sessionId && (work.has(sessionId) || lifecycle.has(sessionId.trim())));
+  const protectsRow = (sessionKey: string, sessionId: string | undefined) => {
+    const normalized = normalizeStoreSessionKey(sessionKey);
+    return (
+      providerKeys.has(normalized) ||
+      workKeys.has(normalized) ||
+      lifecycle.has(sessionKey.trim()) ||
+      lifecycle.has(normalized) ||
+      protectsSessionId(sessionId)
+    );
+  };
+  if (
+    plans.some(
+      (plan) =>
+        plan.entryRemovals.some(({ sessionKey, expectedEntry }) =>
+          protectsRow(sessionKey, expectedEntry?.sessionId),
+        ) ||
+        plan.archivedEntries.some(({ sessionKey, sessionId }) =>
+          protectsRow(sessionKey, sessionId),
+        ) ||
+        plan.stateDeletePlans.some(({ sessionId }) => protectsSessionId(sessionId)),
+    )
+  ) {
+    throw new SessionMaintenancePreservationConflictError();
+  }
+}
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(
@@ -220,14 +273,14 @@ export async function applySessionEntryLifecycleMutation(
                   params.commitGuard?.();
                   assertSourceCurrent?.();
                 };
-                const assertPreservationCurrent = () => {
-                  if (
-                    maintenance &&
-                    preparedPreservation &&
-                    !isDeepStrictEqual(maintenance.preservation, preparedPreservation.capture())
-                  ) {
-                    throw new Error(
-                      "Session maintenance protection changed before lifecycle removal",
+                const assertPreservationCurrent = (
+                  plans?: readonly SessionEntryMaintenancePlan[],
+                ) => {
+                  if (maintenance?.preservation && preparedPreservation) {
+                    assertMaintenancePreservationCompatible(
+                      maintenance.preservation,
+                      preparedPreservation.capture(),
+                      plans,
                     );
                   }
                 };
@@ -237,7 +290,11 @@ export async function applySessionEntryLifecycleMutation(
                       database: reclamationOptions,
                       execution,
                       assertCurrent,
-                      assertPreservationCurrent,
+                      assertPrepared: () => {
+                        preparedPreservation?.capture();
+                      },
+                      assertCandidate: (candidate) =>
+                        assertPreservationCurrent(candidate.result.maintenancePlans),
                       onLifecycleCommitted: params.onLifecycleCommitted,
                       input: {
                         agentId: resolved.agentId,
