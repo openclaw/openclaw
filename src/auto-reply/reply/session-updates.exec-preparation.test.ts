@@ -12,13 +12,15 @@ import {
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { ensureSkillSnapshot } from "./session-updates.js";
 
-// Session classification belongs to the session reader; this boundary covers approval SQL.
+// mock-isolation: Session classification reads are outside the approval SQL boundary.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
 }));
+// mock-isolation: Remote node discovery is outside the approval-read boundary.
 vi.mock("../../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => undefined,
 }));
+// mock-isolation: Capture eligibility without filesystem scans or skill watchers.
 vi.mock("../../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
     snapshot: { prompt: "", skills: [] },

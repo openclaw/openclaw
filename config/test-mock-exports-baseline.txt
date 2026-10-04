@@ -4320,7 +4320,6 @@
 ["src/auto-reply/reply/session-parent-fork-prepare.test.ts","./session-fork.js","43b440d77ff65b57823e107f9371a8b625cf3a3206c20e82b67dc8f723877189",1]
 ["src/auto-reply/reply/session-reset-model.test.ts","../../agents/prepared-model-catalog.js","e9b8418a6ae4571597608950e3936a38558c2a33c862df0c3fcffd92424e79b2",1]
 ["src/auto-reply/reply/session-reset-prompt.runtime-model.test.ts","../../agents/tools-effective-inventory.js","529892dd128b747e289f4b10f3aa8d059242ddb5923dc0edfca54d9c0fc6d2b5",1]
-["src/auto-reply/reply/session-updates.test.ts","../../agents/exec-defaults.js","a16fbeaef713c5b461d69d4988cd7eb7e9c9b5c03b7319f1adc6508a32f4143c",1]
 ["src/auto-reply/reply/session-updates.test.ts","../../config/sessions.js","f6d0499c8d8cf74bf03268d0ef5c186d79baf86619301146079322b4796c98dc",1]
 ["src/auto-reply/reply/session-updates.test.ts","../../config/sessions/session-accessor.js","2905a392e65815ab281d6c82000d39c2f58e32cd1b5c611ad273a08c6cd5cde1",1]
 ["src/auto-reply/reply/session-updates.test.ts","../../skills/loading/workspace-skill-prompt.js","c26cc28752b5b5247baef0a5ca540f92bf17a9c022ced2bf0b775f346fcfd39b",1]

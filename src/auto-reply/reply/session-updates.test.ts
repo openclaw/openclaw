@@ -31,10 +31,12 @@ const {
   loadSessionEntryMock: vi.fn(),
 }));
 
+// mock-isolation: Session classification is outside skill snapshot publication.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
 }));
 
+// mock-isolation: Use a fixed policy while testing skill ownership and publication.
 vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: async () => ({ version: 1, agents: {} }),
 }));
