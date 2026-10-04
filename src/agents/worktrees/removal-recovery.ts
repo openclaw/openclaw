@@ -12,7 +12,7 @@ import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import {
-  assertWorktreeRemovalClaim,
+  createWorktreeRemovalClaimsGuard,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
@@ -187,10 +187,11 @@ async function recoverRemovalWithAllocation(params: {
     ...(retiredRegistration ? { retiredRemoval: true as const } : {}),
     assertCurrent: assertRecord,
   });
+  const assertClaim = createWorktreeRemovalClaimsGuard(params.env, [record.id], token);
   const assertCurrent = () => {
     assertRecord();
     assertDirectRefFiles();
-    assertWorktreeRemovalClaim(params.env, record.id, token);
+    assertClaim();
   };
   const options = {
     signal: params.signal,
@@ -531,7 +532,7 @@ async function recoverRemovalWithAllocation(params: {
       beforeRun: () => {
         params.commitGuard?.();
         assertDirectRefFiles();
-        assertWorktreeRemovalClaim(params.env, record.id, token);
+        assertClaim();
         if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== finalized) {
           throw preserved("Completed removal lifecycle changed");
         }

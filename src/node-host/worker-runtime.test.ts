@@ -284,9 +284,6 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(messages.find((message) => message.type === "ready")).toMatchObject({
       workerHostingEnabled: true,
     });
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ enableWorkerRuns: true }),
-    );
     const connection = {
       url: "wss://gateway.example.test/current",
       protocol: 4,
@@ -427,8 +424,6 @@ it.runIf(process.platform !== "win32").each([
           fixture.handleInvoke.mockImplementation(handleInvoke);
           const prepared = await prepareNodeHostRuntime({
             config: { nodeHost: { skills: { enabled: false } } },
-            enableDuplexPluginCommands: true,
-            enableWorkerRuns: true,
           });
           let rejectSameGatewayRefresh = false;
           const worker = startWorkerFixture(false, undefined, {

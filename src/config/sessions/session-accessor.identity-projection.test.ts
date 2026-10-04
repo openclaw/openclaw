@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -237,7 +234,7 @@ describe("qualified session accessor projection", () => {
         fs.copyFileSync(previousPath, target.storePath);
       } else {
         expect(typeof target.readSource?.databaseIdentity).toBe("symbol");
-        closeOpenClawAgentDatabaseByPath(target.storePath);
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         if (variant.recreated) {
           await replaceSessionEntry(physical, capturedEntry);
         }

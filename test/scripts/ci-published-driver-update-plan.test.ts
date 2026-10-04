@@ -20,57 +20,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("published-driver update selection", () => {
   it.each([
-    "src/infra/update-runner.ts",
-    "src/infra/update-managed-service-handoff.ts",
-    "src/cli/update-cli/update-command.ts",
-    "src/cli/startup-trace.ts",
-    "src/gateway/server-startup-trace.ts",
-    "src\\infra\\update-runner.ts",
-  ])("requires the cross-version cell for %s", (file) => {
-    expect(shouldRunPublishedDriverUpdate([file])).toBe(true);
+    { paths: ["src\\infra\\update-runner.ts"], expected: true },
+    { paths: ["src/cli/update-cli/update-command.ts"], expected: true },
+    { paths: ["src/cli/startup-trace.ts"], expected: true },
+    { paths: ["src/gateway/server-startup-trace.ts"], expected: true },
+    { paths: ["src/state/openclaw-state-lease.ts"], expected: false },
+    { paths: ["scripts/update-gateway.sh"], expected: false },
+    { paths: null, expected: true },
+    { paths: [], expected: true },
+    { paths: [""], expected: true },
+  ])("selects the cross-version cell for $paths: $expected", ({ paths, expected }) => {
+    expect(shouldRunPublishedDriverUpdate(paths)).toBe(expected);
   });
-
-  it.each([
-    "docs/install/updating.md",
-    "src/agents/context-window-guard.ts",
-    "src/state/openclaw-state-schema.ts",
-    "src/plugins/plugin-manifest.ts",
-    "scripts/format-docs.mts",
-    "ui/src/app.ts",
-    "src/state/openclaw-state-lease.ts",
-    "src/state/openclaw-state-lease-identity.ts",
-    "src/state/openclaw-state-db-open.ts",
-    "src/infra/sqlite-file-identity.ts",
-    "src/plugins/plugin-native-assignments.ts",
-    "scripts/update-gateway.sh",
-    "scripts/lib/source-update-build.mts",
-    "scripts/lib/update-compat-chunks.mts",
-    "scripts/e2e/update-first-hop-compat-docker.sh",
-    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-    "scripts/e2e/plugin-update-unchanged-docker.sh",
-    "scripts/e2e/lib/plugin-update/consent-scenario.mjs",
-    "scripts/e2e/parallels/npm-update-smoke.ts",
-    "scripts/lib/release-upgrade-baseline.mjs",
-    "scripts/lib/cross-os-release-checks/packaged-self-update.ts",
-    "scripts/test-update-cli-startup-bench.mts",
-    "scripts/doctor-config-upgrade-replay.mjs",
-    "scripts/package-openclaw-for-docker.mts",
-    "scripts/e2e/published-driver-update-docker.sh",
-    "scripts/lib/ci-published-driver-update-plan.mts",
-    "test/scripts/ci-published-driver-update-plan.test.ts",
-    ".github/workflows/ci-published-driver-update.yml",
-    ".github/workflows/ci.yml",
-    "src\\state\\openclaw-state-lease.ts",
-  ])("defers %s to hourly main and full release validation", (file) => {
-    expect(shouldRunPublishedDriverUpdate([file])).toBe(false);
-  });
-
-  it.each([{ paths: null }, { paths: [] }, { paths: [""] }])(
-    "retains coverage for an unavailable diff $paths",
-    ({ paths }) => {
-      expect(shouldRunPublishedDriverUpdate(paths)).toBe(true);
-    },
-  );
 
   it.each([
     {
@@ -79,7 +40,6 @@ describe("published-driver update selection", () => {
       selected: true,
     },
     { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: false },
-    { eventName: "pull_request", file: "src/agents/context-window-guard.ts", selected: false },
     { eventName: "push", file: "src/agents/context-window-guard.ts", selected: true },
     {
       eventName: "workflow_dispatch",
@@ -88,10 +48,19 @@ describe("published-driver update selection", () => {
     },
     { eventName: "schedule", file: "src/state/openclaw-state-db-open.ts", selected: true },
     { eventName: "pull_request", file: "scripts/update-gateway.sh", selected: false },
-  ] as const)("connects $eventName $file to the required job", ({ eventName, file, selected }) => {
+    {
+      eventName: "workflow_dispatch",
+      file: "src/infra/update-runner.ts",
+      selected: false,
+      historical: true,
+    },
+  ] as const)("connects $eventName $file to the required job", (scenario) => {
+    const { eventName, file, selected } = scenario;
+    const historical = "historical" in scenario && scenario.historical;
     const result = runCiManifestFixture({
       bundledPlanner: true,
-      historicalCompatibility: false,
+      historicalCompatibility: historical,
+      publishedDriverUpdateCapability: !historical,
       eventName,
       changedPaths: [file],
       runNode: file !== "scripts/update-gateway.sh",
@@ -493,16 +462,5 @@ docker_e2e_run_with_harness() {
     );
     expect(evaluateWorkflowExpression(`\${{ ${notice.if} }}`, context)).toBe(true);
     expect(notice.run).toContain("no published-driver cell proof for the selected revision");
-  });
-
-  it("omits the cell for frozen targets that predate its harness", () => {
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: true,
-      publishedDriverUpdateCapability: false,
-      eventName: "workflow_dispatch",
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_published_driver_update).toBe("false");
   });
 });

@@ -121,6 +121,16 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Database retirement completes independently for each path. A database whose
+resources have settled can publish its clean-close receipt while another database
+still owns pending work. Each path still joins its accepted writers, pending opens,
+and WAL maintenance before native close. The selected root refuses fresh native
+opens and new resource admission until every path settles, including failed closes;
+accepted cleanup can still use its existing admitted connection.
+After shutdown grace, cached native handles also retire through their normal idle
+eviction path as soon as their final borrower releases them. They do not wait for
+the restart marker or the ordinary 30-minute idle window. Accepted cleanup can
+reopen through normal admission, which dirties the receipt again.
 Required subagent cleanup remains tracked by its Gateway during drain, including
 child-session deletion, before database dependencies retire. Ordinary RPC
 admission stays closed; cleanup retains its original Gateway and session generation.

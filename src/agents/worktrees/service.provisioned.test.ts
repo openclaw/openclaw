@@ -12,24 +12,29 @@ import {
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
+import * as gitExec from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandSpawner from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import * as worktreeGit from "./git.js";
-import { provisionIncludedFiles, snapshotProvisionedFiles } from "./provisioned-files.js";
+import { provisionIncludedFiles } from "./provisioned-files.js";
+import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
 } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 
@@ -231,8 +236,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       for (const name of [...names, "literalZ.local", "unselected.local"]) {
         await fs.writeFile(path.join(repo, name), "bytes:" + name);
       }
-      const commands = vi.spyOn(worktreeGit, "runGitBuffered");
-      const membershipCommands = vi.spyOn(worktreeGit, "requireGitBuffer");
+      const commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
       try {
         expect(
           await runGitWorkerOperation({
@@ -277,15 +281,17 @@ describe("ManagedWorktreeService provisioned state", () => {
         await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        membershipCommands.mockClear();
+        commands.mockClear();
         const guard = vi.fn();
-        const states = await snapshotProvisionedFiles(env, created.id, created.path, names, {
-          assertCurrent: guard,
-        });
-        expect(states.map((state) => state.path)).toEqual(names.toSorted());
+        await service.remove({ id: created.id, reason: "test", commitGuard: guard });
+        const states = await getRegistryWorktreeProvisionedState(env, created.id);
+        expect(states?.map((state) => state.path)).toEqual(names.toSorted());
         expect(guard).toHaveBeenCalled();
-        const membership = membershipCommands.mock.calls.filter(([, args]) =>
-          args.includes("--literal-pathspecs"),
+        const membership = commands.mock.calls.filter(
+          ([, args]) =>
+            args.includes("--literal-pathspecs") &&
+            (args.includes("ls-files") || args.includes("ls-tree")) &&
+            args.includes("--"),
         );
         expect(membership.length).toBe(batches.length * 3);
         for (const call of membership) {
@@ -293,12 +299,12 @@ describe("ManagedWorktreeService provisioned state", () => {
           expect(options?.killProcessTree).toBe(true);
           expect(options?.beforeRun).toEqual(expect.any(Function));
         }
+        const restored = await service.restore({ id: created.id });
         for (const name of names.slice(0, 5)) {
-          expect(await fs.readFile(path.join(created.path, name), "utf8")).toBe("bytes:" + name);
+          expect(await fs.readFile(path.join(restored.path, name), "utf8")).toBe("bytes:" + name);
         }
       } finally {
         commands.mockRestore();
-        membershipCommands.mockRestore();
       }
     },
   );
@@ -395,6 +401,56 @@ describe("ManagedWorktreeService provisioned state", () => {
     }
   });
 
+  it("preserves recovery chunks when snapshot-error cleanup loses allocation ownership", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "lost-snapshot",
+      baseRef: "HEAD",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "uncommitted checkout\n");
+    const chunk = { worktreeId: created.id, path: "saved.local", chunkIndex: 0 };
+    const bytes = new TextEncoder().encode("successor recovery bytes");
+    await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+    const createWriter = provisionedSnapshots.createProvisionedSnapshotWriter;
+    let ownershipLost = false;
+    const writers = vi
+      .spyOn(provisionedSnapshots, "createProvisionedSnapshotWriter")
+      .mockImplementation((...args) => {
+        const write = createWriter(...args);
+        return async (...effectArgs) => {
+          if (!ownershipLost && effectArgs[0].type === "worktree.snapshot-provisioned-reset") {
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                const changed = executeSqliteQuerySync(
+                  db,
+                  getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+                    .updateTable("state_leases")
+                    .set({ owner: "successor" })
+                    .where("scope", "=", "core:managed-worktrees:create")
+                    .where("lease_key", "=", "capacity"),
+                );
+                expect(changed.numAffectedRows).toBe(1n);
+              },
+              { env },
+            );
+            ownershipLost = true;
+          }
+          return await write(...effectArgs);
+        };
+      });
+    try {
+      await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(/was lost/);
+      expect(ownershipLost).toBe(true);
+      expect(await getRegistryWorktreeProvisionedChunk(env, chunk)).toEqual(bytes);
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+        "uncommitted checkout\n",
+      );
+    } finally {
+      writers.mockRestore();
+    }
+  });
+
   it("skips inventories for deleted provisioned contents and restores their absence", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nignored/\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
@@ -402,37 +458,42 @@ describe("ManagedWorktreeService provisioned state", () => {
     await git(repo, "commit", "-m", "configure worktree provisioning");
     await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned bytes\n");
     const created = await service.create({ repoRoot: repo, name: "absent", baseRef: "HEAD" });
-    const ledger = [".env.local"];
     const expected = [{ path: ".env.local", mode: null, chunks: 0 }];
     await fs.rm(path.join(created.path, ".env.local"));
     await fs.writeFile(path.join(created.path, "README.md"), "preserved edit\n");
     const oldChunk = { worktreeId: created.id, path: "old.local", chunkIndex: 0 };
     const oldBytes = new TextEncoder().encode("old");
-    insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
+    await insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
     const guard = vi.fn();
     const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
     try {
       await expect(
-        snapshotProvisionedFiles(env, created.id, created.path, ledger, {
-          assertCurrent: () => {
+        service.remove({
+          id: created.id,
+          reason: "test",
+          commitGuard: () => {
             throw new Error("authority changed");
           },
         }),
       ).rejects.toThrow("authority changed");
       expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
       expect(
-        await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
-          assertCurrent: guard,
-        }),
-      ).toEqual(expected);
+        await service.remove({ id: created.id, reason: "test", commitGuard: guard }),
+      ).toMatchObject({ removed: true });
+      expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
       expect(guard).toHaveBeenCalled();
       expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
-      expect(commands.mock.calls.length).toBe(0);
+      expect(
+        commands.mock.calls.some(
+          ([argv]) =>
+            argv.includes("--literal-pathspecs") &&
+            argv.includes(".env.local") &&
+            (argv.includes("ls-files") || argv.includes("ls-tree")),
+        ),
+      ).toBe(false);
     } finally {
       commands.mockRestore();
     }
-    const removed = await service.remove({ id: created.id, reason: "test" });
-    expect(removed.removed).toBe(true);
     expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
     const restored = await service.restore({ id: created.id });
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(

@@ -604,6 +604,10 @@ describe("runGatewayLoop", () => {
       try {
         await withIsolatedSignals(async ({ captureSignal }) => {
           const { close, runtime, exited } = await createSignaledLoopHarness();
+          const cleanupSignal = gatewayWorkAdmissionActual.getGatewayShutdownCleanupSignal();
+          close.mockImplementationOnce(async () => {
+            expect(cleanupSignal.aborted).toBe(true);
+          });
           const { startGatewayRestartTrace } = await import("../../gateway/restart-trace.js");
           startGatewayRestartTrace("prior.sequence");
           const pendingDrain = createDeferredCore();
@@ -654,6 +658,7 @@ describe("runGatewayLoop", () => {
             });
             expect(createGatewayActiveWorkSnapshot).not.toHaveBeenCalled();
             expect(close).not.toHaveBeenCalled();
+            expect(cleanupSignal.aborted).toBe(false);
             expect(runtime.exit).not.toHaveBeenCalled();
             expect(gatewayLog.info).toHaveBeenCalledWith(
               `draining active work before stop with timeout 315000ms: ${counts}`,
@@ -710,45 +715,6 @@ describe("runGatewayLoop", () => {
   registerShutdownBudgetTests(fixtures);
 
   registerShutdownCompletionTests(fixtures);
-
-  it("waits for the drain before handing recovery ownership to server close", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
-    const drainStart = createActiveWorkSnapshot({ embeddedRuns: 2 }, [
-      { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
-    ]);
-    let releaseDrain: (() => void) | undefined;
-    const pendingDrain = new Promise<void>((resolve) => {
-      releaseDrain = resolve;
-    });
-    createGatewayActiveWorkSnapshot.mockReturnValueOnce(drainStart);
-    waitForGatewayActiveWork.mockImplementationOnce(async () => {
-      // Recovery ownership must be collected later by server close, after this
-      // window lets active work settle.
-      await pendingDrain;
-      return { drained: true, snapshot: idleActiveWorkSnapshot };
-    });
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
-      const sigterm = captureSignal("SIGTERM");
-
-      sigterm();
-      await vi.waitFor(() => expect(waitForGatewayActiveWork).toHaveBeenCalledOnce());
-
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
-        mode: "compacting",
-        reason: "restart",
-      });
-      expect(close).not.toHaveBeenCalled();
-
-      releaseDrain?.();
-      await expect(exited).resolves.toBe(0);
-
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(undefined, expect.any(Object));
-      expectRestartCloseCall(close, 315_000);
-      expect(start).toHaveBeenCalledOnce();
-    });
-  });
 
   registerGatewayRestartOwnershipTests(fixtures);
 

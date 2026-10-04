@@ -88,6 +88,7 @@ import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-perm
 import { closeIdleOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-scope.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
+  assertAgentDatabaseResourceAdmission,
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
@@ -234,6 +235,7 @@ function* openOpenClawAgentDatabaseSteps(
     }
     return opened;
   }
+  assertAgentDatabaseResourceAdmission({ agentId, path: pathname });
   if (!pending) {
     revokePendingAgentDatabaseOpen(pathname);
   }

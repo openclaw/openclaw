@@ -17,7 +17,7 @@ export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">):
   return `${file.dev}:${file.ino}`;
 }
 
-export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
+export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
   // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
   // Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";

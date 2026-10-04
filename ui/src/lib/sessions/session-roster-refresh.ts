@@ -41,11 +41,12 @@ import {
 } from "./session-list-query.ts";
 import {
   createSessionManagedListRefresh,
+  getManagedSessionList,
   publishManagedList,
   type SessionListRefreshHost,
 } from "./session-managed-list-refresh.ts";
 import { createSessionPrimaryWindows } from "./session-primary-windows.ts";
-import { normalizeManagedSessionListQuery, requestSessionList } from "./session-requests.ts";
+import { requestSessionList, sessionListQueryKey } from "./session-requests.ts";
 import { createSessionRosterListReader } from "./session-roster-list-reader.ts";
 import { createSessionMutationRefresh } from "./session-roster-mutation-refresh.ts";
 import { createSessionRosterObservations } from "./session-roster-observations.ts";
@@ -87,38 +88,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     queuedRefresh = null;
   };
 
-  const managedList = (scope: SessionListScope): ManagedSessionList => {
-    const query = normalizeManagedSessionListQuery(scope);
-    const key = JSON.stringify(query);
-    const current = managedLists.get(key);
-    if (current) {
-      return current;
-    }
-    const entry: ManagedSessionList = {
-      key,
-      query,
-      scope: Object.freeze({ ...scope }),
-      retainedLimit: query.limit,
-      startupRetryAttempt: 0,
-      readGeneration: 0,
-      connectionEpoch: null,
-      snapshot: { result: null, agentId: null, loading: false, error: null },
-      listeners: new Set(),
-      coordinator: createSessionEventRefreshCoordinator({
-        active: false,
-        refresh: (isCurrent) =>
-          refreshManagedList(
-            entry,
-            { append: false, invalidated: true, background: true },
-            isCurrent,
-          ),
-      }),
-      pending: null,
-      queued: null,
-    };
-    managedLists.set(key, entry);
-    return entry;
-  };
+  const managedList = (scope: SessionListScope) =>
+    getManagedSessionList(managedLists, scope, (entry, isCurrent) =>
+      refreshManagedList(entry, { append: false, invalidated: true, background: true }, isCurrent),
+    );
 
   const primaryWindows = createSessionPrimaryWindows(
     managedLists,
@@ -151,8 +124,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     sourceListScope?: SessionListScope,
   ) => {
     const matches = sessionListEventMatcher({ agentId, session: row });
-    const sourceKey =
-      sourceListScope && JSON.stringify(normalizeManagedSessionListQuery(sourceListScope));
+    const sourceKey = sourceListScope && sessionListQueryKey(sourceListScope);
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
     scheduleManagedLists((entry) => matches(entry.query, entry.snapshot.result), sourceKey);
@@ -541,7 +513,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const scope = host.connection.capture();
       const revision = ++requestRevision;
       const matches = sessionListEventMatcher(payload);
-      const lists = sessionListsNeedingEventRefresh(managedLists.values(), payload, matches);
+      const lists = sessionListsNeedingEventRefresh(
+        managedLists.values(),
+        payload,
+        matches,
+        observations.observedRow,
+      );
       return {
         revision,
         scope,
@@ -561,7 +538,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         return { result, agentId, loading, error, startupPending };
       }
       return (
-        managedLists.get(JSON.stringify(normalizeManagedSessionListQuery(scope)))?.snapshot ?? {
+        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
           result: null,
           agentId: null,
           loading: false,
@@ -662,7 +639,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         state &&
         state.error === null &&
         !state.resultCached &&
-        canApplySessionListSnapshot(state.result, payload, lastListOptions)
+        canApplySessionListSnapshot(
+          state.result,
+          payload,
+          lastListOptions,
+          "updatedAt",
+          observations.observedRow,
+        )
       );
     },
     invalidateManagedLists,
@@ -687,9 +670,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId))
       ) {
         eventRefreshCoordinator.schedule();
+      } else if (options.primarySnapshotApplied) {
+        eventRefreshCoordinator.scheduleFallback();
       }
       if (affected) {
         scheduleManagedLists((entry) => affected.has(entry));
+        for (const entry of managedLists.values()) {
+          if (
+            !affected.has(entry) &&
+            entry.listeners.size > 0 &&
+            matchesAgent(entry.query.agentId)
+          ) {
+            entry.coordinator.scheduleFallback();
+          }
+        }
       } else {
         invalidateManagedLists(options.agentId);
       }

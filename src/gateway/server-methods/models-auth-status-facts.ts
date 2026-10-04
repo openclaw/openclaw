@@ -115,7 +115,6 @@ function buildModelAuthStatusFacts(
       store,
       cfg,
       providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
-      allowKeychainPrompt: false,
       authAliasLookupParams,
     });
   const authHealth = readAuthHealth();

@@ -489,6 +489,7 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
+  row.hasBoard = record.hasBoard;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;

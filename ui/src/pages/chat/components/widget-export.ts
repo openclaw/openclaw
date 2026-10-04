@@ -20,17 +20,15 @@ class WidgetSnapshotUnavailableError extends Error {}
 
 function requestWidgetSnapshot(
   frame: HTMLIFrameElement,
-  options: { id?: string; timeoutMs?: number } = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<string> {
   const target = frame.contentWindow;
   if (!target) {
     return Promise.reject(new Error("widget frame is unavailable"));
   }
-  const id =
-    options.id ??
-    Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) =>
-      value.toString(16).padStart(8, "0"),
-    ).join("");
+  const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) =>
+    value.toString(16).padStart(8, "0"),
+  ).join("");
   const timeoutMs = options.timeoutMs ?? WIDGET_SNAPSHOT_TIMEOUT_MS;
 
   return new Promise((resolve, reject) => {

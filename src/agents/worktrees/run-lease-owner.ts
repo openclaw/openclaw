@@ -127,6 +127,7 @@ export class WorktreeRemovalContentionError extends Error {
   constructor(
     readonly kind: "busy" | "finalized",
     message: string,
+    readonly blockedByRun?: { worktreeId: string; pid: number },
   ) {
     super(message);
     this.name = "WorktreeRemovalContentionError";

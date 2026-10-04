@@ -25,6 +25,7 @@ const hoisted = vi.hoisted(() => ({
   waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
+// mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
   runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
 }));
