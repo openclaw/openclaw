@@ -1947,7 +1947,7 @@ describe("matrix monitor handler draft streaming", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(singleTextMessageBody()).toMatch(/`🛠️ Exec: running`$/);
+      expect(singleTextMessageBody()).toMatch(/`Exec: running`$/);
       await finish();
     } finally {
       vi.useRealTimers();

@@ -51,7 +51,7 @@ struct ToolDisplayRegistryTests {
 
     @Test func `resolves known tool from config`() {
         let summary = ToolDisplayRegistry.resolve(name: "exec", args: nil)
-        #expect(summary.emoji == "🛠️")
+        #expect(summary.icon == "squareTerminal")
         #expect(summary.title == "Exec")
     }
 

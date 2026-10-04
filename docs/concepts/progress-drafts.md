@@ -24,7 +24,7 @@ Checking the streaming behavior and running the focused tests.
 The default draft shows a status headline, authored plan steps, and approval
 requests. Intermediate tool failures and nonzero command exits stay out of the
 draft. Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `🛠️ Bash: run tests`.
+including tool failures, with rows such as `Bash: run tests`.
 
 <Note>
   Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
@@ -76,8 +76,8 @@ It sits at the top of the rolling progress-line list, so it scrolls away once
 enough concrete work lines appear. The implicit label is hidden while a status
 headline is present unless you configure one explicitly. Plain text-only
 replies never show a progress draft; a line appears only for real work updates,
-for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
-or `✍️ Write: to /tmp/file`.
+for example `Bash: run tests`, `Web Search: for "discord edit message"`,
+or `Write: to /tmp/file`.
 
 Final delivery depends on the channel and transport. OpenClaw either finalizes
 the draft or sends a separate answer and cleans up or stops updating the draft
@@ -247,10 +247,10 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
 With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
-| Mode      | Progress line                                                   |
-| --------- | --------------------------------------------------------------- |
-| `explain` | `🛠️ check js syntax for /tmp/app.js`                            |
-| `raw`     | `🛠️ check js syntax for /tmp/app.js · node --check /tmp/app.js` |
+| Mode      | Progress line                                                |
+| --------- | ------------------------------------------------------------ |
+| `explain` | `check js syntax for /tmp/app.js`                            |
+| `raw`     | `check js syntax for /tmp/app.js · node --check /tmp/app.js` |
 
 ### Command/exec text
 

@@ -322,7 +322,7 @@ private struct ChatToolActivityRowContent: View {
             }
             .frame(width: Self.disclosureWidth, height: 12)
 
-            Image(systemName: Self.symbol(forToolName: self.displayCall.name))
+            Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
@@ -464,33 +464,6 @@ private struct ChatToolActivityRowContent: View {
         case .ctx, .file, .skip:
             .clear
         }
-    }
-
-    private static func symbol(forToolName name: String?) -> String {
-        let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        switch normalized {
-        case "create_file": return "square.and.pencil"
-        case "ls": return "magnifyingglass"
-        default: break
-        }
-
-        let fallbacks: [([String], String)] = [
-            (["canvas", "image", "screenshot", "photo"], "photo"),
-            (["browser"], "safari"),
-            (["message", "send", "reply"], "bubble.left"),
-            (["node", "gateway"], "server.rack"),
-            (["cron", "schedule", "clock"], "clock"),
-            (["memory"], "brain"),
-            (["session", "agent"], "rectangle.stack"),
-            (["exec", "bash", "shell", "command", "terminal"], "terminal"),
-            (["edit", "patch"], "pencil.line"),
-            (["write"], "square.and.pencil"),
-            (["grep", "glob", "find", "search", "list"], "magnifyingglass"),
-            (["read"], "doc.text"),
-            (["fetch", "web"], "globe"),
-        ]
-        return fallbacks.first { keys, _ in keys.contains(where: normalized.contains) }?.1
-            ?? "wrench.and.screwdriver"
     }
 }
 

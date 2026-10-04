@@ -212,7 +212,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toContain(
-      "Reading the gateway config and restarting agents.\n\n🛠️ Exec: running",
+      "Reading the gateway config and restarting agents.\n\n• Exec: running",
     );
     expectFinalAnswerText("done");
   });
@@ -284,7 +284,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec: running\n• exec done", {
+    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n• Exec: running\n• exec done", {
       complete: true,
     });
     expect(deliverDiscordReply).not.toHaveBeenCalled();

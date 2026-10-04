@@ -416,7 +416,7 @@ describe("streamed-output-echo", () => {
       }),
     );
     const summary = onToolResult.mock.calls[0]?.[0].text;
-    expect(summary).toBe("🛠️ Bash");
+    expect(summary).toBe("Bash");
     const output = "streamed-output-chunk-that-would-overwrite-summary";
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {

@@ -297,7 +297,7 @@ describe("Discord draft preview REST lifecycle", () => {
     });
     const controller = createPreviewController(rest);
 
-    controller.draftStream?.update("🛠️ Exec: failed");
+    controller.draftStream?.update("Exec: failed");
     await controller.flush();
     await controller.lifecycle.deliver({
       kind: "final",

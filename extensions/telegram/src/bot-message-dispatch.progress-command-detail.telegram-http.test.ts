@@ -159,16 +159,16 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     expect(revisions[0]).toEqual([
       "sendMessage",
       null,
-      "<b>Working</b>\n<b>🛠️ Exec</b> false <i>running</i>",
+      "<b>Working</b>\n<b>Exec</b> false <i>running</i>",
     ]);
     expect(revisions.at(-1)).toEqual(["sendMessage", null, "The command failed."]);
     const edits = revisions.filter(([method]) => method === "editMessageText");
     expect(edits.length).toBeGreaterThan(0);
     for (const [, messageId, text] of edits) {
       expect(messageId).toBe(1);
-      expect(text).toContain("<b>🛠️ Exec</b> false");
+      expect(text).toContain("<b>Exec</b> false");
     }
-    expect(edits.at(-1)?.[2]).toBe("<b>Working</b>\n<b>🛠️ Exec</b> false <i>failed</i>");
+    expect(edits.at(-1)?.[2]).toBe("<b>Working</b>\n<b>Exec</b> false <i>failed</i>");
     for (const call of calls) {
       expect(call.fields.text ?? "").not.toContain("command false");
     }
