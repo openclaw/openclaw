@@ -148,8 +148,8 @@ export function createDiscordDraftPreviewController(params: {
     if (draftChunker?.hasBuffered()) {
       draftChunker.drain({
         force: true,
-        emit: (chunk) => {
-          draftText += chunk;
+        emit: (chunk, metadata) => {
+          draftText += metadata?.sourceText ?? chunk;
         },
       });
       draftChunker.reset();
@@ -375,8 +375,8 @@ export function createDiscordDraftPreviewController(params: {
       draftChunker.append(delta);
       draftChunker.drain({
         force: false,
-        emit: (chunk) => {
-          draftText += chunk;
+        emit: (chunk, metadata) => {
+          draftText += metadata?.sourceText ?? chunk;
           draftStream.update(draftText);
         },
       });

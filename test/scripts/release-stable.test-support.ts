@@ -29,8 +29,11 @@ export type FakeStep = {
   times?: number;
   verifyLock?: boolean;
   request?: {
+    kind?: string;
+    refs?: { workflow: string };
     phase: string;
     run?: { id: number; attempt: number };
+    admission?: { workflowSha: string; workflowRef: string };
     request?: {
       targetSha: string;
       targetContextRef: string;
@@ -332,6 +335,7 @@ if (expected.request) {
   mkdirSync(dirname(target), { recursive: true });
   if (expected.request.request) {
     expected.request.request.trustedWorkflowRef = args[args.indexOf('--trusted-workflow-ref') + 1];
+    if (expected.request.admission) expected.request.admission.workflowRef = args[args.indexOf('--admission-workflow-ref') + 1];
   }
   writeFileSync(target, JSON.stringify(expected.request));
 }
@@ -413,3 +417,13 @@ process.exit(expected.exit ?? 0);
     },
   };
 }
+
+// Shape written by probeCapabilities before strict publication removed waiver support.
+export const legacyCapabilities = (closeoutResolvesWaivers: boolean) => ({
+  parentSyncsBetaDistTag: false,
+  parentSweepsStaleChildren: false,
+  parentApprovalReceipt: false,
+  closeoutResolvesWaivers,
+  probedAt: "2026-09-24T00:00:00.000Z",
+  toolingSha: TOOLING_SHA,
+});

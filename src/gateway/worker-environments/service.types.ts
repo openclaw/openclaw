@@ -64,7 +64,7 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       identity: WorkerConnectionIdentity;
       skillWorkshop?: AnyAgentTool;
       portalAvailable?: boolean;
-      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
+      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;
   };
 

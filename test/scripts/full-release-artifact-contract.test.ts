@@ -244,6 +244,7 @@ globalThis.fetch = async (input, options) => {
     GH_TOKEN: "artifact-fixture-token",
     GITHUB_TOKEN: "",
     NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+    PREPARED_PLUGIN_NPM_JSON: JSON.stringify({ descriptor: "prepared-plugin-npm" }),
     QUALIFIED_NPM_BUNDLE_JSON: JSON.stringify(qualified),
   };
 }
@@ -1516,6 +1517,9 @@ describe("full release artifact contract", () => {
         expect(manifest.publicationArtifacts.npmPreflight).toMatchObject({
           source: { sha: SHA },
           producer: { workflowSha: "d".repeat(40), runId: "81", runAttempt: "1" },
+        });
+        expect(manifest.publicationArtifacts.pluginNpm).toEqual({
+          descriptor: "prepared-plugin-npm",
         });
         expect(manifest.publishInputs).toMatchObject({
           targetSha: SHA,

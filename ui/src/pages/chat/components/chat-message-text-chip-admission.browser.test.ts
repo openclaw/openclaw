@@ -10,6 +10,8 @@ const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
 beforeAll(async () => {
   if (browserMode) {
+    // Admission, not cold Vite transformation of the lazy excerpt parser, is under test.
+    await import("../../../lib/chat/pasted-text-excerpt.ts");
     ({ userEvent } = await import("vitest/browser"));
   }
 });

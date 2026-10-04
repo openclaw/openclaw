@@ -5,6 +5,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
@@ -205,7 +206,7 @@ export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
 }
 
 export function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
+  job: CronJob,
   defaultAgentId: string | undefined,
   patch?: CronJobPatch,
 ) {
@@ -224,9 +225,11 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; system-owned monitors invoke Gateway
-  // dependencies directly, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  if (
+    job.payload.kind === "script" ||
+    isSystemOwnedCronPayloadKind(job.payload.kind) ||
+    isHeartbeatTaskCronJob(job)
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);

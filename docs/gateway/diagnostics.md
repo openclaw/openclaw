@@ -169,15 +169,20 @@ The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
 and can exceed `1`. See
 [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
 
-With diagnostics enabled, `sessions.patch` and `sessions.patchMany` calls lasting
-at least one second add an info-level `slow session patch` file-log record. Its
-`elapsedMs`, `phaseDurationsMs`, and `phaseCounts` distinguish lifecycle admission,
-snapshot reads, catalog preparation, projection, commit, runtime acknowledgements,
-effects, and response work. Records inherit the request's diagnostic trace when
-available and contain fixed phase names and numbers, not patch values or session
-keys. Repeated stage visits contribute to the counts and totals. Parallel and
-nested stages can overlap, so their totals are neither an exclusive breakdown
-of request time nor CPU measurements.
+`sessions.patch` and `sessions.patchMany` calls lasting at least one second add
+an info-level `slow session patch` record even when diagnostics are disabled.
+The message includes total elapsed milliseconds, the method, and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+Replacement snapshots use the metadata reader for bounded exact-key selections
+and the maintenance reader for larger or label-owner selections, independently of
+the transcript-history reader. Snapshot time includes worker preparation and reads.
+Phases distinguish lifecycle admission, snapshot reads, catalog preparation,
+projection, commit, runtime acknowledgements, effects, and response work. Keeping
+timings in the message makes them visible in transports that omit structured
+fields. Records inherit the request's diagnostic trace when available and contain
+no patch values or session keys. Repeated stage visits add to each phase's total.
+Parallel and nested stages can overlap, so their totals are neither an exclusive
+breakdown of request time nor CPU measurements.
 
 Session collaboration reads emit queued `diagnostic.phase.completed` events to
 interested diagnostic listeners. `session.members.list` and

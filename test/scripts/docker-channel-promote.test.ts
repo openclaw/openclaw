@@ -105,6 +105,57 @@ function runWorkflowStep(step: WorkflowStep, env: NodeJS.ProcessEnv) {
 }
 
 describe("Docker channel promotion", () => {
+  it.each(["preflight", "alias", "registry", "allowed"])(
+    "revalidates publication authority at each %s mutation boundary",
+    (boundary) => {
+      const docker = createDockerMock({ candidateVersion: "2026.7.1", currentVersion: "2026.7.1" });
+      const writes: string[][] = [];
+      let revoked = false;
+      const execFileSyncImpl = (command: string, args: string[]) => {
+        const result = docker(command, args);
+        if (args[2] === "create") {
+          writes.push(args);
+          if (
+            (boundary === "alias" && writes.length === 1) ||
+            (boundary === "registry" && writes.length === 3)
+          ) {
+            revoked = true;
+          }
+        } else if (boundary === "preflight" && args.at(-1)?.includes(".Image")) {
+          revoked = true;
+        }
+        return result;
+      };
+      const run = () =>
+        promoteDockerChannel(
+          { version: "2026.7.1", images },
+          {
+            execFileSyncImpl,
+            verifyAttestationsImpl: skipAttestationVerification,
+            revalidateAuthority: () => {
+              if (revoked) {
+                throw new Error("Publication authority revoked");
+              }
+            },
+            log: () => {},
+          },
+        );
+      if (boundary === "allowed") {
+        run();
+        expect(writes.flatMap((args) => args.filter((_, i) => args[i - 1] === "--tag"))).toEqual(
+          images.flatMap((image) =>
+            ["latest", "main", "slim", "main-slim", "latest-browser", "main-browser"].map(
+              (tag) => image + ":" + tag,
+            ),
+          ),
+        );
+      } else {
+        expect(run).toThrow("Publication authority revoked");
+        expect(writes).toHaveLength(boundary === "preflight" ? 0 : boundary === "alias" ? 1 : 3);
+      }
+    },
+  );
+
   it("plans every extended-stable image variant in both registries", () => {
     expect(createDockerChannelPromotionPlan({ version: "2026.6.33", images })).toEqual({
       channel: "extended-stable",

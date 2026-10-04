@@ -18,7 +18,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
@@ -339,7 +339,7 @@ export async function resolveEffectiveToolInventory(
       agentAccountId: params.accountId,
     });
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
-  const effectiveTools = createOpenClawCodingToolsInternal(
+  const effectiveTools = await createOpenClawCodingToolsInternalAsync(
     {
       ...params,
       conversationCapabilityProfile: capabilityProfile,

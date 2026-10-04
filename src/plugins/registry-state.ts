@@ -1,11 +1,36 @@
+import type { UnifiedModelCatalogSource } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createNativeSessionCatalogGate } from "./native-session-catalog-registration.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
-import type { PluginHookName } from "./types.js";
+import type { PluginHookName, UnifiedModelCatalogProviderPlugin } from "./types.js";
+
+type UnifiedModelCatalogHook = NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
+
+function mergeModelCatalogHooks(
+  source: UnifiedModelCatalogSource,
+  left: UnifiedModelCatalogHook | undefined,
+  right: UnifiedModelCatalogHook | undefined,
+): UnifiedModelCatalogHook | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return async (ctx) => {
+    const [leftRows, rightRows] = await Promise.all([left(ctx), right(ctx)]);
+    const rows = [...(leftRows ?? []), ...(rightRows ?? [])];
+    for (const [index, row] of rows.entries()) {
+      rows[index] = { ...row, source };
+    }
+    return rows.length ? rows : null;
+  };
+}
 
 export type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
@@ -106,10 +131,70 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   const reportRegistrationWarning = (record: PluginRecord, message: string) => {
     pushDiagnostic({ level: "warn", pluginId: record.id, source: record.source, message });
   };
-  const modelCatalogRegistrars = createModelCatalogRegistrationHandlers({
-    registry,
-    pushDiagnostic,
-  });
+  const registerModelCatalogProvider = (
+    record: PluginRecord,
+    provider: UnifiedModelCatalogProviderPlugin,
+  ) => {
+    const providerId = normalizeOptionalString(provider.provider) ?? "";
+    if (!providerId) {
+      reportRegistrationError(record, "model catalog provider registration missing provider");
+      return;
+    }
+    if (!provider.kinds || provider.kinds.length === 0) {
+      reportRegistrationError(
+        record,
+        `model catalog provider "${providerId}" registration missing kinds`,
+      );
+      return;
+    }
+    const existing = registry.modelCatalogProviders.find(
+      (entry) => entry.provider.provider === providerId && entry.pluginId !== record.id,
+    );
+    if (existing) {
+      reportRegistrationError(
+        record,
+        `model catalog provider already registered: ${providerId} (${existing.pluginId})`,
+      );
+      return;
+    }
+    const normalizedKinds = uniqueValues(provider.kinds);
+    const samePluginOverlapping = registry.modelCatalogProviders.find(
+      (entry) =>
+        entry.provider.provider === providerId &&
+        entry.pluginId === record.id &&
+        entry.provider.kinds.some((kind) => normalizedKinds.includes(kind)),
+    );
+    if (samePluginOverlapping) {
+      samePluginOverlapping.provider = {
+        ...samePluginOverlapping.provider,
+        ...provider,
+        provider: providerId,
+        kinds: uniqueValues([...samePluginOverlapping.provider.kinds, ...normalizedKinds]),
+        staticCatalog: mergeModelCatalogHooks(
+          "static",
+          samePluginOverlapping.provider.staticCatalog,
+          provider.staticCatalog,
+        ),
+        liveCatalog: mergeModelCatalogHooks(
+          "live",
+          samePluginOverlapping.provider.liveCatalog,
+          provider.liveCatalog,
+        ),
+      };
+      return;
+    }
+    registry.modelCatalogProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: {
+        ...provider,
+        provider: providerId,
+        kinds: normalizedKinds,
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
 
   return {
     registry,
@@ -125,7 +210,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,
-    ...modelCatalogRegistrars,
+    registerModelCatalogProvider,
   };
 }
 

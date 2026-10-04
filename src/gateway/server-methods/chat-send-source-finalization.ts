@@ -253,6 +253,7 @@ async function finalizeChatSendAgentReplyPayloads(
       cfg: context.getRuntimeConfig(),
       key: sessionKey,
       ...sessionLoadOptions,
+      projection: [],
     });
   if (!authorizeDelivery("session preparation")) {
     return { kind: "dropped", reason: "no-visible-content" };

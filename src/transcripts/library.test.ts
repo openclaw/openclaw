@@ -453,11 +453,7 @@ describe("transcript library SQLite reads", () => {
       "invite",
       "example.test",
     ]) {
-      const selectors: string[] = [];
-      for await (const entry of store.iterateReadEntries({ query })) {
-        selectors.push(entry.selector);
-      }
-      expect(selectors, query).toEqual([]);
+      expect((await store.listReadEntries({ query })).entries, query).toEqual([]);
       expect((await listTranscriptLibrary(store, { query })).sessions, query).toEqual([]);
     }
     const first = await getTranscriptLibrary(store, {

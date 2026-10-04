@@ -35,7 +35,7 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
-import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   hydrateConfiguredExternalCliAuth,
@@ -970,7 +970,7 @@ export async function startGatewayPostAttachRuntime(
           // work can create sessions that the recovery scan must leave alone.
           params.unlockStartupMethods();
           const newGatewayLifetimeSidecars = [
-            scheduleGatewayHandlerPrewarm(params),
+            ...scheduleGatewayPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];
           const transcriptsConfig =

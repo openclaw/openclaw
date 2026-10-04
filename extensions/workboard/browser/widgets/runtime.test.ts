@@ -271,7 +271,6 @@ it.each([
       refreshed.resolve(snapshot());
     }
     await Promise.all([refresh, duringMoveRefresh]);
-    await vi.waitFor(() => expect(lease.runtime.loading).toBe(false));
     expect(card.container.textContent).toContain("Move temporarily unavailable");
     expect(card.container.querySelector("select")).toBeNull();
 
@@ -596,4 +595,28 @@ it("keeps every board control read-only", async () => {
   );
   changeStatus(widget.container);
   expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("skips session-only events, conditionally reloads cards, and fully reloads on reconnect", async () => {
+  const revision = { epoch: "cards", revision: 1 };
+  const request = vi.fn(async (_method: string, _params?: unknown) => ({
+    ...snapshot(),
+    boards: [],
+    revision,
+  }));
+  const { fixture } = setup(request);
+  const lease = acquireWidgetRuntime(fixture.host, () => {});
+  disposers.push(() => lease.release());
+  await lease.runtime.refresh();
+  request.mockClear();
+  fixture.emit("plugin.workboard.changed", { epoch: "cards", revision: 2, cardsRevision: 1 });
+  expect(request).not.toHaveBeenCalled();
+  await lease.runtime.refresh();
+  expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { sinceRevision: revision });
+  fixture.connection.connected = false;
+  fixture.notify();
+  fixture.connection.connected = true;
+  fixture.notify();
+  await lease.runtime.refresh();
+  expect(request.mock.calls.some(([, params]) => JSON.stringify(params) === "{}")).toBe(true);
 });

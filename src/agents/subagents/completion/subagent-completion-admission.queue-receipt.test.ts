@@ -29,7 +29,7 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { settleRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import { admitCompletionFixtureDatabase } from "./subagent-completion-admission.test-helpers.js";
@@ -79,7 +79,7 @@ describe("committed requester outcome queue receipts", () => {
           batchRunIds: ["blocked-requester-outcome"],
         },
       });
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(entry));
+      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(entry)], []);
       subagentRuns.set(entry.runId, entry);
       const context = captureOpenClawStateWorkerContext();
       const clock = createGatewaySchedulerClock(Date.now());

@@ -109,18 +109,6 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
   if (!normalized) {
     return true;
   }
-  if (!normalized.includes(".")) {
-    return true;
-  }
-  if (
-    normalized === "localhost.localdomain" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".internal")
-  ) {
-    return true;
-  }
-
   const strictIp = parseCanonicalIpAddress(normalized);
   if (strictIp) {
     if (isIpv4Address(strictIp)) {
@@ -131,6 +119,17 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
     return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
+  }
+  if (!normalized.includes(".")) {
+    return true;
+  }
+  if (
+    normalized === "localhost.localdomain" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal")
+  ) {
+    return true;
   }
 
   if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {

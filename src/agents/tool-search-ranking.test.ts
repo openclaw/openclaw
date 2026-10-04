@@ -311,7 +311,7 @@ describe("ToolSearchRuntime.search", () => {
     { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
     { encoding: "Unicode word", padding: "λ", suffix: "" },
   ])(
-    "does not retain oversized $encoding source text through cached token slices",
+    "shares oversized $encoding revisions while their indexes remain live",
     async ({ padding, suffix }) => {
       const catalog = [
         entry({
@@ -319,13 +319,14 @@ describe("ToolSearchRuntime.search", () => {
           description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
         }),
       ];
+      // The spy retains built indexes, as another active catalog view would.
       const build = vi.spyOn(ranking, "buildLexicalIndex");
       for (let turn = 0; turn < 2; turn++) {
         expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
           "oversized_revision",
         ]);
       }
-      expect(build).toHaveBeenCalledTimes(2);
+      expect(build).toHaveBeenCalledTimes(1);
     },
   );
 

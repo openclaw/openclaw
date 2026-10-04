@@ -66,6 +66,25 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Harness tool construction
+
+Harnesses should await `params.hostCapabilities.createToolSurfaceAsync(options,
+bindingOptions?)`. Each construction reads fresh exec policy through the existing
+worker, then binds tools to the exact admitted host. Ordinary exec-approval read
+errors use conservative deny defaults. Migration errors and authority loss reject
+construction; callers must not retry through the synchronous factory.
+The public `createOpenClawCodingToolsAsync(options?)` factory from
+`openclaw/plugin-sdk/agent-harness` provides the same awaited preparation for
+non-harness callers. Harnesses use the host capability to retain its source
+authority and private bindings.
+
+The synchronous `createToolSurface` and `createOpenClawCodingTools` contracts
+shipped in OpenClaw 2026.9.8 remain available with their existing arguments,
+array results, and completion timing. TypeScript marks them deprecated for
+removal at the next Plugin SDK major, subject to explicit breaking-release
+approval. Bundled callers use the awaited factories. This migration changes no
+stored data, schema, retention, or update behavior.
+
 ### WebSocket options and constructors
 
 `websocket-runtime` retains the `ws.ClientOptions` alias and `WebSocket`

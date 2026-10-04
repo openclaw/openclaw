@@ -259,7 +259,7 @@ extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	2
 extensions/discord/src/internal/modal-fields.ts	4
-extensions/discord/src/internal/rest-body.ts	6
+extensions/discord/src/internal/rest-body.ts	5
 extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/rest-scheduler.ts	1
 extensions/discord/src/internal/rest.ts	1
@@ -267,7 +267,6 @@ extensions/discord/src/internal/structures.ts	8
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
 extensions/discord/src/markdown.ts	4
-extensions/discord/src/monitor/agent-components-context.ts	1
 extensions/discord/src/monitor/agent-components.plugin-interactive.ts	1
 extensions/discord/src/monitor/channel-access.ts	1
 extensions/discord/src/monitor/exec-approvals.ts	1
@@ -676,7 +675,7 @@ extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-voice-bridge.ts	1
-extensions/opencode-go/stream-termination.ts	4
+extensions/opencode-go/stream-termination.ts	3
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
@@ -1730,7 +1729,7 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
-src/cli/capability-cli/embedding.ts	3
+src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -2268,7 +2267,7 @@ src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
-src/infra/net/runtime-fetch.ts	5
+src/infra/net/runtime-fetch.ts	4
 src/infra/net/ssrf.ts	7
 src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
@@ -2642,8 +2641,7 @@ src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
-src/secrets/runtime-web-tools.shared.ts	1
-src/secrets/runtime-web-tools.ts	3
+src/secrets/runtime-web-tools.ts	2
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1

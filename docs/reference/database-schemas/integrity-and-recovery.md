@@ -15,8 +15,10 @@ and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
 starts as soon as the listener binds, with at most two databases opening
-concurrently. Secrets and model preparation retain their serialized publication
-order, independently of admission and restored subagent work. Readiness reports
+concurrently. Agent-local session preparation waits for restored recovery owners,
+then runs with up to four agents concurrently. Only credential/model publication
+and final admission are serialized, in the order agents finish session preparation;
+a slow open or migration does not hold that publication turn. Readiness reports
 pending required stores in
 `agentDatabases` without failing the Gateway probe; confirmed database failures
 still fail readiness. The validation deadlines, dirty-close checks, and
@@ -453,8 +455,8 @@ remain separate, with no cached readiness result shared between them.
 
 ### Startup on multi-agent hosts
 
-Current development builds already limit startup agent-database checks and
-session startup maintenance to two databases at a time. Each inspection's
+Foreground startup agent-database checks and session startup maintenance are
+limited to two databases at a time. Each inspection's
 size-derived foreground allowance starts when its scheduled inspection begins, so waiting for a
 slot does not consume it. For example, a 267.5 MiB database without sidecars gets
 635 seconds. These concurrency and budget improvements precede the background
@@ -476,12 +478,23 @@ migration and ordinary writes. The inspection continues in the background within
 the same concurrency limit. Expiring the wait does not establish corruption.
 
 A successful inspection alone does not make the agent available. The Gateway
-first refreshes its credentials and completes that agent's session validation,
-transcript preparation, and model preparation, with current database and runtime ownership checked before
-publication. Only then does it clear the pending refusal. A failed inspection or
+opens each agent's database and completes its session validation and transcript
+preparation independently, then takes a FIFO turn to publish credentials, prepare
+models, and clear the pending refusal. Current database, config, runtime ownership,
+and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Every 60 seconds while recovery is pending, `agent database startup preparation
+still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
+`publication-wait` also names `publishingAgentId`. Success (`agent database
+recovered after background inspection and preparation`) and failure (`agent
+database remains degraded`) include total `elapsedMs` and `phaseDurationsMs`.
+Use the phase durations to distinguish inspection, activation, open/migration
+permit waits, open, readiness, migration, publication wait, secrets, models, and
+final publication. These are wall times, including scheduling delays, not CPU time;
+progress warnings do not impose a deadline or prove corruption.
 
 Inspect `openclaw gateway call agents.list --json` or Gateway logs for the affected
 agent and reason. If the check fails, follow that reason's repair guidance; stop the Gateway
@@ -565,6 +578,25 @@ place. An uncertain exchange stops activation and names the retained recovery
 path for inspection. No SQL schema migration is involved. The rewritten database
 has a new physical identity (device/inode), so the next boot re-runs
 canonical validation once instead of reusing the original identity receipt.
+
+## Planner statistics maintenance
+
+The shared-state writer refreshes SQLite planner statistics once during its
+30-minute WAL maintenance pass, after a successful checkpoint. It uses
+`PRAGMA analysis_limit=1000; ANALYZE main;` under the existing writer admission
+and transaction authority, with no busy wait. Contention skips that attempt;
+later periodic maintenance retries. Checkpoint-only ticks, database admission,
+opens, and ordinary writes do not analyze tables. Vacuum continuation units do
+not repeat the analysis. Shutdown joins accepted maintenance before native close.
+
+The limit bounds sampling per index, not total work or elapsed time across the
+database. Statistics are SQLite-owned, derived data: application records,
+retention, and schema versions are unchanged. Updates and rollback require no
+migration. Existing read snapshots remain intact. Newly opened readers use the
+latest statistics; retained connections can keep older selectivity after later
+refreshes until their normal retirement. This policy does not add recurring
+analysis to agent databases; Doctor's stopped-writer media maintenance continues
+using the same bounded statistics primitive.
 
 ## Troubleshooting
 

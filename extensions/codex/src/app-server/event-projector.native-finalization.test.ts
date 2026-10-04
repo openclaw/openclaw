@@ -319,7 +319,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResult.status).toBe("completed");
     expect(toolResult.isError).toBe(false);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash",
+      text: "Bash",
     });
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "tool.call",

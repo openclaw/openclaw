@@ -3127,7 +3127,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
-    const payload = { text: "🧠 Memory Search: release notes" } satisfies ReplyPayload;
+    const payload = { text: "Memory Search: release notes" } satisfies ReplyPayload;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.(payload);
       return { text: "NO_REPLY" } satisfies ReplyPayload;
@@ -3235,7 +3235,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
+      await opts?.onToolResult?.({ text: "Exec: ruby sleep proof" });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
@@ -3254,7 +3254,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "🛠️ Exec: ruby sleep proof" }),
+      expect.objectContaining({ text: "Exec: ruby sleep proof" }),
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -3270,7 +3270,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ Exec: echo post-restart" });
+      await opts?.onToolResult?.({ text: "Exec: echo post-restart" });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
@@ -3291,7 +3291,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "🛠️ Exec: echo post-restart" }),
+      expect.objectContaining({ text: "Exec: echo post-restart" }),
     );
     expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();

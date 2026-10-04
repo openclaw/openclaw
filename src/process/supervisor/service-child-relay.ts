@@ -144,7 +144,7 @@ function runServiceChildRelay(): void {
     if (generation) {
       return;
     }
-    if (!start || start.type !== "start" || !start.generation) {
+    if (!start || (start.type !== "start" && start.type !== "prepare") || !start.generation) {
       process.exitCode = 1;
       return;
     }

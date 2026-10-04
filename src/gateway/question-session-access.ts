@@ -103,6 +103,7 @@ export async function withPreparedQuestionSessions<T>(
         sessionKeys: string[];
         includeMembers: boolean;
         includeAuthorization: true;
+        snapshotFields: readonly [];
       }
     >();
     const selections = questions.map((question) => {
@@ -127,6 +128,7 @@ export async function withPreparedQuestionSessions<T>(
         sessionKeys: [],
         includeMembers: operation.includeMembers ?? false,
         includeAuthorization: true as const,
+        snapshotFields: [] as const,
       };
       group.sessionKeys.push(sessionKey);
       groups.set(key, group);

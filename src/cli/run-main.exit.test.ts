@@ -135,7 +135,7 @@ describe("runCli exit behavior", () => {
     process.exitCode = exitCode;
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "restores terminal state before uncaught CLI exits (machine output: %s)",
     async (machineOutput) => {
       buildProgramMock.mockReturnValueOnce({

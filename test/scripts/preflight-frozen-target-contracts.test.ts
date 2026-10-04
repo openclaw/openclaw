@@ -26,6 +26,9 @@ const repo = resolve(".");
 const entrypoint = "scripts/preflight-frozen-target-contracts.mjs";
 const closure = [
   entrypoint,
+  "scripts/lib/frozen-target-workflow-request.mjs",
+  "scripts/lib/release-upgrade-baseline.mjs",
+  "scripts/lib/canonical-json.mjs",
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
@@ -522,23 +525,28 @@ describe("frozen admission bootstrap repairs", () => {
   const reader = "scripts/lib/frozen-target-source.mjs";
   const shell = "scripts/lib/frozen-target-compat.sh";
 
-  it.each([reader, "scripts/lib/docker-e2e-scenarios.mts", shell])(
-    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
-    (path) => {
-      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
-      const sentinel = join(f.root, "dependent-code-executed");
-      const file = join(f.tooling.root, path);
-      const payload =
-        path === shell
-          ? `\nprintf executed > '${sentinel}'\n`
-          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
-      writeFileSync(file, readFileSync(file, "utf8") + payload);
-      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: [] });
-      expect(existsSync(sentinel), result.stderr).toBe(false);
-      expectRejected(result, `tooling closure does not match committed source: ${path}`);
-    },
-  );
+  it.each([
+    reader,
+    "scripts/lib/frozen-target-workflow-request.mjs",
+    "scripts/lib/release-upgrade-baseline.mjs",
+    "scripts/lib/release-version.mjs",
+    "scripts/lib/canonical-json.mjs",
+    "scripts/lib/docker-e2e-scenarios.mts",
+    shell,
+  ])("rejects dirty executable %s before any dependent code runs at unchanged HEAD", (path) => {
+    const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+    const sentinel = join(f.root, "dependent-code-executed");
+    const file = join(f.tooling.root, path);
+    const payload =
+      path === shell
+        ? `\nprintf executed > '${sentinel}'\n`
+        : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+    writeFileSync(file, readFileSync(file, "utf8") + payload);
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({ consumers: [] });
+    expect(existsSync(sentinel), result.stderr).toBe(false);
+    expectRejected(result, `tooling closure does not match committed source: ${path}`);
+  });
 
   it.each([entrypoint, `${recipeDirectory}/agents.json`])(
     "rejects dirty closure data %s at unchanged HEAD",

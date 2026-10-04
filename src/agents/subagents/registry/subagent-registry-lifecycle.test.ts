@@ -74,6 +74,7 @@ import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-com
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
+import { registerRequesterDatabaseAdmissionTests } from "./subagent-registry-lifecycle-admission.test-support.js";
 import {
   registerDetachedCleanupAuthorityTest,
   registerDeliveredCleanupEndedHookTest,
@@ -6079,32 +6080,7 @@ describe("requester settle wake trigger", () => {
     expect(settleWake).toHaveBeenCalledTimes(1);
   });
 
-  it("settles bookkeeping after a wake rejects before attempt admission", async () => {
-    const entry = createRunEntry({ endedAt: 4_000 });
-    const warn = vi.fn();
-    const settleWake = vi.fn(async () => {
-      throw new Error("wake exploded");
-    });
-    const controller = createLifecycleController({
-      entry,
-      warn,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-    });
-
-    await expect(
-      controller.completeCleanupBookkeeping({
-        runId: entry.runId,
-        entry,
-        cleanup: "keep",
-        completedAt: 5_000,
-      }),
-    ).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() => {
-      expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
-      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    });
-  });
+  registerRequesterDatabaseAdmissionTests({ createLifecycleController, waitForLifecycleState });
 
   it.each(["yielded", "replacement"])(
     "preserves a newer %s batch when an admitted wake rejects",

@@ -41,19 +41,6 @@ import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-type MockGatewayTool = {
-  name: string;
-  label: string;
-  description: string;
-  parameters: AnyAgentTool["parameters"] | Record<string, unknown>;
-  prepareBeforeToolCallParams?: (...args: unknown[]) => unknown;
-  finalizeBeforeToolCallParams?: (...args: unknown[]) => unknown;
-  execute: (...args: unknown[]) => Promise<{
-    content: unknown[];
-    details?: unknown;
-  }>;
-};
-
 const activeAdmissions: PreparedAgentRunAdmission[] = [];
 
 async function activeAdmission(runId: string): Promise<AdmittedRunContext> {
@@ -69,12 +56,6 @@ async function activeAdmission(runId: string): Promise<AdmittedRunContext> {
   activeAdmissions.push(admission);
   return await admission.admit("gateway", `gateway-${runId}`);
 }
-
-type MockGatewayScopedTools = {
-  agentId: string;
-  workspaceDir?: string;
-  tools: MockGatewayTool[];
-};
 
 type MockBeforeToolCallHookResult = Awaited<ReturnType<typeof runBeforeToolCallHook>>;
 
@@ -93,7 +74,7 @@ const runBeforeToolCallHookMock = vi.hoisted(() =>
 );
 
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
-  vi.fn<(...args: unknown[]) => MockGatewayScopedTools>(() => ({
+  vi.fn<(...args: unknown[]) => Promise<MockGatewayScopedTools>>(async () => ({
     agentId: "main",
     tools: [
       {
@@ -194,6 +175,8 @@ import {
   sendRaw,
   startLoopbackServerForTest,
   type McpToolResultPayload,
+  type MockGatewayTool,
+  type MockGatewayScopedTools,
 } from "./mcp-http.test-support.js";
 
 const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
@@ -469,7 +452,7 @@ function makeCronTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool
 }
 
 function mockScopedTools(tools: MockGatewayTool[]) {
-  resolveGatewayScopedToolsMock.mockReturnValue({
+  resolveGatewayScopedToolsMock.mockResolvedValue({
     agentId: "main",
     tools,
   });
@@ -826,9 +809,7 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).result).toBeDefined();
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey }),
-    );
+    expect(getScopedToolsCall(0)).toMatchObject({ sessionKey });
   });
 
   it("rejects an existing locked harness context", async () => {
@@ -942,7 +923,7 @@ describe("mcp loopback server", () => {
     const { port } = await startLoopbackServerForTest();
     const admittedRunContext = await activeAdmission("run-bound");
     let toolCallerIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-    resolveGatewayScopedToolsMock.mockReturnValue({
+    resolveGatewayScopedToolsMock.mockResolvedValue({
       agentId: "main",
       workspaceDir: "/tmp/openclaw-workspace",
       tools: [
@@ -1086,7 +1067,7 @@ describe("mcp loopback server", () => {
     const execute = vi.fn(async (nativeTools: readonly string[] | null | undefined) => ({
       content: [{ type: "text", text: JSON.stringify(nativeTools) }],
     }));
-    resolveGatewayScopedToolsMock.mockImplementation(() => {
+    resolveGatewayScopedToolsMock.mockImplementation(async () => {
       const { nativeCronCreatorToolAllowlist } = getScopedToolsCall(
         resolveGatewayScopedToolsMock.mock.calls.length - 1,
       );
@@ -1379,38 +1360,40 @@ describe("mcp loopback server", () => {
   );
 
   it("routes sessions_yield to the current CLI capture", async () => {
-    resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
-      const call = input as ScopedToolsCall;
-      return {
-        agentId: "main",
-        tools: [
-          makeMockTool({
-            name: "sessions_yield",
-            execute: async (_toolCallId, args) => {
-              if (!call.sessionId) {
-                throw new Error("No session context");
-              }
-              if (!call.onYield) {
-                throw new Error("Yield not supported in this context");
-              }
-              const { message = "Turn yielded.", acknowledgment } = args as {
-                message?: string;
-                acknowledgment?: string;
-              };
-              await call.onYield(message, acknowledgment);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({ status: "yielded", message, acknowledgment }),
-                  },
-                ],
-              };
-            },
-          }),
-        ],
-      };
-    });
+    resolveGatewayScopedToolsMock.mockImplementation(
+      async (input): Promise<MockGatewayScopedTools> => {
+        const call = input as ScopedToolsCall;
+        return {
+          agentId: "main",
+          tools: [
+            makeMockTool({
+              name: "sessions_yield",
+              execute: async (_toolCallId, args) => {
+                if (!call.sessionId) {
+                  throw new Error("No session context");
+                }
+                if (!call.onYield) {
+                  throw new Error("Yield not supported in this context");
+                }
+                const { message = "Turn yielded.", acknowledgment } = args as {
+                  message?: string;
+                  acknowledgment?: string;
+                };
+                await call.onYield(message, acknowledgment);
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ status: "yielded", message, acknowledgment }),
+                    },
+                  ],
+                };
+              },
+            }),
+          ],
+        };
+      },
+    );
     const { runtime } = await startLoopbackServerForTest();
     const firstYield = vi.fn();
     const secondYield = vi.fn();
@@ -1460,7 +1443,7 @@ describe("mcp loopback server", () => {
       sessionKey: "agent:main:telegram:group:chat123",
       sourceReplyDeliveryMode: "message_tool_only",
     } satisfies Parameters<typeof createMcpToolCacheResolver>[0];
-    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+    resolveGatewayScopedToolsMock.mockImplementation(async (input: unknown) => {
       const params = input as { senderIsOwner?: boolean };
       return {
         agentId: "main",
@@ -1487,7 +1470,7 @@ describe("mcp loopback server", () => {
 
   it("never reuses loopback tools across session permissions or effective exec modes", async () => {
     const resolve = createMcpToolCacheResolver();
-    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+    resolveGatewayScopedToolsMock.mockImplementation(async (input: unknown) => {
       const params = input as ScopedToolsCall;
       const unrestricted =
         params.execSession?.permissionMode === "full" || params.execOverrides?.mode === "full";
@@ -2067,7 +2050,7 @@ describe("mcp loopback server", () => {
   });
 
   it("does not include notifications in internal-error batch responses", async () => {
-    resolveGatewayScopedToolsMock.mockImplementation(() => {
+    resolveGatewayScopedToolsMock.mockImplementation(async () => {
       throw new Error("tool resolution exploded");
     });
     const { runtime, port } = await startLoopbackServerForTest();
@@ -2145,7 +2128,7 @@ describe("mcp loopback server", () => {
   });
 
   it("suppresses internal errors for notification-only requests", async () => {
-    resolveGatewayScopedToolsMock.mockImplementation(() => {
+    resolveGatewayScopedToolsMock.mockImplementation(async () => {
       throw new Error("tool resolution exploded");
     });
     const { runtime, port } = await startLoopbackServerForTest();
@@ -2381,8 +2364,10 @@ describe("collector result tool across the loopback MCP boundary", () => {
     const { resolveGatewayScopedTools: resolveActual } =
       await vi.importActual<typeof import("./tool-resolution.js")>("./tool-resolution.js");
     resolveGatewayScopedToolsMock.mockImplementation(
-      (...args) =>
-        resolveActual(...(args as Parameters<typeof resolveActual>)) as MockGatewayScopedTools,
+      async (...args) =>
+        (await resolveActual(
+          ...(args as Parameters<typeof resolveActual>),
+        )) as MockGatewayScopedTools,
     );
   });
 

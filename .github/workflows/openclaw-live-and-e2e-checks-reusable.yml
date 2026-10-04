@@ -3407,30 +3407,18 @@ jobs:
     outputs:
       candidate_evidence_json: ${{ steps.candidate_binding.outputs.json }}
     steps:
-      # Start from a statically trusted checkout. The following step validates job context
-      # locally before restoring the exact called-workflow revision.
-      - name: Checkout trusted release harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          fetch-depth: 1
-          path: .release-harness
-          persist-credentials: false
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
-      - name: Restore exact trusted workflow revision
+      - name: Resolve exact trusted workflow identity
         id: workflow
         env:
           EXPECTED_WORKFLOW_PATH: .github/workflows/openclaw-live-and-e2e-checks-reusable.yml
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_ID: ${{ github.run_id }}
@@ -3444,7 +3432,6 @@ jobs:
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const expectedWorkflowPath = process.env.EXPECTED_WORKFLOW_PATH ?? "";
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          const harnessPath = process.env.HARNESS_PATH ?? "";
           const runAttempt = process.env.RUN_ATTEMPT ?? "";
           const runId = process.env.RUN_ID ?? "";
           const jobId = String(job.check_run_id ?? "");
@@ -3466,9 +3453,6 @@ jobs:
           }
           if (!/^[1-9][0-9]*$/u.test(runId) || !/^[1-9][0-9]*$/u.test(runAttempt)) {
             throw new Error("publisher run identity must contain positive decimals");
-          }
-          if (harnessPath !== ".release-harness") {
-            throw new Error("trusted harness path is invalid");
           }
           const currentJob = JSON.parse(
             execFileSync("gh", ["api", `repos/${repository}/actions/jobs/${jobId}`], {
@@ -3492,35 +3476,6 @@ jobs:
           ) {
             throw new Error("candidate publisher job name is invalid");
           }
-          const git = (...args) =>
-            execFileSync("git", ["-C", harnessPath, ...args], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "inherit"],
-            }).trim();
-          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
-          if (remote !== `https://github.com/${repository}`) {
-            throw new Error("trusted harness remote does not match the workflow repository");
-          }
-          execFileSync(
-            "git",
-            [
-              "-C",
-              harnessPath,
-              "fetch",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              job.workflow_sha,
-            ],
-            { stdio: "inherit" },
-          );
-          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
-            stdio: "inherit",
-          });
-          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
-            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
-          }
           const outputPath = process.env.GITHUB_OUTPUT;
           if (!outputPath) {
             throw new Error("GITHUB_OUTPUT is required");
@@ -3538,6 +3493,59 @@ jobs:
               "",
             ].join("\n"),
           );
+          NODE
+
+      # The caller seed is immutable; only authenticated callee Q may execute below.
+      - name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Restore exact trusted workflow revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          HARNESS_PATH: .release-harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { realpathSync } from "node:fs";
+          import { resolve } from "node:path";
+
+          const repository = process.env.WORKFLOW_REPOSITORY ?? "";
+          const workflowSha = process.env.WORKFLOW_SHA ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || !/^[0-9a-f]{40}$/u.test(workflowSha)) {
+            throw new Error("authenticated workflow repository and full SHA are required");
+          }
+          if (harnessPath !== ".release-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const directory = resolve(realpathSync(process.cwd()), harnessPath);
+          if (realpathSync(directory) !== directory) {
+            throw new Error("trusted harness path must not traverse symlinks");
+          }
+          const git = (...args) => execFileSync("git", ["-C", directory, ...args], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "inherit"],
+            timeout: 120_000,
+          }).trim();
+          if (git("remote", "get-url", "origin").replace(/\.git$/u, "") !== "https://github.com/" + repository) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            git("fetch", "--no-tags", "--no-recurse-submodules", "--depth=1", "origin", workflowSha);
+            git("checkout", "--detach", workflowSha);
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            throw new Error("trusted harness checkout did not resolve to the authenticated workflow SHA");
+          }
           NODE
 
       - name: Setup trusted release harness

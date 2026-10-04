@@ -11,6 +11,7 @@ import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
 import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
+import * as temporaryUsage from "../infra/temp-directory-usage.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -451,13 +452,11 @@ it.each([
   },
 );
 
-it("reclaims aged tokenless roots without a census and retries locked roots", async () => {
+it("reclaims aged tokenless roots proven inactive and retries locked roots", async () => {
   const stateDir = temp.make("capture-recovery-legacy-");
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
-  vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({
-    error: "Exact process command census is unavailable on win32.",
-  });
+  vi.spyOn(temporaryUsage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
   const create = (parent: string, name: string) => {
     const directory = path.join(parent, name);
     fs.mkdirSync(directory);
@@ -511,6 +510,7 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
 });
 
 it("retries partial tokenless removal without exhausting directory name limits", async () => {
+  vi.spyOn(temporaryUsage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
   const stateDir = temp.make("capture-recovery-retry-");
   const managed = path.join(stateDir, "tmp", "plugin-captures");
   const directory = path.join(managed, "interrupted-instance");

@@ -7,33 +7,21 @@ function formatInlineCliCommand(command: string): string {
   return `\`${formatCliCommand(command)}\``;
 }
 
-export function formatPortRangeHint(example = DEFAULT_GATEWAY_PORT_EXAMPLE): string {
-  return `Use a port number from 1 to 65535, for example ${example}.`;
+export function formatPortRangeHint(): string {
+  return `Use a port number from 1 to 65535, for example ${DEFAULT_GATEWAY_PORT_EXAMPLE}.`;
 }
 
-export function formatInvalidPortOption(
-  option: string,
-  example = DEFAULT_GATEWAY_PORT_EXAMPLE,
-): string {
-  return `Invalid ${option}. ${formatPortRangeHint(example)}`;
+export function formatInvalidPortOption(option: string): string {
+  return `Invalid ${option}. ${formatPortRangeHint()}`;
 }
 
-export function formatInvalidConfigPort(
-  path: string,
-  example = DEFAULT_GATEWAY_PORT_EXAMPLE,
-): string {
-  return `Invalid ${path} in config. Set ${path} to a number from 1 to 65535, or pass --port ${example}.`;
+export function formatInvalidConfigPort(path: string): string {
+  return `Invalid ${path} in config. Set ${path} to a number from 1 to 65535, or pass --port ${DEFAULT_GATEWAY_PORT_EXAMPLE}.`;
 }
 
-export function formatUnknownChannelMessage(params: {
-  channel: string;
-  listCommand?: string;
-  purpose?: string;
-}): string {
-  const purpose = params.purpose ? ` for ${params.purpose}` : "";
-  const listCommand = params.listCommand ?? "openclaw channels list --all";
-  return `Unknown channel "${params.channel}"${purpose}. Run ${formatInlineCliCommand(
-    listCommand,
+export function formatUnknownChannelMessage(params: { channel: string }): string {
+  return `Unknown channel "${params.channel}". Run ${formatInlineCliCommand(
+    "openclaw channels list --all",
   )} to see configured and installable channels.`;
 }
 
@@ -64,11 +52,7 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   ].join(" ");
 }
 
-export function formatGatewayCommandFailure(params: {
-  action: string;
-  error: unknown;
-  inspectCommand?: string;
-}): string {
+export function formatGatewayCommandFailure(params: { action: string; error: unknown }): string {
   const raw = params.error instanceof Error ? params.error.message : String(params.error);
   const message = raw
     .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
@@ -76,10 +60,9 @@ export function formatGatewayCommandFailure(params: {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[.。]+$/u, "");
-  const inspectCommand = params.inspectCommand ?? "openclaw gateway status --deep";
   const detail = message ? `: ${message}` : "";
   return `Could not ${params.action} because the Gateway did not respond${detail}. Run ${formatInlineCliCommand(
-    inspectCommand,
+    "openclaw gateway status --deep",
   )} to inspect the active Gateway.`;
 }
 

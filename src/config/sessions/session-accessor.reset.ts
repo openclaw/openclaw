@@ -327,7 +327,6 @@ export async function commitReplySessionInitialization(params: {
   }
   return {
     ok: true,
-    previousSessionTranscript: {},
     sessionEntry: { ...committedSessionEntry },
     sessionStoreView: cloneSessionEntries(store),
   };

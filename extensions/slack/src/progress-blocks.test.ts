@@ -514,7 +514,7 @@ describe("native Slack progress stream chunks", () => {
       label: "Bash",
       detail: "pnpm test",
       status,
-      text: `🛠️ Bash: pnpm test · ${status}`,
+      text: `Bash: pnpm test · ${status}`,
       toolName: "bash",
     });
     const first = reconcileSlackNativeTaskChunks({
@@ -602,10 +602,9 @@ describe("native Slack progress stream chunks", () => {
         lines: [
           {
             kind: "tool",
-            icon: "🛠️",
             label: "Exec",
             detail: "run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
-            text: "🛠️ Exec: run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
+            text: "Exec: run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
           },
         ],
       }),
@@ -713,25 +712,23 @@ describe("native Slack progress stream chunks", () => {
           {
             id: "cmd-1",
             kind: "item",
-            icon: "🛠️",
             label: "Exec",
-            text: "🛠️ Exec",
+            text: "Exec",
             toolName: "exec",
           },
           {
             id: "cmd-2",
             kind: "item",
-            icon: "🛠️",
             label: "Exec",
-            text: "🛠️ Exec",
+            text: "Exec",
             toolName: "exec",
           },
         ],
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
-      taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
+      taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "Exec", "in_progress"),
+      taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "Exec", "in_progress"),
     ]);
   });
 
@@ -814,9 +811,8 @@ describe("native Slack progress stream chunks", () => {
         {
           id: "call-2",
           kind: "tool",
-          icon: "🛠️",
           label: "Bash",
-          text: "🛠️ Bash",
+          text: "Bash",
           toolName: "bash",
         },
       ],
@@ -827,10 +823,9 @@ describe("native Slack progress stream chunks", () => {
         {
           id: "call-2",
           kind: "command-output",
-          icon: "🛠️",
           label: "Bash",
           status: "completed",
-          text: "🛠️ completed",
+          text: "completed",
           toolName: "bash",
         },
       ],

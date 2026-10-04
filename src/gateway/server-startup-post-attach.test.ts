@@ -231,8 +231,9 @@ vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   prewarmConfigDrivenReplyRuntime: hoisted.prewarmConfigDrivenReplyRuntime,
 }));
 
+// mock-isolation: Startup orchestration does not run independent background preparation.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: hoisted.scheduleGatewayHandlerPrewarm,
+  scheduleGatewayPrewarm: () => [hoisted.scheduleGatewayHandlerPrewarm()],
 }));
 
 const {

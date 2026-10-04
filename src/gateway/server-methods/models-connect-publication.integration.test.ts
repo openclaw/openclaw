@@ -22,9 +22,9 @@ import {
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 
-// Optional startup prewarming must not compete with the catalog request drain.
+// mock-isolation: Optional startup prewarming must not compete with the catalog request drain.
 vi.mock("../server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 
 // Keep real catalog publication while excluding automatic startup work from the

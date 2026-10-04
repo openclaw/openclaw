@@ -132,8 +132,6 @@ export function resolveReferenceImageCapabilityError(params: {
     : undefined;
 }
 
-const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
-
 function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? clampTimerTimeoutMs(timeoutMs)
@@ -460,11 +458,10 @@ export function resolveClosestSize(params: {
   });
 }
 
-/** Chooses the closest supported resolution by numeric rank or custom order. */
+/** Chooses the closest supported resolution within the same numeric unit. */
 export function resolveClosestResolution<TResolution extends string>(params: {
   requestedResolution?: TResolution;
   supportedResolutions?: readonly TResolution[];
-  order?: readonly TResolution[];
 }): TResolution | undefined {
   const supported = normalizeSupportedValues(params.supportedResolutions);
   if (supported.length === 0) {
@@ -474,34 +471,18 @@ export function resolveClosestResolution<TResolution extends string>(params: {
     return params.requestedResolution;
   }
   const requestedNumeric = parseResolutionRank(params.requestedResolution);
-  if (requestedNumeric) {
-    const bestValue = selectClosestValue(supported, (candidate) => {
-      const candidateNumeric = parseResolutionRank(candidate);
-      if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
-        return undefined;
-      }
-      return {
-        primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
-        secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
-      };
-    });
-    if (bestValue) {
-      return bestValue;
-    }
-  }
-  const order: readonly string[] = params.order ?? IMAGE_RESOLUTION_ORDER;
-  const requestedIndex = params.requestedResolution
-    ? order.indexOf(params.requestedResolution)
-    : -1;
-  if (requestedIndex < 0) {
+  if (!requestedNumeric) {
     return undefined;
   }
-
   return selectClosestValue(supported, (candidate) => {
-    const candidateIndex = order.indexOf(candidate);
-    return candidateIndex < 0
-      ? undefined
-      : { primary: Math.abs(candidateIndex - requestedIndex), secondary: candidateIndex };
+    const candidateNumeric = parseResolutionRank(candidate);
+    if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
+      return undefined;
+    }
+    return {
+      primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
+      secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
+    };
   });
 }
 

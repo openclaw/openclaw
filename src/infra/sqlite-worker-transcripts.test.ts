@@ -18,7 +18,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { getTranscriptLibrary } from "../transcripts/library.js";
+import { getTranscriptLibrary, listTranscriptLibrary } from "../transcripts/library.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -144,7 +144,11 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   const databasePath = resolveOpenClawStateSqlitePath(env);
   expect(existsSync(databasePath)).toBe(false);
   await withoutParentSql(async () => {
-    expect(await store.listReadEntries({ limit: 2 })).toEqual([]);
+    expect(await listTranscriptLibrary(store, { limit: 2 })).toEqual({
+      sessions: [],
+      nextCursor: null,
+    });
+    expect(await store.listReadEntries({ limit: 2 })).toEqual({ entries: [], hasMore: false });
     expect(await store.listSessionEntries()).toEqual([]);
     expect(await store.readLatestEntry()).toBeUndefined();
     expect(await store.readSession("missing")).toBeUndefined();
@@ -157,6 +161,31 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   });
   expect(existsSync(databasePath)).toBe(true);
   expect(existsSync(exportRoot)).toBe(false);
+});
+
+it("reads cold and warm public pages off thread with tied dates and private sources", async () => {
+  const { store } = fixture();
+  for (const sessionId of ["a", "b"]) {
+    await store.writeSession({
+      sessionId,
+      startedAt: "2026-09-18T12:00:00.000Z",
+      source: { providerId: "manual-transcript", private: "synthetic-private" },
+      metadata: { agentId: "main", private: "synthetic-metadata" },
+    });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  await withoutParentSql(async () => {
+    const first = await listTranscriptLibrary(store, { limit: 1 }, () => "Manual");
+    expect(first.sessions).toMatchObject([
+      { sessionId: "a", providerName: "Manual", agentId: "main" },
+    ]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor! });
+    expect(second.sessions).toMatchObject([{ sessionId: "b" }]);
+    expect(second.nextCursor).toBeNull();
+    expect(JSON.stringify([first, second])).not.toContain("synthetic-");
+  });
 });
 
 it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {

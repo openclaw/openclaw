@@ -388,7 +388,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     }).data;
     expect(toolStart.toolCallId).toBe("mcp-email-send-1");
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🧩 Email.send: `user@example.com`",
+      text: "Email.send: `user@example.com`",
     });
   });
 

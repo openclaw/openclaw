@@ -22,7 +22,6 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
-  emoji: string;
   title: string;
   label: string;
   verb?: string;
@@ -62,7 +61,6 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const { verb, detail } = resolveToolVerbAndDetailForArgs({
@@ -78,7 +76,6 @@ export function resolveToolDisplay(params: {
   });
   return {
     name,
-    emoji,
     title,
     label,
     verb,
@@ -125,9 +122,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && isShellToolDisplayName(display.name)) {
-    return `${display.emoji} ${detail}`;
+    return detail;
   }
-  return detail
-    ? `${display.emoji} ${display.label}: ${detail}`
-    : `${display.emoji} ${display.label}`;
+  return detail ? `${display.label}: ${detail}` : display.label;
 }

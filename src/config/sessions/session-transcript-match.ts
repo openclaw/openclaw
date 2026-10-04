@@ -33,24 +33,30 @@ export function findTranscriptEventMatchingInDatabase(
   request: SessionTranscriptEventMatchRequest,
 ): { event: TranscriptEvent } | undefined {
   const { target, match } = request;
-  return findTranscriptEventInDatabase(database, target.sessionId, (event) => {
-    if (!matchesTranscriptEvent(event, match)) {
-      return false;
-    }
-    if (match.kind !== "active-assistant") {
-      return true;
-    }
+  const matches = (event: TranscriptEvent) => {
     const entryId = readTranscriptEventId(event);
-    return Boolean(
-      entryId &&
-      target.sessionKey &&
-      readActiveTranscriptEntryAnchorInTransaction({
-        database,
-        resolved: { ...target, sessionKey: target.sessionKey },
-        entryId,
-      }),
+    return (
+      matchesTranscriptEvent(event, match) &&
+      (match.kind !== "active-assistant" ||
+        Boolean(
+          entryId &&
+          target.sessionKey &&
+          readActiveTranscriptEntryAnchorInTransaction({
+            database,
+            resolved: { ...target, sessionKey: target.sessionKey },
+            entryId,
+          }),
+        ))
     );
-  });
+  };
+  return findTranscriptEventInDatabase(
+    database,
+    target.sessionId,
+    matches,
+    match.kind === "latest"
+      ? undefined
+      : (event) => matchesTranscriptEvent(event, match, "navigation"),
+  );
 }
 
 /** Disk reads and matching belong to the existing read-only history worker. */

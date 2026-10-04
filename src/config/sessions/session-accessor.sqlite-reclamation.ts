@@ -358,7 +358,6 @@ function reclaimSqliteRowsInTransaction(
         plan.materializedPlans,
         protectedSessionIds,
         excludedSessionKeys,
-        undefined,
         diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);

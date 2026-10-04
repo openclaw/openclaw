@@ -622,7 +622,16 @@ attempt. Delegated requests and unverified internal inputs cannot resume
 automatically without surviving authority. Missing or invalid provenance does not
 establish a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
-their existing recovery and delivery ownership checks.
+their existing recovery and delivery ownership checks. If their agent database is
+still undergoing startup inspection or preparation, the pending completion wake
+retries after 30 seconds without consuming delivery attempts or changing its
+replay identity. The retained wake survives another restart. A confirmed
+inspection failure or ownership mismatch remains a failure, not permission to
+bypass database admission; cancellation still retires the wake.
+
+A failed child-completion group does not stop startup recovery for unrelated
+groups. The original group keeps its ownership checks and retries with bounded
+backoff; already-started restored runs are not launched again by those retries.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.

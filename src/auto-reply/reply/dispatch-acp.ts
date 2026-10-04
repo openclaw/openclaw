@@ -724,7 +724,7 @@ export async function tryDispatchAcpReplyCore(
       },
     });
 
-    await projector.flush(true);
+    await projector.flush();
     await delivery.flushBlockText();
     if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
       queuedFinal =
@@ -773,7 +773,7 @@ export async function tryDispatchAcpReplyCore(
       fallbackMessage: "ACP turn failed before completion.",
     });
     emitAuditError(acpError);
-    await projector.flush(true);
+    await projector.flush();
     await delivery.flushBlockText();
     queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
     await maybeUnbindStaleBoundConversations({

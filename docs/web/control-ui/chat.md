@@ -18,7 +18,9 @@ shows the tool label instead of leaving the text blank. Hover the icon to see th
 exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
-and activity summaries.
+and activity summaries. Built-in tools use semantic icons, including an envelope
+for messages, a calendar clock for scheduled jobs, and an image for image generation.
+Unknown tools use a puzzle icon unless their plugin supplies an activity icon.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,

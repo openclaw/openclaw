@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -14,6 +15,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withLocalWorkspaceProjection,
   withSettledLocalWorkspace,
@@ -110,6 +112,39 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it("loads reconciliation payloads once before the operation and rereads the final journal", async () => {
+    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    const store = localWorkspaceStore();
+    const row = store.get(owner.worktree.id)!;
+    const baseline = row.baseline_json + " ".repeat(6 * 1024 * 1024);
+    store.update(
+      row,
+      {
+        baseline_json: baseline,
+        baseline_ref: "sha256:" + createHash("sha256").update(baseline).digest("hex"),
+      },
+      owner.assertCurrent,
+    );
+    const reads = observeMainThreadReads();
+    const fullReads = () =>
+      reads.calls
+        .flatMap((call) => call.mock.contexts)
+        .filter((statement): statement is StatementSync => statement instanceof StatementSync)
+        .filter((statement) =>
+          /^select \* from "local_workspace_projections"/iu.test(statement.sourceSQL),
+        );
+    try {
+      reads.calibrate();
+      await withLocalWorkspaceProjection(owner, async (state) => {
+        expect(state.current().baseline_json).toBe(baseline);
+        expect(fullReads()).toHaveLength(1);
+      });
+      expect(fullReads()).toHaveLength(2);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
     ({ signal }) =>
