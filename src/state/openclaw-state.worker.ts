@@ -1,3 +1,4 @@
+import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -36,6 +37,15 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
+import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
+
+// PR provisioning has the template owner, but intentionally omits the application runtime.
+const templateRegistry = createWorkerOperationRegistry<WorktreeTemplateWorkerOperations>({
+  worktrees: () =>
+    import("../agents/worktrees/template-registry.worker.js").then(
+      (loaded) => loaded.worktreeTemplateOperations,
+    ),
+});
 
 let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
@@ -118,6 +128,9 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType.startsWith("worktrees.templates.")) {
+        return templateRegistry.prepare(commandType);
+      }
       if (commandType.startsWith("capture.")) {
         if (capture) {
           return undefined;
@@ -166,6 +179,15 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (templateRegistry.has(command)) {
+        return templateRegistry.execute(command, {
+          open,
+          stateOptions: () => ({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          }),
+        });
       }
       if (
         command.type === "capture.upsertSession" ||
