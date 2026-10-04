@@ -407,7 +407,7 @@ describe("installScheduledTask", () => {
     expect(script).toContain(
       'if not defined OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER set "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER=cmd"',
     );
-    expect(stdout.read()?.toString()).toContain(
+    expect(stdout.read(stdout.readableLength)?.toString()).toContain(
       "Unattended (S4U; boot and logon; no stored password)",
     );
     expectTaskRunCall(3, "OpenClaw Custom Gateway");
@@ -457,7 +457,7 @@ describe("installScheduledTask", () => {
     expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toContain(
       "node gateway.js --task-supervisor < NUL",
     );
-    expect(stdout.read()?.toString()).toContain("Preserved Password task");
+    expect(stdout.read(stdout.readableLength)?.toString()).toContain("Preserved Password task");
   });
 
   it("preserves task scripts when Scheduled Task deletion fails", async ({ profile: { env } }) => {
