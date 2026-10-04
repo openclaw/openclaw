@@ -146,7 +146,7 @@ describe("AcpSessionManager runtime config", () => {
       });
       await f.run();
       expect(f.state.close).toHaveBeenCalledOnce();
-      expect(f.manager.getObservabilitySnapshot(baseCfg).runtimeCache.activeSessions).toBe(0);
+      expect(f.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
       if (restart) {
         await disposeAcpSessionManagerInstance(f.manager, "gateway-shutdown");
       }
