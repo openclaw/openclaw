@@ -64,7 +64,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           mockWindowsTaskkillSuccess();
         } else {
           spawnSync.mockImplementation((exe, args) => {
-            if (args?.includes("-EncodedCommand")) {
+            if (
+              args?.includes("-EncodedCommand") ||
+              (args?.join(" ") ?? "").includes("Schedule.Service")
+            ) {
               return scheduledTaskProbeResult();
             }
             attempted ||= exe.endsWith("taskkill.exe");
@@ -98,7 +101,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
         );
         readWindowsProcessStartTimeSync.mockImplementation((pid) => (pid === 5151 ? 200 : 100));
         spawnSync.mockImplementation((exe, args) => {
-          if (args?.includes("-EncodedCommand")) {
+          if (
+            args?.includes("-EncodedCommand") ||
+            (args?.join(" ") ?? "").includes("Schedule.Service")
+          ) {
             return scheduledTaskProbeResult(killed.has(4242) ? 3 : 4);
           }
           if (exe.endsWith("taskkill.exe")) {
@@ -149,7 +155,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       mockLingeringGatewayListener(4242);
       readWindowsProcessStartTimeSync.mockReturnValueOnce(100).mockReturnValue(200);
       spawnSync.mockImplementation((exe, args) =>
-        args?.includes("-EncodedCommand")
+        args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service")
           ? scheduledTaskProbeResult()
           : spawnSyncResult(
               exe.endsWith("tasklist.exe")
@@ -195,7 +201,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           readGatewayOwnerLease.mockReturnValue(undefined);
           let replacementStarted = false;
           spawnSync.mockImplementation((exe, args) => {
-            if (args?.includes("-EncodedCommand")) {
+            if (
+              args?.includes("-EncodedCommand") ||
+              (args?.join(" ") ?? "").includes("Schedule.Service")
+            ) {
               return scheduledTaskProbeResult();
             }
             if (exe.endsWith("tasklist.exe") && !replacementStarted) {
@@ -243,7 +252,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       const ended = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
       readGatewayOwnerLease.mockImplementation(() => (ended() ? undefined : GATEWAY_OWNER));
       spawnSync.mockImplementation((exe, args) => {
-        if (args?.includes("-EncodedCommand")) {
+        if (
+          args?.includes("-EncodedCommand") ||
+          (args?.join(" ") ?? "").includes("Schedule.Service")
+        ) {
           return scheduledTaskProbeResult();
         }
         if (exe.toLowerCase().endsWith("tasklist.exe")) {
@@ -284,7 +296,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           pid: 5252,
         });
         spawnSync.mockImplementation((_exe, args) =>
-          args?.includes("-EncodedCommand")
+          args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service")
             ? scheduledTaskProbeResult()
             : spawnSyncResult("No tasks"),
         );
@@ -380,7 +392,8 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
             options.assertDispatchCurrent();
             readGatewayOwnerLease.mockImplementation(failRead);
             spawnSync.mockImplementation((exe, args) =>
-              args?.includes("-EncodedCommand")
+              args?.includes("-EncodedCommand") ||
+              (args?.join(" ") ?? "").includes("Schedule.Service")
                 ? scheduledTaskProbeResult()
                 : spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
             );

@@ -55,6 +55,24 @@ const READ_TASK = [
   "$result }",
 ].join("; ");
 
+// Task Scheduler query body. `powershell -EncodedCommand` trips Defender's
+// obfuscation heuristic even though this script only reads task state, so the
+// body stays a literal string and the task name is passed as base64 data on the
+// child's stdin, keeping the spawned command line fixed and auditable. See #138224.
+const SCHEDULED_TASK_QUERY_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
+  "$rawTaskName=[Console]::In.ReadLine()",
+  "$taskName=$null",
+  "if(-not [string]::IsNullOrEmpty($rawTaskName)) { $taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($rawTaskName)) }",
+  "$lookup=$false",
+  READ_TASK,
+  "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect() } catch { Write-Output $_.Exception.HResult; exit 2 }",
+  "function Read-Folder($folder) { foreach($task in $folder.GetTasks(1)) { Read-Task $task }; foreach($child in $folder.GetFolders(0)) { Read-Folder $child } }",
+  "if($null -eq $taskName) { try { $tasks=@(Read-Folder ($service.GetFolder('\\'))); ConvertTo-Json -InputObject $tasks -Depth 4 -Compress; exit 0 } catch { Write-Output $_.Exception.HResult; exit 2 } }",
+  "try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; Read-Task $task | ConvertTo-Json -Depth 4 -Compress; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }",
+].join("; ");
+
 function queryTaskScheduler(
   taskName: string | undefined,
   timeoutMs?: number,
@@ -72,32 +90,18 @@ function queryTaskScheduler(
     timeoutMs,
     WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
   );
-  const encodedTaskName = Buffer.from(taskName ?? "", "utf8").toString("base64");
-  const script = [
-    "$ErrorActionPreference='Stop'",
-    "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
-    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
-    "$lookup=$false",
-    READ_TASK,
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect() } catch { Write-Output $_.Exception.HResult; exit 2 }",
-    taskName === undefined
-      ? "function Read-Folder($folder) { foreach($task in $folder.GetTasks(1)) { Read-Task $task }; foreach($child in $folder.GetFolders(0)) { Read-Folder $child } }; try { $tasks=@(Read-Folder ($service.GetFolder('\\'))); ConvertTo-Json -InputObject $tasks -Depth 4 -Compress; exit 0 } catch { Write-Output $_.Exception.HResult; exit 2 }"
-      : "try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; Read-Task $task | ConvertTo-Json -Depth 4 -Compress; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }",
-  ].join("; ");
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
+    ["-NoProfile", "-NonInteractive", "-Command", SCHEDULED_TASK_QUERY_SCRIPT],
     {
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: probeTimeoutMs,
       // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
       windowsHide: false,
+      // The task name rides on the child's stdin as base64 data, so the command body
+      // stays a fixed literal and caller data never reaches the command line.
+      input: taskName === undefined ? "" : `${Buffer.from(taskName, "utf8").toString("base64")}\n`,
     },
   );
   if (probe.error) {
