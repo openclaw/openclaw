@@ -1230,6 +1230,8 @@ jobs:
           HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
           PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
           SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
           TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
@@ -1249,8 +1251,8 @@ jobs:
               --target-sha "$TARGET_SHA" \
               --harness-repository "$HARNESS_REPOSITORY" \
               --harness-sha "$HARNESS_SHA" \
-              --run-id "$GITHUB_RUN_ID" \
-              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --run-id "$PRODUCER_RUN_ID" \
+              --run-attempt "$PRODUCER_RUN_ATTEMPT" \
               --package-version "$PACKAGE_VERSION" \
               --manifest-sha256 "$MANIFEST_SHA256" \
               --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
@@ -1420,6 +1422,8 @@ jobs:
           HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
           PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
           SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
           TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
@@ -1439,8 +1443,8 @@ jobs:
               --target-sha "$TARGET_SHA" \
               --harness-repository "$HARNESS_REPOSITORY" \
               --harness-sha "$HARNESS_SHA" \
-              --run-id "$GITHUB_RUN_ID" \
-              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --run-id "$PRODUCER_RUN_ID" \
+              --run-attempt "$PRODUCER_RUN_ATTEMPT" \
               --package-version "$PACKAGE_VERSION" \
               --manifest-sha256 "$MANIFEST_SHA256" \
               --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
