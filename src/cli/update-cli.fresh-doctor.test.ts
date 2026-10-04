@@ -30,7 +30,6 @@ import {
   resolveGatewayInstallEntrypoint,
   resolveOpenClawPackageRoot,
   resolveUpdateInstallKind,
-  runCommandWithTimeout,
   runExec,
   runUtf8CommandWithTimeout,
   runPostCorePluginConvergenceSpy,
