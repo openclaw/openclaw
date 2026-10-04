@@ -37,6 +37,10 @@ import {
   resolveLegacyProfileWorkspaceMigrationPaths,
 } from "./state-migrations.state-dir.js";
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
 const tempDirs = createTrackedTempDirs();
 
 function writeLegacyDoctorSources(stateDir: string): { execPath: string } {
@@ -115,12 +119,12 @@ function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("legacy state migration caller execution", () => {
@@ -378,13 +382,19 @@ describe("legacy state migration caller execution", () => {
     expect(fs.existsSync(legacyStateDir)).toBe(true);
     expect(fs.existsSync(stateDir)).toBe(false);
 
-    const explicitStatePlan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root, version: "test" },
-      snapshot: { homeDir: root, configPath, stateDir: legacyStateDir },
-      env: { ...env, OPENCLAW_STATE_DIR: legacyStateDir },
-    });
-    expect(explicitStatePlan.steps[0]?.id).toBe("state-schema");
+    for (const selector of [
+      { OPENCLAW_STATE_DIR: legacyStateDir },
+      { OPENCLAW_HOME: root },
+      { OPENCLAW_CONFIG_PATH: configPath },
+    ]) {
+      const explicitPlan = await planLegacyStateMigrationsReadOnly({
+        mode: "doctor",
+        candidate: { root, version: "test" },
+        snapshot: { homeDir: root, configPath, stateDir: legacyStateDir },
+        env: { ...env, ...selector },
+      });
+      expect(explicitPlan.steps[0]?.id).toBe("state-schema");
+    }
   });
 
   it("refuses later migrations when the legacy state root cannot be relocated", async () => {
