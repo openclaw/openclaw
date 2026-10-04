@@ -39,7 +39,11 @@ import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
 import { formatForLog } from "../../ws-log.js";
-import { joinOrStartTalkConsult, startTalkRealtimeAgentConsult } from "../agent-consult.js";
+import {
+  joinOrStartTalkConsult,
+  normalizeTalkConsultJoinRequest,
+  startTalkRealtimeAgentConsult,
+} from "../agent-consult.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -99,6 +103,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
       let consultArgs: unknown = params.args ?? {};
+      let joinRequest: string;
       let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
       let voiceSessionId: string;
       try {
@@ -134,6 +139,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           request.sessionMutationAuthorization?.assertCurrent();
         }
         const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
+        joinRequest = normalizeTalkConsultJoinRequest(parsedArgs);
         const origin = assertClientVoiceSessionOpen({
           agentId,
           sessionKey: params.sessionKey,
@@ -170,8 +176,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const startConsult = () =>
-        startTalkRealtimeAgentConsult(request, {
+      const startConsult = () => {
+        return startTalkRealtimeAgentConsult(request, {
           sessionTarget: target,
           callId: params.callId,
           args: consultArgs,
@@ -199,11 +205,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             }
           },
         });
+      };
       // A confirmed retry must reach the agent; never fold it into the blocked run.
       const result = confirmationGrant
         ? await startConsult()
         : await joinOrStartTalkConsult({
             key: `${agentId}:${voiceSessionId}`,
+            request: joinRequest,
             isRunLive: (runId) => resolveClientVoiceRunBinding(runId) !== undefined,
             start: startConsult,
           });

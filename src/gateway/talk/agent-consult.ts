@@ -40,44 +40,78 @@ type TalkConsultStart =
   | { ok: true; runId: string; idempotencyKey: string }
   | { ok: false; error: ErrorShape };
 
+type InFlightTalkConsult = {
+  startedAt: number;
+  request: string;
+  start: Promise<TalkConsultStart>;
+};
+
 const CONSULT_JOIN_WINDOW_MS = 120_000;
-const inFlightConsults = new Map<string, { startedAt: number; start: Promise<TalkConsultStart> }>();
+const inFlightConsults = new Map<string, InFlightTalkConsult>();
+
+/** Comparison form of a consult request: a repeat matches whatever its spacing or letter case. */
+export function normalizeTalkConsultJoinRequest(args: {
+  question: string;
+  context?: string;
+  responseStyle?: string;
+}): string {
+  return [args.question, args.context ?? "", args.responseStyle ?? ""]
+    .map((part) => part.trim().replace(/\s+/g, " ").toLowerCase())
+    .join("\n");
+}
 
 /**
- * Start a consult, or join the one already in flight for this voice session.
+ * Start a consult, or join the one already in flight for the same request in this voice session.
  *
  * A realtime model that repeats the consult tool call would otherwise send one
  * chat message per repeat into the busy session. Each returns at once with no
  * text, the model calls again, and the session is left with a backlog of turns.
+ * A different request is never joined: it gets its own start, and chat admission
+ * answers it while the earlier run is still active.
  */
 export async function joinOrStartTalkConsult(params: {
   key: string;
+  request: string;
   isRunLive: (runId: string) => boolean;
   start: () => Promise<TalkConsultStart>;
 }): Promise<TalkConsultStart> {
+  let liveOther: InFlightTalkConsult | undefined;
   for (;;) {
     const prior = inFlightConsults.get(params.key);
     // 120 s matches the client's consult wait and bounds a run whose completion
-    // was never observed. A different follow-up question asked inside the window
-    // is answered by the in-flight run.
+    // was never observed.
     if (!prior || Date.now() - prior.startedAt >= CONSULT_JOIN_WINDOW_MS) {
       break;
     }
     const result = await prior.start;
     if (result.ok && params.isRunLive(result.runId)) {
-      return result;
+      if (prior.request === params.request) {
+        return result;
+      }
+      liveOther = prior;
+      break;
     }
     if (inFlightConsults.get(params.key) === prior) {
       inFlightConsults.delete(params.key);
       break;
     }
   }
-  const entry = { startedAt: Date.now(), start: params.start() };
+  const entry = { startedAt: Date.now(), request: params.request, start: params.start() };
   // Entries past the join window are never joined; drop them so the map stays bounded.
   for (const [key, stale] of inFlightConsults) {
     if (entry.startedAt - stale.startedAt >= CONSULT_JOIN_WINDOW_MS) {
       inFlightConsults.delete(key);
     }
+  }
+  if (liveOther) {
+    // The live run keeps its entry so its own repeats still join. This request
+    // replaces it only if it really started.
+    const result = await entry.start;
+    const current = inFlightConsults.get(params.key);
+    if (result.ok && (!current || current.startedAt <= entry.startedAt)) {
+      inFlightConsults.set(params.key, entry);
+    }
+    return result;
   }
   inFlightConsults.set(params.key, entry);
   const result = await entry.start;
