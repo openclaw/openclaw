@@ -32,6 +32,7 @@ title: "Agent schema history"
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | Unreleased                                        |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | Unreleased                                        |
 | 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | Unreleased                                        |
+| 25      | One session-node validity UPDATE trigger covering payload, identity, and timestamp writes                                                                                                                                                              | Unreleased                                        |
 
 Version 3 was an unshipped development step folded into version 4.
 
@@ -47,6 +48,31 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Session-node validity trigger consolidation
+
+Agent schema **25** replaces the two validity UPDATE triggers on `session_nodes`
+with `session_nodes_entry_valid_after_update`, covering `entry_json`,
+`current_session_id`, and `updated_at` together. The existing schema migration
+owner drops both old triggers and installs the merged trigger in its immediate
+transaction, publishing both version markers atomically. Session payloads and
+snapshots retain their representation. The insert trigger, canonical writer's
+explicit validity settlement, and canonical-validation pending triggers remain.
+
+An ordinary session-node UPSERT followed by validity settlement now performs
+three physical node updates instead of four, with one fewer cache-generation
+update. Top-level application statement count is unchanged. Raw writes still
+invalidate the row, including SET clauses whose values do not change; rollback
+restores data, pending validation, and local cache generations together.
+
+Like schema 21, this changes a required trigger on a canonical table, which older
+schema inspectors reject. Older builds refuse schema 25 with the newer-schema
+error; Gateway startup exits 78, and `openclaw update` refuses older targets.
+Take and verify a WAL-aware backup before migration. Rollback restores that
+pre-migration backup and its matching build; lowering version markers or
+reinstalling old triggers alone is not a supported downgrade. Maintainer acceptance
+of this bump is pending in the implementing PR under the
+[storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
 
 ### Session hot facts and snapshots
 

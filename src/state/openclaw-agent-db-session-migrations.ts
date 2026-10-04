@@ -399,6 +399,23 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
   ensureColumn(db, "conversations", "delivery_target TEXT NOT NULL DEFAULT ''");
 }
 
+export function ensureSessionEntryValidityTriggers(db: DatabaseSync): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_entry_update;
+    DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_identity_update;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+    AFTER INSERT ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_update
+    AFTER UPDATE OF entry_json, current_session_id, updated_at ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+  `);
+}
+
 /** Adds the validity projection and settles only rows left pending by older writers. */
 export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "session_nodes");
@@ -411,23 +428,7 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-  `);
+  ensureSessionEntryValidityTriggers(db);
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );
