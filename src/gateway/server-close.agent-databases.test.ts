@@ -470,7 +470,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
-    ).toBeUndefined();
+    ).toEqual({ [pluginId]: { active: true } });
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" }),
     ).toMatchObject({

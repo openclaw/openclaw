@@ -641,11 +641,12 @@ async function closeGatewayResources(
       }
       for (const { pluginId, hookId, error } of registryClose.pluginFailures) {
         recordShutdownWarning(warnings, `plugin/${pluginId}`);
-        resourceCleanupErrors.push(
-          new Error(`Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`, {
-            cause: error,
-          }),
-        );
+        const message = `Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`;
+        shutdownLog.warn(message);
+        // Retirement has joined admitted work; callback faults are diagnostic, unlike lost state.
+        if (hookId === "session-store") {
+          resourceCleanupErrors.push(new Error(message, { cause: error }));
+        }
       }
     } catch (error) {
       resourceCleanupErrors.push(error);
