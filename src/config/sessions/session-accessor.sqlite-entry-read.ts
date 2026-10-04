@@ -138,15 +138,26 @@ export type ResolvedSessionEntryRow = {
     >;
 };
 
+type ReadableSessionEntryRow = ResolvedSessionEntryRow["row"] &
+  (CanonicalSessionValidationRow | { retained_window_id?: never });
+
 function parseReadableSessionEntryData(
   database: Pick<OpenClawAgentDatabase, "db">,
-  row: ResolvedSessionEntryRow["row"],
+  row: ReadableSessionEntryRow,
   projection: "full" | "list" | "delivery",
 ): SessionEntry | null {
   const parsed: SessionEntry | null =
     projection === "delivery"
       ? parseSqliteSessionEntryRecord(row)
       : parseSessionEntryRow(row, projection);
+  if (parsed) {
+    validateDeliveryCanonicalSessionEntry(row.session_key, parsed);
+  }
+  if (row.retained_window_id !== undefined) {
+    // The guard and decoded entry share one statement snapshot, including cold handles.
+    validateCanonicalSessionRowEntry(row, parsed, "read");
+    return parsed;
+  }
   if (parsed) {
     if (projection === "delivery") {
       const { sessionId, updatedAt, delivery, groupId } = parsed;
@@ -188,24 +199,19 @@ export function validateDeliveryCanonicalSessionEntry(
 /** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
 export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
-  row: ResolvedSessionEntryRow["row"],
+  row: ReadableSessionEntryRow,
   projection: "full" | "list" = "full",
 ): SessionEntry | null {
   const parsed = parseReadableSessionEntryData(database, row, projection);
-  return parsed
-    ? validateDeliveryCanonicalSessionEntry(
-        row.session_key,
-        projectSqliteSessionParticipants(database.db, row.session_key, parsed),
-      )
-    : null;
+  return parsed ? projectSqliteSessionParticipants(database.db, row.session_key, parsed) : null;
 }
 
 /** Decode supplied rows in caller order while sharing their lazy participant acquisition. */
 export function prepareSqliteSessionEntryRowDecoder(
   database: Pick<OpenClawAgentDatabase, "db">,
-  rows: readonly ResolvedSessionEntryRow["row"][],
+  rows: readonly ReadableSessionEntryRow[],
   projection: "full" | "list" | "delivery" = "full",
-): (row: ResolvedSessionEntryRow["row"]) => SessionEntry | null {
+): (row: ReadableSessionEntryRow) => SessionEntry | null {
   const projectParticipants =
     projection === "delivery"
       ? (_key: string, entry: SessionEntry) => entry
@@ -215,12 +221,7 @@ export function prepareSqliteSessionEntryRowDecoder(
         );
   return (row) => {
     const parsed = parseReadableSessionEntryData(database, row, projection);
-    return parsed
-      ? validateDeliveryCanonicalSessionEntry(
-          row.session_key,
-          projectParticipants(row.session_key, parsed),
-        )
-      : null;
+    return parsed ? projectParticipants(row.session_key, parsed) : null;
   };
 }
 
@@ -243,7 +244,7 @@ export function parseReadableSqliteSessionEntryRows(
   return [...projectSqliteSessionParticipantsBatch(database.db, parsedEntries)].map(
     ([sessionKey, entry]) => ({
       sessionKey,
-      entry: validateDeliveryCanonicalSessionEntry(sessionKey, entry),
+      entry,
     }),
   );
 }
@@ -347,11 +348,9 @@ export function readExactSessionEntryRow(
 ): ResolvedSessionEntryRow | undefined {
   return runSqliteReadOperationSync(database.db, () => {
     const queries = getExactSessionEntryQueries(database.db);
-    const canonicalRow =
-      validation === "canonical" ? queries.canonical(sessionKey, projection) : undefined;
     const row =
       validation === "canonical"
-        ? canonicalRow
+        ? queries.canonical(sessionKey, projection)
         : projection === "list"
           ? queries.metadata(sessionKey)
           : queries.row(sessionKey);
@@ -359,10 +358,6 @@ export function readExactSessionEntryRow(
       return undefined;
     }
     const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
-    if (canonicalRow) {
-      // The guard and decoded entry share one statement snapshot, including cold handles.
-      validateCanonicalSessionRowEntry(canonicalRow, entry, "read");
-    }
     return entry ? { entry, row } : undefined;
   });
 }
@@ -372,17 +367,19 @@ export function prepareExactSessionEntryRowReads(
   database: OpenClawAgentDatabaseReader,
   sessionKeys: readonly string[],
   projection: "full" | "list" | "delivery" = "full",
+  validation?: "canonical",
 ): (sessionKey: string) => ResolvedSessionEntryRow | undefined {
   return runSqliteReadOperationSync(database.db, () => {
-    let rows: ResolvedSessionEntryRow["row"][];
+    let rows: ReadableSessionEntryRow[];
     try {
       rows = executeSqliteQuerySync(
         database.db,
-        selectReadableSessionEntryRows(database, projection).where(
-          "session_key",
-          "in",
-          sqliteStringSet(sessionKeys),
-        ),
+        (validation === "canonical"
+          ? canonicalSessionValidationQuery(database, { metadata: true })
+              .select("session_nodes.updated_at")
+              .$if(projection === "full", (query) => query.select(sessionEntrySnapshotColumns))
+          : selectReadableSessionEntryRows(database, projection)
+        ).where("session_nodes.session_key", "in", sqliteStringSet(sessionKeys)),
       ).rows;
     } catch {
       // Native conversion errors have no row identity; exact reads preserve each key's error.
@@ -391,6 +388,7 @@ export function prepareExactSessionEntryRowReads(
           database,
           sessionKey,
           projection === "delivery" ? "list" : projection,
+          validation,
         );
     }
     const byKey = new Map(rows.map((row) => [row.session_key, row]));

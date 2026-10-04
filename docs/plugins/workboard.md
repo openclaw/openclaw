@@ -104,11 +104,23 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
+Card lists share one prepared, claim-token-redacted snapshot per board scope and
+card revision. `workboard.cards.list` returns `revision`; repeat the same query
+with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+The revision includes the store epoch and, for scoped queries, the normalized
+`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+an event `revision` and a separate `cardsRevision`: session-fact notifications
+advance the event sequence without invalidating unchanged cards.
+
 ## Sessions board
 
 Use a Sessions board to see where your conversations stand without creating
 cards. By default, it includes sessions from all configured agents with activity
-in the last 72 hours and excludes archived sessions. Each session appears in
+in the last 72 hours and excludes archived sessions, automation (cron) sessions,
+system sessions, and each agent's home session. Subagent sessions remain included.
+Set `scope.includeAutomation: true` to include automation and system sessions, or
+`scope.includeHome: true` to include home sessions. The Board agent can set these
+options. Existing boards use the same defaults without a migration. Each session appears in
 exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent
 activity. The agent filter narrows the displayed sessions without changing the
@@ -191,7 +203,8 @@ id from that context or from `workboard_boards`.
 Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
 (1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
 Optional colors use the board palette. `scope` accepts `agentIds`,
-`includeArchived`, and a positive `maxAgeHours`. Rules can match `health`, `run`
+`includeArchived`, `includeAutomation`, `includeHome`, and a positive `maxAgeHours`.
+The include options default to false. Rules can match `health`, `run`
 (`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
 `closed`), and `archived`. Unknown pull-request state does not count as `none`.
 

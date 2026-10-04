@@ -9,8 +9,9 @@ import {
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
-import { loadWorkboard } from "./loading.ts";
+import { loadWorkboard, loadWorkboardCatalog } from "./loading.ts";
 import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
+import { createWorkboardCard } from "./test/index-helpers.ts";
 
 function createClient(run: (method: string) => unknown) {
   return { request: vi.fn(async (method: string) => run(method)) };
@@ -236,4 +237,32 @@ describe("Workboard live refresh", () => {
     expect(getWorkboardState(host).cards).toEqual([]);
     expect(getWorkboardState(host).loading).toBe(false);
   });
+});
+
+it("retains cards on unchanged responses and still refreshes caller-scoped Sessions boards", async () => {
+  const host = {};
+  const revision = { epoch: "cards", revision: 1 };
+  const card = createWorkboardCard();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ cards: [card], boards: [], revision })
+    .mockResolvedValue({ unchanged: true, revision });
+  const client = { request } as never;
+  await loadWorkboardCatalog({ host, client });
+  expect(getWorkboardState(host).loaded).toBe(false);
+  await loadWorkboard({ host, client });
+  expect(getWorkboardState(host).loaded).toBe(true);
+  expect(getWorkboardState(host).cards).toEqual([card]);
+  expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { sinceRevision: revision });
+  configureWorkboardLiveRefresh({ host, client });
+  expect(handleWorkboardChanged(host, { epoch: "cards", revision: 2, cardsRevision: 1 })).toBe(
+    false,
+  );
+  const refresh = vi.fn(async () => true);
+  configureWorkboardLiveRefresh({ host, client, refresh });
+  expect(handleWorkboardChanged(host, { epoch: "cards", revision: 3, cardsRevision: 1 })).toBe(
+    true,
+  );
+  expect(refresh).toHaveBeenCalledOnce();
+  stopWorkboardLiveRefresh(host);
 });

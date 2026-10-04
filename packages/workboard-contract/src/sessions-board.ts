@@ -225,7 +225,13 @@ function normalizeColumn(value: unknown) {
 }
 
 function normalizeScope(value: unknown) {
-  const input = record(value, "scope", ["agentIds", "includeArchived", "maxAgeHours"]);
+  const input = record(value, "scope", [
+    "agentIds",
+    "includeArchived",
+    "includeAutomation",
+    "includeHome",
+    "maxAgeHours",
+  ]);
   let agentIds: string[] | undefined;
   if (input.agentIds !== undefined) {
     if (!Array.isArray(input.agentIds)) {
@@ -244,6 +250,12 @@ function normalizeScope(value: unknown) {
     ...(agentIds !== undefined ? { agentIds } : {}),
     ...(input.includeArchived !== undefined
       ? { includeArchived: boolean(input.includeArchived, "scope.includeArchived") }
+      : {}),
+    ...(input.includeAutomation !== undefined
+      ? { includeAutomation: boolean(input.includeAutomation, "scope.includeAutomation") }
+      : {}),
+    ...(input.includeHome !== undefined
+      ? { includeHome: boolean(input.includeHome, "scope.includeHome") }
       : {}),
     ...(maxAgeHours !== undefined ? { maxAgeHours } : {}),
   };

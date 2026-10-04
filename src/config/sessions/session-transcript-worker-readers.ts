@@ -460,6 +460,12 @@ export function createSessionHistoryWorkerReaders(
           return value.entries;
         },
       ),
+    readStoreProjection: reader(
+      "session-store-projection",
+      "store projection admission",
+      (input) => ({ kind: "session-store-projection", ...input }),
+      (value) => value,
+    ),
     readStoreSummary: reader(
       "session-store-summary",
       "a store summary",

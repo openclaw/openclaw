@@ -141,8 +141,8 @@ export default defineControlUiPlugin({
       ),
       workboard.subscribe(host.ui.invalidate),
       host.subscribe(() => catalog.sync(client, host.connection.connected)),
-      host.onEvent(WORKBOARD_CHANGED_EVENT, () =>
-        catalog.handleGatewayEvent(WORKBOARD_CHANGED_EVENT),
+      host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) =>
+        catalog.handleGatewayEvent(WORKBOARD_CHANGED_EVENT, payload),
       ),
     ];
     catalog.sync(client, host.connection.connected);

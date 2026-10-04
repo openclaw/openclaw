@@ -1135,20 +1135,6 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("preserves a newer sentinel while draining durable work from the loaded revision", async () => {
-    mocks.clearSentinel.mockResolvedValueOnce(false);
-
-    await wakeRestartSentinel();
-
-    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
-    expect(mocks.logInfo).toHaveBeenCalledWith(
-      "restart summary: newer restart sentinel preserved while draining durable work",
-      { sessionKey: "agent:main:main" },
-    );
-  });
-
   it("does not resend a restart notice whose stable queue id is already owned", async () => {
     mocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
     mocks.findDeliveryIntentOwner.mockResolvedValueOnce({

@@ -204,7 +204,7 @@ it("reads row metadata, board presence, and cold summary position from one snaps
     const concurrentCommit = vi
       .spyOn(boardStore, "readBoardSessionKeys")
       .mockImplementationOnce((reader, key) => {
-        // Commit after entry decoding; the remaining facts must retain its original snapshot.
+        // Commit after entry acquisition; the remaining facts must retain its original snapshot.
         peer.exec("BEGIN IMMEDIATE");
         try {
           peer
@@ -236,9 +236,27 @@ it("reads row metadata, board presence, and cold summary position from one snaps
         if (!opened.found) {
           throw new Error("Expected the seeded read-only database");
         }
-        const queries = trackSqliteStatementExecutions(opened.value.db, ["boards"], (sql) =>
-          /\bfrom "board_tabs"/iu.test(sql) ? "boards" : null,
+        const queries = trackSqliteStatementExecutions(
+          opened.value.db,
+          ["boards", "entries"],
+          (sql) => {
+            if (/\bfrom "board_tabs"/iu.test(sql)) {
+              return "boards";
+            }
+            return /\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')
+              ? "entries"
+              : null;
+          },
         );
+        const parse = vi.spyOn(JSON, "parse");
+        const entryParseCount = () =>
+          parse.mock.calls.filter(
+            ([value]) =>
+              typeof value === "string" &&
+              value.includes('"sessionId":') &&
+              (value.includes(sessionId) ||
+                sessionKeys.slice(1).some((key) => value.includes(key))),
+          ).length;
         try {
           const read = () =>
             readSessionRowDatabaseFacts({
@@ -250,6 +268,9 @@ it("reads row metadata, board presence, and cold summary position from one snaps
           const first = read();
           expect(first.rows).toHaveLength(64);
           expect(queries.counts.boards).toBe(1);
+          expect(queries.counts.entries).toBe(1);
+          expect(queries.rowCounts.entries).toBe(64);
+          expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
           );
@@ -270,7 +291,10 @@ it("reads row metadata, board presence, and cold summary position from one snaps
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
           expect(queries.counts.boards).toBe(2);
+          expect(queries.counts.entries).toBe(2);
+          expect(entryParseCount()).toBe(128);
         } finally {
+          parse.mockRestore();
           queries.restore();
         }
       });

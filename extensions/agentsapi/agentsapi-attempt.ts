@@ -176,7 +176,7 @@ export async function runAgentsApiAttempt(
   );
   let terminalTurnId: string | undefined;
   const toolCleanups: Array<(reason: string) => Promise<void>> = [];
-  let toolSurface: ReturnType<typeof buildAgentsApiToolSurface> | undefined;
+  let toolSurface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>> | undefined;
   let outputMedia: string[] | undefined;
   let startedToolCount = 0;
   let completedToolCount = 0;
@@ -224,7 +224,7 @@ export async function runAgentsApiAttempt(
     assertCurrent();
     const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
     const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
-    const surface = buildAgentsApiToolSurface(
+    const surface = await buildAgentsApiToolSurface(
       runParams,
       controller.signal,
       assertCurrent,

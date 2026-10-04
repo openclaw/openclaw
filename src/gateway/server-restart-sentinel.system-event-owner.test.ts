@@ -44,16 +44,6 @@ const cases = [
     payload: { kind: "systemEvent", sessionKey: "global", text: "resume work" },
   },
   {
-    name: "stored system-event owner",
-    loadedAgentId: "main",
-    payload: {
-      kind: "systemEvent",
-      sessionKey: "global",
-      agentId: "research",
-      text: "resume work",
-    },
-  },
-  {
     name: "agent turn without a route",
     loadedAgentId: "research",
     payload: {

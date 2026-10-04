@@ -1,7 +1,8 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
-  selectAcpSessionRowForRead,
+  acpSessionRowMatchesEntry,
   selectAcpSessionRows,
+  selectAcpSessionRowsByKeys,
 } from "../acp/runtime/session-meta-keys.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
@@ -267,9 +268,22 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "acpSessions.metadata") {
+              const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
+              const rows = new Map(
+                [...selectAcpSessionRowsByKeys(db, cohortKeys)].map((row) => [
+                  row.session_key,
+                  row,
+                ]),
+              );
               return {
                 type: command.type,
-                rows: command.entries.map((entry) => selectAcpSessionRowForRead(db, entry) ?? null),
+                rows: command.entries.map(
+                  ({ keys, entry }) =>
+                    keys
+                      .map((key) => rows.get(key))
+                      .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ??
+                    null,
+                ),
               };
             }
             if (isChannelIngressReadCommand(command)) {

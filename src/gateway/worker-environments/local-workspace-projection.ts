@@ -70,8 +70,7 @@ export async function withSettledLocalWorkspace<T>(
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
-  const store = localWorkspaceStore(params.env);
-  const row = store.get(params.worktree.id);
+  const row = localWorkspaceStore(params.env).get(params.worktree.id);
   if (!row) {
     return await operation();
   }
@@ -255,6 +254,7 @@ export async function withLocalWorkspaceProjection<T>(
           },
         },
         lease.signal,
+        previous,
       );
       const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");
@@ -282,9 +282,13 @@ export async function withLocalWorkspaceProjection<T>(
   );
 }
 
-function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
+function projectionOperations(
+  owner: LocalWorkspaceOwner,
+  signal: AbortSignal,
+  initialRow: LocalWorkspaceProjection | undefined,
+) {
   const store = localWorkspaceStore(owner.env);
-  let row = store.get(owner.worktree.id);
+  let row = initialRow;
   const selectCurrent = (authority: LocalWorkspaceOwner) => {
     if (!row) {
       throw new Error("Local workspace binding is missing");
@@ -306,7 +310,6 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
   };
   const update = (patch: Parameters<typeof store.update>[1]) => {
     row = store.update(current(), patch, current);
-    return row;
   };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;

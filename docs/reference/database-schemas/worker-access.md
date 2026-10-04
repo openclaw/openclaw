@@ -860,6 +860,22 @@ Cached publication stores outside a sync generation keep the ordinary shutdown
 release behavior; settled leases do not wait for unrelated cleanup. This changes
 neither persisted retention nor update behavior.
 
+A reply or its owning work scope aborted for restart releases its admission's
+database claim immediately, including after terminal settlement freezes reply
+cancellation, without waiting for model or tool finalization. The admission read has already
+settled. Other admitted work retains its own references, and the last borrower
+closes the native worker and publishes the clean-close receipt. The released
+claim stays invalid; reply completion still joins the same idempotent release
+before admitting a successor. Ordinary user cancellation retains its original
+cleanup lifetime. Each restart release logs the attached run ID when available.
+
+After run cancellation and ACP session drainage, the Gateway's existing plugin
+registry owner begins Memory manager drainage before joining connection and SDK
+cleanup. Memory still settles accepted sync and publication work before releasing
+its database borrows. Other serving Gateways retain shared Memory runtimes. Final
+registry, model, and shared-state retirement stays behind the existing cleanup
+joins and consumes the same Memory drainage result.
+
 Memory Core standing-intent operations queue through the canonical agent writer
 before acquiring their database generation. Their connection-bound worker handles
 creation, listing, cancellation, matching, and lifecycle maintenance. Schema
@@ -952,6 +968,15 @@ revision within the writer FIFO, including after lost replies; unknown outcomes
 never replay. Database close joins accepted mutations. Workspace authoring guards
 retain their existing owner. Schemas, quotas, retention, publication security checks,
 and update behavior are unchanged.
+
+Delegate-tool construction prepares sandbox classification and exec approvals
+through the existing readers before assembling its permission posture. Each
+construction and permission refresh reads current policy from its captured
+physical store; there is no run-wide approvals snapshot. Source and run authority
+are rechecked after preparation, and unavailable approval state remains fail-closed.
+Bundled tool factories await preparation; released synchronous harness factories
+remain deprecated SDK compatibility paths until the next Plugin SDK major.
+Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
 
 Channel pairing allowlist preparation uses the existing shared-state reader.
 The async SDK reader captures the physical store before yielding and reads current
@@ -1594,6 +1619,14 @@ before returning the result. Cold archives retain their existing restoration
 owner. Native transaction callbacks and process-held incognito transcripts retain
 their synchronous reader; worker failures never fall back to host disk reads.
 
+Generic and assistant matching share one reverse raw-sequence scanner. Stored
+navigation filters run, role, and idempotency candidates before compressed bodies
+are decoded; the canonical event still decides visible-final and delivery-mirror
+matches. Active-assistant anchors are checked in the same cold-marker-protected
+snapshot. Identity TEXT retains JavaScript duplicate-key and Unicode semantics;
+latest and arbitrary rewrite predicates keep canonical-body reads. This changes
+no schema, stored metadata, restoration, or update behavior.
+
 Turn completion and reply-delivery observation read durable anchors, projection
 readiness, and reply-tail identities through that same history worker. Each batch
 uses one snapshot and refuses stale projections without rebuilding them. Final
@@ -1646,6 +1679,14 @@ notifications retain their invalidation checks. Rows replaced or
 refreshed by direct reads while a reply is pending keep their newer facts; a dirty
 replacement retries under its own generation. Related rows use resident facts and
 existing invalidations to converge across batches.
+
+Cold resident-store admission reads its initial entry inventory through the same
+projection worker. The host captures every physical file before yielding, retains
+reader custody through publication, and rejects replies after a store replacement
+or a concurrent session publication. Existing stores reuse resident entries;
+canonical comparison-schema validation and metadata admission remain with the
+worker connection owner and its admitted schema facts. Schema, stored bytes,
+retention, and update behavior are unchanged.
 
 Dirty resident row refreshes also prepare ACP metadata in the shared-state read
 worker. Explicit absence travels with the row facts, so presentation does not

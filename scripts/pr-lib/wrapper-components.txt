@@ -972,6 +972,7 @@ src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-pinned-read-snapshot.ts
+src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -1182,6 +1183,7 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
+src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts

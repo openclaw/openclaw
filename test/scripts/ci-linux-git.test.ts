@@ -279,7 +279,13 @@ const historyProfiles: {
   {
     job: "preflight",
     step: "Resolve exact diff base",
-    env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
+    env: {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      RELEASE_GATE: "true",
+      DISPATCH_ID: "",
+      TARGET_CONTEXT_REF: "",
+      WORKFLOW_REVISION: harness,
+    },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
   },
   {

@@ -223,7 +223,9 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
   }
 });
 
-it("preserves terminal close and healthy siblings after memory cleanup fails", async () => {
+it("drains memory before stalled connection cleanup while preserving terminal close and healthy siblings", async ({
+  signal,
+}) => {
   const original = captureActivePluginRegistrySnapshot();
   const fixture = await createFixture("gateway-memory-close-failure");
   const kernels: Awaited<ReturnType<typeof createGatewayKernel>>[] = [];
@@ -232,10 +234,14 @@ it("preserves terminal close and healthy siblings after memory cleanup fails", a
   let refuse = true;
   const memoryFailure = new Error("synthetic memory close refused");
   const completed: string[] = [];
+  const memoryCloseStarted = createDeferredCore();
+  const releaseConnectionWork = createDeferredCore();
+  let connectionWork: Promise<void> | undefined;
   const firstClose = vi.fn(async () => {
     expect(getGatewayContextLifetime(kernels[0]!.resolvePluginGatewayContext).signal.aborted).toBe(
       false,
     );
+    memoryCloseStarted.resolve();
     if (refuse) {
       throw memoryFailure;
     }
@@ -304,9 +310,26 @@ it("preserves terminal close and healthy siblings after memory cleanup fails", a
     vi.spyOn(firstKernel.terminalSessions, "disposeAll").mockImplementationOnce(() => {
       throw warning;
     });
-    const failure = await servers[0]!
+    connectionWork = firstKernel.connectionWork.track(() => releaseConnectionWork.promise);
+    const closing = servers[0]!
       .close({ reason: "memory close proof" })
       .catch((error: unknown) => error);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        memoryCloseStarted.promise,
+        closing,
+        "Gateway retired before memory drainage began",
+      ),
+      signal,
+    );
+    expect(first.instance.lifecycle.signal.aborted).toBe(false);
+    expect(getGatewayContextLifetime(firstKernel.resolvePluginGatewayContext).signal.aborted).toBe(
+      false,
+    );
+    expect(registryClose).not.toHaveBeenCalled();
+    expect(siblingClose).not.toHaveBeenCalled();
+    releaseConnectionWork.resolve();
+    const failure = await closing;
     expect.soft(failure).toBeInstanceOf(AggregateError);
     expect.soft(collectNestedErrorCandidates(failure)).toContain(warning);
     const failedAttempts = firstClose.mock.calls.length;
@@ -347,6 +370,8 @@ it("preserves terminal close and healthy siblings after memory cleanup fails", a
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
     expect(registryClose).toHaveBeenCalledOnce();
   } finally {
+    releaseConnectionWork.resolve();
+    await connectionWork;
     refuse = false;
     for (const server of servers.toReversed()) {
       await server.close().catch(() => {});
@@ -371,6 +396,11 @@ it("closes one managed memory runtime exactly once when its registry owners clos
     });
     assert(result.manager, result.error ?? "Shared memory manager unavailable");
     await result.manager.probeEmbeddingAvailability();
+    const preparation = first.prepareClose();
+    expect(first.prepareClose()).toBe(preparation);
+    await Promise.all([preparation, second.prepareClose()]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(memory.instance.lifecycle.signal.aborted).toBe(false);
     await Promise.all([first.close(), second.close()]);
     expect(close).toHaveBeenCalledOnce();
     expect(memory.instance.lifecycle.signal.aborted).toBe(true);
@@ -399,9 +429,10 @@ it("retains memory shared with an open owner other than the process projection s
     });
     assert(result.manager, result.error ?? "Shared memory manager unavailable");
     await result.manager.probeEmbeddingAvailability();
-    await first.close();
+    await first.prepareClose();
     expect.soft(close).not.toHaveBeenCalled();
     await expect(result.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+    await first.close();
     await sharing.close();
     expect(close).toHaveBeenCalledOnce();
   } finally {

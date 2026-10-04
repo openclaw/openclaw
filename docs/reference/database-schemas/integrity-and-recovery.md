@@ -566,6 +566,25 @@ path for inspection. No SQL schema migration is involved. The rewritten database
 has a new physical identity (device/inode), so the next boot re-runs
 canonical validation once instead of reusing the original identity receipt.
 
+## Planner statistics maintenance
+
+The shared-state writer refreshes SQLite planner statistics once during its
+30-minute WAL maintenance pass, after a successful checkpoint. It uses
+`PRAGMA analysis_limit=1000; ANALYZE main;` under the existing writer admission
+and transaction authority, with no busy wait. Contention skips that attempt;
+later periodic maintenance retries. Checkpoint-only ticks, database admission,
+opens, and ordinary writes do not analyze tables. Vacuum continuation units do
+not repeat the analysis. Shutdown joins accepted maintenance before native close.
+
+The limit bounds sampling per index, not total work or elapsed time across the
+database. Statistics are SQLite-owned, derived data: application records,
+retention, and schema versions are unchanged. Updates and rollback require no
+migration. Existing read snapshots remain intact. Newly opened readers use the
+latest statistics; retained connections can keep older selectivity after later
+refreshes until their normal retirement. This policy does not add recurring
+analysis to agent databases; Doctor's stopped-writer media maintenance continues
+using the same bounded statistics primitive.
+
 ## Troubleshooting
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
