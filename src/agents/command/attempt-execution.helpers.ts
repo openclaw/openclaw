@@ -217,8 +217,14 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   );
 }
 
-async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
-  return await readCliTranscriptFile(filePath, false, async (fh, size) => {
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(
+  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
+): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath(params);
+  if (!expectedPath) {
+    return false;
+  }
+  return await readCliTranscriptFile(expectedPath, false, async (fh, size) => {
     const tailBytes = Math.min(size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
     const start = size - tailBytes;
     const buffer = Buffer.alloc(tailBytes);
@@ -274,16 +280,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
     }
     return false;
   });
-}
-
-export async function claudeCliSessionTranscriptHasOrphanedToolUse(
-  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
-): Promise<boolean> {
-  const expectedPath = claudeCliSessionTranscriptPath(params);
-  if (!expectedPath) {
-    return false;
-  }
-  return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
 export function resolveFallbackRetryPrompt(params: {
@@ -382,13 +378,22 @@ function formatFallbackTurns(
 }
 
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
-function formatClaudeCliFallbackPrelude(
-  seed: ClaudeCliFallbackSeed,
-  options?: { charBudget?: number },
-): string {
+export function buildClaudeCliFallbackContextPrelude(params: {
+  cliSessionId: string | undefined;
+  homeDir?: string;
+  charBudget?: number;
+}): string {
+  const sessionId = params.cliSessionId?.trim();
+  if (!sessionId) {
+    return "";
+  }
+  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  if (!seed) {
+    return "";
+  }
   const charBudget = Math.max(
     CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
-    options?.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
+    params.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
   );
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
@@ -421,23 +426,6 @@ function formatClaudeCliFallbackPrelude(
     return "";
   }
   return sections.join("\n");
-}
-
-/** Read a CLI session and project the available fallback context. */
-export function buildClaudeCliFallbackContextPrelude(params: {
-  cliSessionId: string | undefined;
-  homeDir?: string;
-  charBudget?: number;
-}): string {
-  const sessionId = params.cliSessionId?.trim();
-  if (!sessionId) {
-    return "";
-  }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
-  if (!seed) {
-    return "";
-  }
-  return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
 }
 
 /** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */

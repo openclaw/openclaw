@@ -40,10 +40,7 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import type {
-  SidebarPanelDefinition,
-  SidebarPanelTemplates,
-} from "./components/chat-sidebar-region-types.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
@@ -448,24 +445,4 @@ export function sidebarPanelDefinitions(
       empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
     })),
   ];
-}
-
-export function availableSidebarSlots(definitions: SidebarPanelDefinition[]): SidebarSlotId[] {
-  return definitions
-    .filter((definition) => definition.available)
-    .map((definition) => definition.slot);
-}
-
-export function sidebarPanelTemplates(
-  definitions: SidebarPanelDefinition[],
-  field: "content" | "headerAction" = "content",
-): SidebarPanelTemplates {
-  const templates: SidebarPanelTemplates = {};
-  for (const definition of definitions) {
-    const template = definition[field];
-    if (template != null) {
-      templates[definition.slot] = template;
-    }
-  }
-  return templates;
 }

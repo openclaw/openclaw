@@ -132,7 +132,6 @@ function renderSidebarAttachment(
     !isCrossOriginHttpSource(src ?? "")
   ) {
     return html`<openclaw-chat-text-attachment
-      .compact=${true}
       .plainText=${content.plainText ?? false}
       .actions=${content.renderActions?.() ?? nothing}
       .embedSandboxMode=${embedSandboxMode}

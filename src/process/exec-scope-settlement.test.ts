@@ -126,30 +126,49 @@ afterEach(async () => {
 });
 
 describe("command scope physical settlement", () => {
-  it("inherits custody and withholds settlement until native close", async () => {
-    const fixture = commandFixture();
-    const reservation = { spawned: vi.fn(), settled: vi.fn() };
-    const reserve = vi.fn(() => reservation);
-    const spawn = transport.spawn.getMockImplementation()!;
-    transport.spawn.mockImplementation((...args) => {
-      expect(reserve).toHaveBeenCalledExactlyOnceWith(["fixture"]);
-      return spawn(...args);
-    });
-    const scope = ownScope(
-      () => ownScope(async () => void (await spawnCommand(["fixture"], { reject: false }))),
-      { reserve },
-    );
-    expect(reservation.spawned).not.toHaveBeenCalled();
-    fixture.open();
-    await setImmediate();
-    expect(reservation.spawned).toHaveBeenCalledExactlyOnceWith({ pid: 424242, startedAt: 1 });
-    fixture.finish(false);
-    await setImmediate();
-    expect(reservation.settled).not.toHaveBeenCalled();
-    fixture.closed.resolve();
-    await scope;
-    expect(reservation.settled).toHaveBeenCalledOnce();
-  });
+  it.each(["resolved", "rejected"] as const)(
+    "inherits custody through native close after %s transport",
+    async (result) => {
+      const fixture = commandFixture();
+      const reservation = { spawned: vi.fn(), settled: vi.fn() };
+      const reserve = vi.fn(() => reservation);
+      const spawn = transport.spawn.getMockImplementation()!;
+      transport.spawn.mockImplementation((...args) => {
+        expect(reserve).toHaveBeenCalledExactlyOnceWith(["fixture"]);
+        return spawn(...args);
+      });
+      let finished = false;
+      const failure = new Error("transport failed");
+      const scope = ownScope(
+        () => ownScope(async () => void (await spawnCommand(["fixture"], { reject: false }))),
+        { reserve },
+      ).finally(() => {
+        finished = true;
+      });
+      const outcome = scope.catch((error: unknown) => error);
+      expect(reservation.spawned).not.toHaveBeenCalled();
+      fixture.open();
+      await setImmediate();
+      expect(reservation.spawned).toHaveBeenCalledExactlyOnceWith({ pid: 424242, startedAt: 1 });
+      if (result === "rejected") {
+        fixture.child.exitCode = 0;
+        fixture.child.emit("exit", 0, null);
+        fixture.result.reject(failure);
+      } else {
+        fixture.finish(false);
+      }
+      await setImmediate();
+      expect(finished).toBe(false);
+      expect(reservation.settled).not.toHaveBeenCalled();
+      fixture.closed.resolve();
+      if (result === "rejected") {
+        expect(await outcome).toBe(failure);
+      } else {
+        await scope;
+      }
+      expect(reservation.settled).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([false, true])(
     "retains unknown broker launches unless non-start is proven: %s",
@@ -166,8 +185,16 @@ describe("command scope physical settlement", () => {
       if (notStarted) {
         fixture.child.markNotStarted();
       }
-      fixture.fail(new Error("broker lost before PID delivery"));
-      await outcome;
+      const failure = new Error("broker lost before PID delivery");
+      fixture.fail(failure);
+      if (notStarted) {
+        expect(await outcome).toBe(failure);
+      } else {
+        expect(await outcome).toMatchObject({
+          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
+          cause: failure,
+        });
+      }
       expect(reservation.spawned).not.toHaveBeenCalled();
       expect(reservation.settled).toHaveBeenCalledTimes(notStarted ? 1 : 0);
     },
@@ -199,33 +226,41 @@ describe("command scope physical settlement", () => {
     expect(reservation.settled).not.toHaveBeenCalled();
   });
 
-  it("keeps the bounded runner result separate from scope cleanup", async () => {
-    const fixture = commandFixture();
-    const controller = new AbortController();
-    const resultSeen = createDeferredCore();
-    let scopeFinished = false;
-    const scope = ownScope(async () => {
-      const pending = runCommandWithTimeout(["fixture"], {
-        signal: controller.signal,
-        killProcessTree: true,
+  it.each(["forced", "uncertain"] as const)(
+    "keeps bounded results pending until %s scope cleanup",
+    async (cleanup) => {
+      const fixture = commandFixture();
+      const controller = new AbortController();
+      const resultSeen = createDeferredCore();
+      let scopeFinished = false;
+      const scope = ownScope(async () => {
+        const pending = runCommandWithTimeout(["fixture"], {
+          signal: controller.signal,
+          killProcessTree: true,
+        });
+        controller.abort();
+        expect(await pending).toMatchObject({ termination: "signal", cleanup: "uncertain" });
+        resultSeen.resolve();
+      }).finally(() => {
+        scopeFinished = true;
       });
-      controller.abort();
-      expect(await pending).toMatchObject({ termination: "signal", cleanup: "uncertain" });
-      resultSeen.resolve();
-    }).finally(() => {
-      scopeFinished = true;
-    });
-    await resultSeen.promise;
-    await setImmediate();
-    expect(scopeFinished).toBe(false);
-    fixture.open();
-    fixture.finish();
-    await setImmediate();
-    expect(scopeFinished).toBe(false);
-    fixture.cleanup.resolve("forced");
-    await scope;
-    expect(scopeFinished).toBe(true);
-  });
+      const outcome = scope.catch((error: unknown) => error);
+      await resultSeen.promise;
+      await setImmediate();
+      expect(scopeFinished).toBe(false);
+      fixture.open();
+      fixture.finish();
+      await setImmediate();
+      expect(scopeFinished).toBe(false);
+      fixture.cleanup.resolve(cleanup);
+      if (cleanup === "uncertain") {
+        expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      } else {
+        await scope;
+      }
+      expect(scopeFinished).toBe(true);
+    },
+  );
 
   it.each(["exec", "spawn"] as const)(
     "retains %s admitted before remote readiness",
@@ -251,38 +286,6 @@ describe("command scope physical settlement", () => {
       expect(await outcome).toBe(failure);
     },
   );
-
-  it("does not turn cleanup uncertainty into successful scope settlement", async () => {
-    const fixture = commandFixture();
-    const controller = new AbortController();
-    const scope = ownScope(async () => {
-      const pending = runCommandWithTimeout(["fixture"], {
-        signal: controller.signal,
-        killProcessTree: true,
-      });
-      controller.abort();
-      await pending;
-    });
-    const outcome = scope.catch((error: unknown) => error);
-    fixture.open();
-    fixture.finish();
-    fixture.cleanup.resolve("uncertain");
-    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
-  });
-
-  it("does not treat lost transport before PID delivery as non-execution", async () => {
-    const fixture = commandFixture();
-    const failure = new Error("broker transport lost");
-    const scope = ownScope(async () => {
-      await spawnCommand(["fixture"], { reject: false });
-    });
-    const outcome = scope.catch((error: unknown) => error);
-    fixture.fail(failure);
-    expect(await outcome).toMatchObject({
-      code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
-      cause: failure,
-    });
-  });
 });
 
 it.skipIf(process.platform === "win32")(
@@ -305,26 +308,6 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
-
-it("joins rejected broker transport through final pipe close", async () => {
-  const fixture = commandFixture();
-  const failure = new Error("transport failed");
-  let finished = false;
-  const scope = ownScope(async () => {
-    await spawnCommand(["fixture"], { reject: false });
-  }).finally(() => {
-    finished = true;
-  });
-  const outcome = scope.catch((error: unknown) => error);
-  fixture.open();
-  fixture.child.exitCode = 0;
-  fixture.child.emit("exit", 0, null);
-  fixture.result.reject(failure);
-  await setImmediate();
-  expect(finished).toBe(false);
-  fixture.closed.resolve();
-  expect(await outcome).toBe(failure);
-});
 
 it("keeps Windows transport failure uncertain without a native exit", async () => {
   await withMockedWindowsPlatform(async () => {

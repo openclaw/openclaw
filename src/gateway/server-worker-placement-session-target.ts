@@ -78,14 +78,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
     const completion = createDeferredCore();
     const controller = new AbortController();
     let unregister = () => {};
-    const release = () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      unregister();
-      retained.claim.release();
-    };
     const assertSourceCurrent = () => {
       controller.signal.throwIfAborted();
       assertOwnerCurrent();
@@ -147,7 +139,9 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         }),
       );
     } finally {
-      release();
+      released = true;
+      unregister();
+      retained.claim.release();
       completion.resolve();
     }
   };
@@ -238,14 +232,16 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
   errorMessage: string;
 }) {
-  const initialTarget = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.config,
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
+  const resolveTarget = (cfg: OpenClawConfig) =>
+    params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      preserveQualifiedAddress: true,
+      clone: false,
+      exactRead: true,
+    });
+  const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     initialTarget.store,
     initialTarget.storeKeys,
@@ -274,14 +270,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
     : undefined;
   const resolveBinding = (config = params.config) => {
-    const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: config,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    const target = resolveTarget(config);
     const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
       target.storeKeys,
