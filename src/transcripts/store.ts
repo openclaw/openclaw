@@ -234,14 +234,6 @@ export class TranscriptsStore {
     );
   }
 
-  async *iterateReadEntries(options: read.TranscriptReadOptions = {}) {
-    return yield* iterateOpenClawStateDatabaseReadOnly(
-      this.database(),
-      ({ db }) => read.iterateTranscriptReadEntries(db, options),
-      this.databaseOptions.env,
-    );
-  }
-
   async readEntry(selector: string, purpose: read.TranscriptReadPurpose = "page") {
     return this.readWorker("transcripts.entry", { params: { selector, purpose } });
   }
@@ -319,7 +311,13 @@ export class TranscriptsStore {
     });
   }
 
-  async listReadEntries(options: read.TranscriptReadOptions) {
+  listReadEntries(
+    options: read.TranscriptReadOptions & { projection: "public" },
+  ): Promise<read.TranscriptLibraryPage>;
+  listReadEntries(
+    options: read.TranscriptReadOptions,
+  ): Promise<read.TranscriptReadPage<read.TranscriptReadEntry>>;
+  async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
     return this.readWorker("transcripts.readEntries", { params: options });
   }
 

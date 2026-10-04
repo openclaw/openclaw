@@ -1,11 +1,10 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   TranscriptSessionSummary,
   TranscriptsGetResult,
   TranscriptUtterance as ProjectedTranscriptUtterance,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { truncateUtf16Safe } from "../utils.js";
-import { isTranscriptSessionActive, readTranscriptCaptureSnapshot } from "./capture.js";
 import type { TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { normalizeExportText } from "./store-artifacts.js";
@@ -36,10 +35,7 @@ export function projectTranscriptSource(
 
 export function projectTranscriptSession(
   entry: TranscriptReadEntry,
-  active = isTranscriptSessionActive(entry.session),
-  providerName?: string,
-  captures = readTranscriptCaptureSnapshot(),
-): TranscriptSessionSummary {
+): Omit<TranscriptSessionSummary, "active" | "activeSubscription" | "providerName"> {
   const { session } = entry;
   const source = projectTranscriptSource(session.source);
   const owner = session.metadata?.agentId;
@@ -48,17 +44,9 @@ export function projectTranscriptSession(
     sessionId: session.sessionId,
     title: session.title === undefined ? undefined : sanitizeTerminalText(session.title),
     providerId: source.providerId,
-    providerName,
     source,
     startedAt: session.startedAt,
     stoppedAt: session.stoppedAt,
-    active,
-    activeSubscription: captures.some(
-      (capture) =>
-        capture.state === "armed" &&
-        capture.session.sessionId === session.sessionId &&
-        capture.session.startedAt === session.startedAt,
-    ),
     agentId: typeof owner === "string" ? owner : null,
     updatedAt: entry.updatedAt,
     lastUtteranceAt: entry.lastUtteranceAt,
