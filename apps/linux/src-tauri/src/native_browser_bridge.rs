@@ -85,8 +85,12 @@ impl NativeBrowserBridgeState {
             ready: false,
         };
         let script = format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             initialization_script(&document),
+            scoped_script(
+                &document,
+                crate::native_device_settings::toggle_initialization_script()
+            ),
             crate::window_chrome::initialization_script(Some(dashboard), true)
         );
         state.document = Some(document);

@@ -439,6 +439,13 @@ impl NativeBrowserState {
                 let _ = view.close();
                 return Err(format!("Could not prepare the browser tab: {error}"));
             }
+            #[cfg(target_os = "linux")]
+            if let Err(error) = platform::set_default_charset_utf8(&view).await {
+                let _ = view.close();
+                return Err(format!(
+                    "Could not configure browser text encoding: {error}"
+                ));
+            }
             host.tabs.push(Tab {
                 id: id.clone(),
                 session_key,

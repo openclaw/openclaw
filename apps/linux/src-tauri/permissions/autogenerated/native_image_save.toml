@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-image-save"
+description = "Enables the native_image_save command without any pre-configured scope."
+commands.allow = ["native_image_save"]
+
+[[permission]]
+identifier = "deny-native-image-save"
+description = "Denies the native_image_save command without any pre-configured scope."
+commands.deny = ["native_image_save"]

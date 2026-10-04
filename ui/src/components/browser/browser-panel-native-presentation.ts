@@ -33,6 +33,7 @@ export class BrowserPanelNativePresentation {
   private intersecting = true;
   private occluded = false;
   private frame: number | null = null;
+  private geometryTimer: number | null = null;
   private lastPresentation: { key: string } | null = null;
   private connected = false;
 
@@ -73,6 +74,7 @@ export class BrowserPanelNativePresentation {
       cancelAnimationFrame(this.frame);
       this.frame = null;
     }
+    this.stopGeometryTimer();
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     this.stage = null;
@@ -117,7 +119,21 @@ export class BrowserPanelNativePresentation {
     this.schedule();
   }
 
+  private stopGeometryTimer(): void {
+    if (this.geometryTimer !== null) {
+      window.clearInterval(this.geometryTimer);
+      this.geometryTimer = null;
+    }
+  }
+
   readonly schedule = (): void => {
+    if (this.canPresent() && this.geometryTimer === null) {
+      // A dock can move without resizing its stage or scrolling the document.
+      // Recheck only while visible; send() deduplicates unchanged geometry.
+      this.geometryTimer = window.setInterval(this.schedule, 500);
+    } else if (!this.canPresent()) {
+      this.stopGeometryTimer();
+    }
     if (!this.connected || this.frame !== null) {
       return;
     }
@@ -134,6 +150,7 @@ export class BrowserPanelNativePresentation {
   }
 
   hide(): void {
+    this.stopGeometryTimer();
     if (this.connected) {
       this.send(null, null);
     }

@@ -58,6 +58,21 @@ pub async fn configure_browser(
     .await
 }
 
+/// WebKit falls back to a legacy charset for text documents whose server omits
+/// charset (notably exported Markdown). Keep browser text readable without
+/// changing the bytes or the encoding of documents that declare their own charset.
+#[cfg(target_os = "linux")]
+pub async fn set_default_charset_utf8(webview: &Webview) -> Result<(), String> {
+    native(webview, |platform| {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        if let Some(settings) = platform.inner().settings() {
+            settings.set_default_charset("UTF-8");
+        }
+        Ok(())
+    })
+    .await
+}
+
 async fn response<T>(
     response: tokio::sync::oneshot::Receiver<Result<T, String>>,
 ) -> Result<T, String> {
@@ -65,6 +80,16 @@ async fn response<T>(
         .await
         .map_err(|_| "The browser did not respond. Try again after the page loads.".to_string())?
         .map_err(|_| "The browser tab closed before the operation completed.".to_string())?
+}
+
+#[cfg(target_os = "linux")]
+pub async fn reload_bypass_cache(webview: &Webview) -> Result<(), String> {
+    native(webview, |platform| {
+        use webkit2gtk::WebViewExt;
+        platform.inner().reload_bypass_cache();
+        Ok(())
+    })
+    .await
 }
 
 async fn native<T: Send + 'static>(
@@ -2026,8 +2051,9 @@ pub async fn set_bounds(
         let (x, y) = (position.x.round() as i32, position.y.round() as i32);
         let (width, height) = (size.width.round() as i32, size.height.round() as i32);
         widget.set_size_request(width, height);
+        // GtkFixed owns child allocation. A manual allocation here can leave the
+        // native view painted at stale coordinates after the panel moves.
         fixed.move_(&widget, x, y);
-        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
         Ok(())
     })
     .await;

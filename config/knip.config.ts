@@ -488,6 +488,8 @@ const rootEntries = [
   "apps/linux/ui/quickchat.js!",
   // The native window-chrome owner injects this script through Rust include_str!.
   "apps/linux/ui/window-chrome.js!",
+  // The native image-save owner injects this script through Rust include_str!.
+  "apps/linux/ui/native-image-save.js!",
   // The native Gateway auth owner injects this script through Rust include_str!.
   "apps/linux/ui/native-control-auth.js!",
   "apps/linux/ui/gateway-switch.js!",
