@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasUncollectedSessionSpawn,
+  mergeAcceptedSessionSpawnsForRun,
+} from "./accepted-session-spawn.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import {
   createTestContext,
   endTool,
   resultWithDetails,
@@ -117,5 +122,42 @@ describe("handleToolExecutionEnd agents_wait collector settlement", () => {
       { runId: "run-failed", collected: undefined },
       { runId: "run-pending", collected: undefined },
     ]);
+  });
+
+  it("marks a collector accepted by an earlier attempt of the same run", async () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
+    const spawning = createTestContext().ctx;
+    spawning.params.operationalRunInstance = operationalRunInstance;
+    await endTool(spawning, {
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-collector",
+      result: resultWithDetails({
+        status: "accepted",
+        runId: "run-collector",
+        childSessionKey: "agent:main:subagent:collector",
+        expectsCompletionMessage: false,
+      }),
+    });
+    mergeAcceptedSessionSpawnsForRun(operationalRunInstance, spawning.state.acceptedSessionSpawns);
+
+    const collecting = createTestContext().ctx;
+    collecting.params.operationalRunInstance = operationalRunInstance;
+    await endTool(collecting, {
+      toolName: "agents_wait",
+      toolCallId: "wait-collector",
+      result: resultWithDetails({
+        completed: [{ runId: "run-collector", status: "done", result: "ok" }],
+        pending: [],
+      }),
+    });
+
+    expect(
+      hasUncollectedSessionSpawn(
+        mergeAcceptedSessionSpawnsForRun(
+          operationalRunInstance,
+          collecting.state.acceptedSessionSpawns,
+        ),
+      ),
+    ).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
@@ -33,6 +34,8 @@ export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Logical run that owns child receipts across this run's attempts. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */
