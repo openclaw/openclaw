@@ -69,7 +69,10 @@ describe("interactive memory recall admission", () => {
     await recordMemoryRecall(params, claim);
     expect(record).toHaveBeenCalledOnce();
     record.mockClear();
-    await recordMemoryRecall({ ...params, results: [{ ...params.results[0]!, endLine: 3 }] }, claim);
+    await recordMemoryRecall(
+      { ...params, results: [{ ...params.results[0]!, endLine: 3 }] },
+      claim,
+    );
     expect(record).not.toHaveBeenCalled();
   });
 
