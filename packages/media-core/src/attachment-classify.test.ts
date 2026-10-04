@@ -86,6 +86,18 @@ describe("classifyAttachmentBytes", () => {
     ).resolves.toEqual({ mime: "text/plain", class: "text", charset: "utf-16le" });
   });
 
+  it.each([
+    ["text/plain", "Dear team, the meeting moved to 3pm."],
+    ["application/json", '{"name":"openclaw","stars":1}'],
+  ] as const)("keeps declared %s for UTF-16 bytes with a BOM", async (declaredMime, text) => {
+    await expect(
+      classifyAttachmentBytes({
+        buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+        declaredMime,
+      }),
+    ).resolves.toEqual({ mime: declaredMime, class: "text", charset: "utf-16le" });
+  });
+
   it("keeps the charset when a BOM-less UTF-16 file resolves text by extension", async () => {
     await expect(
       classifyAttachmentBytes({

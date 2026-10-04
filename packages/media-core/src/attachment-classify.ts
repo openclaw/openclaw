@@ -132,6 +132,7 @@ export async function classifyAttachmentBytes(params: {
   if (
     mime === "application/octet-stream" ||
     mime?.startsWith("application/vnd.") ||
+    detectedClass === "text" ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
     const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
