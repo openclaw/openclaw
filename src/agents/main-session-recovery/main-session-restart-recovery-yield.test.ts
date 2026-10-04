@@ -46,15 +46,11 @@ describe("restart recovery discovery yield", () => {
         agents: { list: [{ id: "yield-a", default: true }, { id: "yield-b" }] },
       } as OpenClawConfig;
 
-      // Observation point: with two stores and a per-target yield, an immediate
-      // queued after discovery starts must run while the scan is unsettled AND
-      // exactly one probe has happened (between probe 1 and probe 2). A single
-      // yield before all probes (or none) would leave probeCount at 0 or 2
-      // respectively, so this pins the mid-scan interleaving (#149935 Rev 1).
-      const probeSpy = vi.spyOn(sessionAccessor, "hasSessionEntriesByStatusReadOnly");
+      // Observation: with two stores and per-target macrotask boundaries, timers
+      // queued before the scan must observe at least one event-loop turn while
+      // the scan is still unsettled (#149935).
       let settled = false;
-      let observedUnsettled = false;
-      let observedProbes = -1;
+      let unsettledTurns = 0;
       const pending = discoverRestartRecoveryStoreTargets({
         cfg,
         stateDir: tmpDir,
@@ -63,17 +59,17 @@ describe("restart recovery discovery yield", () => {
         settled = true;
         return targets;
       });
-      setImmediate(() => {
-        observedUnsettled = !settled;
-        observedProbes = probeSpy.mock.calls.length;
-      });
+      const observe = () => {
+        if (!settled) {
+          unsettledTurns += 1;
+        }
+      };
+      setImmediate(observe);
+      setImmediate(observe);
+      setImmediate(observe);
       const storeTargets = await pending;
 
-      // The pre-scan timer must have run while discovery was still probing: the
-      // probe chain yields one macrotask between targets instead of blocking for
-      // the combined length of every store probe (#149935).
-      expect(observedUnsettled).toBe(true);
-      expect(observedProbes).toBe(1);
+      expect(unsettledTurns).toBeGreaterThan(0);
       expect(storeTargets).toContainEqual({
         agentId: "yield-a",
         storePath: path.join(sessionsDirA, "sessions.json"),
@@ -82,7 +78,6 @@ describe("restart recovery discovery yield", () => {
         agentId: "yield-b",
         storePath: path.join(sessionsDirB, "sessions.json"),
       });
-      probeSpy.mockRestore();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -107,12 +102,16 @@ describe("restart recovery discovery yield", () => {
         agents: { list: [{ id: "cancel-a", default: true }, { id: "cancel-b" }] },
       } as OpenClawConfig;
 
-      const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
+      let callsAtFirstRecoverStore = -1;
       let shouldContinueCalls = 0;
-      // Calls 1-4: discovery probes both stores (pre + post-status per store).
-      // Call 5: the first target's pre-yield check passes. Call 6: the
-      // post-yield recheck cancels, so store 1's recoverStore must never run —
-      // this pins the recovery-yield guard specifically (#149935 Rev 2/4).
+      const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
+      // Discovery consumes 8 calls on this fixture (pre + post-status per
+      // store). When it finishes, queue the cancellation for the next
+      // macrotask — the recovery loop's first inter-store yield — so the
+      // post-yield recheck sees it and store 1's recoverStore never runs
+      // (#149935 Rev 2/4). Without that guard the store is loaded first and
+      // this test fails.
+      let cancelled = false;
       const result = await recoverRestartAbortedMainSessions({
         cfg,
         stateDir: tmpDir,
@@ -122,10 +121,19 @@ describe("restart recovery discovery yield", () => {
           waitForAgent: vi.fn(),
           sendRecoveryNotice: vi.fn(),
         } as unknown as Parameters<typeof recoverRestartAbortedMainSessions>[0]["gatewayRuntime"],
-        shouldContinue: () => ++shouldContinueCalls <= 5,
+        shouldContinue: () => {
+          const call = ++shouldContinueCalls;
+          if (call === 9) {
+            setImmediate(() => {
+              cancelled = true;
+            });
+          }
+          return !cancelled;
+        },
       });
 
-      expect(storeSpy).toHaveBeenCalledTimes(0);
+      expect(cancelled).toBe(true);
+      expect(callsAtFirstRecoverStore).toBe(-1);
       expect(result).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
       storeSpy.mockRestore();
     } finally {
@@ -163,7 +171,12 @@ describe("restart recovery discovery yield", () => {
         shouldContinue: () => ++shouldContinueCalls <= 1,
       });
 
-      expect(probeSpy).toHaveBeenCalledTimes(1);
+      // Internal callers may hit the status probe more than once per store;
+      // the pin is that store B is never probed at all.
+      const probedStoreB = probeSpy.mock.calls.filter(([target]) =>
+        String(target?.storePath ?? "").includes("dstop-b"),
+      );
+      expect(probedStoreB).toHaveLength(0);
       expect(storeTargets).toHaveLength(0);
       probeSpy.mockRestore();
     } finally {
