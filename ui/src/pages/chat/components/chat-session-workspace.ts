@@ -77,7 +77,7 @@ function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
 function unsupportedFileSidebarContent(
   file: SessionWorkspaceGetResult["file"],
   fallbackPath: string,
-): SidebarContent {
+): Extract<SidebarContent, { kind: "markdown" }> {
   const filePath = file.workspacePath || file.path || fallbackPath;
   const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
   const lines = [
@@ -118,10 +118,13 @@ function binaryFileSidebarContent(
   owner: { sessionKey: string; agentId?: string },
 ): SidebarContent {
   const filePath = file.workspacePath || file.path || fallbackPath;
-  // Files outside the workspace root (readable on main since host reads) arrive absolute.
+  // Files outside the workspace root arrive with their absolute host path.
   const absolute = isAbsolutePath(filePath);
   if (!root && !absolute) {
-    return { ...unsupportedFileSidebarContent(file, fallbackPath), fileLinkSessionKey: owner.sessionKey };
+    return {
+      ...unsupportedFileSidebarContent(file, fallbackPath),
+      fileLinkSessionKey: owner.sessionKey,
+    };
   }
   const attachment = {
     url: absolute ? filePath : workspaceBrowserFilePath(root, filePath),

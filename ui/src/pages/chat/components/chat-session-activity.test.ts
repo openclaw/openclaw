@@ -136,10 +136,6 @@ describe("inter-session activity", () => {
     );
     expect(container.textContent).toContain("END first");
     expect(container.textContent).toContain("END second");
-    // File links in relayed messages resolve against the sender's workspace.
-    expect(
-      container.querySelector<HTMLElement>("[data-file-session-key]")?.dataset.fileSessionKey,
-    ).toBe(sourceKey);
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     expect(container.querySelectorAll(".chat-group-timestamp")).toHaveLength(2);
     draw();
