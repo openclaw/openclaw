@@ -70,6 +70,7 @@ export const BOUNDARY_CHECKS = (
     "lint:plugins:no-extension-test-core-imports",
     "lint:plugins:plugin-sdk-subpaths-exported",
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
+    ["deps:pins:check", "pnpm", ["deps:pins:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-plugin-sdk-boundaries",
