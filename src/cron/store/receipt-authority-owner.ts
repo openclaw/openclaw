@@ -12,6 +12,7 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { observeOpenClawDatabaseMaintenanceResource } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -103,6 +104,7 @@ function ownerFor(context: OpenClawStateWorkerContext): AuthorityOwner {
   const previous = owners.get(key);
   if (previous) {
     assertOwner(previous, context);
+    observeOpenClawDatabaseMaintenanceResource(previous);
     return previous;
   }
   if (lifetime.closing) {
@@ -139,8 +141,8 @@ function ownerFor(context: OpenClawStateWorkerContext): AuthorityOwner {
     owner.failure = { origin: "admission", error };
   });
   owners.set(key, owner);
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(identity) {
+  const resource = {
+    async close(identity?: typeof admittedSource.identity) {
       if (identity && identity.key !== admittedSource.identity.key) {
         return;
       }
@@ -163,7 +165,11 @@ function ownerFor(context: OpenClawStateWorkerContext): AuthorityOwner {
       }
       unregister();
     },
-  });
+  };
+  const unregister = registerOpenClawStateDatabaseAsyncResource(resource);
+  // Doctor must release its exact cron custody before restoring the Gateway;
+  // CLI-global cleanup runs only after that service handoff.
+  context.maintenanceScope?.own(owner, "shared-resources", () => resource.close());
   return owner;
 }
 

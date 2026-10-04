@@ -24,6 +24,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { captureEffectAuthority, withEffectPreparation } from "../../shared/effect-authority.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -839,6 +840,26 @@ it("enrolls approval mutations in the same physical receipt authority boundary",
       expect(owner.observation.readForPreparation().messageRevoked).toBe(false);
     } finally {
       factory.mockRestore();
+      await owner.close();
+    }
+  });
+});
+
+it("keeps independently borrowed cron custody after the creating maintenance scope closes", async () => {
+  await withOpenClawTestState({ label: "cron-authority-maintenance-borrow" }, async (fixture) => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const owner = await maintenance.run(() => seed(fixture));
+    try {
+      await loadCronStore(owner.storePath);
+      await maintenance.close();
+      expect(owner.observation.readForPreparation().messageRevoked).toBe(false);
+      await saveCronStore(owner.storePath, {
+        version: 1,
+        jobs: [{ ...owner.job, enabled: false }],
+      });
+      expect(owner.observation.readForPreparation().messageRevoked).toBe(true);
+    } finally {
+      await maintenance.close();
       await owner.close();
     }
   });
