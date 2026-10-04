@@ -765,6 +765,35 @@ describe("bedrock mantle discovery", () => {
     expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves Mantle runtime auth via ambient aws-sdk authMode without the IAM marker", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-aws-sdk-authmode"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: "***",
+      authMode: "aws-sdk",
+      env: {
+        AWS_REGION: testRegion,
+      },
+      now: () => 9000,
+      tokenProviderFactory,
+    });
+    expect(resolved?.apiKey).toBe("bedrock-api-key-aws-sdk-authmode");
+    expect(resolved?.expiresAt).toBe(9000 + 7200_000);
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the literal apiKey as-is when authMode is not aws-sdk and the IAM marker is absent", async () => {
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: "literal-bearer-value", // pragma: allowlist secret
+      authMode: "api-key",
+      env: {
+        AWS_REGION: testRegion,
+      },
+    });
+    expect(resolved).toEqual({ apiKey: "literal-bearer-value" });
+  });
+
   it("returns null for unsupported regions", async () => {
     const provider = await resolveImplicitMantleProvider({
       env: {
