@@ -3,6 +3,7 @@ import { getCommandPositionalsWithRootOptions } from "./cli-root-options.mjs";
 
 export const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--port",
+  "--task-supervisor-child",
   "--bind",
   "--token",
   "--token-file",
@@ -15,6 +16,7 @@ export const GATEWAY_RUN_VALUE_FLAGS = new Set([
 ]);
 
 export const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
+  "--task-supervisor",
   "--tailscale-reset-on-exit",
   "--allow-unconfigured",
   "--dev",
