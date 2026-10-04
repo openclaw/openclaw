@@ -216,9 +216,3 @@ export function getRemoteModelCatalogProviderOverlay(
   const providerId = normalizeProviderId(provider);
   return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
 }
-
-export function getRemoteModelCatalogPricing(
-  config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogPrice>> | undefined {
-  return getActiveRemoteModelCatalog(config)?.pricing;
-}
