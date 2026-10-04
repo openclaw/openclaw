@@ -574,6 +574,10 @@ vi.mock("../../tts/tts-config.js", () => ({
   shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
 }));
+// mock-isolation: Dispatch fixtures supply prepared preferences without opening the shared-state worker.
+vi.mock("../../tts/tts-preferences.js", () => ({
+  prepareTtsPreferences: async () => ({}),
+}));
 
 export const noAbortResult = { handled: false, aborted: false } as const;
 export const emptyConfig = {} as OpenClawConfig;

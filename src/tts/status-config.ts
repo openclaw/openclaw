@@ -2,6 +2,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
@@ -127,6 +128,7 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
 
 export function resolveStatusTtsSnapshot(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   sessionAuto?: string;
   agentId?: string;
   channelId?: string;

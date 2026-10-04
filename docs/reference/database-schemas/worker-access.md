@@ -350,6 +350,29 @@ must do the same. Detached SessionManager getters, `inMemory`, `fromEntries`, an
 ordinary current-turn traversal remain synchronous because they use loaded views.
 No synchronous bridge, fire-and-forget persistence, or fallback database is allowed.
 
+### Incognito hydration and pending-input history (P7c, inactive)
+
+Hydration navigation now has typed actor reads for the current turn, maintenance
+facts, recent active events, and the latest active message. The bound hydration
+reader captures the actor and session generation before yielding and keeps the
+existing read fences and version checks. Full and bounded hydration retain their
+existing snapshot contracts.
+
+Pending-input pages and exact reads use the same bounded history kernel on the
+actor. Stale-input interruption rereads candidates inside the existing synchronous
+transaction and rechecks live host custody at transaction and commit admission.
+Its native receipt acknowledges the exact interrupted IDs together with session
+facts, so a lost ordinary reply does not cause replay. The outer composition
+retains actor lifetime without holding its FIFO across another actor request.
+The inactive compute reader exposes hydration preparation, and the inactive
+history reader exposes pending-input list and exact reads through these bindings.
+
+Both compositions remain inactive. Production incognito stays host-owned until
+P7d switches all runtime callers and deletes the native arms. Durable flows,
+schemas, retention, permissions, and update behavior are unchanged; this stage
+retires no T1 sites. Pending-input staging, source, and withdrawal routing remain
+separate activation prerequisites.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
@@ -819,6 +842,15 @@ their native paths, so their shared SQL sites remain T1. No schema, retention,
 durability, or update migration changes.
 
 ## Carry facts, publish after commit
+
+Reply dispatch prepares the machine-owned TTS preference path through the existing
+shared-state reader and carries it through eligibility checks, delivery callbacks,
+and prompt assembly. Missing state is a prepared fact, so later consumers do not
+fall back to host SQL. Standalone prompt, ACP, cron, and message-action preparation
+use the same reader. Config and environment path precedence remain unchanged;
+preference-file contents still refresh at their existing read boundaries. Released
+synchronous TTS SDK helpers retain their compatibility contract. This introduces
+no schema, stored-data, retention, or update change.
 
 Device join-code registration and redemption use the existing device-pairing
 worker and FIFO. The setup RPC captures its physical store and requester authority
