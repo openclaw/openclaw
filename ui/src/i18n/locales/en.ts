@@ -3914,6 +3914,10 @@ export const en: TranslationMap & {
       microphoneAccessPending:
         "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
+      microphoneDeviceStarting:
+        "Starting the selected microphone. This can take a moment if the device is busy.",
+      microphoneStartTimeout:
+        "Microphone startup timed out. The selected device may be unavailable or in use. Choose another input or close other apps using it, then try again.",
       microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",

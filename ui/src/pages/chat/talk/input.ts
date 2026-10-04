@@ -178,6 +178,26 @@ function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaT
   };
 }
 
+const REALTIME_TALK_MICROPHONE_START_TIMEOUT_MS = 10_000;
+
+function realtimeTalkMicrophonePermissionState(): Promise<PermissionState | undefined> | undefined {
+  const permissions = globalThis.navigator?.permissions;
+  if (!permissions?.query) {
+    return undefined;
+  }
+  try {
+    return (
+      permissions
+        // SAFETY: Chromium supports the microphone descriptor although lib.dom omits it.
+        .query({ name: "microphone" as PermissionName })
+        .then((status) => status.state)
+        .catch(() => undefined)
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function realtimeTalkAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -290,8 +310,28 @@ export class RealtimeTalkInputController {
     this.stop();
     const controller = new AbortController();
     this.controller = controller;
+    let startupTimeout: ReturnType<typeof globalThis.setTimeout> | undefined;
     try {
-      this.onConnecting?.(t("chat.composer.microphoneAccessPending"));
+      const permissionQuery = realtimeTalkMicrophonePermissionState();
+      const permissionState = permissionQuery ? await permissionQuery : undefined;
+      if (controller.signal.aborted || this.controller !== controller) {
+        throw realtimeTalkAbortReason(controller.signal);
+      }
+      const permissionGranted = permissionState === "granted";
+      this.onConnecting?.(
+        t(
+          permissionGranted
+            ? "chat.composer.microphoneDeviceStarting"
+            : "chat.composer.microphoneAccessPending",
+        ),
+      );
+      if (permissionGranted) {
+        startupTimeout = globalThis.setTimeout(() => {
+          if (this.controller === controller) {
+            controller.abort(new Error(t("chat.composer.microphoneStartTimeout")));
+          }
+        }, REALTIME_TALK_MICROPHONE_START_TIMEOUT_MS);
+      }
       const media = await openRealtimeTalkInput(inputDeviceId, { signal: controller.signal });
       if (controller.signal.aborted) {
         media.getTracks().forEach((track) => track.stop());
@@ -318,6 +358,10 @@ export class RealtimeTalkInputController {
         this.stop();
       }
       throw error;
+    } finally {
+      if (startupTimeout !== undefined) {
+        globalThis.clearTimeout(startupTimeout);
+      }
     }
   }
 

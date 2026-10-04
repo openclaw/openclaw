@@ -58,10 +58,103 @@ function openMicrophone(inputDeviceId: string | undefined) {
 afterEach(() => {
   ownedInputs.forEach((input) => input.stop());
   ownedInputs.clear();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("realtime Talk microphone lifetime", () => {
+  it("times out granted microphone startup, releases late media, and allows retry", async () => {
+    vi.useFakeTimers();
+    const first = createDeferred<MediaStream>();
+    const late = microphoneFixture();
+    const retry = microphoneFixture();
+    const getUserMedia = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(retry.stream);
+    const query = vi.fn(async () => ({ state: "granted" }));
+    vi.stubGlobal("navigator", {
+      permissions: { query },
+      mediaDevices: { getUserMedia },
+    });
+    const onConnecting = vi.fn();
+    const input = createMicrophoneInput(undefined, onConnecting);
+
+    const opening = input.open("studio-display");
+    const timedOut = opening.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onConnecting).toHaveBeenCalledWith(
+      "Starting the selected microphone. This can take a moment if the device is busy.",
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await timedOut).toMatchObject({
+      message:
+        "Microphone startup timed out. The selected device may be unavailable or in use. Choose another input or close other apps using it, then try again.",
+    });
+    expect(input.stream).toBeNull();
+
+    first.resolve(late.stream);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(late.track.stop).toHaveBeenCalledOnce();
+
+    await expect(input.open("studio-display")).resolves.toBe(retry.stream);
+    expect(input.stream).toBe(retry.stream);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(retry.track.stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps prompt-state microphone acquisition open past the device timeout", async () => {
+    vi.useFakeTimers();
+    const permission = createDeferred<MediaStream>();
+    const media = microphoneFixture();
+    const getUserMedia = vi.fn(() => permission.promise);
+    vi.stubGlobal("navigator", {
+      permissions: { query: vi.fn(async () => ({ state: "prompt" })) },
+      mediaDevices: { getUserMedia },
+    });
+    const onConnecting = vi.fn();
+    const input = createMicrophoneInput(undefined, onConnecting);
+    let settled = false;
+
+    const opening = input.open(undefined).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(settled).toBe(false);
+    expect(onConnecting).toHaveBeenCalledWith(expect.stringContaining("allow access if prompted"));
+    permission.resolve(media.stream);
+    await expect(opening).resolves.toBe(media.stream);
+    expect(media.track.stop).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "synchronously",
+      () => {
+        throw new TypeError("unsupported permission descriptor");
+      },
+    ],
+    ["asynchronously", () => Promise.reject(new Error("permission query failed"))],
+  ])("continues when the permission query fails %s", async (_mode, queryPermission) => {
+    const media = microphoneFixture();
+    const getUserMedia = vi.fn(async () => media.stream);
+    const query = vi.fn(queryPermission);
+    vi.stubGlobal("navigator", {
+      permissions: { query },
+      mediaDevices: { getUserMedia },
+    });
+    const onConnecting = vi.fn();
+    const input = createMicrophoneInput(undefined, onConnecting);
+
+    await expect(input.open(undefined)).resolves.toBe(media.stream);
+    expect(onConnecting).toHaveBeenCalledWith(expect.stringContaining("allow access if prompted"));
+    expect(query).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenCalledOnce();
+  });
+
   it.each(["requesting", "acquired"])(
     "releases ownership if the %s status callback throws",
     async (phase) => {

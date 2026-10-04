@@ -15,9 +15,10 @@ import type { RealtimeTalkTranscript } from "./shared.ts";
 class Peer extends EventTarget {
   static instances: Peer[] = [];
   static setupBlock: (() => Promise<void>) | undefined;
+  static channelReadyState: RTCDataChannelState = "open";
   connectionState = "new";
   channel = Object.assign(new EventTarget(), {
-    readyState: "open",
+    readyState: Peer.channelReadyState,
     send: vi.fn(),
     close: vi.fn(),
   });
@@ -125,6 +126,7 @@ describe("browser Talk provider item ordering", () => {
   beforeEach(() => {
     Peer.instances = [];
     Peer.setupBlock = undefined;
+    Peer.channelReadyState = "open";
     vi.stubGlobal("RTCPeerConnection", Peer);
     vi.stubGlobal(
       "fetch",
@@ -308,6 +310,30 @@ describe("browser Talk provider item ordering", () => {
       );
     },
   );
+
+  it("closes the logical voice session when the control data channel never opens", async () => {
+    vi.useFakeTimers();
+    Peer.channelReadyState = "connecting";
+    const call = createCall();
+    const starting = call.session.start();
+    const failed = starting.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(Peer.instances[0]?.setRemoteDescription).toHaveBeenCalled());
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await failed).toMatchObject({
+      message: expect.stringContaining("Realtime control channel did not open within 15000ms"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      call.requests.filter(
+        ({ method, params }) =>
+          method === "talk.client.close" && params.voiceSessionId === "voice-1",
+      ),
+    ).toHaveLength(1);
+    expect(Peer.instances[0]?.close).toHaveBeenCalledOnce();
+    expect(Peer.instances[0]?.channel.close).toHaveBeenCalledOnce();
+  });
 
   it("streams immediately but persists a long utterance before its earlier-arriving reply", async () => {
     const call = await start();

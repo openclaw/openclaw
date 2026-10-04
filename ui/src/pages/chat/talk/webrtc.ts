@@ -20,6 +20,7 @@ import {
 } from "./shared.ts";
 import { captureRealtimeTalkVideoFrame } from "./video.ts";
 import {
+  RealtimeTalkDataChannelStartup,
   RealtimeTalkWebRtcOfferExchange,
   realtimeTalkCompletedToolCalls,
   realtimeTalkTranscriptItem,
@@ -58,6 +59,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
   private starting = false;
   private startupError: Error | null = null;
+  private dataChannelStartup: RealtimeTalkDataChannelStartup | null = null;
 
   constructor(
     private readonly session: RealtimeTalkWebRtcSdpSessionResult,
@@ -135,10 +137,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return this.cancelledStart();
     }
     this.channel = channel;
-    channel.addEventListener("open", () => {
-      this.ctx.callbacks.onStatus?.("listening");
-      this.emitTalkEvent({ type: "session.ready" });
-    });
+    const dataChannelStartup = new RealtimeTalkDataChannelStartup(
+      channel,
+      () => this.isCurrentPeer(peer) && this.channel === channel,
+      (detail) => this.failConnection(detail),
+    );
+    this.dataChannelStartup = dataChannelStartup;
     channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
     peer.addEventListener("connectionstatechange", () => {
       if (this.closed) {
@@ -176,6 +180,15 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (remoteDescriptionResult === cancelledSetup || !this.isCurrentPeer(peer)) {
       return this.cancelledStart();
     }
+    const channelReady = await dataChannelStartup.wait();
+    if (this.dataChannelStartup === dataChannelStartup) {
+      this.dataChannelStartup = null;
+    }
+    if (channelReady === "cancelled" || !this.isCurrentPeer(peer)) {
+      return this.cancelledStart();
+    }
+    this.ctx.callbacks.onStatus?.("listening");
+    this.emitTalkEvent({ type: "session.ready" });
     this.starting = false;
     return "ready";
   }
@@ -228,6 +241,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private releaseResources(): void {
     this.starting = false;
     this.controlAbortController.abort();
+    this.dataChannelStartup?.cancel();
+    this.dataChannelStartup = null;
     this.input.stop();
     this.offerExchange.abort();
     this.channel?.close();
