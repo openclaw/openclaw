@@ -1,4 +1,5 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import {
@@ -20,8 +21,21 @@ import type {
 
 export function managedCommandCustody(
   lease: ManagedHandoffParent | ManagedHandoffLeasePayload | null,
+  key?: string,
 ) {
-  return lease?.version === 2 && lease.action.kind === "update" ? lease.action.custody : undefined;
+  if (
+    lease?.version !== 2 ||
+    lease.action.kind !== "update" ||
+    lease.action.mutationProtocol !== undefined ||
+    lease.mutationOriginal !== undefined
+  ) {
+    return undefined;
+  }
+  const commandKey = "key" in lease ? lease.key : key;
+  if (!commandKey || !/\/\.openclaw-update-child-[a-f0-9-]{36}-command$/.test(commandKey)) {
+    return undefined;
+  }
+  return isDeepStrictEqual(lease.helper, lease.executor) ? "reserved" : "bound";
 }
 
 /** Tracked command reservations outlive their helper; only group extinction closes a binding. */
@@ -42,10 +56,10 @@ export function managedCommandAllowsBinding(
   return custody
     ? custody === "reserved" &&
         action.kind === "update" &&
-        action.custody === "bound" &&
+        action.mutationProtocol === undefined &&
         executor !== undefined &&
         executor.pid !== lease.helper.pid
-    : action.kind !== "update" || !action.custody;
+    : true;
 }
 
 export function createManagedHandoffChildReader(deps: {

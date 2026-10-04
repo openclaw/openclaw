@@ -165,7 +165,7 @@ export function createManagedHandoffLeaseStore(
     legacyParent?: BorrowedLegacyHandoffParent,
     originalParent?: ManagedHandoffParent,
   ): LeaseAcquisition {
-    const custody = managedCommandCustody(parseManagedHandoffLeasePayload(payload));
+    const custody = managedCommandCustody(parseManagedHandoffLeasePayload(payload), root);
     if (custody && (custody !== "reserved" || !root.includes("/.openclaw-update-child-"))) {
       throw new Error("Managed command custody requires a child reservation");
     }
@@ -436,7 +436,7 @@ export function createManagedHandoffLeaseStore(
             version: 2,
             helper: lease.helper,
             executor,
-            action: custody ? { ...lease.action, custody: "bound" } : lease.action,
+            action: lease.action,
           });
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {

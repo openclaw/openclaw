@@ -102,7 +102,7 @@ export function createManagedCommandProcessCustody(options: {
           const acquired = store.acquire(
             `${root}/${child}`,
             options.runId,
-            { kind: "update", custody: "reserved" },
+            { kind: "update" },
             false,
             parent.version === 1 ? parent : undefined,
             parent.version === 1 ? undefined : parent,
