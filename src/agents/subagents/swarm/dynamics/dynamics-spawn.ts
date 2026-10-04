@@ -1,18 +1,18 @@
 import { candidateIdentity, type CandidateManifest } from "./candidate-evidence.js";
 import { buildHandoffManifest, type HandoffPayload } from "./dynamics-handoffs.js";
 import type {
-  DynamicsRequirement,
-  DynamicsSpawnRequirements,
-  InformationBoundary,
+  BoundedLaunchRequirement,
+  BoundedLaunchRequirements,
+  BoundedLaunchBoundary,
 } from "./dynamics-types.js";
 
-export type PreparedDynamicsSpawn = {
+export type PreparedBoundedLaunch = {
   task: string;
   context?: "isolated";
   sandbox?: "require";
 };
 
-const DEFAULT_REQUIREMENTS: DynamicsSpawnRequirements = {
+const DEFAULT_REQUIREMENTS: BoundedLaunchRequirements = {
   sandbox: "inherit",
   candidateDigest: "optional",
   artifactRefs: "optional",
@@ -43,7 +43,7 @@ function readRefs(value: unknown, name: string): string[] {
   return value.map((item) => readText(item, name, 512));
 }
 
-function readBoundary(value: unknown): InformationBoundary {
+function readBoundary(value: unknown): BoundedLaunchBoundary {
   if (
     value !== "isolated" &&
     value !== "artifact-only" &&
@@ -51,52 +51,52 @@ function readBoundary(value: unknown): InformationBoundary {
     value !== "summary-only"
   ) {
     throw new Error(
-      "dynamics.boundary must be isolated, artifact-only, evidence-only, or summary-only",
+      "boundedLaunch.boundary must be isolated, artifact-only, evidence-only, or summary-only",
     );
   }
   return value;
 }
 
-function readRequirement(value: unknown, name: string): DynamicsRequirement {
+function readRequirement(value: unknown, name: string): BoundedLaunchRequirement {
   if (value !== "optional" && value !== "required") {
     throw new Error(`${name} must be optional or required`);
   }
   return value;
 }
 
-function readRequirements(value: unknown): DynamicsSpawnRequirements {
+function readRequirements(value: unknown): BoundedLaunchRequirements {
   if (value === undefined) {
     return { ...DEFAULT_REQUIREMENTS };
   }
-  const raw = readRecord(value, "dynamics.requirements");
+  const raw = readRecord(value, "boundedLaunch.requirements");
   if (
     Object.keys(raw).some((key) => !["sandbox", "candidateDigest", "artifactRefs"].includes(key))
   ) {
-    throw new Error("unsupported dynamics requirement");
+    throw new Error("unsupported bounded launch requirement");
   }
   const sandbox = raw.sandbox ?? DEFAULT_REQUIREMENTS.sandbox;
   if (sandbox !== "inherit" && sandbox !== "require") {
-    throw new Error("dynamics.requirements.sandbox must be inherit or require");
+    throw new Error("boundedLaunch.requirements.sandbox must be inherit or require");
   }
   return {
     sandbox,
     candidateDigest:
       raw.candidateDigest === undefined
         ? DEFAULT_REQUIREMENTS.candidateDigest
-        : readRequirement(raw.candidateDigest, "dynamics.requirements.candidateDigest"),
+        : readRequirement(raw.candidateDigest, "boundedLaunch.requirements.candidateDigest"),
     artifactRefs:
       raw.artifactRefs === undefined
         ? DEFAULT_REQUIREMENTS.artifactRefs
-        : readRequirement(raw.artifactRefs, "dynamics.requirements.artifactRefs"),
+        : readRequirement(raw.artifactRefs, "boundedLaunch.requirements.artifactRefs"),
   };
 }
 
 function validateContract(
-  boundary: InformationBoundary,
-  requirements: DynamicsSpawnRequirements,
+  boundary: BoundedLaunchBoundary,
+  requirements: BoundedLaunchRequirements,
 ): void {
   if (requirements.artifactRefs === "required" && boundary !== "artifact-only") {
-    throw new Error("dynamics requires artifact references across a boundary that drops artifacts");
+    throw new Error("boundedLaunch requires artifact references across a boundary that drops artifacts");
   }
   if (
     requirements.candidateDigest === "required" &&
@@ -104,7 +104,7 @@ function validateContract(
     boundary !== "evidence-only"
   ) {
     throw new Error(
-      "dynamics requires candidate identity across a boundary that drops candidate identity",
+      "boundedLaunch requires candidate identity across a boundary that drops candidate identity",
     );
   }
 }
@@ -113,7 +113,7 @@ function readCandidateManifest(value: unknown): CandidateManifest | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const record = readRecord(value, "dynamics.candidate");
+  const record = readRecord(value, "boundedLaunch.candidate");
   if (
     Object.keys(record).some(
       (key) =>
@@ -122,10 +122,10 @@ function readCandidateManifest(value: unknown): CandidateManifest | undefined {
         ),
     )
   ) {
-    throw new Error("unsupported dynamics candidate field");
+    throw new Error("unsupported bounded launch candidate field");
   }
   if (record.version !== 1) {
-    throw new Error("dynamics.candidate.version must be 1");
+    throw new Error("boundedLaunch.candidate.version must be 1");
   }
   return {
     version: 1,
@@ -136,23 +136,23 @@ function readCandidateManifest(value: unknown): CandidateManifest | undefined {
   };
 }
 
-export function prepareDynamicsSpawn(params: {
+export function prepareBoundedLaunch(params: {
   task: string;
-  dynamics: unknown;
+  boundedLaunch: unknown;
   sourceReplicaId: string;
   targetReplicaId: string;
-}): PreparedDynamicsSpawn {
-  if (params.dynamics === undefined) {
+}): PreparedBoundedLaunch {
+  if (params.boundedLaunch === undefined) {
     return { task: params.task };
   }
-  const options = readRecord(params.dynamics, "dynamics");
+  const options = readRecord(params.boundedLaunch, "boundedLaunch");
   if (
     Object.keys(options).some(
       (key) =>
         key !== "boundary" && key !== "requirements" && key !== "handoff" && key !== "candidate",
     )
   ) {
-    throw new Error("dynamics accepts only boundary, requirements, handoff, and candidate");
+    throw new Error("boundedLaunch accepts only boundary, requirements, handoff, and candidate");
   }
 
   const boundary = readBoundary(options.boundary);
@@ -160,13 +160,13 @@ export function prepareDynamicsSpawn(params: {
   validateContract(boundary, requirements);
   const candidate = readCandidateManifest(options.candidate);
 
-  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
+  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "boundedLaunch.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
     )
   ) {
-    throw new Error("unsupported dynamics handoff field");
+    throw new Error("unsupported bounded launch handoff field");
   }
   const explicitCandidateDigest =
     raw.candidateDigest === undefined
@@ -177,7 +177,7 @@ export function prepareDynamicsSpawn(params: {
     explicitCandidateDigest !== undefined &&
     explicitCandidateDigest !== candidate.candidateDigest
   ) {
-    throw new Error("dynamics handoff candidate digest does not match candidate manifest");
+    throw new Error("boundedLaunch handoff candidate digest does not match candidate manifest");
   }
 
   const payload: HandoffPayload = {
@@ -203,7 +203,7 @@ export function prepareDynamicsSpawn(params: {
       : []),
   ];
   if (missingRequirements.length > 0) {
-    throw new Error(`dynamics requires ${missingRequirements.join(" and ")} for this handoff`);
+    throw new Error(`boundedLaunch requires ${missingRequirements.join(" and ")} for this handoff`);
   }
 
   const contract = { version: 1 as const, boundary, requirements };

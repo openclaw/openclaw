@@ -16,15 +16,15 @@ Use it when a verification lane must:
 - require the existing sandbox admission path; and/or
 - bind an exact candidate identity into the existing replay fingerprint.
 
-Calls without `dynamics` use the existing launch path unchanged.
+Calls without `boundedLaunch` use the existing launch path unchanged.
 
 ## Contract
 
 ```typescript
-type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type BoundedLaunchBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
 
-type DynamicsOptions = {
-  boundary: DynamicsBoundary;
+type BoundedLaunchOptions = {
+  boundary: BoundedLaunchBoundary;
   requirements?: {
     sandbox?: "inherit" | "require";
     candidateDigest?: "optional" | "required";
@@ -59,7 +59,7 @@ publication, merge, or deployment authority.
 
 OpenClaw rejects requirements that the selected boundary cannot preserve.
 References remain caller-provided data. Handoff filtering controls only the
-explicit `dynamics.handoff` payload; it is not a sandbox for the original task,
+explicit `boundedLaunch.handoff` payload; it is not a sandbox for the original task,
 workspace, memory, or tool visibility.
 
 ## Exact verifier launch
@@ -67,7 +67,7 @@ workspace, memory, or tool visibility.
 ```javascript
 await agents.run("Verify this exact candidate.", {
   thinking: "high",
-  dynamics: {
+  boundedLaunch: {
     boundary: "artifact-only",
     requirements: {
       sandbox: "require",
@@ -88,7 +88,7 @@ await agents.run("Verify this exact candidate.", {
 });
 ```
 
-A dynamics launch uses `context: "isolated"`. When `sandbox: "require"` is
+A bounded launch uses `context: "isolated"`. When `sandbox: "require"` is
 requested, the existing native spawn owner must admit that sandbox or reject the
 launch. The bridge does not retry unsandboxed.
 
@@ -100,6 +100,18 @@ candidate identity rejects reuse of a persisted collector.
 Candidate identity proves which object was handed to verification. It does not
 prove that verification ran, that the verifier was independent, or that the
 candidate is correct.
+
+## Architecture boundary
+
+`boundedLaunch` is the crystallization/measurement seam, not a population
+controller:
+
+`explore -> select -> freeze exact candidate -> bounded launch -> verify`
+
+Caller or plugin policy may adapt model, thinking level, fast mode, search width,
+or verification intensity from novelty, disagreement, correlation, and resource
+pressure. Core does not own that policy. One conservation rule holds: compute may
+vary; authority may not increase.
 
 ## Ownership
 

@@ -19,12 +19,13 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
 import * as registryState from "../registry/subagent-registry-state.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
-import { prepareDynamicsSpawn } from "../swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "../swarm/dynamics/dynamics-spawn.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
-// mock-isolation: Keep runtime plugin discovery outside the native spawn fixture while injecting an in-memory registry.\nvi.mock("../../runtime-plugins.js", () => ({
+// mock-isolation: Keep runtime plugin discovery outside the native spawn fixture while injecting an in-memory registry.
+vi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
@@ -54,9 +55,9 @@ async function writeConfig(sandboxMode: "off" | "all"): Promise<void> {
 }
 
 function preparedVerifier() {
-  return prepareDynamicsSpawn({
+  return prepareBoundedLaunch({
     task: "Verify the frozen candidate against the acceptance criteria.",
-    dynamics: {
+    boundedLaunch: {
       boundary: "artifact-only",
       requirements: {
         sandbox: "require",
@@ -121,7 +122,7 @@ function installInProcessRegistryPersistenceForTests(): void {
   });
 }
 
-describe("native dynamics spawn boundary", () => {
+describe("native bounded launch spawn boundary", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();

@@ -15,10 +15,12 @@ const state = vi.hoisted(() => ({
       },
 }));
 
-// mock-isolation: Keep session lifecycle side effects outside the launch-bridge unit fixture.\nvi.mock("../sessions/session-lifecycle-events.js", () => ({
+// mock-isolation: Keep session lifecycle side effects outside the launch-bridge unit fixture.
+vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
-// mock-isolation: Drive source revocation deterministically without loading ambient guard state.\nvi.mock("./agent-tool-source-execution-guard.js", () => ({
+// mock-isolation: Drive source revocation deterministically without loading ambient guard state.
+vi.mock("./agent-tool-source-execution-guard.js", () => ({
   captureAgentToolSourceExecutionGuard: (signal?: AbortSignal) => () => signal?.throwIfAborted(),
   runAgentToolSourceExecutionGuard: () => {
     if (state.blocked) {
@@ -26,11 +28,13 @@ const state = vi.hoisted(() => ({
     }
   },
 }));
-// mock-isolation: Keep persistent collector registry state outside the launch-bridge unit fixture.\nvi.mock("./subagents/registry/subagent-registry.js", () => ({
+// mock-isolation: Keep persistent collector registry state outside the launch-bridge unit fixture.
+vi.mock("./subagents/registry/subagent-registry.js", () => ({
   getSwarmRunByLaunchReplayKey: () => state.existing,
   initSubagentRegistry: vi.fn(),
 }));
-// mock-isolation: Exercise joined-collector behavior without admitting scheduler or registry state.\nvi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
+// mock-isolation: Exercise joined-collector behavior without admitting scheduler or registry state.
+vi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
   isCollectorSpawnTool: () => true,
   runWithJoinedCollectorSpawn: async (
     _tool: unknown,
@@ -41,24 +45,29 @@ const state = vi.hoisted(() => ({
     return await run();
   },
 }));
-// mock-isolation: Use deterministic swarm enablement and concurrency without ambient config resolution.\nvi.mock("./subagents/swarm/swarm-config.js", () => ({
+// mock-isolation: Use deterministic swarm enablement and concurrency without ambient config resolution.
+vi.mock("./subagents/swarm/swarm-config.js", () => ({
   resolveSwarmConfig: () => ({ enabled: state.enabled, maxConcurrent: 4 }),
 }));
-// mock-isolation: Control allow/deny behavior locally without process-wide tool policy state.\nvi.mock("./tool-policy-shared.js", () => ({
+// mock-isolation: Control allow/deny behavior locally without process-wide tool policy state.
+vi.mock("./tool-policy-shared.js", () => ({
   isToolExecutionAllowed: (allow: readonly string[], name: string) => allow.includes(name),
 }));
-// mock-isolation: Collector completion is outside these launch-only bridge cases.\nvi.mock("./tools/agents-wait-tool.js", () => ({
+// mock-isolation: Collector completion is outside these launch-only bridge cases.
+vi.mock("./tools/agents-wait-tool.js", () => ({
   waitForCollectorCompletion: vi.fn(),
 }));
-// mock-isolation: Use a local input-error type without loading unrelated tool runtime state.\nvi.mock("./tools/common.js", () => ({
+// mock-isolation: Use a local input-error type without loading unrelated tool runtime state.
+vi.mock("./tools/common.js", () => ({
   ToolInputError: class ToolInputError extends Error {},
 }));
-// mock-isolation: Resolve synthetic session keys without opening session-store state.\nvi.mock("./tools/sessions-resolution.js", () => ({
+// mock-isolation: Resolve synthetic session keys without opening session-store state.
+vi.mock("./tools/sessions-resolution.js", () => ({
   resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
   resolveInternalSessionKey: ({ key }: { key: string }) => key,
 }));
 
-function setup(dynamics?: unknown, options: Record<string, unknown> = {}) {
+function setup(boundedLaunch?: unknown, options: Record<string, unknown> = {}) {
   const tool = {
     name: "sessions_spawn",
     label: "Sessions",
@@ -104,7 +113,7 @@ function setup(dynamics?: unknown, options: Record<string, unknown> = {}) {
         method: "agentSpawn" as const,
         args: [
           "Check the candidate",
-          { ...options, ...(dynamics === undefined ? {} : { dynamics }) },
+          { ...options, ...(boundedLaunch === undefined ? {} : { boundedLaunch }) },
         ],
       },
     },
@@ -117,7 +126,7 @@ beforeEach(() => {
   state.existing = undefined;
 });
 
-describe("dynamics through the actual native spawn bridge", () => {
+describe("bounded launch through the actual native spawn bridge", () => {
   it("dispatches a filtered sandbox-required verifier through the existing native tool", async () => {
     const fixture = setup({
       boundary: "artifact-only",
@@ -203,10 +212,10 @@ describe("dynamics through the actual native spawn bridge", () => {
     );
   });
 
-  it("rejects an invalid dynamics boundary before dispatch", async () => {
+  it("rejects an invalid bounded launch boundary before dispatch", async () => {
     const fixture = setup({ boundary: "constructor" });
     await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow(
-      "dynamics.boundary must be",
+      "boundedLaunch.boundary must be",
     );
     expect(fixture.callExactId).not.toHaveBeenCalled();
   });

@@ -162,7 +162,7 @@ starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
 
-The optional `dynamics` field is an experimental **bounded launch** contract.
+The optional `boundedLaunch` field is an experimental **bounded launch** contract.
 It can filter the explicit handoff, require the existing sandbox admission path,
 and bind exact candidate identity into replay. It does not add a scheduler or a
 permission plane.
@@ -171,13 +171,13 @@ For example, an independent-verification recipe can choose
 `boundary: "artifact-only"` and require `sandbox: "require"`, a candidate
 digest, and artifact references. If that sandbox cannot be provided, the launch
 fails rather than retrying unsandboxed. Handoff filtering controls only the
-explicit `dynamics.handoff` payload; it is not a security boundary for the
+explicit `boundedLaunch.handoff` payload; it is not a security boundary for the
 original task, workspace, memory, or tool visibility.
 
 See [Swarm bounded launches](/tools/swarm-dynamics) for the exact contract and
 ownership boundaries.
 
-When `dynamics.candidate` is present, OpenClaw validates the complete
+When `boundedLaunch.candidate` is present, OpenClaw validates the complete
 candidate/source/recipe/policy manifest, computes a stable candidate identity,
 and binds both manifest and identity into the native launch bytes before the
 existing replay fingerprint is computed. A conflicting

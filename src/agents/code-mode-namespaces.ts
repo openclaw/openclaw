@@ -415,17 +415,17 @@ function createMcpNamespaceModel(
 
 const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
 
-type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
-type DynamicsRequirement = "optional" | "required";
+type BoundedLaunchBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type BoundedLaunchRequirement = "optional" | "required";
 
-interface DynamicsHandoff {
+interface BoundedLaunchHandoff {
   candidateDigest?: string;
   artifactRefs?: string[];
   evidenceRefs?: string[];
   summary?: string;
 }
 
-interface DynamicsCandidate {
+interface BoundedLaunchCandidate {
   version: 1;
   candidateDigest: string;
   sourceDigest: string;
@@ -433,15 +433,15 @@ interface DynamicsCandidate {
   policyDigest: string;
 }
 
-interface DynamicsOptions {
-  boundary: DynamicsBoundary;
+interface BoundedLaunchOptions {
+  boundary: BoundedLaunchBoundary;
   requirements?: {
     sandbox?: "inherit" | "require";
-    candidateDigest?: DynamicsRequirement;
-    artifactRefs?: DynamicsRequirement;
+    candidateDigest?: BoundedLaunchRequirement;
+    artifactRefs?: BoundedLaunchRequirement;
   };
-  handoff?: DynamicsHandoff;
-  candidate?: DynamicsCandidate;
+  handoff?: BoundedLaunchHandoff;
+  candidate?: BoundedLaunchCandidate;
 }
 
 interface AgentRunOptions {
@@ -452,7 +452,7 @@ interface AgentRunOptions {
   agentId?: string;
   schema?: AgentJsonSchema;
   phase?: string;
-  dynamics?: DynamicsOptions;
+  boundedLaunch?: BoundedLaunchOptions;
 }
 
 interface AgentsApi {

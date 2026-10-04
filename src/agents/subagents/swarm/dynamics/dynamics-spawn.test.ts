@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareDynamicsSpawn } from "./dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./dynamics-spawn.js";
 
 const base = {
   task: "Check the upload race",
@@ -22,13 +22,13 @@ const verifier = {
   },
 };
 
-describe("native dynamics launch preparation", () => {
-  it("leaves calls without dynamics unchanged", () => {
-    expect(prepareDynamicsSpawn({ ...base, dynamics: undefined })).toEqual({ task: base.task });
+describe("native bounded launch preparation", () => {
+  it("leaves calls without bounded launch unchanged", () => {
+    expect(prepareBoundedLaunch({ ...base, boundedLaunch: undefined })).toEqual({ task: base.task });
   });
 
   it("filters an artifact-only handoff and requests the existing sandbox owner", () => {
-    const result = prepareDynamicsSpawn({ ...base, dynamics: verifier });
+    const result = prepareBoundedLaunch({ ...base, boundedLaunch: verifier });
     expect(result.context).toBe("isolated");
     expect(result.sandbox).toBe("require");
     expect(result.task).toContain("artifact:a");
@@ -38,17 +38,51 @@ describe("native dynamics launch preparation", () => {
     expect(result.task).toContain("grants no authority");
   });
 
+  it.each([
+    ["isolated", [], ["candidate:matrix", "artifact:matrix", "evidence:matrix", "summary:matrix"]],
+    [
+      "artifact-only",
+      ["candidate:matrix", "artifact:matrix"],
+      ["evidence:matrix", "summary:matrix"],
+    ],
+    [
+      "evidence-only",
+      ["candidate:matrix", "evidence:matrix"],
+      ["artifact:matrix", "summary:matrix"],
+    ],
+    ["summary-only", ["summary:matrix"], ["candidate:matrix", "artifact:matrix", "evidence:matrix"]],
+  ] as const)("projects %s handoff to only its allowed information class", (boundary, kept, dropped) => {
+    const result = prepareBoundedLaunch({
+      ...base,
+      boundedLaunch: {
+        boundary,
+        handoff: {
+          candidateDigest: "candidate:matrix",
+          artifactRefs: ["artifact:matrix"],
+          evidenceRefs: ["evidence:matrix"],
+          summary: "summary:matrix",
+        },
+      },
+    });
+    for (const value of kept) {
+      expect(result.task).toContain(value);
+    }
+    for (const value of dropped) {
+      expect(result.task).not.toContain(value);
+    }
+  });
+
   it("binds the generic contract and host-owned lineage into reproducible task bytes", () => {
-    const first = prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } });
-    expect(first).toEqual(prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } }));
+    const first = prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "isolated" } });
+    expect(first).toEqual(prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "isolated" } }));
     expect(first.task).not.toBe(
-      prepareDynamicsSpawn({ ...base, dynamics: { boundary: "summary-only" } }).task,
+      prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "summary-only" } }).task,
     );
     expect(first.task).not.toBe(
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
         targetReplicaId: "replacement",
-        dynamics: { boundary: "isolated" },
+        boundedLaunch: { boundary: "isolated" },
       }).task,
     );
   });
@@ -62,15 +96,15 @@ describe("native dynamics launch preparation", () => {
       boundary: "artifact-only",
       requirements: { artifactRefs: "required" },
     },
-  ])("rejects invalid or incomplete configuration %j", (dynamics) => {
-    expect(() => prepareDynamicsSpawn({ ...base, dynamics })).toThrow();
+  ])("rejects invalid or incomplete configuration %j", (boundedLaunch) => {
+    expect(() => prepareBoundedLaunch({ ...base, dynamics })).toThrow();
   });
 
   it("rejects requirements incompatible with the selected boundary", () => {
     expect(() =>
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
-        dynamics: {
+        boundedLaunch: {
           boundary: "summary-only",
           requirements: { candidateDigest: "required" },
         },
@@ -86,27 +120,27 @@ describe("native dynamics launch preparation", () => {
       recipeDigest: "recipe:a",
       policyDigest: "policy:a",
     };
-    const first = prepareDynamicsSpawn({
+    const first = prepareBoundedLaunch({
       ...base,
-      dynamics: {
+      boundedLaunch: {
         ...verifier,
         candidate,
       },
     });
     expect(first.task).toContain("Exact candidate binding");
     expect(first.task).not.toBe(
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
-        dynamics: {
+        boundedLaunch: {
           ...verifier,
           candidate: { ...candidate, policyDigest: "policy:b" },
         },
       }).task,
     );
     expect(() =>
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
-        dynamics: {
+        boundedLaunch: {
           ...verifier,
           handoff: { candidateDigest: "candidate:b", artifactRefs: ["artifact:a"] },
           candidate,
@@ -117,22 +151,22 @@ describe("native dynamics launch preparation", () => {
 
   it("bounds handoffs and snapshots their content before returning", () => {
     expect(() =>
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
-        dynamics: { boundary: "summary-only", handoff: { summary: "x".repeat(4097) } },
+        boundedLaunch: { boundary: "summary-only", handoff: { summary: "x".repeat(4097) } },
       }),
     ).toThrow();
     expect(() =>
-      prepareDynamicsSpawn({
+      prepareBoundedLaunch({
         ...base,
-        dynamics: {
+        boundedLaunch: {
           boundary: "evidence-only",
           handoff: { evidenceRefs: Array(33).fill("ref") },
         },
       }),
     ).toThrow();
     const mutable = structuredClone(verifier);
-    const prepared = prepareDynamicsSpawn({ ...base, dynamics: mutable });
+    const prepared = prepareBoundedLaunch({ ...base, boundedLaunch: mutable });
     mutable.handoff.artifactRefs.push("late addition");
     expect(prepared.task).not.toContain("late addition");
   });

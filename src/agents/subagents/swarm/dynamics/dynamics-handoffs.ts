@@ -1,4 +1,4 @@
-import type { HandoffManifest, InformationBoundary } from "./dynamics-types.js";
+import type { HandoffManifest, BoundedLaunchBoundary } from "./dynamics-types.js";
 
 export type HandoffPayload = {
   candidateDigest?: string;
@@ -10,7 +10,7 @@ export type HandoffPayload = {
 export function buildHandoffManifest(params: {
   sourceReplicaId: string;
   targetReplicaId: string;
-  boundary: InformationBoundary;
+  boundary: BoundedLaunchBoundary;
   payload: HandoffPayload;
 }): HandoffManifest {
   const artifactRefs = params.payload.artifactRefs ?? [];
@@ -58,7 +58,7 @@ export function buildHandoffManifest(params: {
       };
     default: {
       const exhaustiveBoundary: never = params.boundary;
-      throw new Error(`Unsupported dynamics handoff boundary: ${String(exhaustiveBoundary)}`);
+      throw new Error(`Unsupported bounded launch handoff boundary: ${String(exhaustiveBoundary)}`);
     }
   }
 }

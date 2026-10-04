@@ -26,14 +26,15 @@ import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-regis
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
-import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./subagents/swarm/dynamics/dynamics-spawn.js";
 import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
-// mock-isolation: Keep runtime plugin discovery outside the replay fixture while injecting an in-memory registry.\nvi.mock("./runtime-plugins.js", () => ({
+// mock-isolation: Keep runtime plugin discovery outside the replay fixture while injecting an in-memory registry.
+vi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("./runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
@@ -67,7 +68,7 @@ function candidate(policyDigest = "sha256:policy-a") {
   };
 }
 
-function dynamics(policyDigest = "sha256:policy-a") {
+function boundedLaunch(policyDigest = "sha256:policy-a") {
   return {
     boundary: "artifact-only",
     requirements: {
@@ -83,11 +84,11 @@ function dynamics(policyDigest = "sha256:policy-a") {
   };
 }
 
-function preparedInput(dynamicsInput: ReturnType<typeof dynamics>) {
+function preparedInput(boundedLaunchInput: ReturnType<typeof boundedLaunch>) {
   return {
-    ...prepareDynamicsSpawn({
+    ...prepareBoundedLaunch({
       task,
-      dynamics: dynamicsInput,
+      boundedLaunch: boundedLaunchInput,
       sourceReplicaId: groupId,
       targetReplicaId: replayKey,
     }),
@@ -142,7 +143,7 @@ function installInProcessRegistryPersistenceForTests(): void {
   });
 }
 
-describe("Code Mode dynamics native replay", () => {
+describe("Code Mode bounded launch native replay", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
@@ -192,8 +193,8 @@ describe("Code Mode dynamics native replay", () => {
       dispatchGatewayMethodInProcess,
     });
 
-    const originalDynamics = dynamics();
-    const input = preparedInput(originalDynamics);
+    const originalBoundedLaunch = boundedLaunch();
+    const input = preparedInput(originalBoundedLaunch);
     const seeded = await spawnSubagentDirect(
       {
         ...input,
@@ -248,7 +249,7 @@ describe("Code Mode dynamics native replay", () => {
     const request = {
       id: requestId,
       method: "agentSpawn" as const,
-      args: [task, { dynamics: originalDynamics }],
+      args: [task, { boundedLaunch: originalBoundedLaunch }],
     };
 
     await expect(
@@ -269,7 +270,7 @@ describe("Code Mode dynamics native replay", () => {
         parentToolCallId: "parent-call",
         request: {
           ...request,
-          args: [task, { dynamics: dynamics("sha256:policy-b") }],
+          args: [task, { boundedLaunch: boundedLaunch("sha256:policy-b") }],
         },
         codeModeRunId,
         ctx,

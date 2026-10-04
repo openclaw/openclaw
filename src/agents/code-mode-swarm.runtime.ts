@@ -13,7 +13,7 @@ import {
   initSubagentRegistry,
 } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
-import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./subagents/swarm/dynamics/dynamics-spawn.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -132,9 +132,9 @@ async function runAgentSpawnBridge(params: {
   };
   assertCurrent();
   const groupId = resolveCodeModeSwarmGroupId(params.ctx);
-  const preparedDynamics = prepareDynamicsSpawn({
+  const preparedBoundedLaunch = prepareBoundedLaunch({
     task: prompt.trim(),
-    dynamics: options.dynamics,
+    boundedLaunch: options.boundedLaunch,
     sourceReplicaId: groupId,
     targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
   });
@@ -149,7 +149,7 @@ async function runAgentSpawnBridge(params: {
     ...(schema ? { outputSchema: schema } : {}),
     // Apply the bounded launch contract before replay fingerprinting so exact
     // candidate identity and stricter admission are persisted with the request.
-    ...preparedDynamics,
+    ...preparedBoundedLaunch,
   };
   const requestFingerprint = `sha256:${createHash("sha256")
     .update(stableStringify(spawnInput))
