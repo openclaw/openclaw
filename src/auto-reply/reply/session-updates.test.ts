@@ -13,7 +13,6 @@ const {
   getRemoteSkillEligibilityMock,
   updateSessionEntryMock,
   loadSessionEntryMock,
-  resolveNodeExecEligibilityMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -30,11 +29,14 @@ const {
   })),
   updateSessionEntryMock: vi.fn(),
   loadSessionEntryMock: vi.fn(),
-  resolveNodeExecEligibilityMock: vi.fn(() => ({ canExec: false })),
 }));
 
-vi.mock("../../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
+}));
+
+vi.mock("../../infra/exec-approvals-store.js", () => ({
+  loadExecApprovalsReadOnlyAsync: async () => ({ version: 1, agents: {} }),
 }));
 
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -87,7 +89,6 @@ describe("ensureSkillSnapshot", () => {
     updateSessionEntryMock.mockReset();
     loadSessionEntryMock.mockReset();
     updateSessionEntryMock.mockResolvedValue(null);
-    resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
   });
 
   afterEach(() => {
@@ -116,12 +117,11 @@ describe("ensureSkillSnapshot", () => {
 
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
         workspaceDir,
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "writer",
-          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+          eligibility: expect.objectContaining({
+            nodeSkills: { canExec: true, node: "build-node" },
+          }),
         }),
       );
     },
