@@ -202,9 +202,20 @@ describe("native collection data argument identity", () => {
           );
           const view = instance.wrap(source);
           let key = original;
-          view.forEach((_value, candidate) => {
+          class Receiver {
+            #label = "caller receiver";
+            read() {
+              return this.#label;
+            }
+          }
+          const receiver = new Receiver();
+          view.forEach(function (this: Receiver, value, candidate) {
+            expect(this).toBe(receiver);
+            expect(this.read()).toBe("caller receiver");
+            expect(value).toBe(source.get(original));
+            expect(candidate).toBe(original);
             key = candidate;
-          });
+          }, receiver);
           expect(view.has(key)).toBe(true);
           expect(view.get(key)!()).toBe("value");
           expect(view.set(key, replacement)).toBe(source);

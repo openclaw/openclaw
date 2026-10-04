@@ -150,6 +150,7 @@ describe("secret egress plain HTTP", () => {
     { host: "[::1]", allowed: true },
     { host: "localhost.example.com", allowed: false },
     { host: "128.0.0.1", allowed: false },
+    { host: "[::2]", allowed: false },
   ])("permits only literal loopback HTTP to $host", async ({ host, allowed: permitted }) => {
     expect(
       await request({ target: `http://${host}:${host === "[::1]" ? ipv6Port : port}/ok` }),

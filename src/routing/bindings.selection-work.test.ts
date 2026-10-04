@@ -108,6 +108,22 @@ describe("bound account selection work", () => {
       iterations: matching ? 1 : 0,
       visits: matching ? 1000 : 0,
     });
+    if (matching) {
+      const select = () =>
+        resolveFirstBoundAccountId({
+          cfg,
+          channelId: "discord",
+          agentId: "bot-alpha",
+          groupSpace: "current",
+          memberRoleIds,
+        });
+      memberRoleIds[999] = "other-role";
+      expect(select()).toBeUndefined();
+      memberRoleIds[999] = "role-999";
+      expect(select()).toBe("account-999");
+      cfg.bindings = [match("replacement")];
+      expect(select()).toBe("replacement");
+    }
   });
 
   it("retains early channel and default-owner guards without reading binding types", () => {
