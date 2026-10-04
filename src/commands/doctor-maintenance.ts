@@ -9,8 +9,9 @@ import {
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
-import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
@@ -250,12 +251,13 @@ export async function beginDoctorMaintenance(
             : {}),
         }),
       );
-      if (health.waitOutcome === "still-starting") {
-        const warning = renderRestartDiagnostics(health).join(" ");
-        warn(warning);
+      if (health.outcome === "starting") {
+        warn(
+          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+        );
         return;
       }
-      if (!health.healthy) {
+      if (health.outcome !== "ready") {
         throw doctorGatewayMaintenanceError({
           env,
           phase: "gateway-restoration",
@@ -366,7 +368,7 @@ export async function beginDoctorMaintenance(
       error instanceof DoctorMaintenanceRefusalError
         ? error
         : new DoctorMaintenanceRefusalError(
-            `Doctor could not enter maintenance. ${String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
             classifyDoctorMaintenanceRefusal(error),
             {
               cause: error,

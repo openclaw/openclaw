@@ -291,7 +291,7 @@ describe("getReplyFromConfig message hooks", () => {
   const sandboxDocumentConfig: OpenClawConfig = {
     agents: {
       defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 

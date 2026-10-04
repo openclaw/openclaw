@@ -121,12 +121,18 @@ async function installStatelessFixture(
     | "config-only"
     | "broken"
     | "setup-only"
+    | "public-setup-only"
+    | "public-setup-detector"
+    | "public-setup-full-detector"
     | "setup-invalid-detector"
     | "setup-broken" = "absent",
   channel = false,
 ) {
   const setup =
     contract === "setup-only" ||
+    contract === "public-setup-only" ||
+    contract === "public-setup-detector" ||
+    contract === "public-setup-full-detector" ||
     contract === "setup-broken" ||
     contract === "setup-invalid-detector";
   await fs.mkdir(root, { recursive: true });
@@ -141,7 +147,12 @@ async function installStatelessFixture(
       },
     }),
   );
-  await fs.writeFile(path.join(root, "index.cjs"), "module.exports = {};\n");
+  await fs.writeFile(
+    path.join(root, "index.cjs"),
+    contract === "public-setup-full-detector"
+      ? `module.exports = { plugin: { id: ${JSON.stringify(pluginId)}, lifecycle: { detectLegacyStateMigrations: () => [] } } };\n`
+      : "module.exports = {};\n",
+  );
   await fs.writeFile(
     path.join(root, "openclaw.plugin.json"),
     JSON.stringify({
@@ -180,9 +191,13 @@ async function installStatelessFixture(
       path.join(root, "setup-entry.cjs"),
       contract === "setup-broken"
         ? 'throw new Error("Fixture setup contract unavailable");\n'
-        : contract === "setup-invalid-detector"
-          ? 'module.exports = { kind: "bundled-channel-setup-entry", loadSetupPlugin() { return {}; }, loadLegacyStateMigrationDetector() { return undefined; } };\n'
-          : 'module.exports = { kind: "bundled-channel-setup-entry", loadSetupPlugin() { return {}; } };\n',
+        : contract === "public-setup-only" || contract === "public-setup-full-detector"
+          ? `module.exports = { plugin: { id: ${JSON.stringify(pluginId)} } };\n`
+          : contract === "public-setup-detector"
+            ? `module.exports = { plugin: { id: ${JSON.stringify(pluginId)}, lifecycle: { detectLegacyStateMigrations: () => [] } } };\n`
+            : contract === "setup-invalid-detector"
+              ? 'module.exports = { kind: "bundled-channel-setup-entry", loadSetupPlugin() { return {}; }, loadLegacyStateMigrationDetector() { return undefined; } };\n'
+              : 'module.exports = { kind: "bundled-channel-setup-entry", loadSetupPlugin() { return {}; } };\n',
     );
   }
 }
@@ -223,7 +238,10 @@ describe("configured plugin migration deferral", () => {
       const source = path.join(home, "legacy-binding.json");
       const migrated = path.join(home, "migrated-binding.json");
       const pluginId = "deferred-fixture";
-      const config = createPluginConfig(pluginId, { legacyBinding: source });
+      const config = {
+        ...createPluginConfig(pluginId, { legacyBinding: source }),
+        meta: { migrations: { webhookListeners: true } },
+      };
       await writeOpenClawConfig(home, config);
       await fs.writeFile(source, '{"binding":"retained"}\n');
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -373,9 +391,12 @@ describe("configured plugin migration deferral", () => {
     },
   );
 
-  it.each([false, true])(
-    "clears installation-only deferral for a stateless plugin (next Doctor: %s)",
-    async (nextDoctor) => {
+  it.each([
+    { nextDoctor: false, contract: "absent" },
+    { nextDoctor: true, contract: "public-setup-detector" },
+  ] as const)(
+    "clears installation-only deferral for a stateless $contract plugin (next Doctor: $nextDoctor)",
+    async ({ nextDoctor, contract }) => {
       await withDoctorConfigPreflightHome(async (home) => {
         const pluginRoot = path.join(home, "stateless-plugin");
         const pluginId = "stateless-fixture";
@@ -393,7 +414,7 @@ describe("configured plugin migration deferral", () => {
               preparePluginMetadataSnapshot: true,
             });
             expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
-            await installStatelessFixture(pluginRoot, pluginId);
+            await installStatelessFixture(pluginRoot, pluginId, contract);
             installed = true;
             await writeOpenClawConfig(home, config);
           }
@@ -403,7 +424,7 @@ describe("configured plugin migration deferral", () => {
             measure: async (name, run) => {
               const measured = await run();
               if (name === "doctor.config-preflight.config-snapshot" && !installed) {
-                await installStatelessFixture(pluginRoot, pluginId);
+                await installStatelessFixture(pluginRoot, pluginId, contract);
                 installed = true;
               }
               return measured;
@@ -422,6 +443,43 @@ describe("configured plugin migration deferral", () => {
       });
     },
   );
+
+  it("keeps an existing obligation when only the full entry declares a detector", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const pluginId = "full-entry-detector-fixture";
+      const pluginRoot = path.join(home, pluginId);
+      const config = createPluginConfig(pluginId, { region: "us-en" }, [pluginRoot]);
+      await writeOpenClawConfig(home, config);
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        await writeOpenClawConfig(home, {
+          ...config,
+          plugins: { ...config.plugins, load: { paths: [] } },
+        });
+        await runDoctorConfigPreflight({
+          ...doctorOptions,
+          preparePluginMetadataSnapshot: true,
+        });
+        expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
+
+        await installStatelessFixture(pluginRoot, pluginId, "public-setup-full-detector");
+        await writeOpenClawConfig(home, config);
+        const result = await runDoctorConfigPreflight({
+          ...doctorOptions,
+          preparePluginMetadataSnapshot: true,
+        });
+
+        expect(result.snapshot.valid).toBe(true);
+        expect(readDeferredPluginMigrations()).toEqual([
+          expect.objectContaining({ pluginId, requiresDoctorInspection: true }),
+        ]);
+        expect(
+          (await readConfigFileSnapshot()).sourceConfig.plugins?.entries?.[pluginId]?.config,
+        ).toEqual({
+          region: "us-en",
+        });
+      });
+    });
+  });
 
   it.each(["disabled-channel", "unconfigured"] as const)(
     "confirms an installed stateless plugin with a retained %s obligation",
@@ -635,7 +693,7 @@ describe("configured plugin migration deferral", () => {
             { legacyBinding: source },
             entry === "stale-candidate" ? [pluginRoot] : undefined,
           ),
-          agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+          agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
           ...(entry === "stale-candidate" ? { legacyFixture: source } : {}),
         };
         if (entry === "stale-candidate") {

@@ -34,6 +34,28 @@ describe("outbound message planning", () => {
       chunkMode: "newline",
       expected: ["first", "second"],
     },
+    ...[
+      { name: "U+2028", separator: "\u2028" },
+      { name: "U+2029", separator: "\u2029" },
+    ].flatMap(({ name, separator }) =>
+      [
+        {
+          name: "fenced JSON",
+          text: `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``,
+        },
+        { name: "inline code", text: `Copy \`first${separator}second\` exactly.` },
+      ].flatMap(({ name: codeName, text }) =>
+        (["length", "newline"] as const).map((chunkMode) => ({
+          name: `${name} in ${codeName} in ${chunkMode} mode`,
+          text,
+          limit: 4000,
+          chunker: chunkMarkdownText,
+          chunkerMode: "markdown" as const,
+          chunkMode,
+          expected: [text],
+        })),
+      ),
+    ),
     ...[0, -1].map((limit) => ({
       name: `Markdown paragraphs with disabled limit ${limit}`,
       text: "```txt\ncontent\n```\n\nafter",

@@ -5,8 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
@@ -27,8 +28,61 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
+
+export function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
+export class ChatDirectiveDedupe extends Map<string, DedupeEntry> {
+  private readonly pending = new Map<string, ReturnType<typeof createDeferred<void>>>();
+
+  constructor(private readonly signal: AbortSignal) {
+    super();
+  }
+
+  override set(key: string, entry: DedupeEntry): this {
+    super.set(key, entry);
+    if (key.startsWith("chat:")) {
+      const runId = key.slice("chat:".length);
+      if (readChatSendDedupeResponse(this, runId)) {
+        this.pending.get(runId)?.resolve();
+      }
+    }
+    return this;
+  }
+
+  async waitForResponse(runId: string): Promise<void> {
+    if (!readChatSendDedupeResponse(this, runId)) {
+      const publication = this.pending.get(runId) ?? createDeferred();
+      this.pending.set(runId, publication);
+      try {
+        await withinTest(publication.promise, this.signal);
+      } finally {
+        this.pending.delete(runId);
+      }
+    }
+    this.signal.throwIfAborted();
+    // Admission retains request identity before a response-bearing receipt exists.
+    expect(readChatSendDedupeResponse(this, runId)).toBeDefined();
+  }
+}
 
 type ChatDirectiveSessionState = {
   config: Record<string, unknown>;
@@ -41,16 +95,30 @@ type ChatDirectiveSessionState = {
   transcriptPath: string;
 };
 
+export function createGlobalChatDirectiveConfig(): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "main" },
+        sessionStore: { agentId: "main" },
+      },
+      entries: { main: {}, work: {} },
+    },
+    session: { scope: "global" },
+  };
+}
+
 export function readChatDirectiveConfig(
   state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey">,
 ): OpenClawConfig {
-  return {
+  return inheritLegacyDefaultAgentId(state.config, {
     ...state.config,
     session: {
       ...(state.config.session as Record<string, unknown> | undefined),
       mainKey: state.mainSessionKey,
     },
-  };
+  });
 }
 
 export function createChatDirectiveSuiteResources() {
@@ -58,6 +126,7 @@ export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
   let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
@@ -68,6 +137,7 @@ export function createChatDirectiveSuiteResources() {
     settleFixtures: () => fixtureLifetime.cleanup(),
     // The caller retains cleanup ownership before opening can fail.
     open() {
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
       metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
@@ -122,13 +192,15 @@ export function createChatDirectiveSuiteResources() {
     },
     async close() {
       try {
+        const metadataCleanup = await metadataOwner?.close();
+        expect(metadataCleanup?.failures ?? []).toEqual([]);
         await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
           disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
         );
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         fs.rmSync(root, { recursive: true, force: true });
       } finally {
-        await metadataOwner?.close();
+        previousEnv.restore();
       }
     },
   };

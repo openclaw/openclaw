@@ -15,7 +15,10 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+} from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -129,6 +132,7 @@ export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
@@ -155,12 +159,20 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         const builtEntries = vi
           .mocked(build)
           .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length);
-        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
-        // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
-        expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
-          "worker/worker.mjs",
-        ]);
+        expect(builtEntries.length).toBe(workerEntryNames.length + 1);
+        expect(builtEntries.toSorted()).toEqual(
+          [...workerEntryNames, "worker/worker-chunk-highlight"].toSorted(),
+        );
+        const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
+        expect(chunks).toContain("worker/worker.mjs");
+        expect(chunks.length).toBeGreaterThan(2);
+        expect(
+          chunks.every(
+            (file) =>
+              file === "worker/worker.mjs" ||
+              (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
+          ),
+        ).toBe(true);
         expect(
           bundles.flatMap((bundle) =>
             bundle.chunks.flatMap((chunk) =>
@@ -188,7 +200,7 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
       }
     });
 
-    it("commits exec authorization through the SQLite worker in a relocated archive", ({
+    it("reads exec environment and commits authorization through SQLite workers in a relocated archive", ({
       signal,
     }) =>
       fixtureLifetime.run(async () => {
@@ -210,12 +222,14 @@ const {
   commitExecAuthorizationLocked,
   updateExecApprovalsSync,
   readExecApprovalsSnapshot,
+  readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
 updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
+  assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },

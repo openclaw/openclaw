@@ -92,6 +92,16 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
 }));
 
+// Preparation and live authority checks use the same fixture session state.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
+}));
+
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandBuffered: mocks.runCommand,
@@ -313,7 +323,7 @@ let realWorktree = false;
 /** Publish and reset the same real SQLite owner while transport faults stay synthetic. */
 export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   setRuntimeConfigSnapshot({
-    agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
+    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
     // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
     session: { maintenance: { mode: "warn" } },
   });
@@ -592,7 +602,7 @@ export function installGitHubPublicationTestHarness(
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({
-      agents: { list: [{ id: "main", default: true, workspace: "/repo/worktree" }] },
+      agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: SESSION_KEY },

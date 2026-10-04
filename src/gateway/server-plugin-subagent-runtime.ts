@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
@@ -29,13 +31,10 @@ import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-cli
 function normalizePluginSubagentRunRuntime(
   value: unknown,
 ): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const harness = typeof record.harness === "string" ? record.harness.trim() : "";
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const record = asOptionalRecord(value);
+  const harness = normalizeOptionalString(record?.harness);
+  const provider = normalizeOptionalString(record?.provider);
+  const model = normalizeOptionalString(record?.model);
   return harness && provider && model ? { harness, provider, model } : undefined;
 }
 
@@ -345,10 +344,7 @@ export function createGatewaySubagentRuntime(
         params.completionDelivery,
       );
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,
@@ -475,10 +471,7 @@ export function createGatewaySubagentRuntime(
     getSessionMessages,
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,

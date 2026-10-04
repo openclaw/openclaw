@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
@@ -30,6 +31,7 @@ import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 1;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
@@ -63,7 +65,7 @@ const snapshotSchema = z
 
 const recordSchema = z
   .object({
-    cursorMatchesSnapshot: z.literal(true).optional(),
+    projectionVersion: z.number().int().positive(),
     savedAt: z.number().finite().nonnegative(),
     sessionId: z.string().nullable(),
     sessionKey: z.string().min(1),
@@ -119,7 +121,7 @@ function createSnapshotRecord(
     return null;
   }
   const envelope = {
-    cursorMatchesSnapshot: true,
+    projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
     savedAt: pending.savedAt,
     sessionId: pending.snapshot.sessionId,
     sessionKey,
@@ -286,15 +288,15 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (!isPersistableChatSnapshotKey(sessionKey)) {
       return null;
     }
+    // Older display projections cannot resume a cursor or contribute a retained history prefix.
+    if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
+      return null;
+    }
     const record = parseSnapshotRecord(value, sessionKey);
     if (!record) {
       debugSnapshotStore("resetting cache after record shape mismatch");
       await resetSessionSnapshotDatabase();
       return null;
-    }
-    // Older split panes could save a sibling's newer cursor with an incomplete transcript.
-    if (!record.cursorMatchesSnapshot) {
-      delete record.snapshot.deltaCursor;
     }
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));
     return record.snapshot;

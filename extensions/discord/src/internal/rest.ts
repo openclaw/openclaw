@@ -1,11 +1,7 @@
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import {
-  clampTimerTimeoutMs,
-  resolveIntegerOption as normalizeIntegerOption,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { clampTimerTimeoutMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { captureDiscordRequestAuthority } from "./request-authority.js";
@@ -23,33 +19,18 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-type RequestSchedulerOptions = {
-  lanes?: Partial<
-    Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
-  >;
-  maxConcurrency?: number;
-  maxRateLimitRetries?: number;
-};
-
 export type RequestClientOptions = {
-  tokenHeader?: "Bot" | "Bearer";
   baseUrl?: string;
   /** Complete versioned REST base supplied by the Discord endpoint override. */
   apiBaseUrl?: string;
-  apiVersion?: number;
-  userAgent?: string;
   signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
-  maxQueueSize?: number;
-  scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
 
 type NormalizedRequestClientOptions = RequestClientOptions & {
   apiBaseUrl: string;
-  apiVersion: number;
-  maxQueueSize: number;
   timeout: number;
 };
 
@@ -59,20 +40,9 @@ type RequestDispatchData = {
 };
 
 const defaultOptions = {
-  tokenHeader: "Bot" as const,
   baseUrl: "https://discord.com/api",
-  apiVersion: 10,
-  userAgent: "OpenClaw Discord",
   timeout: 15_000,
   queueRequests: true,
-  maxQueueSize: 1000,
-};
-
-const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
-const defaultLaneOptions: Record<RequestPriority, { staleAfterMs?: number; weight: number }> = {
-  critical: { weight: 6 },
-  standard: { weight: 3 },
-  background: { staleAfterMs: 20_000, weight: 1 },
 };
 
 // Cap the REST response body well above any legitimate Discord JSON payload
@@ -155,22 +125,6 @@ export class RequestClient {
     this.customFetch = resolvedOptions?.fetch;
     this.options = normalizeRequestClientOptions(resolvedOptions);
     this.scheduler = new RestScheduler<RequestDispatchData>(
-      {
-        lanes: normalizeSchedulerLanes(this.options.maxQueueSize, this.options.scheduler?.lanes),
-        maxConcurrency: normalizeIntegerOption(
-          this.options.scheduler?.maxConcurrency,
-          DEFAULT_MAX_CONCURRENT_WORKERS,
-          { min: 1 },
-        ),
-        maxQueueSize: this.options.maxQueueSize,
-        maxRateLimitRetries: normalizeIntegerOption(
-          this.options.scheduler?.maxRateLimitRetries,
-          3,
-          {
-            min: 0,
-          },
-        ),
-      },
       async (request) =>
         await this.executeRequest(
           request.method,
@@ -240,14 +194,14 @@ export class RequestClient {
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
-      "User-Agent": this.options.userAgent ?? defaultOptions.userAgent,
+      "User-Agent": "OpenClaw Discord",
     });
     if (this.token !== "webhook") {
-      headers.set("Authorization", `${this.options.tokenHeader ?? "Bot"} ${this.token}`);
+      headers.set("Authorization", `Bot ${this.token}`);
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
     timeout.unref?.();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
@@ -260,7 +214,7 @@ export class RequestClient {
         this.customFetch && assertCurrent
           ? await this.customFetch(url, init, assertCurrent)
           : await (this.customFetch ?? fetch)(url, init);
-      const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
+      const text = await readResponseBodyText(response, this.options.timeout);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
@@ -298,10 +252,6 @@ export class RequestClient {
     return this.scheduler.queueSize;
   }
 
-  getSchedulerMetrics() {
-    return this.scheduler.getMetrics();
-  }
-
   abortAllRequests(): void {
     this.scheduler.abortPending();
     for (const controller of this.requestControllers) {
@@ -315,56 +265,11 @@ function normalizeRequestClientOptions(
   options?: RequestClientOptions,
 ): NormalizedRequestClientOptions {
   const merged = { ...defaultOptions, ...options };
-  const apiVersion = normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, {
-    min: 1,
-  });
   return {
     ...merged,
-    apiBaseUrl:
-      options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v${apiVersion}`,
-    apiVersion,
+    apiBaseUrl: options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v10`,
     timeout:
       clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
-    maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
-      min: 1,
-    }),
-  };
-}
-
-function normalizeSchedulerLanes(
-  maxQueueSize: number,
-  lanes?: RequestSchedulerOptions["lanes"],
-): Record<RequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
-  const fallbackMaxQueueSize = normalizeIntegerOption(maxQueueSize, defaultOptions.maxQueueSize, {
-    min: 1,
-  });
-  return {
-    critical: normalizeSchedulerLane("critical", fallbackMaxQueueSize, lanes?.critical),
-    standard: normalizeSchedulerLane("standard", fallbackMaxQueueSize, lanes?.standard),
-    background: normalizeSchedulerLane("background", fallbackMaxQueueSize, lanes?.background),
-  };
-}
-
-function normalizeSchedulerLane(
-  lane: RequestPriority,
-  maxQueueSize: number,
-  options?: { maxQueueSize?: number; staleAfterMs?: number; weight?: number },
-): { maxQueueSize: number; staleAfterMs?: number; weight: number } {
-  const defaults = defaultLaneOptions[lane];
-  const staleAfterMs =
-    options?.staleAfterMs !== undefined
-      ? normalizeIntegerOption(options.staleAfterMs, defaults.staleAfterMs ?? 0, { min: 0 })
-      : defaults.staleAfterMs;
-  return {
-    maxQueueSize:
-      options?.maxQueueSize !== undefined
-        ? normalizeIntegerOption(options.maxQueueSize, maxQueueSize, { min: 1 })
-        : maxQueueSize,
-    ...(staleAfterMs !== undefined ? { staleAfterMs } : {}),
-    weight:
-      options?.weight !== undefined
-        ? normalizeIntegerOption(options.weight, defaults.weight, { min: 1 })
-        : defaults.weight,
   };
 }
 

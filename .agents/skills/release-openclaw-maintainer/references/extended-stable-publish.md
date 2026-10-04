@@ -20,8 +20,8 @@ Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.
 
-Use this path only for a `.33+` Gateway distribution from either of the two
-trailing completed months: the `openclaw` npm package, official npm plugins,
+Use this path only for a `.33+` Gateway distribution from the trailing
+completed month: the `openclaw` npm package, official npm plugins,
 and matching Docker Gateway images. Use
 `scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
 on pinned current `main` for command and validation requirements.

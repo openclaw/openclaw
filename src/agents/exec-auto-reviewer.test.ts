@@ -1,11 +1,38 @@
 // Exec auto-reviewer tests cover model response parsing, risk-based allow gates,
 // reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import { createModelExecAutoReviewer as createProductionReviewer } from "./exec-auto-reviewer.js";
+import * as completionRuntime from "./simple-completion-runtime.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+function createModelExecAutoReviewer(
+  params: Parameters<typeof createProductionReviewer>[0] & {
+    deps?: Partial<
+      Pick<
+        typeof completionRuntime,
+        "acquireSimpleCompletionModelForAgent" | "completeWithPreparedSimpleCompletionModel"
+      >
+    >;
+  },
+) {
+  const { deps, ...options } = params;
+  if (deps?.acquireSimpleCompletionModelForAgent) {
+    vi.spyOn(completionRuntime, "acquireSimpleCompletionModelForAgent").mockImplementation(
+      deps.acquireSimpleCompletionModelForAgent,
+    );
+  }
+  if (deps?.completeWithPreparedSimpleCompletionModel) {
+    vi.spyOn(completionRuntime, "completeWithPreparedSimpleCompletionModel").mockImplementation(
+      deps.completeWithPreparedSimpleCompletionModel,
+    );
+  }
+  return createProductionReviewer(options);
+}
 
 const input = {
   // Baseline approval request is read-only; individual cases override command

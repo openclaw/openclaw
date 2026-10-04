@@ -13,7 +13,6 @@ public struct OpenClawChatVoiceNoteControl {
 
 struct OpenClawVoiceNoteButton: View {
     let control: OpenClawChatVoiceNoteControl
-    let compact: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
 
@@ -39,7 +38,7 @@ struct OpenClawVoiceNoteButton: View {
         .help("Record Voice Note")
         .accessibilityLabel("Record voice note")
         .accessibilityIdentifier("chat-voice-note-record")
-        .modifier(VoiceNoteButtonChrome(compact: self.compact))
+        .buttonStyle(.bordered)
         .controlSize(.small)
         .foregroundStyle(.secondary)
         .contentShape(Rectangle())
@@ -97,18 +96,6 @@ struct OpenClawVoiceNoteRecordingRow: View {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(OpenClawChatTheme.composerBorder))
             }
-        }
-    }
-}
-
-private struct VoiceNoteButtonChrome: ViewModifier {
-    let compact: Bool
-
-    func body(content: Content) -> some View {
-        if self.compact {
-            content.buttonStyle(.plain)
-        } else {
-            content.buttonStyle(.bordered)
         }
     }
 }

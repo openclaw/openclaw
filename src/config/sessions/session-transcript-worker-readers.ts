@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readRuntimeTarget: reader(
+      "session-runtime-target",
+      "runtime transcript target",
+      (input) => ({ kind: "session-runtime-target", ...input }),
+      (value) => value.target,
+    ),
     readConversations: reader(
       "conversation-rows",
       "conversations",
@@ -70,6 +76,12 @@ export function createSessionHistoryWorkerReaders(
       "pending archives",
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
+    ),
+    readLifecycleArtifactPlan: reader(
+      "lifecycle-artifact-plan",
+      "lifecycle artifact plan",
+      (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
+      (value) => value,
     ),
     readMemorySessionTargets: reader(
       "memory-session-targets",
@@ -213,6 +225,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "source-messages" &&
             value.kind !== "recent-page" &&
             value.kind !== "rpc" &&
+            value.kind !== "rpc-message" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "inline-visibility" &&
@@ -286,6 +299,12 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readMaintenance: reader(
+      "transcript-maintenance",
+      "transcript maintenance facts",
+      (input) => ({ kind: "transcript-maintenance", ...input }),
+      (value) => value,
+    ),
     readCurrentTurnEntry: reader(
       "current-turn-entry",
       "a current-turn entry",
@@ -327,6 +346,12 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readSuggestions: reader(
+      "session-suggestions",
+      "suggestions",
+      (input) => ({ kind: "session-suggestions", ...input }),
+      (value) => value.suggestions,
+    ),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(
@@ -363,11 +388,23 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-progress-card", ...input }),
       (value) => value.card,
     ),
+    readPendingInputHistory: reader(
+      "session-pending-input-history",
+      "pending input history",
+      (input) => ({ kind: "session-pending-input-history", ...input }),
+      (value) => value.snapshot,
+    ),
     readPendingInputReceipts: reader(
       "session-pending-input-receipts",
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
+    ),
+    readPendingInputSource: reader(
+      "session-pending-input-source",
+      "a submitted input source",
+      (input) => ({ kind: "session-pending-input-source", ...input }),
+      (value) => value.snapshot,
     ),
     readConversationDelivery: reader(
       "conversation-delivery",

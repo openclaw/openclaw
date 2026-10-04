@@ -266,62 +266,46 @@ function observeColdAdmission(
   };
 }
 
-it.each(["delete", "artifact cleanup"] as const)(
-  "keeps cold %s preparation asynchronous inside its writer FIFO",
-  async (operation) => {
-    const f = fixture();
-    const admission = observeColdAdmission(f.databaseOptions.path);
-    const work =
-      operation === "delete"
-        ? own(
-            deleteSessionEntryLifecycle({
-              storePath: f.scope.storePath,
-              target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-              archiveTranscript: false,
-            }),
-          )
-        : own(
-            cleanupSessionLifecycleArtifactsCore({
-              storePath: f.scope.storePath,
-              sessionKeySegmentPrefix: "cleanup-admission-",
-              transcriptContentMarker: "unused-marker",
-              archiveRemovedEntryTranscripts: false,
-              orphanTranscriptMinAgeMs: 0,
-            }),
-          );
-    await yieldToEventLoop();
-    expect(admission.parentChecks()).toBe(0);
-    expect(
-      await Promise.race([
-        admission.entered.promise.then(() => true),
-        work.then(
-          () => false,
-          () => false,
-        ),
-      ]),
-    ).toBe(true);
-    let followingWriterEntered = false;
-    const following = own(
-      runExclusiveSqliteSessionWrite(
-        f.databaseOptions,
-        async () => {
-          followingWriterEntered = true;
-        },
-        "session.transcript.batch",
+it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
+  const f = fixture();
+  const admission = observeColdAdmission(f.databaseOptions.path);
+  const work = own(
+    deleteSessionEntryLifecycle({
+      storePath: f.scope.storePath,
+      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
+      archiveTranscript: false,
+    }),
+  );
+  await yieldToEventLoop();
+  expect(admission.parentChecks()).toBe(0);
+  expect(
+    await Promise.race([
+      admission.entered.promise.then(() => true),
+      work.then(
+        () => false,
+        () => false,
       ),
-    );
-    await yieldToEventLoop();
-    expect(followingWriterEntered).toBe(false);
-    expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
-    admission.release.resolve();
-    await expect(work).resolves.toMatchObject(
-      operation === "delete" ? { deleted: true } : { removedEntries: 1 },
-    );
-    await following;
-    expect(followingWriterEntered).toBe(true);
-    expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
-  },
-);
+    ]),
+  ).toBe(true);
+  let followingWriterEntered = false;
+  const following = own(
+    runExclusiveSqliteSessionWrite(
+      f.databaseOptions,
+      async () => {
+        followingWriterEntered = true;
+      },
+      "session.transcript.batch",
+    ),
+  );
+  await yieldToEventLoop();
+  expect(followingWriterEntered).toBe(false);
+  expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
+  admission.release.resolve();
+  await expect(work).resolves.toMatchObject({ deleted: true });
+  await following;
+  expect(followingWriterEntered).toBe(true);
+  expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
+});
 
 it.each(["cold", "warm"] as const)(
   "keeps no-op lifecycle cleanup read-only across a %s ordinary-session fleet",

@@ -181,6 +181,24 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
+  it.each(["system.run.prepare", "system.run"])(
+    "requires Gateway context support before dispatching %s",
+    async (command) => {
+      await callGatewayTool(
+        "node.invoke",
+        {},
+        {
+          ...nodeParams,
+          command,
+          params: { executionContext: { subagent: true } },
+        },
+      );
+      expect(capturedGatewayCall().requiredCapabilities).toEqual([
+        "system.run.execution-context.v1",
+      ]);
+    },
+  );
+
   it("fails approval replay closed without a persisted device", async () => {
     mocks.missingDevice = true;
     await expect(

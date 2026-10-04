@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.ts";
+import { run, stopChildren } from "./node-test-children.mjs";
 import { telegramPythonArgs } from "./telegram-runtime.mjs";
 
 const uv = spawnSync("which", ["uv"], { encoding: "utf8" }).stdout?.trim();
@@ -18,47 +19,6 @@ const python = spawnSync(
 // budget for the whole Node suite, with time left for the after hooks to join children.
 const TEST_TIMEOUT_MS = 90_000;
 
-// Completion is the child closing its pipes; only the test timeout bounds a stalled
-// host. The after hook kills and joins whatever a timed-out body left running.
-function run(context, command, args, options) {
-  context.signal.throwIfAborted();
-  const child = spawn(command, args, {
-    ...options,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const closed = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
-  });
-  context.after(async () => {
-    // Kill the group even after the child exits: a descendant can still hold its pipes.
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH" && error.code !== "EPERM") {
-          throw error;
-        }
-      }
-    }
-    await closed.catch(() => {});
-  });
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(context.signal.reason);
-    context.signal.addEventListener("abort", abort, { once: true });
-    closed.then(resolve, reject).finally(() => context.signal.removeEventListener("abort", abort));
-  });
-}
-
 describe("Telegram runtime", { concurrency: true }, () => {
   for (const cachedTdlib of [false, true]) {
     test(
@@ -68,8 +28,14 @@ describe("Telegram runtime", { concurrency: true }, () => {
         timeout: TEST_TIMEOUT_MS,
       },
       async (context) => {
-        const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "telegram-runtime-")));
-        context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const children = new Set();
+        const temporary = useAutoCleanupTempDirTracker((cleanup) =>
+          context.after(async () => {
+            await stopChildren(children);
+            cleanup();
+          }),
+        );
+        const root = temporary.make("telegram-runtime-");
         const host = path.join(root, "host");
         const state = path.join(root, "state");
         const bin = path.join(host, "bin");
@@ -77,7 +43,10 @@ describe("Telegram runtime", { concurrency: true }, () => {
         // Real uv discovery with no compatible interpreter on PATH. The installed
         // executable is real Python 3.12; only its managed-install location is a fixture.
         const version = (
-          await run(context, python, ["-c", "import platform; print(platform.python_version())"])
+          await run(context, children, python, [
+            "-c",
+            "import platform; print(platform.python_version())",
+          ])
         ).stdout.trim();
         const installation = path.join(
           managed,
@@ -95,6 +64,7 @@ describe("Telegram runtime", { concurrency: true }, () => {
         const env = { HOME: host, PATH: bin, UV_OFFLINE: "1", UV_PYTHON_DOWNLOADS: "never" };
         const approved = await run(
           context,
+          children,
           uv,
           [
             "python",
@@ -118,6 +88,7 @@ spec.loader.exec_module(driver)
         // request or native Telegram client. Cache selection, not binary ABI, is under test.
         const cache = await run(
           context,
+          children,
           python,
           [
             "-B",
@@ -150,6 +121,7 @@ print(p)`,
         const userSite = (
           await run(
             context,
+            children,
             python,
             ["-I", "-S", "-c", "import site; print(site.getusersitepackages())"],
             { env },
@@ -161,7 +133,7 @@ print(p)`,
           `from pathlib import Path\nPath(${JSON.stringify(startupWrite)}).write_text("host startup ran")\n`,
         );
         // Discovery runs synchronous probes, so call it from a child the timeout can kill.
-        const discovery = await run(context, process.execPath, [
+        const discovery = await run(context, children, process.execPath, [
           "--input-type=module",
           "--eval",
           `import { createTelegramRuntimeEnvironment } from ${JSON.stringify(new URL("./telegram-runtime.mjs", import.meta.url).href)};
@@ -176,6 +148,7 @@ process.stdout.write(JSON.stringify(createTelegramRuntimeEnvironment(${JSON.stri
         );
         const result = await run(
           context,
+          children,
           "/usr/bin/sandbox-exec",
           ["-f", policy, uv, ...telegramPythonArgs(runtime, script)],
           { env: { ...env, ...runtime } },

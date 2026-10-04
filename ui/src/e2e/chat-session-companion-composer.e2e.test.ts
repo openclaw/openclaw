@@ -226,6 +226,27 @@ suite.define(() => {
         requestsBefore.length,
       );
 
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "ime-confirmation.png") });
+      }
+      expect(confirmationConsumed).toBe(false);
+      expect(await composer.inputValue()).toBe(multiline);
+      expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
       await composer.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ question: multiline });

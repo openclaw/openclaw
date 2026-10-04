@@ -125,11 +125,13 @@ export function registerTerminalStateSignalAuthorityTests({
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
         }
         expect(observed).toBe(true);
-        const events = sessionStateEvents.listSessionStateEventsSince(
-          entry.childSessionKey,
-          "main",
-          0,
-          200,
+        const events = (
+          await sessionStateEvents.listSessionStateEventsSince(
+            entry.childSessionKey,
+            "main",
+            0,
+            200,
+          )
         ).events;
         const stored = loadSubagentRegistryFromSqlite().get(entry.runId);
         if (change === "none" || serializedSuccessor) {

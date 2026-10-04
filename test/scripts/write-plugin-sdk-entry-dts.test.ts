@@ -7,7 +7,6 @@ import {
   publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture as createFixture,
   createDeclarationTest,
@@ -145,7 +144,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
   }) =>
     command.lifetime.run(async () => {
       const { root, write, writeDeclarations, production, qa } = createFixture(command);
-      materializeNativeCompiler(root);
       expect(production.toSorted()).toEqual(
         publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
       );
@@ -237,7 +235,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         write: writeRelocated,
         writeDeclarations: writeRelocatedDeclarations,
       } = createFixture(command);
-      materializeNativeCompiler(relocated);
       writeRelocatedDeclarations("after");
       fs.rmSync(path.join(relocated, "contracts/before.ts"));
       writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");

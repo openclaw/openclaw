@@ -299,18 +299,31 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
 export function installHistoryImagePruneContextTransform(
   agent: PrunableContextAgent,
   mediaOptions?: Parameters<typeof hydratePromptMediaMessages>[1],
+  onPruned?: (messages: ReadonlyMap<number, AgentMessage>) => void,
 ): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
-    const prunedInput = pruneProcessedHistoryImages(messages) ?? messages;
+    const pruned = new Map<number, AgentMessage>();
+    const prune = (source: AgentMessage[]) => {
+      const projected = pruneProcessedHistoryImages(source);
+      projected?.forEach((message, index) => {
+        const original = source[index];
+        if (original && message !== original) {
+          pruned.set(index, original);
+        }
+      });
+      return projected ?? source;
+    };
+    const prunedInput = prune(messages);
     const hydratedInput = mediaOptions
       ? await hydratePromptMediaMessages(prunedInput, mediaOptions)
       : prunedInput;
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, hydratedInput, signal)
       : hydratedInput;
-    const sourceMessages = Array.isArray(transformed) ? transformed : hydratedInput;
-    return pruneProcessedHistoryImages(sourceMessages) ?? sourceMessages;
+    const result = prune(transformed);
+    onPruned?.(pruned);
+    return result;
   };
   return () => {
     agent.transformContext = originalTransformContext;

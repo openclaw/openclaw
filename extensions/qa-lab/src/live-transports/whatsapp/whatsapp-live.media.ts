@@ -134,13 +134,12 @@ export async function runWhatsAppStructuredInboundChecks(params: {
   await params.waitForStructuredReply("sticker", stickerStartedAt, params.stickerToken);
 }
 
-export function createWhatsAppQaAudioWavBuffer(params?: { durationSeconds?: number }) {
+export function createWhatsAppQaAudioWavBuffer() {
   const sampleRate = 16_000;
   const channelCount = 1;
   const bitsPerSample = 16;
-  const durationSeconds = params?.durationSeconds ?? 1;
   const bytesPerSample = bitsPerSample / 8;
-  const dataBytes = sampleRate * durationSeconds * channelCount * bytesPerSample;
+  const dataBytes = sampleRate * channelCount * bytesPerSample;
   const buffer = Buffer.alloc(44 + dataBytes);
   buffer.write("RIFF", 0, "ascii");
   buffer.writeUInt32LE(36 + dataBytes, 4);

@@ -1,9 +1,9 @@
 import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import {
-  PRESENTATION_CHANGED_EVENT,
+  PresentationAsyncDirective,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { linkReaderHovercardBootstrap as bootstrap } from "./link-reader-hovercard-registration.ts";
 import {
@@ -22,7 +22,7 @@ const PREFETCH_LIMIT = 8;
 const PREFETCH_DELAY_MS = 150;
 const SCAN_IDLE_TIMEOUT_MS = 500;
 
-class LinkReaderPrefetchDirective extends AsyncDirective {
+class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
   private root: HTMLElement | undefined;
   private provider: Element | null = null;
   private readonly handleCapabilities = () => {
@@ -32,13 +32,12 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
   };
   private sessionKey: string | undefined;
   private active = false;
-  private presentation?: PresentationBinding;
-  private readonly handlePresentationChange = () => {
-    if (this.presentation?.isPresented() === false) {
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
       this.active = false;
       this.release();
     }
-  };
+  }
   private cancelScan: (() => void) | undefined;
   private observer: IntersectionObserver | null = null;
   private mutations: MutationObserver | null = null;
@@ -63,35 +62,15 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
     return claim;
   };
 
-  render(
-    _sessionKey: string,
-    _active = true,
-    _connected = true,
-    _presentation?: PresentationBinding,
-  ) {
+  render(_sessionKey: string, _presented: PresentationValue, _connected = true) {
     return nothing;
   }
 
   override update(
     part: ElementPart,
-    [sessionKey, active = true, connected = true, presentation]: [
-      string,
-      boolean?,
-      boolean?,
-      PresentationBinding?,
-    ],
+    [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
   ) {
-    const previousOwner = this.presentation?.owner;
-    this.presentation = presentation;
-    if (previousOwner !== presentation?.owner) {
-      previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
-      if (this.isConnected) {
-        presentation?.owner.addEventListener(
-          PRESENTATION_CHANGED_EVENT,
-          this.handlePresentationChange,
-        );
-      }
-    }
+    this.updatePresentation(presented);
     if (sessionKey !== this.sessionKey || !connected) {
       this.release();
       this.attempted.clear();
@@ -109,28 +88,22 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
       this.release();
       this.attempted.clear();
     }
-    this.active = active && connected && presentation?.isPresented() !== false;
+    this.active =
+      connected && (typeof presented === "boolean" ? presented : presented.isPresented());
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
     return nothing;
   }
 
   protected override disconnected(): void {
-    this.presentation?.owner.removeEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
+    super.disconnected();
     this.provider?.removeEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.release();
   }
 
   protected override reconnected(): void {
-    this.presentation?.owner.addEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
-    this.handlePresentationChange();
+    super.reconnected();
     this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();

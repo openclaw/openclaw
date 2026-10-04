@@ -1,7 +1,7 @@
 import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -48,7 +48,7 @@ it("searches cold archives with worker-prepared facts across publications and li
       },
     );
     const publishAcp = (backend: string) =>
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: key,
         lifecycleRevision: "first",
         meta: {

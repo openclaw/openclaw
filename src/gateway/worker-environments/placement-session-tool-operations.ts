@@ -17,7 +17,6 @@ import {
 } from "./placement-turn-authority.js";
 import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 
-export { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.kernel.js";
 type Kernel = ReturnType<typeof createPlacementSessionToolOperationKernel>;
 type Waiting = {
   path: string;

@@ -3,8 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import { addClientToolsToToolCatalog } from "../tool-search-catalog.js";
 import {
-  addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -44,7 +44,6 @@ describe("tool name allowlists", () => {
     const compacted = applyToolSearchCatalog({
       tools: uncompactedTools,
       config: { tools: { toolSearch: true } } as never,
-      sessionId: "session-conflict-admission",
       catalogRef: createToolSearchCatalogRef(),
     });
     const names = collectCoreBuiltinToolNames(uncompactedTools);
@@ -104,7 +103,6 @@ describe("tool name allowlists", () => {
     const compacted = applyToolSearchCatalog({
       tools: [createStubTool(TOOL_CALL_RAW_TOOL_NAME)],
       config,
-      sessionId: "session-client-allowed-names",
       catalogRef,
     });
     const clientTools: ClientToolDefinition[] = [
@@ -116,10 +114,9 @@ describe("tool name allowlists", () => {
         },
       },
     ];
-    const clientToolSearch = addClientToolsToToolSearchCatalog({
+    const clientToolSearch = addClientToolsToToolCatalog({
       tools: [createStubTool("client_pick_file")],
-      config,
-      sessionId: "session-client-allowed-names",
+      enabled: true,
       catalogRef,
     });
 
@@ -147,7 +144,6 @@ describe("tool name allowlists", () => {
     const compacted = applyToolSearchCatalog({
       tools: uncompactedTools,
       config,
-      sessionId: "session-replay-allowed-names",
       catalogRef: createToolSearchCatalogRef(),
     });
     const clientTools: ClientToolDefinition[] = [

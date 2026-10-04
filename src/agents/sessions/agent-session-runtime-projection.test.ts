@@ -32,6 +32,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
+import { createGrepToolDefinition } from "./tools/grep.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -235,9 +236,12 @@ describe("AgentSession runtime and transcript projections", () => {
     const line = `needle ${"x".repeat(600)} OMITTED_END`;
     await fs.writeFile(path.join(cwd, "long-line.txt"), `${line}\n`);
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd,
       tools: ["grep"],
+      customTools: [createGrepToolDefinition(cwd)],
       model: testModel,
+      thinkingLevel: "medium" as const,
       resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),

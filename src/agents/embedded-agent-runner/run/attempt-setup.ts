@@ -38,7 +38,11 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
-import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import {
+  getEmbeddedSessionPromptState,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -267,6 +271,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         // replay so the prefix already sent for this session does not change.
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
+          declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
           lastCacheTouchAt = Date.now();
         },
       });
@@ -361,6 +366,16 @@ export function installEmbeddedAttemptContextGuards(input: {
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+    },
+    (pruned) => {
+      const promptState = getEmbeddedSessionPromptState(attempt.sessionId);
+      const keys = new Set(
+        [...pruned].map(([index, message]) => `${index}:${message.role}:${message.timestamp}`),
+      );
+      if ([...keys].some((key) => !promptState.prunedImageMessages?.has(key))) {
+        declarePromptHistoryRewrite({ ...attempt, reason: "imageCleanup" });
+      }
+      promptState.prunedImageMessages = keys;
     },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;

@@ -387,9 +387,18 @@ describe("owned plugin inspections", () => {
         ]);
         await failed.state.disposed.promise;
         expect(failed.connection().database.isOpen).toBe(false);
-        expect(successful.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
-          value: 42,
-        });
+        const invocations = getPluginRegistryInspectionResources(
+          inspection.registry,
+        )!.createInvocationScope(inspection.registry);
+        try {
+          expect(
+            invocations.run(() =>
+              successful.connection().database.prepare("SELECT 42 AS value").get(),
+            ),
+          ).toEqual({ value: 42 });
+        } finally {
+          invocations.release();
+        }
         await expect(inspection.release()).rejects.toMatchObject({
           errors: [
             expect.objectContaining({

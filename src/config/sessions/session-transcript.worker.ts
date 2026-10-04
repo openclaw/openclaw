@@ -7,6 +7,10 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
+  isSessionHistoryReadOperation,
+  prepareSessionHistoryReadOperation,
+} from "./session-history-read-operation.worker.js";
+import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
@@ -38,6 +42,17 @@ serveOwnedWorkerTasks(
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    if (request.kind === "cli-process-history") {
+      if (!channel) {
+        throw new Error("Process-held history requires its host reader channel");
+      }
+      const { readProcessHeldCliHistoryInWorker } =
+        await import("../../gateway/cli-session-history.process-held.js");
+      return {
+        ok: true,
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
+      };
+    }
     if (request.kind === "sqlite-target") {
       const { resolveSqliteTargetFromSessionStorePath } =
         await import("./session-sqlite-target.js");
@@ -78,6 +93,26 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (isSessionHistoryReadOperation(request)) {
+        const execute = await prepareSessionHistoryReadOperation(request);
+        return execute();
+      }
+      if (request.kind === "lifecycle-artifact-plan") {
+        const { readSessionLifecycleArtifactCleanup } =
+          await import("./session-accessor.sqlite-lifecycle-artifacts.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readSessionLifecycleArtifactCleanup(database, request.input, request.expectedSource),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          plan: result.found ? result.value : { entries: [], deletePlans: [] },
+          diagnostics: request.input.diagnostics,
+        };
+      }
       if (request.kind === "prewarm") {
         await Promise.all([
           import("../../gateway/session-history-worker-reader.js"),
@@ -213,34 +248,6 @@ serveOwnedWorkerTasks(
             }
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "transcript-match") {
-        const { findTranscriptEventMatchingInDatabase } =
-          await import("./session-transcript-match.js");
-        const { withOpenClawAgentDatabaseReadOnly } =
-          await import("../../state/openclaw-agent-db-readonly.js");
-        const opened = withOpenClawAgentDatabaseReadOnly(
-          (database) => findTranscriptEventMatchingInDatabase(database, request.request),
-          {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
-          },
-        );
-        return {
-          kind: "transcript-match" as const,
-          result: opened.found ? opened.value : undefined,
-        };
-      }
-      if (request.kind === "transcript-search") {
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        return {
-          kind: "transcript-search" as const,
-          result: searchSessionTranscriptsReadOnlySync(request.params, {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-          }),
-        };
-      }
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =
           await import("./session-store-target-inventory.js");
@@ -309,49 +316,15 @@ serveOwnedWorkerTasks(
         const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
         return readSessionDiagnosticText(request);
       }
-      if (request.kind === "session-entry-read") {
-        const { loadSessionEntryReadOnlyResultInScope } =
-          await import("./session-accessor.sqlite-exact-read.js");
-        let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
-        const read = loadSessionEntryReadOnlyResultInScope(
-          {
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          },
-          request.continuation,
-          (readSource) => {
-            if (typeof readSource.databaseIdentity !== "string") {
-              throw new Error("Private session entry requires its process-held owner");
-            }
-            source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
-          },
-        );
-        if (!read.ok) {
-          const readError = encodeSessionTranscriptWorkerError(read.error);
-          if (!readError || readError.kind === "fence") {
-            throw read.error;
-          }
-          return {
-            kind: "session-entry-read" as const,
-            entry: undefined,
-            source,
-            readError,
-          };
-        }
-        return { kind: "session-entry-read" as const, entry: read.value, source };
+      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
+        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
+        return readSessionEntryWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
-        const { listSessionEntriesReadOnly } =
-          await import("./session-accessor.sqlite-entry-list.read.js");
+        const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly(
-            {
-              ...request.scope,
-              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-            },
-            { continuation: request.continuation },
-          ),
+          entries: readSessionEntryList(request),
         };
       }
       if (request.kind === "session-store-summary") {
@@ -376,11 +349,6 @@ serveOwnedWorkerTasks(
           { ...request.database, env: request.env },
           request.request,
         );
-      }
-      if (request.kind === "branch-summaries") {
-        const { readSessionBranchSummariesInWorker } =
-          await import("./session-accessor.sqlite-branches.js");
-        return readSessionBranchSummariesInWorker(request.request);
       }
       if (request.kind === "session-membership-facts") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -437,21 +405,27 @@ serveOwnedWorkerTasks(
         );
         return result.found ? result.value : [];
       }
-      if (request.kind === "session-pending-input-receipts") {
-        const { listSessionPendingInputReceipts } =
-          await import("./session-accessor.sqlite-pending-input-receipts.js");
+      if (request.kind === "session-suggestions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionSuggestionsInDatabase } =
+          await import("./session-suggestion-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listSessionSuggestionsInDatabase(database, request.sessionKey, request.params),
+          { ...request.database, env: request.env },
+        );
         return {
-          kind: "session-pending-input-receipts" as const,
-          receipts: listSessionPendingInputReceipts(
-            {
-              agentId: request.agentId,
-              sessionKey: request.sessionKey,
-              sessionId: request.sessionId,
-              storePath: request.database.path,
-              env: cloneEnvWithPlatformSemantics(request.env),
-            },
-            { runIds: request.runIds },
-          ),
+          kind: "session-suggestions" as const,
+          suggestions: result.found ? result.value : [],
+        };
+      }
+      if (request.kind === "session-pending-input-history") {
+        const { readPendingInputHistoryInWorker } =
+          await import("./session-pending-input-history-read.worker.js");
+        return {
+          kind: "session-pending-input-history",
+          snapshot: readPendingInputHistoryInWorker(request),
         };
       }
       if (request.kind === "conversation-rows") {
@@ -520,18 +494,10 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-row-presence") {
         const { loadSessionEntryReadOnlyInScope } =
-          await import("./session-accessor.sqlite-entry.js");
+          await import("./session-accessor.sqlite-exact-read.js");
         return (
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
-      }
-      if (request.kind === "transcript-watermark") {
-        const { readSessionTranscriptWatermark } =
-          await import("./session-accessor.sqlite-transcript-watermark.js");
-        return {
-          kind: "transcript-watermark",
-          watermark: readSessionTranscriptWatermark(request.scope),
-        };
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,
@@ -544,27 +510,9 @@ serveOwnedWorkerTasks(
               source: readActivitySummaryBatch(request),
             };
           }
-          if (request.kind === "session-title-fields") {
-            const { readSessionTitleFieldsFromTranscript } =
-              await import("../../gateway/session-transcript-title-reader.js");
-            return {
-              kind: "session-title-fields" as const,
-              fields: readSessionTitleFieldsFromTranscript(request.scope, {
-                includeInterSession: request.includeInterSession,
-                readOnly: true,
-              }),
-            };
-          }
-          if (request.kind === "session-preview") {
-            const { readSessionPreviewItemsReadOnly } =
-              await import("../../gateway/session-transcript-preview-reader.js");
-            return {
-              kind: "session-preview" as const,
-              items: readSessionPreviewItemsReadOnly(request),
-            };
-          }
           if (
             request.kind === "transcript-hydration" ||
+            request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
             request.kind === "recent-active-events" ||
             request.kind === "latest-active-message"
@@ -572,15 +520,6 @@ serveOwnedWorkerTasks(
             const { readSessionTranscriptHydrationRequest } =
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionTranscriptHydrationRequest(request, channel, control);
-          }
-          if (request.kind === "model-context") {
-            const { readSessionTranscriptModelContext } =
-              await import("./session-accessor.sqlite-model-context.js");
-            return readSessionTranscriptModelContext(
-              request.target,
-              request.through,
-              request.limits,
-            );
           }
           if (request.kind === "history-page") {
             const { readSessionHistoryRequest } =
@@ -640,16 +579,15 @@ serveOwnedWorkerTasks(
         return [];
       }
       const value = reply.value;
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        !("kind" in value) ||
-        value.kind !== "artifacts" ||
-        value.result.kind !== "download-response"
-      ) {
+      if (typeof value !== "object" || value === null || !("kind" in value)) {
         return [];
       }
-      const body = value.result.response?.body;
+      const body =
+        value.kind === "rpc"
+          ? value.page.encodedResponse?.messages
+          : value.kind === "artifacts" && value.result.kind === "download-response"
+            ? value.result.response?.body
+            : undefined;
       return body ? [body.buffer] : [];
     },
     closeResource: (key) => {

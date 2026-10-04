@@ -10,6 +10,7 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   TERMINAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
@@ -304,6 +305,7 @@ describe("OpenClaw shell source initialization", () => {
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
       previousGatewayPhase: null,
+      recoverDeletedActiveSession: vi.fn(),
       routeState: {},
       runtimeConfigClient: null,
       runtimeConfigSource: null,
@@ -895,8 +897,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const navigate = vi.fn();
     const panelEvent = vi.fn();
     const uiCommandEvent = vi.fn();
+    const pluginPanelEvent = vi.fn();
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
     shell.runtime = {
       context: {
@@ -969,6 +973,34 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       }),
     );
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        sessionKey: "global",
+        agentId: "writer",
+        command: {
+          kind: "panel",
+          panel: "plugin",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
+      },
+    });
+    expect(setAgent).toHaveBeenLastCalledWith("writer");
+    expect(setSessionKey).toHaveBeenLastCalledWith("global");
+    expect(pluginPanelEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        detail: {
+          sessionKey: "global",
+          agentId: "writer",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
+      }),
+    );
+    window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });

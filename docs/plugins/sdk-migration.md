@@ -110,6 +110,10 @@ The anchors from the single-page version still resolve here.
 
 [How to migrate a plugin](/plugins/sdk-migration/how-to-migrate) — the ordered migration steps.
 
+- [Await personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
+- [Await session transcript persistence](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+- [Await extension session changes](/plugins/sdk-migration/how-to-migrate#await-extension-session-changes)
+- [Await provider replay metadata](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata)
 - <a id="how-to-migrate"></a>[How to migrate](/plugins/sdk-migration/how-to-migrate#how-to-migrate)
 - <a id="migrate-runtime-config-load%2Fwrite-helpers"></a>[Migrate runtime config load/write helpers](/plugins/sdk-migration/how-to-migrate#migrate-runtime-config-load%2Fwrite-helpers)
 - <a id="migrate-embedded-tool-result-extensions-to-middleware"></a>[Migrate embedded tool-result extensions to middleware](/plugins/sdk-migration/how-to-migrate#migrate-embedded-tool-result-extensions-to-middleware)

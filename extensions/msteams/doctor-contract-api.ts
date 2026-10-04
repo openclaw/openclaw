@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   archiveLegacyStateSource,
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stateFileArchiveDirectory, stateFileBackupResources } from "./doctor-backup-resources.js";
 import {
   MSTEAMS_DELEGATED_TOKEN_KEY,
   MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
@@ -17,21 +17,27 @@ import {
 } from "./src/delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
+export * from "./config-doctor-api.js";
 
 const MSTEAMS_PLUGIN_ID = "Microsoft Teams";
 
-function listAgentIds(config: OpenClawConfig): string[] {
+function listAgentIds(config: unknown): string[] {
+  // State migration receives the preserved config from before core roster migration.
   const ids = new Set<string>(["main"]);
-  if (isRecord(config.agents?.entries)) {
-    for (const agentId of Object.keys(config.agents.entries)) {
+  const agents = isRecord(config) && isRecord(config.agents) ? config.agents : undefined;
+  if (isRecord(agents?.entries)) {
+    for (const agentId of Object.keys(agents.entries)) {
       if (agentId.trim()) {
         ids.add(agentId.trim());
       }
     }
   }
-  for (const agent of config.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
+  const legacyList =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  for (const agent of legacyList) {
+    if (isRecord(agent) && typeof agent.id === "string" && agent.id.trim()) {
       ids.add(agent.id.trim());
     }
   }
@@ -95,6 +101,7 @@ function retiredJsonMigration(
   return {
     id: `msteams-${name}-json-to-plugin-state`,
     label: `Microsoft Teams ${label}`,
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
       return (await hasSource(params)) ? { preview: [guidance] } : null;
     },
@@ -117,6 +124,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-delegated-token-json-to-plugin-state",
     label: "Microsoft Teams delegated OAuth token",
+    collectBackupResources: ({ stateDir }) =>
+      stateFileBackupResources(stateDir, MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME),
     async detectLegacyState(params) {
       const filePath = path.join(params.stateDir, MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME);
       try {
@@ -190,6 +199,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       changes.push(`Migrated ${MSTEAMS_PLUGIN_ID} delegated OAuth token -> plugin state`);
       await archiveLegacyStateSource({
         filePath,
+        archiveDirectory: stateFileArchiveDirectory(filePath),
         label: `${MSTEAMS_PLUGIN_ID} delegated OAuth token`,
         changes,
         warnings,

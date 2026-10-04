@@ -50,7 +50,6 @@ import {
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createServiceRegistration } from "../plugins/services.test-support.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -141,6 +140,7 @@ import {
   fixtureLifetime,
   waitForFast,
 } from "./server-reload-handlers.process.test-support.js";
+import { registerGatewayTargetedServiceReloadTests } from "./server-reload-handlers.services.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
@@ -2482,139 +2482,9 @@ describe("gateway hot reload model state", () => {
   });
 });
 
-describe("gateway targeted service reload", () => {
-  it("forwards the service owner through managed config publication", async () => {
-    vi.useFakeTimers();
-    const registry = createTestRegistry([]);
-    registry.services.push(
-      createServiceRegistration(
-        { id: "exporter", reload: { configPrefixes: ["diagnostics.otel"] }, start() {} },
-        { pluginId: "exporter" },
-      ),
-    );
-    setActivePluginRegistry(registry);
-    const initialConfig: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
-    const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
-    const listener = createConfigWriteListenerRef();
-    const reloadPluginServices = vi.fn(async () => {});
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: async () => createValidConfigSnapshot(nextConfig, "otel-disabled"),
-      subscribeToWrites: captureConfigWriteListener(listener),
-      reloadPluginServices,
-    });
-    await reloader.ready;
-    try {
-      const application = createRuntimeConfigWriteApplication();
-      if (!listener.current) {
-        throw new Error("Expected managed config write listener");
-      }
-      listener.current(
-        attachRuntimeConfigWriteApplication(
-          createConfigWriteNotification(nextConfig, "otel-disabled", 1, "runtime", "source"),
-          application,
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(application.result).resolves.toBe("applied");
-      expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
-        nextConfig,
-        new Set(["exporter"]),
-      );
-    } finally {
-      await reloader.stop();
-    }
-  });
-
-  it.each(["success", "failure", "plugin failure"] as const)(
-    "reloads retained services after a different plugin changes in the same config publication (%s)",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const registry = createTestRegistry([]);
-      for (const id of ["replaced", "retained"]) {
-        registry.services.push(createServiceRegistration({ id, start() {} }, { pluginId: id }));
-      }
-      const runtime = {
-        operationId: "mixed-services",
-        generation: 1,
-        pluginIds: ["replaced"],
-        sourceDigests: {},
-      };
-      const events: string[] = [];
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const reloadPluginServices = vi.fn(async () => {
-        events.push("retained-service");
-        if (outcome === "failure") {
-          throw new Error("retained service failed");
-        }
-      });
-      const handlers = createGatewayReloadHandlers({
-        requestRecoveryRestart,
-        getPluginRegistry: () => registry,
-        reloadPluginServices,
-        reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-          prepareConfigEffects({
-            pluginIds: new Set(runtime.pluginIds),
-            channels: new Set(),
-          }).retire();
-          await commitRuntime();
-          events.push("replaced-plugin");
-          if (outcome === "plugin failure") {
-            throw new PluginRuntimeApplicationError("Plugin activation failed", {
-              ...runtime,
-              phase: "activate",
-              committed: true,
-            });
-          }
-          return makePluginReloadResult({ runtime });
-        },
-      });
-      const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
-      try {
-        const applying = handlers.applyHotReload(
-          createHotTailPlan({
-            changedPaths: ["plugins.entries.replaced.enabled", "diagnostics.otel.enabled"],
-            reloadPlugins: true,
-            pluginLifecycle: {
-              operationId: runtime.operationId,
-              pluginIds: ["replaced"],
-              reason: "enable",
-            },
-            restartServices: new Set(["replaced", "retained"]),
-          }),
-          nextConfig,
-          {
-            sourceConfig: nextConfig,
-            isCurrent: () => true,
-            publish: async (commit) => {
-              await commit();
-              events.push("published");
-            },
-          },
-        );
-        await expect(applying).resolves.toEqual(
-          outcome === "success" ? { status: "applied", runtime } : "applied-restart-required",
-        );
-        expect(events).toEqual(
-          outcome === "plugin failure"
-            ? ["published", "replaced-plugin"]
-            : ["published", "replaced-plugin", "retained-service"],
-        );
-        if (outcome === "plugin failure") {
-          expect(reloadPluginServices).not.toHaveBeenCalled();
-        } else {
-          expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
-            nextConfig,
-            new Set(["retained"]),
-          );
-        }
-        await vi.advanceTimersByTimeAsync(500);
-        expect(requestRecoveryRestart).toHaveBeenCalledTimes(outcome === "success" ? 0 : 1);
-      } finally {
-        handlers.stopRestartRetries();
-      }
-    },
-  );
+registerGatewayTargetedServiceReloadTests({
+  createGatewayReloadHandlers,
+  startManagedGatewayConfigReloader,
 });
 
 describe("gateway hot reload superseded tail recovery", () => {
@@ -3552,7 +3422,7 @@ describe("gateway restart deferral preflight", () => {
       expect(signalSpy).toHaveBeenCalledTimes(1);
       expect(consumeGatewayRestartIntent()).toEqual({
         force: true,
-        drainBudgetExhausted: true,
+        waitMs: 300_000,
         reason: "config reload forced restart",
       });
       expect(hoisted.markRestartAbortedMainSessions).not.toHaveBeenCalled();

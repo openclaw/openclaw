@@ -12,12 +12,10 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
-import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
@@ -51,21 +49,6 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   if (core.logging.shouldLogVerbose()) {
     runtime.log?.(`[googlechat] ${message}`);
   }
-}
-
-function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "app-url" || normalized === "app_url" || normalized === "app") {
-    return "app-url";
-  }
-  if (
-    normalized === "project-number" ||
-    normalized === "project_number" ||
-    normalized === "project"
-  ) {
-    return "project-number";
-  }
-  return undefined;
 }
 
 function resolveBotDisplayName(params: {
@@ -431,9 +414,9 @@ export async function startGoogleChatMonitor(
     return async () => {};
   }
 
-  const audienceType = normalizeAudienceType(options.account.config.audienceType);
+  const audienceType = options.account.config.audienceType;
   const audience = options.account.config.audience?.trim();
-  if (!audienceType || !audience) {
+  if ((audienceType !== "app-url" && audienceType !== "project-number") || !audience) {
     const error =
       "Google Chat webhook authentication requires channels.googlechat.audienceType and channels.googlechat.audience.";
     options.runtime.error?.(`[${options.account.accountId}] ${error}`);

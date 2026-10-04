@@ -724,15 +724,6 @@ run_required_step() {
     exit 1
 }
 
-cleanup_legacy_submodules() {
-    local repo_dir="$1"
-    local legacy_dir="$repo_dir/Peekaboo"
-    if [[ -d "$legacy_dir" ]]; then
-        ui_info "Removing legacy submodule checkout: ${legacy_dir}"
-        rm -rf "$legacy_dir"
-    fi
-}
-
 begin_openclaw_bin_backup() {
     local target="$1" candidate="$2" discard="${3:-0}" backup=""
     [[ -z "$OPENCLAW_BIN_BACKUP_PATH" ]] || return 0
@@ -1605,16 +1596,9 @@ parse_node_version_components_for_binary() {
     return 0
 }
 
-parse_node_version_components() {
-    if ! command -v node &> /dev/null; then
-        return 1
-    fi
-    parse_node_version_components_for_binary node
-}
-
 node_major_version() {
     local version_components major minor patch
-    version_components="$(parse_node_version_components || true)"
+    version_components="$(parse_node_version_components_for_binary node || true)"
     read -r major minor patch <<< "$version_components"
     if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
         echo "$major"
@@ -1643,74 +1627,14 @@ node_version_components_are_supported() {
     esac
 }
 
-node_binary_has_safe_sqlite() {
-    local node_bin="$1"
-    "$node_bin" -e '
-        const { DatabaseSync } = require("node:sqlite");
-        const db = new DatabaseSync(":memory:");
-        try {
-            const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
-            const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
-            const major = Number(match?.[1]);
-            const minor = Number(match?.[2]);
-            const patch = Number(match?.[3]);
-            const safe =
-                major > 3 ||
-                (major === 3 &&
-                    (minor > 51 ||
-                        (minor === 51 && patch >= 3) ||
-                        (minor === 50 && patch >= 7) ||
-                        (minor === 44 && patch >= 6)));
-            const text = "a\u0000b\u0000";
-            const bytes = Buffer.from(text, "utf8");
-            const json = JSON.stringify({ value: text });
-            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
-            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
-            if (!textSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
-            } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
-            } else if (!safe) {
-                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
-            }
-            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
-        } finally {
-            db.close();
-        }
-    ' --no-warnings >/dev/null
-}
-
-node_binary_sqlite_version() {
-    local node_bin="$1"
-    local version
-    version="$("$node_bin" -e '
-        const { DatabaseSync } = require("node:sqlite");
-        const db = new DatabaseSync(":memory:");
-        try {
-            process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
-        } finally {
-            db.close();
-        }
-    ' 2>/dev/null || true)"
-    printf '%s\n' "${version:-unavailable}"
-}
-
 node_version_is_supported() {
     local version_components major minor patch
-    version_components="$(parse_node_version_components || true)"
+    version_components="$(parse_node_version_components_for_binary node || true)"
     read -r major minor patch <<< "$version_components"
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
     node_version_components_are_supported "$major" "$minor" "$patch"
-}
-
-node_is_supported() {
-    node_binary_is_supported node
 }
 
 node_binary_is_supported() {
@@ -1967,10 +1891,6 @@ promote_supported_node_binary() {
     return 1
 }
 
-activate_supported_node_on_path() {
-    promote_supported_node_binary
-}
-
 print_active_node_paths() {
     if ! command -v node &> /dev/null; then
         return 1
@@ -2002,7 +1922,7 @@ ensure_macos_default_node_active() {
         fi
     fi
 
-    if node_is_supported; then
+    if node_binary_is_supported node; then
         return 0
     fi
 
@@ -2024,7 +1944,7 @@ ensure_macos_default_node_active() {
 }
 
 ensure_default_node_active_shell() {
-    if node_is_supported; then
+    if node_binary_is_supported node; then
         return 0
     fi
 
@@ -2078,7 +1998,7 @@ use_supported_nvm_node() {
         version="${version##*/}"
         nvm use --silent "$version" || return 1
         refresh_shell_command_cache
-        node_is_supported || return 1
+        node_binary_is_supported node || return 1
         ui_info "Using existing nvm Node.js ${version} for this installation (${NVM_DIR})"
         echo "  Shell profiles and the nvm default are unchanged. For later commands, run: nvm use ${version}"
         return 0
@@ -2145,7 +2065,7 @@ install_node_with_existing_nvm() {
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if node_is_supported; then
+        if node_binary_is_supported node; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
@@ -2164,10 +2084,10 @@ check_node() {
 }
 
 finish_linux_node_install() {
-    if ! node_is_supported; then
-        activate_supported_node_on_path || true
+    if ! node_binary_is_supported node; then
+        promote_supported_node_binary || true
     fi
-    if ! node_is_supported; then
+    if ! node_binary_is_supported node; then
         local active_path active_version
         active_path="$(command -v node 2>/dev/null || echo "not found")"
         active_version="$(node -v 2>/dev/null || echo "missing")"
@@ -2188,8 +2108,8 @@ install_node_with_apk() {
         run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm
     fi
 
-    activate_supported_node_on_path || true
-    if node_is_supported; then
+    promote_supported_node_binary || true
+    if node_binary_is_supported node; then
         finish_linux_node_install
         return 0
     fi
@@ -2204,8 +2124,8 @@ install_node_with_apk() {
         run_required_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
     fi
 
-    activate_supported_node_on_path || true
-    if node_is_supported; then
+    promote_supported_node_binary || true
+    if node_binary_is_supported node; then
         finish_linux_node_install
         return 0
     fi
@@ -3104,7 +3024,6 @@ install_openclaw_from_git() {
         fi
     fi
 
-    cleanup_legacy_submodules "$repo_dir"
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -3195,10 +3114,6 @@ resolve_package_install_spec() {
         echo "$value"
         return 0
     fi
-    if [[ "$value" == "latest" ]]; then
-        echo "${package_name}@latest"
-        return 0
-    fi
     echo "${package_name}@${value}"
 }
 
@@ -3210,7 +3125,6 @@ install_openclaw() {
         if [[ -n "$beta_version" ]]; then
             OPENCLAW_VERSION="$beta_version"
             ui_info "Beta tag detected (${beta_version})"
-            package_name="openclaw"
         else
             OPENCLAW_VERSION="latest"
             ui_info "No beta tag found; using latest"
@@ -3612,8 +3526,8 @@ main() {
     # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
     # only when they are about to call brew.
     load_nvm_for_node_detection || exit 1
-    if ! node_is_supported; then
-        use_supported_nvm_node || activate_supported_node_on_path || true
+    if ! node_binary_is_supported node; then
+        use_supported_nvm_node || promote_supported_node_binary || true
     fi
     if ! check_node; then
         if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
@@ -3752,15 +3666,11 @@ main() {
         if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
             local user_claw
             user_claw="$(openclaw_command_for_user "$claw")"
-            if [[ "$DRY_RUN" == "1" ]]; then
-                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
+            ui_info "Gateway daemon detected; restarting"
+            if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
+                ui_success "Gateway restarted"
             else
-                ui_info "Gateway daemon detected; restarting"
-                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
-                    ui_success "Gateway restarted"
-                else
-                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
-                fi
+                ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
             fi
         fi
     fi

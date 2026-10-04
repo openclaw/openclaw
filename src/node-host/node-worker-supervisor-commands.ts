@@ -1,4 +1,8 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type {
+  SessionsProcessesListResult,
+  SessionsProcessesStopResult,
+} from "../../packages/gateway-protocol/src/schema/session-processes.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { boundedWorkerErrorWithCode } from "../gateway/worker-environments/worker-error.js";
 import {
@@ -7,6 +11,7 @@ import {
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PROCESSES_COMMAND,
   NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -48,6 +53,7 @@ import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
+import { parseNodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import { invokeNodeWorkerDesktopLaunch } from "./desktop-launch-command.js";
 import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
@@ -62,6 +68,8 @@ import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
 
 type NodeWorkerSupervisorCommandPayload =
+  | SessionsProcessesListResult
+  | SessionsProcessesStopResult
   | NodeWorkerBundleInstallResult
   | NodeWorkerSupervisorReceipt
   | NodeWorkerWorkspaceExecResult
@@ -233,6 +241,8 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       supervisor && invokeNodeWorkerPortalStream(params).then(() => null),
     [NODE_WORKER_DESKTOP_LAUNCH_COMMAND]: () =>
       supervisor && invokeNodeWorkerDesktopLaunch({ paramsJSON, signal }),
+    [NODE_WORKER_PROCESSES_COMMAND]: () =>
+      supervisor?.observeProcesses(parseNodeWorkerProcessInput(paramsJSON), signal),
     [NODE_WORKER_ENVIRONMENT_STOP_COMMAND]: () =>
       supervisor?.stopEnvironment(parseNodeWorkerEnvironmentStopInput(paramsJSON)).then(() => null),
     [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND]: () =>

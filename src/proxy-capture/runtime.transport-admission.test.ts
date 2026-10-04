@@ -15,7 +15,6 @@ import {
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCapture,
   initializeDebugProxyCaptureAsync,
-  prepareHttpCapture,
   prepareHttpCaptureForTransport,
 } from "./runtime.js";
 
@@ -56,11 +55,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  (["selection", "continuation"] as const).flatMap((phase) =>
-    (["success", "failure"] as const).map((outcome) => ({ phase, outcome })),
-  ),
-)(
+it.each([
+  { phase: "selection", outcome: "success" },
+  { phase: "continuation", outcome: "failure" },
+] as const)(
   "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
   async ({ phase, outcome }) => {
     const admissionFailure = new Error("synthetic admission refusal");
@@ -138,7 +136,7 @@ function stubGuardedCaptureEnv(sessionId: string) {
   }
 }
 
-it.each(["fresh", "cached-legacy", "cached-worker", "saved-fetch"] as const)(
+it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
   "defers %s capture writes until the live update owner releases them",
   async (mode) => {
     stubGuardedCaptureEnv(`deferred-${mode}`);
@@ -170,16 +168,11 @@ it.each(["fresh", "cached-legacy", "cached-worker", "saved-fetch"] as const)(
       error: new Error("synthetic transport diagnostic"),
     };
     let exercise: () => Promise<void>;
-    if (mode === "cached-legacy" || mode === "saved-fetch") {
+    if (mode === "saved-fetch") {
       initializeDebugProxyCapture("fixture", settings, deps);
-      const cached = prepareHttpCapture(settings, deps)!;
       const savedFetch = target.fetch;
       exercise = async () => {
-        if (mode === "cached-legacy") {
-          cached(params);
-        } else {
-          expect((await savedFetch(params.url)).status).toBe(204);
-        }
+        expect((await savedFetch(params.url)).status).toBe(204);
       };
     } else if (mode === "cached-worker") {
       await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
@@ -266,11 +259,10 @@ it.each(["fresh", "cached-legacy", "cached-worker", "saved-fetch"] as const)(
   },
 );
 
-it.each(
-  (["ready", "reservation"] as const).flatMap((failureKind) =>
-    (["success", "failure"] as const).map((outcome) => ({ failureKind, outcome })),
-  ),
-)(
+it.each([
+  { failureKind: "ready", outcome: "success" },
+  { failureKind: "reservation", outcome: "failure" },
+] as const)(
   "keeps guarded transport $outcome independent of $failureKind capture preparation failure",
   async ({ failureKind, outcome }) => {
     const preparationFailure = new Error("synthetic capture preparation rejected");

@@ -604,51 +604,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
-  it("fingerprints identical metadata snapshots once per plugin metadata lifecycle", () => {
-    const traversals = { candidates: 0, plugins: 0 };
+  it("refreshes same-turn auto-enable results when metadata arrays are replaced", () => {
     const config: OpenClawConfig = {};
-    const envSnapshot = makeIsolatedEnv();
-    const discovery: PluginDiscoveryResult = {
-      candidates: new Proxy([], {
-        get: (target, property, receiver) => {
-          if (property === "map") {
-            traversals.candidates += 1;
-          }
-          return Reflect.get(target, property, receiver);
-        },
+    const configuredEnv = makeIsolatedEnv({ CACHE_CHANNEL_TOKEN: "configured" });
+    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+    const manifestRegistry = makeRegistry([
+      { id: "cache-channel-plugin", channels: ["cache-channel"] },
+    ]);
+    const params = { config, discovery, env: configuredEnv, manifestRegistry };
+
+    const first = applyPluginAutoEnable(params);
+    expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+
+    discovery.candidates = [
+      makeBundledChannelCandidate({
+        pluginId: "cache-channel-plugin",
+        channelId: "cache-channel",
       }),
-      diagnostics: [],
-    };
-    const manifestRegistry = makeRegistry([]);
-    manifestRegistry.plugins = new Proxy(manifestRegistry.plugins, {
-      get: (target, property, receiver) => {
-        if (property === "map") {
-          traversals.plugins += 1;
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    ];
+    const second = applyPluginAutoEnable(params);
+    expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
 
-    const first = applyPluginAutoEnable({
-      config,
-      discovery,
-      env: envSnapshot,
-      manifestRegistry,
-    });
-    const firstTraversalCounts = { ...traversals };
-
-    for (let index = 0; index < 20; index += 1) {
-      expect(applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry })).toBe(
-        first,
-      );
-    }
-    expect(traversals).toEqual(firstTraversalCounts);
-
-    clearPluginMetadataLifecycleCaches();
-    applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry });
-
-    expect(traversals.candidates).toBeGreaterThan(firstTraversalCounts.candidates);
-    expect(traversals.plugins).toBeGreaterThan(firstTraversalCounts.plugins);
+    manifestRegistry.plugins = [];
+    const third = applyPluginAutoEnable(params);
+    expect(third.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+    expect(applyPluginAutoEnable(params)).toBe(third);
   });
 
   it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {

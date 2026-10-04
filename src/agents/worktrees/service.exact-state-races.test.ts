@@ -6,9 +6,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as provisionedFiles from "./provisioned-files.js";
 import * as registry from "./registry.js";
 import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import * as leases from "./run-lease.js";
@@ -48,6 +48,7 @@ describe("exact-state retirement admission and recovery", () => {
       getConfig: () => ({ worktreeAcceleration: false }),
     });
   });
+  const readme = (directory: string) => fs.readFile(path.join(directory, "README.md"), "utf8");
   async function refNames(ref: string) {
     return await git(repo, "for-each-ref", "--format=%(refname)", ref);
   }
@@ -176,7 +177,7 @@ describe("exact-state retirement admission and recovery", () => {
         // A newly authorized recovery may reconcile the original incarnation in
         // place. It must retain late bytes rather than overlay the old capture.
         expect((await recovery).removedAt).toBeUndefined();
-        expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe(
+        expect(await readme(f.record.path)).toBe(
           kind === "file" ? "concurrent change\n" : "working\n",
         );
         expect(await fs.readFile(f.indexPath)).toEqual(f.index);
@@ -237,7 +238,7 @@ describe("exact-state retirement admission and recovery", () => {
           await git(restored.path, "rev-parse", "--git-path", "index"),
         );
         expect(await fs.readFile(restoredIndex)).toEqual(f.index);
-        expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("working\n");
+        expect(await readme(restored.path)).toBe("working\n");
         expect(await git(restored.path, "rev-parse", "HEAD")).toBe(f.exactState.head);
         expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeUndefined();
         expect(await refNames(`refs/openclaw/removals/${f.record.id}`)).toBe("");
@@ -323,43 +324,107 @@ describe("exact-state retirement admission and recovery", () => {
     });
     await expect(service.remove(f.request)).rejects.toThrow("changed after exact-state capture");
     expect(injected).toBe(true);
-    expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe(
-      "late source write\n",
-    );
+    expect(await readme(f.record.path)).toBe("late source write\n");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeUndefined();
   });
 
-  it("fences native HEAD, branch and index writers through archival admission", async () => {
-    const f = await fixture();
-    const run = commandRunner.runCommandWithTimeout;
-    let checked = false;
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const argv = args[0];
-      const cwd = argv[argv.indexOf("-C") + 1];
-      if (!checked && cwd?.includes(".openclaw-retiring-") && argv.includes("symbolic-ref")) {
-        checked = true;
-        const quarantined = cwd;
-        await expect(git(quarantined, "add", "README.md")).rejects.toThrow(/index.lock/);
-        await expect(
-          git(quarantined, "update-ref", "HEAD", f.exactState.branchHead),
-        ).rejects.toThrow(/HEAD.lock/);
-        await expect(
-          git(repo, "update-ref", `refs/heads/${f.record.branch}`, f.exactState.head),
-        ).rejects.toThrow(/lock/);
+  it.each(["admission", "retirement", "retained-restore", "fallback-restore"] as const)(
+    "excludes native Git writers through %s finalization",
+    async (phase) => {
+      const f = await fixture();
+      const restoring = phase === "retained-restore" || phase === "fallback-restore";
+      if (restoring) {
+        const retired = await service.remove(f.request);
+        if (phase === "fallback-restore") {
+          await git(repo, "worktree", "remove", "--force", retired.recoveryPath!);
+        }
       }
-      return await run(...args);
-    });
-    expect((await service.remove(f.request)).removed).toBe(true);
-    expect(checked).toBe(true);
-    expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
-    const restored = await service.restore({ id: f.record.id });
-    const restoredIndex = path.resolve(
-      restored.path,
-      await git(restored.path, "rev-parse", "--git-path", "index"),
-    );
-    expect(await fs.readFile(restoredIndex)).toEqual(f.index);
-  });
+      let checked = false;
+      let archived = "";
+      if (!restoring) {
+        const run = commandRunner.runCommandWithTimeout;
+        vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
+          const argv = args[0];
+          const cwd = argv[argv.indexOf("-C") + 1];
+          if (
+            phase === "admission" &&
+            !checked &&
+            cwd?.includes(".openclaw-retiring-") &&
+            argv.includes("symbolic-ref")
+          ) {
+            checked = true;
+            await expect(git(cwd, "add", "README.md")).rejects.toThrow(/index.lock/);
+            await expect(git(cwd, "update-ref", "HEAD", f.exactState.branchHead)).rejects.toThrow(
+              /HEAD.lock/,
+            );
+            await expect(
+              git(repo, "update-ref", `refs/heads/${f.record.branch}`, f.exactState.head),
+            ).rejects.toThrow(/lock/);
+          }
+          const result = await run(...args);
+          if (phase === "retirement" && argv.includes("worktree") && argv.includes("move")) {
+            archived = argv.at(-1)!;
+          }
+          return result;
+        });
+      }
+      const admitted: boolean[] = [];
+      if (phase !== "admission") {
+        const update = registry.updateRegistryWorktree;
+        vi.spyOn(registry, "updateRegistryWorktree").mockImplementation((...args) => {
+          if (
+            args[1] === f.record.id &&
+            (restoring
+              ? "removedAt" in args[2] && args[2].removedAt === undefined
+              : typeof args[2].removedAt === "number")
+          ) {
+            for (const command of [
+              ["add", "README.md"],
+              ["checkout", "--detach", f.exactState.branchHead],
+              ["update-ref", `refs/heads/${f.record.branch}`, f.exactState.head],
+            ]) {
+              const result = spawnSync(
+                "git",
+                ["-C", restoring ? f.record.path : archived, ...command],
+                { encoding: "utf8" },
+              );
+              admitted.push(result.status === 0);
+            }
+          }
+          return update(...args);
+        });
+      }
+      if (!restoring) {
+        expect((await service.remove(f.request)).removed).toBe(true);
+        if (phase === "admission") {
+          expect(checked).toBe(true);
+          expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
+        } else {
+          expect(admitted).toEqual([false, false, false]);
+        }
+      }
+      const restored = await service.restore({ id: f.record.id });
+      if (phase === "admission") {
+        const restoredIndex = path.resolve(
+          restored.path,
+          await git(restored.path, "rev-parse", "--git-path", "index"),
+        );
+        expect(await fs.readFile(restoredIndex)).toEqual(f.index);
+      } else {
+        if (restoring) {
+          expect(admitted).toEqual([false, false, false]);
+        }
+        expect(restored.removedAt).toBeUndefined();
+        expect(await fs.readFile(f.indexPath)).toEqual(f.index);
+        if (restoring) {
+          expect(await git(restored.path, "rev-parse", "HEAD")).toBe(f.exactState.head);
+          expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
+          await git(restored.path, "add", "README.md");
+        }
+      }
+    },
+  );
 
   it("retains writes through an already-open descriptor after final verification and retirement", async () => {
     const f = await fixture();
@@ -382,43 +447,63 @@ describe("exact-state retirement admission and recovery", () => {
       const result = await service.remove(f.request);
       expect(branchReads).toBe(1);
       expect(result.removed).toBe(true);
-      expect(await fs.readFile(path.join(result.recoveryPath!, "README.md"), "utf8")).toBe(
-        "late descriptor bytes\n",
-      );
+      expect(await readme(result.recoveryPath!)).toBe("late descriptor bytes\n");
       expect(await git(repo, "show", `${result.snapshotRef}:README.md`)).toBe("working");
       await writer.write("later retired writes!\n", 0, "utf8");
       const restored = await service.restore({ id: f.record.id });
-      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
-        "later retired writes!\n",
-      );
+      expect(await readme(restored.path)).toBe("later retired writes!\n");
       expect(await fs.readFile(f.indexPath)).toEqual(f.index);
     } finally {
       await writer.close();
     }
   });
 
-  it("keeps the original source until the existing 30-day recovery deadline", async () => {
-    const f = await fixture();
-    let now = Date.now();
-    service = new ManagedWorktreeService({
-      env,
-      now: () => now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    const result = await service.remove(f.request);
-    expect(result.recoveryRetainedUntil).toBe(now + 30 * 24 * 60 * 60 * 1000);
-    now = result.recoveryRetainedUntil! - 1;
-    await service.gc();
-    expect(await fs.readFile(path.join(result.recoveryPath!, "README.md"), "utf8")).toBe(
-      "working\n",
-    );
-    now += 2;
-    const expired = await service.gc();
-    expect(expired.snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
-    expect(await fs.stat(result.recoveryPath!).catch(() => undefined)).toBeUndefined();
-    expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
-  });
+  it.each([false, true])(
+    "expires the original source after its recovery deadline (ref deletion interrupted=%s)",
+    async (interrupt) => {
+      const f = await fixture();
+      let now = Date.now();
+      service = new ManagedWorktreeService({
+        env,
+        now: () => now,
+        getConfig: () => ({ worktreeAcceleration: false }),
+      });
+      const result = await service.remove(f.request);
+      let interrupted = false;
+      if (interrupt) {
+        const run = commandRunner.runCommandWithTimeout;
+        vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
+          const value = await run(...args);
+          if (
+            !interrupted &&
+            args[0].includes("update-ref") &&
+            args[0].includes("-d") &&
+            args[0].includes(result.snapshotRef!)
+          ) {
+            interrupted = true;
+            throw new Error("controlled post-expiry-ref interruption");
+          }
+          return value;
+        });
+      } else {
+        expect(result.recoveryRetainedUntil).toBe(now + 30 * 24 * 60 * 60 * 1000);
+        now = result.recoveryRetainedUntil! - 1;
+        await service.gc();
+        expect(await readme(result.recoveryPath!)).toBe("working\n");
+      }
+      now = result.recoveryRetainedUntil! + 1;
+      expect((await service.gc()).snapshotsPruned).toBe(interrupt ? 0 : 1);
+      if (interrupt) {
+        expect(interrupted).toBe(true);
+        expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
+        expect((await service.gc()).snapshotsPruned).toBe(1);
+      } else {
+        expect(await fs.stat(result.recoveryPath!).catch(() => undefined)).toBeUndefined();
+      }
+      expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
+      expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
+    },
+  );
 
   it("reconciles a native restore interrupted after moving the original source", async () => {
     const f = await fixture();
@@ -443,7 +528,7 @@ describe("exact-state retirement admission and recovery", () => {
       "controlled post-restore-move interruption",
     );
     expect(interrupted).toBe(true);
-    expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe("working\n");
+    expect(await readme(f.record.path)).toBe("working\n");
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeDefined();
     const restored = await service.restore({ id: f.record.id });
     expect(restored.removedAt).toBeUndefined();
@@ -451,23 +536,46 @@ describe("exact-state retirement admission and recovery", () => {
     expect(await git(restored.path, "rev-parse", "HEAD")).toBe(f.exactState.head);
   });
 
-  it("does not adopt a recreated directory after a retained source moves back", async () => {
-    const f = await fixture();
-    const result = await service.remove(f.request);
-    await git(repo, "worktree", "move", result.recoveryPath!, f.record.path);
-    const original = path.join(path.dirname(f.record.path), "original-source-held");
-    await fs.rename(f.record.path, original);
-    await fs.cp(original, f.record.path, { recursive: true });
-    await fs.writeFile(path.join(f.record.path, "README.md"), "replacement source\n");
-    await expect(service.restore({ id: f.record.id })).rejects.toThrow(
-      "source identity or registration changed",
-    );
-    expect(await fs.readFile(path.join(original, "README.md"), "utf8")).toBe("working\n");
-    expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe(
-      "replacement source\n",
-    );
-    expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeDefined();
-  });
+  it.each(["moved-back", "awaited-check"] as const)(
+    "rejects a retained source replaced at %s",
+    async (phase) => {
+      const f = await fixture();
+      const result = await service.remove(f.request);
+      const original = path.join(path.dirname(f.record.path), "original-source-held");
+      const source = phase === "moved-back" ? f.record.path : result.recoveryPath!;
+      const replace = async () => {
+        await fs.rename(source, original);
+        await fs.cp(original, source, { recursive: true });
+        await fs.writeFile(path.join(source, "README.md"), "replacement source\n");
+      };
+      let replaced = false;
+      if (phase === "moved-back") {
+        await git(repo, "worktree", "move", result.recoveryPath!, f.record.path);
+        await replace();
+      } else {
+        const run = commandRunner.runCommandWithTimeout;
+        vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
+          const resultOfCommand = await run(...args);
+          const argv = args[0];
+          if (!replaced && argv.includes(result.recoveryPath!) && argv.includes("HEAD^{commit}")) {
+            replaced = true;
+            await replace();
+          }
+          return resultOfCommand;
+        });
+      }
+      await expect(service.restore({ id: f.record.id })).rejects.toThrow(
+        phase === "moved-back" ? "source identity or registration changed" : /source identity/,
+      );
+      expect(await readme(original)).toBe("working\n");
+      expect(await readme(source)).toBe("replacement source\n");
+      expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeDefined();
+      if (phase === "awaited-check") {
+        expect(replaced).toBe(true);
+        expect(await git(repo, "rev-parse", result.snapshotRef!)).toMatch(/^[a-f0-9]{40}$/u);
+      }
+    },
+  );
 
   it("supports repeated retirement after native restore with a new snapshot", async () => {
     const f = await fixture();
@@ -482,37 +590,8 @@ describe("exact-state retirement admission and recovery", () => {
     expect(await git(repo, "rev-parse", second.snapshotRef!)).not.toBe(firstSnapshot);
     expect(await git(repo, "show", `${second.snapshotRef}:README.md`)).toBe("second working state");
     const again = await service.restore({ id: f.record.id });
-    expect(await fs.readFile(path.join(again.path, "README.md"), "utf8")).toBe(
-      "second working state\n",
-    );
+    expect(await readme(again.path)).toBe("second working state\n");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
-  });
-
-  it("rejects a retained source replaced during awaited restore checks", async () => {
-    const f = await fixture();
-    const result = await service.remove(f.request);
-    const original = path.join(path.dirname(f.record.path), "original-source-held");
-    const run = commandRunner.runCommandWithTimeout;
-    let replaced = false;
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const resultOfCommand = await run(...args);
-      const argv = args[0];
-      if (!replaced && argv.includes(result.recoveryPath!) && argv.includes("HEAD^{commit}")) {
-        replaced = true;
-        await fs.rename(result.recoveryPath!, original);
-        await fs.cp(original, result.recoveryPath!, { recursive: true });
-        await fs.writeFile(path.join(result.recoveryPath!, "README.md"), "replacement source\n");
-      }
-      return resultOfCommand;
-    });
-    await expect(service.restore({ id: f.record.id })).rejects.toThrow(/source identity/);
-    expect(replaced).toBe(true);
-    expect(await fs.readFile(path.join(original, "README.md"), "utf8")).toBe("working\n");
-    expect(await fs.readFile(path.join(result.recoveryPath!, "README.md"), "utf8")).toBe(
-      "replacement source\n",
-    );
-    expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeDefined();
-    expect(await git(repo, "rev-parse", result.snapshotRef!)).toMatch(/^[a-f0-9]{40}$/u);
   });
 
   it.each(["missing", "changed"] as const)(
@@ -586,55 +665,15 @@ describe("exact-state retirement admission and recovery", () => {
       expect(getRegistryWorktree(env, f.record.id)?.snapshotRef).toBe(result.snapshotRef);
       expect(await git(repo, "rev-parse", result.snapshotRef!)).toMatch(/^[a-f0-9]{40}$/u);
       if (kind === "replacement") {
-        expect(await fs.readFile(path.join(original, "README.md"), "utf8")).toBe("working\n");
-        expect(await fs.readFile(path.join(result.recoveryPath!, "README.md"), "utf8")).toBe(
-          "replacement source\n",
-        );
+        expect(await readme(original)).toBe("working\n");
+        expect(await readme(result.recoveryPath!)).toBe("replacement source\n");
       } else if (kind === "restore-moved") {
         expect((await service.restore({ id: f.record.id })).removedAt).toBeUndefined();
-        expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe("working\n");
+        expect(await readme(f.record.path)).toBe("working\n");
       } else {
         expect(changed).toBe(true);
-        expect(await fs.readFile(path.join(result.recoveryPath!, "README.md"), "utf8")).toBe(
-          "working\n",
-        );
+        expect(await readme(result.recoveryPath!)).toBe("working\n");
       }
-    },
-  );
-
-  it.each([true, false])(
-    "excludes native Git writers until restored lifecycle finalization (retained=%s)",
-    async (retained) => {
-      const f = await fixture();
-      const retired = await service.remove(f.request);
-      if (!retained) {
-        await git(repo, "worktree", "remove", "--force", retired.recoveryPath!);
-      }
-      const update = registry.updateRegistryWorktree;
-      const admitted: boolean[] = [];
-      vi.spyOn(registry, "updateRegistryWorktree").mockImplementation((...args) => {
-        if (args[1] === f.record.id && "removedAt" in args[2] && args[2].removedAt === undefined) {
-          for (const command of [
-            ["add", "README.md"],
-            ["checkout", "--detach", f.exactState.branchHead],
-            ["update-ref", `refs/heads/${f.record.branch}`, f.exactState.head],
-          ]) {
-            const result = spawnSync("git", ["-C", f.record.path, ...command], {
-              encoding: "utf8",
-            });
-            admitted.push(result.status === 0);
-          }
-        }
-        return update(...args);
-      });
-      const restored = await service.restore({ id: f.record.id });
-      expect(admitted).toEqual([false, false, false]);
-      expect(restored.removedAt).toBeUndefined();
-      expect(await fs.readFile(f.indexPath)).toEqual(f.index);
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(f.exactState.head);
-      expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
-      // Once the lifecycle is live, ordinary native Git writers are admitted again.
-      await git(restored.path, "add", "README.md");
     },
   );
 
@@ -663,111 +702,71 @@ describe("exact-state retirement admission and recovery", () => {
     expect((await service.restore({ id: f.record.id })).removedAt).toBeUndefined();
   });
 
-  it("excludes a competing lifecycle writer through the expiry registry transaction", async () => {
-    const f = await fixture();
-    let now = Date.now();
-    service = new ManagedWorktreeService({
-      env,
-      now: () => now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    const result = await service.remove(f.request);
-    const remove = registry.deleteRegistryWorktree;
-    let attempted = false;
-    let rejected = false;
-    vi.spyOn(registry, "deleteRegistryWorktree").mockImplementation((...args) => {
-      if (args[1] === f.record.id) {
+  it.each(["registry", "git-deletion"] as const)(
+    "excludes a competing lifecycle writer through expiry %s admission",
+    async (phase) => {
+      const f = await fixture();
+      let now = Date.now();
+      service = new ManagedWorktreeService({
+        env,
+        now: () => now,
+        getConfig: () => ({ worktreeAcceleration: false }),
+      });
+      const result = await service.remove(f.request);
+      let attempted = false;
+      let rejected = false;
+      const write = () => {
         attempted = true;
         try {
           updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
         } catch {
           rejected = true;
         }
+      };
+      if (phase === "registry") {
+        const remove = registry.deleteRegistryWorktree;
+        vi.spyOn(registry, "deleteRegistryWorktree").mockImplementation((...args) => {
+          if (args[1] === f.record.id) {
+            write();
+          }
+          return remove(...args);
+        });
+      } else {
+        const run = commandRunner.runCommandWithTimeout;
+        vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
+          if (
+            !attempted &&
+            args[0].includes("update-ref") &&
+            args[0].includes("-d") &&
+            args[0].includes(result.snapshotRef!)
+          ) {
+            write();
+          }
+          return await run(...args);
+        });
       }
-      return remove(...args);
-    });
-    now = result.recoveryRetainedUntil! + 1;
-    expect((await service.gc()).snapshotsPruned).toBe(1);
-    expect({ attempted, rejected }).toEqual({ attempted: true, rejected: true });
-    expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
-  });
-
-  it("excludes native Git writers until retired lifecycle finalization", async () => {
-    const f = await fixture();
-    const run = commandRunner.runCommandWithTimeout;
-    let archived = "";
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const result = await run(...args);
-      if (args[0].includes("worktree") && args[0].includes("move")) {
-        archived = args[0].at(-1)!;
+      now = result.recoveryRetainedUntil! + 1;
+      const expired = await service.gc();
+      if (phase === "registry") {
+        expect(expired.snapshotsPruned).toBe(1);
+        expect({ attempted, rejected }).toEqual({ attempted: true, rejected: true });
+        expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
+      } else {
+        expect(attempted).toBe(true);
+        expect({
+          rejected,
+          recordPresent: Boolean(getRegistryWorktree(env, f.record.id)),
+          snapshotPresent: Boolean(await refNames(result.snapshotRef!)),
+          snapshotsPruned: expired.snapshotsPruned,
+        }).toEqual({
+          rejected: true,
+          recordPresent: false,
+          snapshotPresent: false,
+          snapshotsPruned: 1,
+        });
       }
-      return result;
-    });
-    const update = registry.updateRegistryWorktree;
-    const admitted: boolean[] = [];
-    vi.spyOn(registry, "updateRegistryWorktree").mockImplementation((...args) => {
-      if (args[1] === f.record.id && typeof args[2].removedAt === "number") {
-        for (const command of [
-          ["add", "README.md"],
-          ["checkout", "--detach", f.exactState.branchHead],
-          ["update-ref", `refs/heads/${f.record.branch}`, f.exactState.head],
-        ]) {
-          const result = spawnSync("git", ["-C", archived, ...command], { encoding: "utf8" });
-          admitted.push(result.status === 0);
-        }
-      }
-      return update(...args);
-    });
-    const retired = await service.remove(f.request);
-    expect(retired.removed).toBe(true);
-    expect(admitted).toEqual([false, false, false]);
-    expect((await service.restore({ id: f.record.id })).removedAt).toBeUndefined();
-    expect(await fs.readFile(f.indexPath)).toEqual(f.index);
-  });
-
-  it("excludes a lifecycle writer after expiry Git deletion admission", async () => {
-    const f = await fixture();
-    let now = Date.now();
-    service = new ManagedWorktreeService({
-      env,
-      now: () => now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    const result = await service.remove(f.request);
-    const run = commandRunner.runCommandWithTimeout;
-    let attempted = false;
-    let rejected = false;
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      if (
-        !attempted &&
-        args[0].includes("update-ref") &&
-        args[0].includes("-d") &&
-        args[0].includes(result.snapshotRef!)
-      ) {
-        attempted = true;
-        try {
-          updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
-        } catch {
-          rejected = true;
-        }
-      }
-      return await run(...args);
-    });
-    now = result.recoveryRetainedUntil! + 1;
-    const expired = await service.gc();
-    expect(attempted).toBe(true);
-    expect({
-      rejected,
-      recordPresent: Boolean(getRegistryWorktree(env, f.record.id)),
-      snapshotPresent: Boolean(await refNames(result.snapshotRef!)),
-      snapshotsPruned: expired.snapshotsPruned,
-    }).toEqual({
-      rejected: true,
-      recordPresent: false,
-      snapshotPresent: false,
-      snapshotsPruned: 1,
-    });
-  });
+    },
+  );
 
   it.each([
     "native-add",
@@ -856,7 +855,7 @@ describe("exact-state retirement admission and recovery", () => {
     expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
     expect(await git(f.record.path, "status", "--porcelain=v1")).toBe("MM README.md");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
-    expect(await fs.readFile(path.join(f.record.path, "README.md"), "utf8")).toBe(restoredBytes);
+    expect(await readme(f.record.path)).toBe(restoredBytes);
   });
 
   it.each(["staged-only.txt", "unexpected.txt"])(
@@ -927,39 +926,6 @@ describe("exact-state retirement admission and recovery", () => {
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeDefined();
   });
 
-  it("finishes exact expiration interrupted after deleting its snapshot ref", async () => {
-    const f = await fixture();
-    let now = Date.now();
-    service = new ManagedWorktreeService({
-      env,
-      now: () => now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    const retired = await service.remove(f.request);
-    const run = commandRunner.runCommandWithTimeout;
-    let interrupted = false;
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const result = await run(...args);
-      if (
-        !interrupted &&
-        args[0].includes("update-ref") &&
-        args[0].includes("-d") &&
-        args[0].includes(retired.snapshotRef!)
-      ) {
-        interrupted = true;
-        throw new Error("controlled post-expiry-ref interruption");
-      }
-      return result;
-    });
-    now = retired.recoveryRetainedUntil! + 1;
-    expect((await service.gc()).snapshotsPruned).toBe(0);
-    expect(interrupted).toBe(true);
-    expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
-    expect((await service.gc()).snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
-    expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
-  });
-
   it("rejects provisioned ABA bytes that differ from the exact capture", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\n");
     await git(repo, "add", ".gitignore");
@@ -970,20 +936,27 @@ describe("exact-state retirement admission and recovery", () => {
     await fs.writeFile(filename, "original secret\n");
     await fs.utimes(filename, 1_600_000_000, 1_600_000_000);
     const original = await fs.stat(filename);
-    const snapshot = provisionedFiles.snapshotProvisionedFiles;
+    const runCommand = gitExec.executeGitCommandBuffered;
     let captured = false;
-    vi.spyOn(provisionedFiles, "snapshotProvisionedFiles").mockImplementation(async (...args) => {
-      captured = true;
-      await fs.writeFile(filename, "different bytes\n");
-      try {
-        return await snapshot(...args);
-      } finally {
-        await fs.writeFile(filename, "original secret\n");
-        await fs.utimes(filename, original.atime, original.mtime);
+    vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(async (...args) => {
+      if (
+        !captured &&
+        args[0] === f.record.path &&
+        args[1].includes("--literal-pathspecs") &&
+        args[1].includes("ls-files") &&
+        args[1].includes("--ignored")
+      ) {
+        captured = true;
+        await fs.writeFile(filename, "different bytes\n");
       }
+      return await runCommand(...args);
     });
-    await expect(service.remove(f.request)).rejects.toThrow(/provisioned exact-state/);
+    await expect(service.remove(f.request)).rejects.toThrow(
+      /provisioned exact-state bytes changed after capture/,
+    );
     expect(captured).toBe(true);
+    await fs.writeFile(filename, "original secret\n");
+    await fs.utimes(filename, original.atime, original.mtime);
     expect(await fs.readFile(filename, "utf8")).toBe("original secret\n");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeUndefined();

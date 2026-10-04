@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadTab,
@@ -12,10 +13,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
-import {
-  captureDurableChatAttachments,
-  readBlobAsDataUrl,
-} from "./durable-composer-persistence.ts";
+import { captureDurableChatAttachments } from "./durable-composer-persistence.ts";
 
 type Host = ChatComposerScope & { sessionKey?: string };
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {

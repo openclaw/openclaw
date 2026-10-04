@@ -2,9 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mock } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { RetainedOperation } from "./retained-operation.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,

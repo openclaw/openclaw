@@ -277,12 +277,6 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
   ensureColumn(db, "workboard_boards", "kind", "kind TEXT");
   ensureColumn(db, "workboard_boards", "sessions_spec", "sessions_spec TEXT");
-  ensureColumn(
-    db,
-    "workboard_cards",
-    "lifecycle_status_source_updated_at",
-    "lifecycle_status_source_updated_at INTEGER",
-  );
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")

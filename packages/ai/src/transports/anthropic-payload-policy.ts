@@ -104,15 +104,18 @@ export function resolveAnthropicServerCompactionPlan(
   };
 }
 
-export function isDirectAnthropicModel(model: { provider?: unknown; baseUrl?: string }): boolean {
-  const baseUrl = model.baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim();
+export function isDirectAnthropicModel(
+  model: { provider?: unknown; baseUrl?: string },
+  env: { ANTHROPIC_BASE_URL?: string } = process.env,
+): boolean {
+  const baseUrl = model.baseUrl?.trim() || env.ANTHROPIC_BASE_URL?.trim();
   const endpointModel = baseUrl === model.baseUrl ? model : { ...model, baseUrl };
   const endpointClass = resolveProviderEndpoint(endpointModel).endpointClass;
   return (
     normalizeOptionalLowercaseString(model.provider) === "anthropic" &&
     (endpointClass === "anthropic-public" ||
       (endpointClass === "default" &&
-        (!baseUrl || resolveBaseUrlHostname(baseUrl) === "api.anthropic.com")))
+        (!baseUrl || URL.parse(baseUrl)?.hostname === "api.anthropic.com")))
   );
 }
 
@@ -140,15 +143,11 @@ export function isAnthropicServerToolClearingEnabled(
   );
 }
 
-function resolveBaseUrlHostname(baseUrl: string): string | undefined {
-  return URL.parse(baseUrl)?.hostname;
-}
-
 function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   if (typeof baseUrl !== "string") {
     return false;
   }
-  const hostname = resolveBaseUrlHostname(baseUrl);
+  const hostname = URL.parse(baseUrl)?.hostname;
   if (!hostname) {
     return false;
   }
@@ -596,6 +595,15 @@ export function resolveAnthropicRequestBetaHeader(
   // Payload-required betas must survive model and per-request header overrides.
   if (payload.fallbacks === ANTHROPIC_SERVER_SIDE_FALLBACKS) {
     betas.add(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
+  if (
+    Array.isArray(payload.messages) &&
+    payload.messages.some(
+      (message) =>
+        isRecord(message) && message.role === "system" && message.clear_at === "next_user_message",
+    )
+  ) {
+    betas.add("mid-conversation-system-clear-at-2026-08-21");
   }
   for (const edit of Array.isArray(edits) ? edits : []) {
     if (!isRecord(edit)) {

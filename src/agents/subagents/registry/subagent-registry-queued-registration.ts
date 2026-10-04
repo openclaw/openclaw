@@ -63,7 +63,7 @@ export function registerRequiredQueuedSubagent(params: {
   const exactEntry = () => isSameSubagentRunOwner(currentEntry(), entry);
   const ownsSession = () =>
     (!manager.runs.has(runId) || exactEntry()) &&
-    !Array.from(manager.getRunsForChildSession(entry.childSessionKey)).some(
+    !Array.from(manager.getRunsForChildSession(entry.childSessionKey, entry.childAgentId)).some(
       (candidate) =>
         !isSameSubagentRunOwner(candidate, entry) &&
         compareSubagentRunGeneration(candidate, entry) > 0,
@@ -194,6 +194,8 @@ export function registerRequiredQueuedSubagent(params: {
         registryCurrent() &&
         ownsSession(),
       canAcceptLaunch: () =>
+        registrationAcknowledged && registryCurrent() && exactEntry() && ownsSession(),
+      canAbortAcceptedRun: () =>
         registrationAcknowledged && registryCurrent() && exactEntry() && ownsSession(),
       canRetireReservation: () => ownsSwarmRunReservation(runId, getSubagentRunRuntimeKey(entry)),
       settleFailedLaunch: async (error: string) => {

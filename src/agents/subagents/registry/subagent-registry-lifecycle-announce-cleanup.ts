@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
   getDeliveryLastError,
@@ -63,15 +64,26 @@ export const resumeAncestorCleanup = (
 ) => {
   const params = context.options;
   const now = Date.now();
-  const visited = new Set([settledEntry.childSessionKey]);
+  const visited = [settledEntry];
   let requesterSessionKey = settledEntry.requesterSessionKey;
-  while (requesterSessionKey && !visited.has(requesterSessionKey)) {
-    visited.add(requesterSessionKey);
-    const entry = params.getLatestRunForChildSession(requesterSessionKey);
+  let requesterAgentId = settledEntry.requesterAgentId;
+  while (
+    requesterSessionKey &&
+    !visited.some((entry) =>
+      matchesSubagentChildSessionOwner(entry, requesterSessionKey, requesterAgentId),
+    )
+  ) {
+    const entry = params.getLatestRunForChildSession(
+      requesterSessionKey,
+      undefined,
+      requesterAgentId,
+    );
     if (!entry || params.runs.get(entry.runId) !== entry) {
       break;
     }
+    visited.push(entry);
     requesterSessionKey = entry.requesterSessionKey;
+    requesterAgentId = entry.requesterAgentId;
     const { runId } = entry;
     // A failed cleanup belongs to its retry timer or exhausted process-local
     // budget; even descendant settlement must not reopen that attempt early.
@@ -180,27 +192,20 @@ export const startSubagentAnnounceCleanupFlow = (
       onPublished,
     });
   };
-  if (
-    !checkDescendants &&
-    (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered")
-  ) {
+  const alreadyDelivered = () =>
+    typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered";
+  const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
+    finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
+      skipAnnounce: true,
+      ...options,
+    });
+  if (!checkDescendants && alreadyDelivered()) {
     runDetachedCleanupAttempt(context, {
       runId,
       entry,
       cleanupGeneration,
       stateContext,
-      run: () =>
-        finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-          },
-        ),
+      run: () => finalizeDelivered(),
     });
     return true;
   }
@@ -247,7 +252,7 @@ export const startSubagentAnnounceCleanupFlow = (
         await Promise.resolve();
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         if (
@@ -269,20 +274,8 @@ export const startSubagentAnnounceCleanupFlow = (
           }
           return;
         }
-        if (
-          checkDescendants &&
-          (typeof entry.delivery?.announcedAt === "number" ||
-            entry.delivery?.status === "delivered")
-        ) {
-          await finalizeSubagentCleanup(
-            context,
-            entry,
-            cleanup,
-            "delivered",
-            cleanupGeneration,
-            stateContext,
-            { skipAnnounce: true },
-          );
+        if (checkDescendants && alreadyDelivered()) {
+          await finalizeDelivered();
           return;
         }
         if (cleanup === "delete" && (await prepareChildSessionEffects())) {
@@ -331,21 +324,10 @@ export const startSubagentAnnounceCleanupFlow = (
         }
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
-        await finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-            skipRequesterDelivery,
-          },
-        );
+        await finalizeDelivered({ skipRequesterDelivery });
       },
     });
     return true;
@@ -368,7 +350,7 @@ export const startSubagentAnnounceCleanupFlow = (
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     assertCurrent();
@@ -380,7 +362,7 @@ export const startSubagentAnnounceCleanupFlow = (
         : undefined;
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     // Requester-settle can commit delivery while the mirror lookup is pending.
@@ -453,11 +435,13 @@ export const startSubagentAnnounceCleanupFlow = (
     prepareChildSessionEffects,
     isCompletionDeliveryAllowed: () => {
       assertPersistenceCurrent();
-      return isSubagentCompletionDeliveryAllowed(
-        context,
-        entry,
-        cleanupGeneration,
-        committedDeliveryOwner,
+      return (
+        isSubagentCompletionDeliveryAllowed(
+          context,
+          entry,
+          cleanupGeneration,
+          committedDeliveryOwner,
+        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
@@ -596,7 +580,10 @@ export const startSubagentAnnounceCleanupFlow = (
         announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
           params.runSubagentAnnounceFlow({
             ...announceParams,
+            childAgentId: entry.childAgentId,
             signal: deadline.signal,
+            // Delivery expiry bounds admission; the requester owns its execution budget.
+            onExecutionStarted: () => clearTimeout(deadlineTimer),
           }),
         );
       } catch (error) {

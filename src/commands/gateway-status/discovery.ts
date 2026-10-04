@@ -8,19 +8,11 @@ import {
 
 /** Infers a user@host SSH target from a configured remote websocket URL. */
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
-  if (typeof rawUrl !== "string") {
-    return null;
-  }
-  const trimmed = normalizeOptionalString(rawUrl) ?? "";
+  const trimmed = normalizeOptionalString(rawUrl);
   if (!trimmed) {
     return null;
   }
-  let host: string | null;
-  try {
-    host = new URL(trimmed).hostname || null;
-  } catch {
-    return null;
-  }
+  const host = URL.parse(trimmed)?.hostname;
   if (!host) {
     return null;
   }
@@ -47,12 +39,10 @@ export async function resolveSshTarget(params: {
   rawTarget: string;
   identity: string | null;
   overallTimeoutMs: number;
-  loadSshConfigModule: () => Promise<typeof import("../../infra/ssh-config.js")>;
-  loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
 }): Promise<{ target: string; identity?: string } | null> {
   const [{ resolveSshConfig }, { parseSshTarget }] = await Promise.all([
-    params.loadSshConfigModule(),
-    params.loadSshTunnelModule(),
+    import("../../infra/ssh-config.js"),
+    import("../../infra/ssh-tunnel.js"),
   ]);
   const parsed = parseSshTarget(params.rawTarget);
   if (!parsed) {

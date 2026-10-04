@@ -36,6 +36,7 @@ export type SqliteSchemaRow = {
 };
 
 export type SqliteTableListRow = {
+  schema: string;
   name: string;
   strict: number;
   wr: number;

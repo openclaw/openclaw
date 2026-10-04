@@ -170,18 +170,32 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
-  it("normalizes and cleans up system-agent entries through the shared lifecycle", async () => {
+  it("normalizes and cleans up system-agent entries through a lazy native runtime", async () => {
     const shouldHandle = vi.fn().mockReturnValue(true);
     const unbindPending = vi.fn();
     const onFinalized = vi.fn();
     const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const approvalRuntime = await createTestApprovalHandler({
+    const nativeRuntime = createApprovalNativeRuntimeAdapterStubs({
       eventKinds: ["system-agent"],
       shouldHandle,
       buildResolvedResult,
       unbindPending,
       onFinalized,
     });
+    const approvalRuntime = await createChannelApprovalHandlerFromCapability({
+      ...TEST_HANDLER_PARAMS,
+      capability: {
+        ...makeNativeApprovalCapability(),
+        nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+          eventKinds: nativeRuntime.eventKinds,
+          ...nativeRuntime.availability,
+          load: async () => nativeRuntime,
+        }),
+      },
+    });
+    if (!approvalRuntime) {
+      throw new Error("Expected approval handler runtime");
+    }
     const request = {
       id: "system-agent:1",
       request: {

@@ -78,7 +78,11 @@ describe("board and progress event session ownership", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, work: {} },
+          },
           session: { scope },
           tools: { exec: { mode: "ask" } },
         };
@@ -259,7 +263,7 @@ describe("board and progress event session ownership", () => {
           await flushPendingSessionsChangedEvents(context);
           detach();
           projection.dispose();
-          connection.mentionInbox.dispose();
+          await connection.mentionInbox.dispose();
         }
       });
     },
@@ -514,8 +518,13 @@ describe("collaboration event scope guards", () => {
       subscribers,
       sessionEventSubscribers,
       isVisible: () => true,
-      getConfig: () =>
-        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
+      getConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
+      }),
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([message.client, eventOnly.client, unrelated.client]),
@@ -774,7 +783,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       await Promise.allSettled(publications);
       detach();
       rowProjection.dispose();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       clearSubagentRunsReadCacheForTest();
       invalidateSessionSharingSnapshot();
     }

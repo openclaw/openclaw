@@ -321,7 +321,7 @@ function seedState() {
       write(path.join(workspace, fileName), contents);
     }
   }
-  writeJson(path.join(workspace, ".openclaw", "workspace-state.json"), {
+  writeJson(path.join(workspace, "openclaw-workspace-state.json"), {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
@@ -1866,7 +1866,7 @@ if (command === "list-scenarios") {
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  seedUpgradeVolume(stateDir);
+  await seedUpgradeVolume(stateDir, process.argv[3]);
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-restart-serving-turn") {

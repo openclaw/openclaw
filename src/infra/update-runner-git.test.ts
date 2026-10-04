@@ -11,6 +11,8 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import {
+  advanceFixtureRemote,
+  createGitFixtureCheckout,
   expectRuntime,
   runFixtureGit as git,
   expectCancelledGitCandidateCleanup,
@@ -30,43 +32,8 @@ describe("Git checkout execution", () => {
   let runCommand: CommandRunner;
 
   beforeEach(async () => {
-    // Keep fixture-local identity authoritative during candidate rebases.
-    vi.stubEnv("GIT_CONFIG_COUNT", "0");
-    for (const key of [
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
     directory = await fs.realpath(directories.make("openclaw-git-execution-"));
-    root = path.join(directory, "checkout");
-    remote = path.join(directory, "remote");
-    await fs.mkdir(remote);
-    await git(remote, "init", "--initial-branch=main");
-    await git(remote, "config", "user.name", "OpenClaw Test");
-    await git(remote, "config", "user.email", "openclaw@example.com");
-    await fs.writeFile(
-      path.join(remote, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.0.0" }),
-    );
-    await fs.writeFile(path.join(remote, "openclaw.mjs"), "export {};\n");
-    await fs.mkdir(path.join(remote, "packages", "runtime"), { recursive: true });
-    await fs.writeFile(
-      path.join(remote, "packages", "runtime", "index.js"),
-      "module.exports = require('./node_modules/nested.cjs');",
-    );
-    await fs.writeFile(
-      path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\ndist-runtime/\n.artifacts\n.pnpm\ncache/\n",
-    );
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "base");
-    beforeSha = await git(remote, "rev-parse", "HEAD");
-    await git(directory, "clone", "--quiet", remote, root);
-    await git(root, "config", "user.name", "OpenClaw Test");
-    await git(root, "config", "user.email", "openclaw@example.com");
+    ({ root, remote, beforeSha } = await createGitFixtureCheckout(directory));
     await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), "node_modules/.pnpm");
     events = [];
     stopped = false;
@@ -97,12 +64,7 @@ describe("Git checkout execution", () => {
     vi.restoreAllMocks();
   });
 
-  async function advanceRemote() {
-    await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "candidate");
-    return git(remote, "rev-parse", "HEAD");
-  }
+  const advanceRemote = () => advanceFixtureRemote(remote);
 
   function update(opts: Partial<Omit<UpdateRunnerOptions, "prepareGitExposure">> = {}) {
     const { runGitDoctor, ...overrides } = opts;

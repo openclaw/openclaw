@@ -42,7 +42,11 @@ export function createStateDatabaseRetainer(
 ) {
   const admit = (pathname: string, ownership?: "cached-read") => {
     const scope = getOpenClawDatabaseMaintenanceScope();
-    scope?.assertAdmission();
+    if (ownership === "cached-read") {
+      scope?.assertReadAdmission();
+    } else {
+      scope?.assertAdmission();
+    }
     operations.assertOpen(pathname, ownership);
     return scope;
   };
@@ -89,6 +93,7 @@ export function createStateDatabaseRetainer(
       stopBeforeRetirement: () => database.walMaintenance.stop(),
       retainFailedClose: () => operations.retainFailed(database),
       ownRetirement: (close) => operations.ownRetirement(database, close),
+      onIdle: () => operations.touch(database),
     });
     scope?.own(reference, "shared-references", () => reference.releaseAsync());
     return reference;
@@ -115,10 +120,7 @@ export function createStateDatabaseRetainer(
         // Failed schema admission must not transfer a maintenance-owned handle.
         observeOpenClawDatabaseMaintenanceResource(database.db);
       },
-      release() {
-        reference.release();
-        operations.touch(database);
-      },
+      release: () => reference.release(),
     };
   };
   return {
@@ -156,6 +158,7 @@ function retainStateDatabaseReference(params: {
   stopBeforeRetirement(): Promise<void>;
   retainFailedClose(): void;
   ownRetirement(close: () => Promise<void>): () => void;
+  onIdle(): void;
 }): { release(): void; releaseAsync(): Promise<void> } {
   const { owner } = params;
   const reference = {};
@@ -176,7 +179,11 @@ function retainStateDatabaseReference(params: {
     if (params.retirement?.isCurrent() && !owner.retirement?.ordinary) {
       owner.retirement = params.retirement;
     }
-    if (owner.references.size > 0 || !owner.retirement) {
+    if (owner.references.size > 0) {
+      return;
+    }
+    if (!owner.retirement) {
+      params.onIdle();
       return;
     }
     owner.retiring = true;
@@ -193,6 +200,7 @@ function retainStateDatabaseReference(params: {
       throw error;
     }
     owner.retirement = undefined;
+    params.onIdle();
   };
   return {
     release,
@@ -216,13 +224,26 @@ function retainStateDatabaseReference(params: {
 function createAsyncStateDatabaseRetirement(
   params: Pick<
     Parameters<typeof retainStateDatabaseReference>[0],
-    "owner" | "stopBeforeRetirement" | "retainFailedClose" | "ownRetirement"
+    "owner" | "stopBeforeRetirement" | "retainFailedClose" | "ownRetirement" | "onIdle"
   >,
 ): NonNullable<StateDatabaseBorrowers["asyncRetirement"]> {
   const { owner } = params;
   const retained = {};
   let pending: Promise<void> | undefined;
   let unregister: (() => void) | undefined;
+  const finish = (retirement?: RetirementIntent) => {
+    owner.references.delete(retained);
+    if (retirement?.isCurrent()) {
+      retirement.retire();
+    } else {
+      owner.retiring = false;
+    }
+    owner.retirement = undefined;
+    owner.asyncRetirement = undefined;
+    unregister?.();
+    unregister = undefined;
+    params.onIdle();
+  };
   const run = (): Promise<void> => {
     if (pending) {
       return pending;
@@ -231,12 +252,7 @@ function createAsyncStateDatabaseRetirement(
       return Promise.resolve();
     }
     if (!owner.retirement?.isCurrent()) {
-      owner.references.delete(retained);
-      owner.retirement = undefined;
-      owner.asyncRetirement = undefined;
-      owner.retiring = false;
-      unregister?.();
-      unregister = undefined;
+      finish();
       return Promise.resolve();
     }
     owner.retiring = true;
@@ -246,18 +262,7 @@ function createAsyncStateDatabaseRetirement(
     pending = Promise.resolve()
       .then(async () => {
         await params.stopBeforeRetirement();
-        const retirement = owner.retirement;
-        if (retirement?.isCurrent()) {
-          owner.references.delete(retained);
-          retirement.retire();
-        } else {
-          owner.references.delete(retained);
-          owner.retiring = false;
-        }
-        owner.retirement = undefined;
-        owner.asyncRetirement = undefined;
-        unregister?.();
-        unregister = undefined;
+        finish(owner.retirement);
       })
       .catch((error: unknown) => {
         owner.references.add(retained);

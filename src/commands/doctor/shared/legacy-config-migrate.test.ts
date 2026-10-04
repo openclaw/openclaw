@@ -3,14 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
-import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { migrateLegacyConfigForTest } from "./legacy-config-migrate.apply.test-support.js";
 import { registerLegacySilentReplyConfigMigrationTests } from "./legacy-config-migrate.silent-reply.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
-function repairBindingsForTest(config: OpenClawConfig) {
+function repairBindingsForTest<T extends object>(config: T) {
   const changes: string[] = [];
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
 }
@@ -42,7 +41,7 @@ describe("compatibility binding repair migrate", () => {
         { agentId: "MAIN", match: { channel: "discord" } },
         { agentId: "ghost", match: { channel: "discord" } },
       ],
-    } as OpenClawConfig);
+    });
 
     expect(res.config.bindings).toEqual([
       { agentId: "main", match: { channel: "discord" } },
@@ -60,7 +59,7 @@ describe("compatibility binding repair migrate", () => {
         { agentId: "ghost", match: { channel: "discord" } },
         { agentId: "alpha", match: { channel: "discord" } },
       ],
-    } as unknown as OpenClawConfig;
+    };
 
     const res = repairBindingsForTest(cfg);
 
@@ -455,17 +454,17 @@ describe("profile configured tool section migrate", () => {
       exec: { security: "allowlist" },
       byProvider: { openai: { profile: "full", allow: ["message", "exec", "process"] } },
     });
-    expect(res.config?.agents?.list?.[0]?.tools).toEqual({
+    expect(res.config?.agents?.entries?.direct?.tools).toEqual({
       profile: "full",
       allow: ["message", "exec", "process"],
       exec: { security: "allowlist" },
     });
-    expect(res.config?.agents?.list?.[1]?.tools).toEqual({
+    expect(res.config?.agents?.entries?.also?.tools).toEqual({
       profile: "full",
       allow: ["message", "exec"],
       exec: { security: "allowlist" },
     });
-    const broad = res.config?.agents?.list?.[2]?.tools;
+    const broad = res.config?.agents?.entries?.broad?.tools;
     expect(broad?.profile).toBe("full");
     expect(broad?.allow).toEqual(expect.arrayContaining(["message", "exec", "process"]));
     expect(broad?.allow).not.toContain("*");
@@ -479,12 +478,10 @@ describe("profile configured tool section migrate", () => {
     const res = migrateLegacyConfigForTest(raw);
 
     expect(Object.prototype).not.toHaveProperty("profile");
-    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual([
-      "message",
-      "exec",
-      "process",
-    ]);
-    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+    expect(res.config?.agents?.entries?.sage?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual(
+      ["message", "exec", "process"],
+    );
+    expect(res.config?.agents?.entries?.sage?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
       "full",
     );
   });
@@ -761,6 +758,7 @@ describe("legacy sandbox config migrate", () => {
   it("disables the default sandbox browser network without granting inherited egress", () => {
     const raw = {
       agents: {
+        ownership: "explicit",
         defaults: {
           sandbox: {
             browser: {
@@ -772,7 +770,6 @@ describe("legacy sandbox config migrate", () => {
         },
         entries: {
           main: {
-            default: true,
             sandbox: { browser: { enabled: true, network: "none", headless: true } },
           },
           inherited: {
@@ -1848,7 +1845,7 @@ describe("legacy model compat migrate", () => {
       params: { temperature: 0.2 },
     });
     expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.3 });
-    expect(res.config?.agents?.list?.[0]).toEqual({ id: "local", params: { temperature: 0.4 } });
+    expect(res.config?.agents?.entries?.local).toEqual({ params: { temperature: 0.4 } });
     expect(res.changes).toEqual([
       expect.stringContaining(
         "Removed models.providers.vllm.params.qwenThinkingFormat; no concrete vLLM model",
@@ -1985,15 +1982,15 @@ describe("legacy memory search config migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
     expect(res.config?.memory?.search).toEqual({ provider: "openai", query: { maxResults: 5 } });
-    expect(res.config?.agents?.list?.[0]?.memory?.search).toEqual({
+    expect(res.config?.agents?.entries?.local?.memory?.search).toEqual({
       provider: "openai",
       store: { vector: { enabled: true } },
     });
-    expect(res.config?.agents?.list?.[1]?.memory?.search).toEqual({
+    expect(res.config?.agents?.entries?.custom?.memory?.search).toEqual({
       provider: "openai-compatible",
       query: { maxResults: 10 },
     });
-    expect(res.config?.agents?.list?.[2]?.memory?.search).toBeUndefined();
+    expect(res.config?.agents?.entries?.retired?.memory?.search).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

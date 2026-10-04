@@ -122,11 +122,11 @@ function extractKimiMessageText(message: KimiMessage | undefined): string | unde
   return reasoning || undefined;
 }
 
-function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>): void {
-  const searchResults = data.search_results ?? [];
-  if (!Array.isArray(searchResults)) {
-    throwMalformedKimiResponse();
-  }
+function collectKimiCitations(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+  toolCalls: KimiToolCall[],
+  citations: Set<string>,
+): void {
   for (const entry of searchResults) {
     const url = isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : "";
     if (url) {
@@ -134,16 +134,6 @@ function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>):
     }
   }
 
-  const choices = data.choices ?? [];
-  if (!Array.isArray(choices)) {
-    throwMalformedKimiResponse();
-  }
-  const firstChoice = choices[0];
-  const message = firstChoice && isRecord(firstChoice.message) ? firstChoice.message : undefined;
-  const toolCalls = message?.tool_calls ?? [];
-  if (!Array.isArray(toolCalls)) {
-    throwMalformedKimiResponse();
-  }
   for (const toolCall of toolCalls) {
     if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
       continue;
@@ -173,11 +163,9 @@ function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>):
   }
 }
 
-function hasKimiSearchResults(data: KimiSearchResponse): boolean {
-  const searchResults = data.search_results ?? [];
-  if (!Array.isArray(searchResults)) {
-    throwMalformedKimiResponse();
-  }
+function hasKimiSearchResults(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+): boolean {
   return searchResults.some(
     (entry) =>
       isRecord(entry) &&
@@ -242,72 +230,58 @@ async function runKimiSearch(params: {
         if (!Array.isArray(data.choices)) {
           throwMalformedKimiResponse();
         }
-        if (hasKimiSearchResults(data)) {
-          hasGroundingEvidence = true;
+        const searchResults = data.search_results ?? [];
+        if (!Array.isArray(searchResults)) {
+          throwMalformedKimiResponse();
         }
-        collectKimiCitations(data, collectedCitations);
-        if (collectedCitations.size > 0) {
-          hasGroundingEvidence = true;
-        }
-        const choice = data.choices?.[0];
+        const choice = data.choices[0];
         if (!isRecord(choice) || !isRecord(choice.message)) {
           throwMalformedKimiResponse();
         }
-        const message = choice?.message;
-        const text = extractKimiMessageText(message);
-        const toolCalls = message?.tool_calls ?? [];
+        const message = choice.message;
+        const toolCalls = message.tool_calls ?? [];
         if (!Array.isArray(toolCalls)) {
           throwMalformedKimiResponse();
         }
+        collectKimiCitations(searchResults, toolCalls, collectedCitations);
+        hasGroundingEvidence ||= hasKimiSearchResults(searchResults) || collectedCitations.size > 0;
 
-        if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          if (!text) {
-            throwMalformedKimiResponse();
-          }
-          return {
-            done: true,
-            content: text,
-            citations: [...collectedCitations],
-          };
-        }
-
-        messages.push({
-          role: "assistant",
-          content: message?.content ?? "",
-          ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-          tool_calls: toolCalls,
-        });
-
-        let pushed = false;
-        for (const toolCall of toolCalls) {
-          const toolCallId = toolCall.id?.trim();
-          const toolCallName = toolCall.function?.name?.trim();
-          const toolContent = extractKimiToolResultContent(toolCall);
-          if (!toolCallId || !toolCallName || !toolContent) {
-            continue;
-          }
-          if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
-            hasGroundingEvidence = true;
-          }
-          pushed = true;
+        const text = extractKimiMessageText(message);
+        if (choice.finish_reason === "tool_calls" && toolCalls.length > 0) {
           messages.push({
-            role: "tool",
-            tool_call_id: toolCallId,
-            name: toolCallName,
-            content: toolContent,
+            role: "assistant",
+            content: message.content ?? "",
+            ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+            tool_calls: toolCalls,
           });
-        }
-        if (!pushed) {
-          if (!text) {
-            throwMalformedKimiResponse();
+
+          let pushed = false;
+          for (const toolCall of toolCalls) {
+            const toolCallId = toolCall.id?.trim();
+            const toolCallName = toolCall.function?.name?.trim();
+            const toolContent = extractKimiToolResultContent(toolCall);
+            if (!toolCallId || !toolCallName || !toolContent) {
+              continue;
+            }
+            if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
+              hasGroundingEvidence = true;
+            }
+            pushed = true;
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCallId,
+              name: toolCallName,
+              content: toolContent,
+            });
           }
-          return {
-            done: true,
-            content: text,
-            citations: [...collectedCitations],
-          };
+          if (pushed) {
+            return { done: false };
+          }
         }
-        return { done: false };
+        if (!text) {
+          throwMalformedKimiResponse();
+        }
+        return { done: true, content: text, citations: [...collectedCitations] };
       },
     );
 

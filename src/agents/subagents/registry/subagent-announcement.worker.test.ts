@@ -189,6 +189,17 @@ it.each(["not-committed", "unknown", "successor"] as const)(
   async (change) => {
     const run = await registerCompletion(`cleanup-start-${change}`);
     const entry = subagentRuns.get(run.runId)!;
+    const unreadableReceiptFailure = {
+      name: "AggregateError",
+      message: "Failed to settle subagent cleanup roots",
+      errors: [
+        {
+          name: "SubagentRegistryCommitReceiptError",
+          outcome: "committed",
+          cause: { code: "outcome-unknown", message: "Committed registry receipt is unreadable" },
+        },
+      ],
+    };
     const ready = createDeferredCore();
     const release = createDeferredCore();
     let intercepted = false;
@@ -276,7 +287,11 @@ it.each(["not-committed", "unknown", "successor"] as const)(
       }
       release.resolve();
       await registration;
-      await fixture.settle();
+      if (change === "unknown") {
+        await expect(fixture.settle()).rejects.toMatchObject(unreadableReceiptFailure);
+      } else {
+        await fixture.settle();
+      }
       if (change !== "successor") {
         expect(fixture.wake).not.toHaveBeenCalled();
         expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBeUndefined();
@@ -299,8 +314,10 @@ it.each(["not-committed", "unknown", "successor"] as const)(
         expect(persisted.cleanupHandled).toBe(false);
         expect(persisted.execution).toEqual(before?.execution);
         expect(persisted.completion).toEqual(before?.completion);
+        const nativeCalls = worker.mock.calls.length;
         resumeSubagentRun(run.runId);
-        await fixture.settle();
+        await expect(fixture.settle()).rejects.toMatchObject(unreadableReceiptFailure);
+        expect(worker).toHaveBeenCalledTimes(nativeCalls);
         expect(fixture.wake).not.toHaveBeenCalled();
       } else {
         expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(

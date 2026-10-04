@@ -23,9 +23,9 @@ import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   approveDevicePairing,
@@ -41,7 +41,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
-import { readSystemInfo } from "../../lib/system-info.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -51,6 +51,8 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
 import { renderDevices } from "./view.ts";
+
+registerDevicesEnglish();
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
@@ -378,12 +380,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private get canLoadSystemInfo(): boolean {
     const snapshot = this.gateway.snapshot;
-    return (
-      this.isConnected &&
-      snapshot?.phase === "connected" &&
-      !this.systemInfoUnavailable &&
-      isGatewayMethodAdvertised(snapshot, "system.info") === true
-    );
+    return this.isConnected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
   private get canLoadDesktopEnvironments(): boolean {

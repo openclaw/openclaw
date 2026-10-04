@@ -27,10 +27,6 @@ import type {
   ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import type { Static, TSchema } from "typebox";
-import type {
-  OAuthCredentials,
-  OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
   AgentMessage,
@@ -49,7 +45,7 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.js";
 import type { KeybindingsManager } from "../keybindings.js";
 import type { CustomMessage } from "../messages.js";
 import type { ModelRegistry } from "../model-registry.js";
-import type { ProviderConfigBase, ProviderModelConfig } from "../provider-config.js";
+import type { ProviderConfig } from "../provider-config.js";
 import type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -59,7 +55,7 @@ import type {
 } from "../session-manager.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import type { BashOperations } from "../tools/bash-operations.js";
 import type {
   BashToolDetails,
@@ -77,6 +73,7 @@ import type {
   WriteToolInput,
 } from "../tools/tool-contracts.js";
 
+export type { ProviderConfig, OAuthLoginCallbacks } from "../provider-config.js";
 export type {
   OAuthAuthInfo,
   OAuthCredentials,
@@ -84,8 +81,6 @@ export type {
   OAuthSelectOption,
   OAuthSelectPrompt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
-
-export interface OAuthLoginCallbacks extends ProviderOAuthLoginCallbacks {}
 
 // UI Context
 
@@ -1191,19 +1186,28 @@ export interface ExtensionAPI {
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
-  /** Append a custom entry to the session for state persistence (not sent to LLM). */
+  /** @deprecated Use appendEntryAsync; removed at the next Plugin SDK major. */
   appendEntry(customType: string, data?: unknown): void;
+
+  /** Persist a custom entry and return its id after the worker commits. */
+  appendEntryAsync(customType: string, data?: unknown): Promise<string>;
 
   // Session Metadata
 
-  /** Set the session display name (shown in session selector). */
+  /** @deprecated Use setSessionNameAsync; removed at the next Plugin SDK major. */
   setSessionName(name: string): void;
+
+  /** Set the display name and publish the change after the worker commits. */
+  setSessionNameAsync(name: string): Promise<void>;
 
   /** Get the current session name, if set. */
   getSessionName(): string | undefined;
 
-  /** Set or clear a label on an entry. Labels are user-defined markers for bookmarking/navigation. */
+  /** @deprecated Use setLabelAsync; removed at the next Plugin SDK major. */
   setLabel(entryId: string, label: string | undefined): void;
+
+  /** Set or clear an entry label after the worker commits. */
+  setLabelAsync(entryId: string, label: string | undefined): Promise<void>;
 
   /** Execute a shell command. */
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
@@ -1304,27 +1308,6 @@ export interface ExtensionAPI {
   events: EventBus;
 }
 
-// Provider Registration Types
-
-/** Configuration for registering a provider via api.registerProvider(). */
-export interface ProviderConfig extends ProviderConfigBase {
-  /** Models to register. If provided, replaces all existing models for this provider. */
-  models?: ProviderModelConfig[];
-  /** OAuth provider for /login support. The `id` is set automatically from the provider name. */
-  oauth?: {
-    /** Display name for the provider in login UI. */
-    name: string;
-    /** Run the login flow, return credentials to persist. */
-    login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-    /** Refresh expired credentials, return updated credentials to persist. */
-    refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-    /** Convert credentials to API key string for the provider. */
-    getApiKey(credentials: OAuthCredentials): string;
-    /** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
-    modifyModels?(models: Model[], credentials: OAuthCredentials): Model[];
-  };
-}
-
 /** Extension factory function type. Supports both sync and async initialization. */
 export type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
 
@@ -1410,6 +1393,12 @@ export interface ExtensionActions extends Pick<
   refreshTools: RefreshToolsHandler;
 }
 
+/** Host actions with required worker-backed persistence capabilities. */
+export interface ExtensionActionsV2
+  extends
+    ExtensionActions,
+    Pick<ExtensionAPI, "appendEntryAsync" | "setSessionNameAsync" | "setLabelAsync"> {}
+
 /** Actions for the live extension context, supplied by each runtime mode. */
 export interface ExtensionContextActions extends Pick<
   ExtensionContext,
@@ -1435,7 +1424,16 @@ export interface ExtensionCommandContextActions extends Pick<
  * Full runtime = state + actions.
  * Created by loader with throwing action stubs, completed by runner.initialize().
  */
-export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionActions {}
+export interface ExtensionRuntime
+  extends
+    ExtensionRuntimeState,
+    ExtensionActions,
+    Partial<
+      Pick<ExtensionActionsV2, "appendEntryAsync" | "setSessionNameAsync" | "setLabelAsync">
+    > {}
+
+/** Host runtime with required worker-backed persistence capabilities. */
+export interface ExtensionRuntimeV2 extends ExtensionRuntimeState, ExtensionActionsV2 {}
 
 /** Loaded extension with all registered items. */
 export interface Extension {

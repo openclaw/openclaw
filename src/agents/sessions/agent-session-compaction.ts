@@ -2,6 +2,7 @@ import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
@@ -413,7 +414,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       );
     }
 
-    const committed = await withSessionManagerWrite(this.sessionManager, () => {
+    const committed = await withSessionManagerWrite(this.sessionManager, async () => {
       const currentController = isManual
         ? this.compactionAbortController
         : this.autoCompactionAbortController;
@@ -437,18 +438,36 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             pendingTokens: 0,
           })
         : estimateContextTokens(replacementMessages).tokens;
-      const entryId = this.sessionManager.appendCompaction(
-        completedCompaction.summary,
-        completedCompaction.firstKeptEntryId,
-        completedCompaction.tokensBefore,
-        completedCompaction.details,
-        fromExtension,
-        { itemId: options.itemId },
-        tokensAfter,
-      );
+      const assertCommitCurrent = () => {
+        options.signal.throwIfAborted();
+        const controller = isManual
+          ? this.compactionAbortController
+          : this.autoCompactionAbortController;
+        if (
+          controller?.signal !== options.signal ||
+          this.assertContextReplacementActive !== assertContextReplacementActive ||
+          this.onContextReplaced !== onContextReplaced
+        ) {
+          throw new Error("Compaction context changed before transcript commit");
+        }
+        assertContextReplacementActive?.();
+      };
+      const append = () =>
+        this.sessionManager.appendCompactionAsync(
+          completedCompaction.summary,
+          completedCompaction.firstKeptEntryId,
+          completedCompaction.tokensBefore,
+          completedCompaction.details,
+          fromExtension,
+          { itemId: options.itemId },
+          tokensAfter,
+        );
+      const target = this.sessionManager.getSessionTarget();
+      const entryId = await (target
+        ? withSessionTranscriptWriteAssertion(target, assertCommitCurrent, append)
+        : append());
       const sessionContext = this.sessionManager.buildSessionContext();
-      // Compaction replaces the prefix; sanitize replay and publish accounting
-      // before any await can let cancellation hide the committed replacement.
+      // Publish the committed replacement and accounting together after its receipt.
       this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
       onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
       return { entryId, tokensAfter };

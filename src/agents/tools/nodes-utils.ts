@@ -1,6 +1,6 @@
-// Gateway node inventory and explicit/default target resolution.
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
@@ -40,7 +40,6 @@ function compareDefaultNodeOrder(
   );
 }
 
-/** Selects the implicit node target when a tool call omits an explicit node query. */
 export function selectDefaultNodeFromList(
   nodes: NodeListNode[],
   options: DefaultNodeSelectionOptions = {},
@@ -90,16 +89,35 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists the Gateway node inventory. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  const res = await callGatewayTool("node.list", opts, {}, { signal });
-  return parseNodeList(res);
+  // In-process calls share this build; every transported call replaces this from hello.
+  let supportsContext = true;
+  const res = await callGatewayTool(
+    "node.list",
+    opts,
+    {},
+    {
+      signal,
+      onHelloOk: (hello) => {
+        supportsContext =
+          hello.features.capabilities?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY) === true;
+      },
+    },
+  );
+  // Older Gateways expose unknown node caps but strip the new field from system.run.
+  const nodes = parseNodeList(res);
+  if (!supportsContext) {
+    // Only transport can lack support; these records were decoded for this RPC.
+    for (const node of nodes) {
+      node.caps = node.caps?.filter((cap) => cap !== SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY);
+    }
+  }
+  return nodes;
 }
 
-/** Resolves a node id from an already-loaded node list using shared node matching rules. */
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
@@ -113,26 +131,15 @@ export function resolveNodeIdFromList(
   });
 }
 
-/** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveAgentNodeId(
-  opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
-) {
-  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
+export async function resolveAgentNodeId(opts: GatewayCallOptions, query: string) {
+  return (await resolveAgentNode(opts, query)).nodeId;
 }
 
-/** Loads nodes from the Gateway and returns the requested or default node record. */
 export async function resolveAgentNode(
   opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
+  query: string,
 ): Promise<NodeListNode> {
-  const nodes = await listNodes(opts);
-  return resolveNodeFromNodeList(nodes, query, {
-    allowDefault,
-    pickDefaultNode,
-  });
+  return resolveNodeFromNodeList(await listNodes(opts), query);
 }
 
 export async function invokeAgentNodeCommand(params: {

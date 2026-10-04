@@ -41,7 +41,7 @@ import {
   loadSetupChannelPluginFromManifestRecord,
   type ChannelSetupPluginLoadFailure,
 } from "./setup-entry-loader.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;

@@ -24,7 +24,7 @@ let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").read
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main" }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 vi.mock("./config.js", () => {

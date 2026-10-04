@@ -12,6 +12,31 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("incomplete-turn terminal metadata", () => {
+  it("accepts a completed speech-only answer with provider reasoning", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       provider: "anthropic",
@@ -181,5 +206,44 @@ describe("incomplete-turn terminal metadata", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("tool-authored source replies", () => {
+  // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
+  // tool-use stop with no post-tool assistant text is not an incomplete turn.
+  it("treats a final tool-authored source reply as a complete tool-use turn", () => {
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt: makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "order_status", meta: "orderId=SO1" }],
+          // A live run starts with no source reply delivered yet.
+          sourceReplyDeliveryState: "missing",
+          messagingToolSourceReplyPayloads: [
+            {
+              text: "Pedido SO1 creado.",
+              sourceReplyFinal: true,
+              toolAuthored: true,
+            },
+          ],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "order_status",
+                arguments: { orderId: "SO1" },
+              },
+            ],
+          }),
+        }),
+      }),
+    ).toBeNull();
   });
 });

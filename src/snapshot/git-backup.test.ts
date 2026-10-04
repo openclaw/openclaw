@@ -30,6 +30,7 @@ import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 import {
   createAgentFixture,
+  createCatalogFixture,
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
@@ -837,58 +838,7 @@ describe("Git-backed SQLite snapshots", () => {
       const root = await tempRoot();
       const source = path.join(root, "source.sqlite");
       const dump = path.join(root, "dump");
-      createAgentFixture(source, "main");
-      const catalog = {
-        generatedBy: "openclaw-plugin-model-catalog-v1",
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            apiKey: "provider-secret",
-            headers: { Authorization: "Bearer header-secret" },
-            models: [{ id: "model", apiKey: "model-secret", headers: { "X-Key": "model-key" } }],
-          },
-        },
-      };
-      const malformedHeaders = {
-        generatedBy: "openclaw-plugin-model-catalog-v1",
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            apiKey: { value: "provider-secret" },
-            headers: ["provider-header-secret"],
-            models: [
-              { id: "array-header", headers: { Authorization: ["model-header-secret"] } },
-              { id: "object-header", headers: { Authorization: { token: "model-secret" } } },
-              { id: "string-headers", headers: "model-secret" },
-            ],
-          },
-        },
-      };
-      const unusableCatalogs = [
-        '{"apiKey":"malformed-secret"',
-        JSON.stringify({ ...catalog, providers: { fixture: ["provider-secret"] } }),
-        JSON.stringify({
-          ...catalog,
-          providers: { fixture: { models: { Authorization: "model-secret" } } },
-        }),
-        JSON.stringify({ ...catalog, providers: { fixture: { models: ["model-secret"] } } }),
-      ];
-      const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
-      const database = new DatabaseSync(source);
-      try {
-        database.exec("CREATE TABLE cache_entries (scope TEXT, key TEXT, value_json TEXT)");
-        const insert = database.prepare("INSERT INTO cache_entries VALUES (?, ?, ?)");
-        for (const scope of scopes) {
-          insert.run(scope, "fixture", JSON.stringify(catalog));
-          insert.run(scope, "malformed-headers", JSON.stringify(malformedHeaders));
-          for (const [index, contents] of unusableCatalogs.entries()) {
-            insert.run(scope, `broken-${index}`, contents);
-          }
-        }
-        insert.run("unrelated-cache", "keep", '{"value":"retained"}');
-      } finally {
-        database.close();
-      }
+      const { catalog, malformedHeaders, unusableCatalogs, scopes } = createCatalogFixture(source);
       const manifest = await dumpGitBackupDatabase({
         snapshotPath: source,
         outputPath: dump,

@@ -45,6 +45,11 @@ import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/ex
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import {
+  expectRecordFields,
+  findMockCall,
+  mockCallArg,
+} from "./compact.hooks.assertions.test-support.js";
+import {
   expectedNativeCompactionOptions,
   useCompactHooksSessionFixture,
 } from "./compact.hooks.fixture.test-support.js";
@@ -53,7 +58,7 @@ import {
   attemptServerEndpointCompactionMock,
   applyExtraParamsToAgentMock,
   buildAgentRuntimePlanMock,
-  buildEmbeddedSystemPromptMock,
+  buildConfiguredAgentSystemPromptMock,
   resolveBootstrapContextForRunMock,
   contextEngineCompactMock,
   createAgentSessionMock,
@@ -63,7 +68,6 @@ import {
   estimateTokensMock,
   getApiKeyForModelMock,
   getHistoryLimitFromSessionKeyMock,
-  getMemorySearchManagerMock,
   hookRunner,
   limitHistoryTurnsMock,
   listRegisteredPluginAgentPromptGuidanceMock,
@@ -77,7 +81,6 @@ import {
   resolveContextEngineMock,
   resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamMock,
-  resolveMemorySearchConfigMock,
   resolveModelAsyncMock,
   resolveModelMock,
   resolveSandboxContextMock,
@@ -94,10 +97,22 @@ import {
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import {
+  registerDirectProviderRefreshTests,
+  registerQueuedProviderRefreshTest,
+} from "./compact.hooks.memory-refresh.test-support.js";
+import {
+  getMemorySearchManagerMock,
+  resolveMemorySearchConfigMock,
+} from "./compact.hooks.memory.test-support.js";
+import {
   createCompactHooksAuthStorage,
   createCompactHooksPreparedModelRuntime,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
+import {
+  mockPendingContextEngineCompaction,
+  mockPendingNativeCompaction,
+} from "./compact.hooks.pending.test-support.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -132,61 +147,6 @@ type PostCompactionSyncParams = {
   sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
-function mockPendingContextEngineCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    release: createDeferred(),
-  };
-  contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    await pending.release.promise;
-    return {
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-    };
-  });
-  return pending;
-}
-
-function mockPendingNativeCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
-  };
-  maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    return await pending.terminal.promise;
-  });
-  return pending;
-}
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -196,14 +156,6 @@ function plannedCompactionPluginSelections(
     "admitted compaction selection recipe",
   );
   return derive({ config, metadataSnapshot });
-}
-
-function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]) => boolean) {
-  const call = mock.mock.calls.find((entry) => predicate(entry));
-  if (!call) {
-    throw new Error("Expected matching mock call");
-  }
-  return call;
 }
 
 function mockResolvedModel(params?: {
@@ -420,11 +372,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         execute: vi.fn(),
       })),
     );
-    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
-        toolNames: params.tools.map((tool) => tool.name),
+        toolNames: params.tools?.map((tool) => tool.name),
       }),
     );
     let endpointSystemPrompt: string | undefined;
@@ -707,7 +659,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
         }),
       );
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeInfo: expect.objectContaining({
             activeProcessSessions: [expect.objectContaining({ sessionId: owned.id })],
@@ -735,7 +687,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
         surface: promptSurface,
       });
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           promptMode,
           promptSurface,
@@ -770,9 +722,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           : [file],
         contextFiles: [{ path: file.path, content: file.content }],
       });
-      const actual =
-        await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
-      buildEmbeddedSystemPromptMock.mockImplementation(actual.buildEmbeddedSystemPrompt);
+      const actual = await vi.importActual<typeof import("../system-prompt-config.js")>(
+        "../system-prompt-config.js",
+      );
+      buildConfiguredAgentSystemPromptMock.mockImplementation(
+        actual.buildConfiguredAgentSystemPrompt,
+      );
       await compactEmbeddedAgentSessionDirect(directCompactionArgs());
       const created = (await createAgentSessionMock.mock.results[0]?.value) as {
         session: { agent: { state: { systemPrompt?: string } }; setBaseSystemPrompt: Mock };
@@ -1100,7 +1055,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     it("returns a structured automatic retention skip without reporting compaction failure", async () => {
       const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
-      const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
+      const { createAgentSession } = await import("../sessions/sdk.js");
       const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
       const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
       const { attachCompactionAccountingRecorder } =
@@ -1129,7 +1084,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         streamFn: stream,
         strategy: "session-custom",
       });
-      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
         if (!model) {
           throw new Error("Expected prepared compaction model");
         }
@@ -1174,7 +1129,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       "keeps model fallback boundaries for %s",
       async (scenario, errorMessage, outcome) => {
         const [
-          { createAgentSessionForEmbeddedRunner },
+          { createAgentSession },
           { guardSessionManager },
           { resolveEmbeddedAgentStream },
           { buildEmbeddedExtensionFactories },
@@ -1258,26 +1213,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           });
           return [];
         });
-        vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(
-          async ({ model, thinkingLevel }) => {
-            if (!model) {
-              throw new Error("Expected the prepared compaction model");
-            }
-            const created = await createTestSession({
-              model: {
-                ...testModel,
-                ...model,
-                reasoning: outcome === "thinking",
-                maxTokens: 1_024,
-              },
-              sessionManager,
-              settingsManager,
-              resourceLoader: createResourceLoader(extension.handlers),
-            });
-            await created.session.setThinkingLevel(thinkingLevel ?? "off");
-            return created;
-          },
-        );
+        vi.mocked(createAgentSession).mockImplementation(async ({ model, thinkingLevel }) => {
+          if (!model) {
+            throw new Error("Expected the prepared compaction model");
+          }
+          const created = await createTestSession({
+            model: {
+              ...testModel,
+              ...model,
+              reasoning: outcome === "thinking",
+              maxTokens: 1_024,
+            },
+            sessionManager,
+            settingsManager,
+            resourceLoader: createResourceLoader(extension.handlers),
+          });
+          await created.session.setThinkingLevel(thinkingLevel ?? "off");
+          return created;
+        });
         const config = {
           agents: {
             defaults: {
@@ -1651,6 +1604,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(settled).toBe(true);
   });
 
+  registerDirectProviderRefreshTests({
+    compactTesting: () => compactTesting,
+    compactionConfig,
+    sessionKey: TEST_SESSION_KEY,
+    sessionFile: () => TEST_SESSION_FILE,
+  });
   it("fires post-compaction memory sync without awaiting it in async mode", async () => {
     const sync = vi.fn<PostCompactionSync>(async () => {});
     const managerRequested = createDeferred();
@@ -1944,6 +1903,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
     mockResolvedModel();
     mockQueuedRouteAwareModel();
+  });
+
+  registerQueuedProviderRefreshTest({
+    compact: () => compactEmbeddedAgentSession,
+    wrappedArgs: wrappedCompactionArgs,
+    compactionConfig,
+    sessionKey: TEST_SESSION_KEY,
+    sessionId: () => TEST_SESSION_ID,
   });
 
   it.each([
@@ -2341,23 +2308,19 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("does not impose a second aggregate timeout on delegated native compaction", async () => {
-    const { markRuntimeCompactionDelegate } =
+    const { compactionWatchdogResets } =
       await import("../../context-engine/compaction-watchdog.js");
     const started = createDeferred<() => void>();
     const terminal = createDeferred<Awaited<ReturnType<ContextEngine["compact"]>>>();
-    // Mark only this invocation's delegate; shared mockReset does not clear WeakSet identity.
-    const compact = markRuntimeCompactionDelegate(
-      vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
-        const resetTimeout = runtimeContext?.compactionTimeoutReset;
-        if (typeof resetTimeout !== "function") {
-          throw new Error("Delegated compaction must receive its progress reset callback");
-        }
-        started.resolve(() => {
-          resetTimeout();
-        });
-        return await terminal.promise;
-      }),
-    );
+    // Stand in for the runtime delegate: it finds the reset through the host signal.
+    const compact = vi.fn<ContextEngine["compact"]>(async ({ abortSignal }) => {
+      const resetTimeout = abortSignal && compactionWatchdogResets.get(abortSignal);
+      if (!resetTimeout) {
+        throw new Error("Delegated compaction must receive its progress reset callback");
+      }
+      started.resolve(resetTimeout);
+      return await terminal.promise;
+    });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact,

@@ -20,10 +20,10 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
-export function removeTrailingMidTurnPrecheckAssistantError(params: {
+export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   sessionManager: AttemptSessionManager;
-}): void {
+}): Promise<void> {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
   const preserveTrailing = (entry: ReturnType<AttemptSessionManager["getEntries"]>[number]) =>
@@ -39,12 +39,12 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
     persistedTail?.type === "message" && isMidTurnPrecheckAssistantError(persistedTail.message);
   const removedPersistedError =
     hasPersistedError &&
-    params.sessionManager.removeTrailingEntries(
+    (await params.sessionManager.removeTrailingEntriesAsync(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
       {
         preserveTrailing,
       },
-    ) > 0;
+    )) > 0;
   if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
@@ -55,16 +55,16 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
   }
 }
 
-export function normalizeCompactionRecoveryTranscriptTail(params: {
+export async function normalizeCompactionRecoveryTranscriptTail(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   sessionManager: AttemptSessionManager;
-}): number {
+}): Promise<number> {
   const messages = params.activeSession.agent.state.messages;
   const continuableMessages = trimToContinuableTail(messages) ?? [];
 
   // This is the single recovery owner for compaction exits that hand control
   // back to a continuation. AgentCore rejects assistant tails before providers run.
-  const removedEntries = params.sessionManager.removeTrailingEntries(
+  const removedEntries = await params.sessionManager.removeTrailingEntriesAsync(
     (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
     {
       preserveTrailing: (entry) =>

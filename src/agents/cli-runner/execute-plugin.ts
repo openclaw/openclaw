@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { raceWithTimeout } from "@openclaw/retry";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -90,6 +91,9 @@ function createPluginToolPermissionHandler(params: {
 
     // Provider schemas are not policy schemas: match canonical names and file operands.
     const canonicalToolName = normalizeCliToolName(toolName);
+    if (params.context.hostOwnedTools?.includes(canonicalToolName)) {
+      return denyTool(`Use OpenClaw ${canonicalToolName}; its native equivalent is unavailable.`);
+    }
     const nativeFileTool =
       ["read", "write", "edit"].includes(canonicalToolName) &&
       Object.hasOwn(request.toolInput, "file_path");
@@ -394,23 +398,18 @@ async function closePluginIterator(
   if (!iterator?.return) {
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       iterator.return(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("CLI plugin runtime did not close after its run ended.")),
-          PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
-        );
-        timeout.unref();
-      }),
-    ]);
+      PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
+      () => {
+        throw new Error("CLI plugin runtime did not close after its run ended.");
+      },
+      { ref: false },
+    );
   } catch (error) {
     recordAgentCleanupFailure();
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

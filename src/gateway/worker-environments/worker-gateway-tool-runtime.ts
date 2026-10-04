@@ -7,9 +7,13 @@ import {
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type {
   WorkerGatewayToolRuntime,
@@ -27,6 +31,7 @@ export function createWorkerGatewayToolRuntime(params: {
   prepare(identity: WorkerConnectionIdentity): Promise<{
     tools: AnyAgentTool[];
     policy: WorkerToolSurface["policy"];
+    presentation: WorkerToolSurface["presentation"];
   }>;
 }): WorkerGatewayToolRuntime {
   const generation = randomUUID();
@@ -38,7 +43,9 @@ export function createWorkerGatewayToolRuntime(params: {
     callSignal?.throwIfAborted();
   };
   let prepared: Promise<WorkerToolSurface> | undefined;
+  let modelTools: Awaited<ReturnType<WorkerGatewayToolRuntime["getPromptProjection"]>> | undefined;
   let issuedTools: Map<string, AnyAgentTool> | undefined;
+  let preparedSurface: WorkerToolSurface | undefined;
   const calls = new Map<
     string,
     {
@@ -51,40 +58,112 @@ export function createWorkerGatewayToolRuntime(params: {
   >();
   let sequential: Promise<unknown> = Promise.resolve();
   return {
+    applyPromptToolsAllow(toolsAllow) {
+      assertCurrent();
+      const handles = issuedTools;
+      if (!handles || !preparedSurface) {
+        throw new Error("Worker tools have not been prepared");
+      }
+      if (toolsAllow === undefined) {
+        return [...handles.values()].map((tool) => tool.name);
+      }
+      const allowed = new Set(
+        applyEmbeddedAttemptToolsAllow([...handles.values()], toolsAllow).map((tool) => tool.name),
+      );
+      for (const [id, tool] of handles) {
+        if (!allowed.has(tool.name)) {
+          handles.delete(id);
+        }
+      }
+      preparedSurface.tools = preparedSurface.tools.filter((tool) => handles.has(tool.id));
+      modelTools = undefined;
+      return [...allowed];
+    },
     async getSurface(identity) {
       assertCurrent();
-      const surface = await (prepared ??= params.prepare(identity).then(({ tools, policy }) => {
-        assertCurrent();
-        const handles = new Map<string, AnyAgentTool>();
-        const catalog = {
-          generation,
-          policy,
-          tools: tools.map((tool, index) => {
-            const location = getAgentToolExecutionLocation(tool);
-            if (!location) {
-              throw new Error("Worker tool has no execution owner");
-            }
-            const id = String(index);
-            handles.set(id, tool);
-            return {
-              id,
-              execution: location.kind,
-              ...(location.kind === "gateway" && location.replay ? { replay: true as const } : {}),
-              ...(location.kind === "gateway" && location.timeout
-                ? { timeout: location.timeout }
-                : {}),
-              definition: projectAgentToolDefinition(tool),
-            };
-          }),
-        };
-        if (!Value.Check(WorkerToolSurfaceSchema, catalog)) {
-          throw new Error("Worker tool surface is invalid");
-        }
-        issuedTools = handles;
-        return catalog;
-      }));
+      const surface = await (prepared ??= params
+        .prepare(identity)
+        .then(({ tools, policy, presentation }) => {
+          assertCurrent();
+          const handles = new Map<string, AnyAgentTool>();
+          const catalog = {
+            generation,
+            policy,
+            presentation,
+            tools: tools.map((tool, index) => {
+              const location = getAgentToolExecutionLocation(tool);
+              const plugin = getPluginToolMeta(tool);
+              const id = String(index);
+              handles.set(id, tool);
+              return {
+                id,
+                execution: location.kind,
+                plugin: plugin
+                  ? Value.Clean(
+                      WorkerToolSurfaceSchema.properties.tools.items.properties.plugin,
+                      structuredClone(plugin),
+                    )
+                  : undefined,
+                ...(location.kind === "gateway" && location.replay
+                  ? { replay: true as const }
+                  : {}),
+                ...(location.kind === "gateway" && location.timeout
+                  ? { timeout: location.timeout }
+                  : {}),
+                definition: {
+                  ...projectAgentToolDefinition(tool),
+                  outputSchema: tool.outputSchema,
+                  catalogMode: tool.catalogMode,
+                },
+              };
+            }),
+          };
+          if (!Value.Check(WorkerToolSurfaceSchema, catalog)) {
+            throw new Error("Worker tool surface is invalid");
+          }
+          issuedTools = handles;
+          preparedSurface = catalog;
+          return catalog;
+        }));
       assertCurrent();
       return surface;
+    },
+    async getPromptProjection(identity) {
+      const surface = await this.getSurface(identity);
+      assertCurrent();
+      if (!modelTools) {
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          presentation: surface.presentation,
+          supportsDeferredToolCalls: false,
+          modelToolsEnabled: surface.tools.length > 0,
+          contextTokenBudget: surface.policy.modelContextWindowTokens,
+        });
+        try {
+          const execute: AnyAgentTool["execute"] = () =>
+            Promise.reject(new Error("Schema projection cannot execute tools"));
+          const tools = surface.tools.map(({ definition, plugin }) => {
+            const tool: AnyAgentTool = Object.assign({ execute }, definition);
+            if (plugin) {
+              setPluginToolMeta(tool, plugin);
+            }
+            return tool;
+          });
+          const projected = runtime
+            .compactTools(tools, { prepared: { preserveToolNames: [] } })
+            .promptToolPolicy.apply();
+          modelTools = {
+            tools: projected.tools.map(({ name, description, parameters }) => ({
+              name,
+              description,
+              parameters,
+            })),
+            toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+          };
+        } finally {
+          runtime.cleanup();
+        }
+      }
+      return modelTools;
     },
     async invoke(_identity, request, sink, connectionSignal) {
       // Admission issues handles; cancellation must see the call before its first yield.
@@ -108,7 +187,7 @@ export function createWorkerGatewayToolRuntime(params: {
         assertCurrent(prior.signal);
         return result;
       }
-      if (calls.size >= 4) {
+      if (calls.size >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         throw new Error("Too many worker tool operations are already in progress");
       }
       const controller = new AbortController();
@@ -160,16 +239,13 @@ export function createWorkerGatewayToolRuntime(params: {
       if (tool.executionMode !== "parallel") {
         sequential = result.catch(() => undefined);
       }
-      const call = { digest, controller, signal: callSignal, sinks, result };
-      calls.set(request.toolCallId, call);
+      calls.set(request.toolCallId, { digest, controller, signal: callSignal, sinks, result });
       try {
         const value = await result;
         assertCurrent(callSignal);
         return value;
       } finally {
-        if (calls.get(request.toolCallId) === call) {
-          calls.delete(request.toolCallId);
-        }
+        calls.delete(request.toolCallId);
       }
     },
     cancel(request) {

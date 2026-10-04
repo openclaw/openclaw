@@ -516,44 +516,30 @@ console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?
       }
     }));
 
-  it("falls back to a fresh capsule only after the bounded allocation wait expires", async () =>
-    withFixture(async (f) => {
-      const [warm] = await idleMirrors(f, [f.source]);
-      const unlock = holdDatabase(join(f.staging, "mirrors", ".allocation.lock"));
-      try {
-        const result = await f.program(
-          `const cap=prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',reuseMirror:true,syncPlan:{command:process.execPath,args:['-e','process.stdout.write(JSON.stringify({candidate:{files:1},topFiles:[{path:"source.txt"}]}))']}});
+  it.each(["fresh capsule", "contending allocator"] as const)(
+    "bounds the shared allocation wait for a %s",
+    async (mode) =>
+      withFixture(async (f) => {
+        const [warm] = await idleMirrors(f, [f.source]);
+        const capsule = mode === "fresh capsule";
+        const unlock = capsule
+          ? holdDatabase(join(f.staging, "mirrors", ".allocation.lock"))
+          : () => {};
+        try {
+          const result = capsule
+            ? await f.program(
+                `const cap=prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',reuseMirror:true,syncPlan:{command:process.execPath,args:['-e','process.stdout.write(JSON.stringify({candidate:{files:1},topFiles:[{path:"source.txt"}]}))']}});
 const receipt=JSON.parse(fs.readFileSync(join(cap.staging.root,'staging.json'),'utf8'));
 console.log(JSON.stringify({budgets,root:cap.staging.root,mirror:Boolean(receipt.mirror),source:fs.readFileSync(join(cap.directory,'source.txt'),'utf8')}));cap.cleanup();`,
-          `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;const budgets=[];
+                `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;const budgets=[];
 DatabaseSync.prototype.exec=function(sql){const match=/busy_timeout\\s*=\\s*(\\d+)/u.exec(sql);if(match&&Number(match[1])>0){budgets.push(Number(match[1]));sql=sql.replace(match[0],'busy_timeout=1');}return execute.call(this,sql);};`,
-          30_000,
-          "capsule",
-          true,
-        );
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          budgets: [120_000],
-          mirror: false,
-          source: "retained source\n",
-        });
-        expect(JSON.parse(result.stdout).root).not.toBe(warm!.root);
-        expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
-        expect(result.stderr).toContain(
-          "[crabbox] source mirror allocation is busy; using a fresh capsule",
-        );
-        expect(existsSync(warm!.root)).toBe(true);
-      } finally {
-        unlock();
-      }
-    }));
-
-  it("shares the allocation wait budget when a contender wins between SQLite statements", async () =>
-    withFixture(async (f) => {
-      const [warm] = await idleMirrors(f, [f.source]);
-      const result = await f.program(
-        `try{const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({allocated:Boolean(next),budgets,journalRetried}));next?.discard();}finally{execute.call(holder,'ROLLBACK');holder.close();}`,
-        `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;
+                30_000,
+                "capsule",
+                true,
+              )
+            : await f.program(
+                `try{const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({allocated:Boolean(next),budgets,journalRetried}));next?.discard();}finally{execute.call(holder,'ROLLBACK');holder.close();}`,
+                `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;
 const holder=new DatabaseSync(join(ctx.staging,'mirrors','.allocation.lock'),{timeout:0});
 execute.call(holder,'PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
 const budgets=[];let journalRetried=false;
@@ -569,105 +555,99 @@ DatabaseSync.prototype.exec=function(sql){
   }
   return execute.call(this,sql);
 };`,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const outcome = JSON.parse(result.stdout) as {
-        allocated: boolean;
-        budgets: number[];
-        journalRetried: boolean;
-      };
-      expect(outcome).toMatchObject({ allocated: false, journalRetried: true });
-      expect(outcome.budgets).toHaveLength(2);
-      expect(outcome.budgets[0]).toBe(120_000);
-      expect(outcome.budgets[1]).toBeGreaterThan(0);
-      expect(outcome.budgets[1]).toBeLessThan(outcome.budgets[0]!);
-      expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
-      expect(result.stderr).toContain(
-        "[crabbox] source mirror allocation is busy; using a fresh capsule",
-      );
-      expect(existsSync(warm!.root)).toBe(true);
-    }));
+              );
+          expect(result.status, result.stderr).toBe(0);
+          if (capsule) {
+            expect(JSON.parse(result.stdout)).toMatchObject({
+              budgets: [120_000],
+              mirror: false,
+              source: "retained source\n",
+            });
+            expect(JSON.parse(result.stdout).root).not.toBe(warm!.root);
+          } else {
+            const outcome = JSON.parse(result.stdout) as {
+              allocated: boolean;
+              budgets: number[];
+              journalRetried: boolean;
+            };
+            expect(outcome).toMatchObject({ allocated: false, journalRetried: true });
+            expect(outcome.budgets).toHaveLength(2);
+            expect(outcome.budgets[0]).toBe(120_000);
+            expect(outcome.budgets[1]).toBeGreaterThan(0);
+            expect(outcome.budgets[1]).toBeLessThan(outcome.budgets[0]!);
+          }
+          expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
+          expect(result.stderr).toContain(
+            "[crabbox] source mirror allocation is busy; using a fresh capsule",
+          );
+          expect(existsSync(warm!.root)).toBe(true);
+        } finally {
+          unlock();
+        }
+      }),
+  );
 
-  it("keeps other warm mirrors available while a slot's database digest is slow", async ({
-    signal,
-  }) =>
-    withFixture(async (f) => {
-      const other = join(f.root, "other-repository");
-      mkdirSync(other);
-      f.initialize(other);
-      const [slow, warm] = await idleMirrors(f, [f.source, other]);
-      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
-      try {
-        const pending = f.program(
-          "const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();",
-          blockingMirrorIo(
-            f.root,
-            `const open=fs.openSync,read=fs.readSync;let databaseFd;
+  it.for(["database digest", "eviction"] as const)(
+    "keeps another warm slot available while a reserved slot's %s is slow",
+    async (mode, { signal }) =>
+      withFixture(async (f) => {
+        const eviction = mode === "eviction";
+        const other = join(f.root, "other-repository");
+        const newcomer = join(f.root, "new-repository");
+        for (const sourceRepository of eviction ? [other, newcomer] : [other]) {
+          mkdirSync(sourceRepository);
+          f.initialize(sourceRepository);
+        }
+        const [slow, warm] = await idleMirrors(f, [f.source, other], eviction);
+        const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
+        try {
+          const pending = f.program(
+            eviction
+              ? `const next=createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});console.log(JSON.stringify({allocated:Boolean(next),reused:next?.reused}));next?.discard();`
+              : "const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();",
+            blockingMirrorIo(
+              f.root,
+              eviction
+                ? `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(slow!.root, "payload"))})blockedIo();return remove(path,...args);};`
+                : `const open=fs.openSync,read=fs.readSync;let databaseFd;
 fs.openSync=(path,...args)=>{const fd=open(path,...args);if(path===${JSON.stringify(join(slow!.root, "mirror.sqlite"))})databaseFd=fd;return fd;};
 fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();}return read(fd,...args);};`,
-          ),
-        );
-        await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
-        const concurrent = await f.program(
-          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
-        );
-        expect(concurrent.status, concurrent.stderr).toBe(0);
-        expect(JSON.parse(concurrent.stdout)).toEqual({ reused: true, root: warm!.root });
-        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
-        unlock();
-        const result = await pending;
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({ reused: true, root: slow!.root });
-      } finally {
-        unlock();
-      }
-    }));
-
-  it("reserves an eviction victim until disposal finishes without blocking another warm slot", async ({
-    signal,
-  }) =>
-    withFixture(async (f) => {
-      const other = join(f.root, "other-repository");
-      const newcomer = join(f.root, "new-repository");
-      for (const sourceRepository of [other, newcomer]) {
-        mkdirSync(sourceRepository);
-        f.initialize(sourceRepository);
-      }
-      const [victim, warm] = await idleMirrors(f, [f.source, other], true);
-      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
-      try {
-        const pending = f.program(
-          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});console.log(JSON.stringify({allocated:Boolean(next),reused:next?.reused}));next?.discard();`,
-          blockingMirrorIo(
-            f.root,
-            `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(victim!.root, "payload"))})blockedIo();return remove(path,...args);};`,
-          ),
-        );
-        await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
-        const concurrent = await f.program(
-          `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
-console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`,
-        );
-        expect(concurrent.status, concurrent.stderr).toBe(0);
-        expect(JSON.parse(concurrent.stdout)).toEqual({
-          victimAdopted: false,
-          reused: true,
-          root: warm!.root,
-        });
-        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
-        expect(existsSync(victim!.root)).toBe(true);
-        unlock();
-        const result = await pending;
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({ allocated: true, reused: false });
-        expect(existsSync(victim!.root)).toBe(false);
-        expect(
-          readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
-        ).toHaveLength(32);
-      } finally {
-        unlock();
-      }
-    }));
+            ),
+          );
+          await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
+          const concurrent = await f.program(
+            eviction
+              ? `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
+console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`
+              : `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
+          );
+          expect(concurrent.status, concurrent.stderr).toBe(0);
+          expect(JSON.parse(concurrent.stdout)).toEqual({
+            ...(eviction ? { victimAdopted: false } : {}),
+            reused: true,
+            root: warm!.root,
+          });
+          expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
+          if (eviction) {
+            expect(existsSync(slow!.root)).toBe(true);
+          }
+          unlock();
+          const result = await pending;
+          expect(result.status, result.stderr).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual(
+            eviction ? { allocated: true, reused: false } : { reused: true, root: slow!.root },
+          );
+          if (eviction) {
+            expect(existsSync(slow!.root)).toBe(false);
+            expect(
+              readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
+            ).toHaveLength(32);
+          }
+        } finally {
+          unlock();
+        }
+      }),
+  );
 
   it("records interrupted eviction for recovery and rejects changed disposal metadata", async () =>
     withFixture(async (f) => {

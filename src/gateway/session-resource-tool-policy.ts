@@ -36,12 +36,15 @@ export function resolveSessionResourceToolPolicy(params: {
     storePath?: string;
   }) => SessionEntry | undefined;
   toolName: string;
+  /** A thread-owned native App borrow supplies its current binding assertion. */
+  assertNativeRuntimeCurrent?: () => void;
 }) {
   const { config, current } = params;
   const entry = current.entry;
   // Native ownership still uses plugin storage. A published, invalidatable ownership
   // view is required before this retained resource path can serve locked sessions.
-  if (entry.modelSelectionLocked === true) {
+  params.assertNativeRuntimeCurrent?.();
+  if (entry.modelSelectionLocked === true && !params.assertNativeRuntimeCurrent) {
     denied(
       "Session-scoped resources are unavailable for sessions with locked model selection. Administrator global access remains available.",
     );

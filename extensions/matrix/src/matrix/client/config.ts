@@ -12,10 +12,7 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import {
-  isPrivateNetworkOptInEnabled,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -237,14 +234,7 @@ export {
 
 function hasScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): boolean {
   const scoped = resolveScopedMatrixEnvConfig(accountId, env);
-  return Boolean(
-    scoped.homeserver ||
-    scoped.userId ||
-    scoped.accessToken ||
-    scoped.password ||
-    scoped.deviceId ||
-    scoped.deviceName,
-  );
+  return Object.values(scoped).some(Boolean);
 }
 
 function readMatrixConfigStrings(params: {
@@ -321,7 +311,8 @@ function resolveMatrixAccountConfigSnapshot(
     min: 0,
   });
   const allowPrivateNetwork =
-    isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+    account.network?.dangerouslyAllowPrivateNetwork === true ||
+    matrix.network?.dangerouslyAllowPrivateNetwork === true
       ? true
       : undefined;
   return {
@@ -466,7 +457,6 @@ export async function resolveMatrixAuth(params?: {
       ? cached
       : null;
 
-  // If we have an access token, we can fetch userId via whoami if not provided
   if (accessToken) {
     let userId = resolved.userId;
     const hasMatchingCachedToken = cachedCredentials?.accessToken === accessToken;

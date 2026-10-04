@@ -16,6 +16,18 @@ Assembly has three layers:
 
 This keeps exported/debug prompt surfaces aligned with live runs without turning every runtime detail into one monolithic builder.
 
+Node-hosted OpenClaw sessions use the same prompt and bootstrap preparation as
+Gateway-local sessions. The Gateway selects agent instructions, persona files,
+skills, memory guidance, and conversation context under the session's existing
+privacy and tool policies. The node supplies its own workspace path, host, OS,
+shell, and active process facts. Moving execution to a node does not switch the
+agent to a generic coding prompt or make unselected node-local bootstrap files
+part of its context.
+
+Context-engine selection, history preparation, and turn settlement remain
+Gateway-owned. Direct post-turn hooks run after the node's workspace results
+are accepted and before its placement claim is released.
+
 Provider plugins can contribute cache-aware guidance without replacing the OpenClaw-owned prompt. A provider runtime can:
 
 - replace one of three named core sections: `interaction_style`, `tool_call_style`, `execution_bias`
@@ -34,7 +46,7 @@ The prompt is compact, with fixed sections:
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing. A requested action with an available tool is authorized: tool policy, sandboxing, and exec approvals gate risk at runtime, so the prompt does not ask the model to pre-refuse, warn, or seek extra permission.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
 - **Care**: inspect and merge before editing existing config or scheduler files, use or store credentials the user shares as asked, private delivery of short-lived login codes in groups, and a terminal setup route when no control tools are available.
-- **Runtime Context**: stable guidance for all providers, immediately after Care and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
+- **Runtime Context**: stable guidance for all providers, immediately after Care and above the cache boundary. OpenClaw can attach a separate, typed runtime-context message for the current request. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Providers project that message at the strongest authority their protocol supports; prefix-bound replay can retain a labeled compatibility message. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). For the Gateway hosting this session, owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI for updates to that Gateway. Never modify that Gateway's installation or control its service through exec or detached jobs; do not invent CLI commands. When `exec` is available, the prompt also says: "For a user-requested update on another host, verify it is not this Gateway, then use exec/SSH with `openclaw update --yes`; normal exec approvals still apply." See [Automation and SSH](/cli/update#automation-and-ssh).
 - **Messaging**: use OpenClaw routing for connected channel replies and actions, not shell or HTTP workarounds. This does not prohibit user-authorized CLI or API actions for other services, such as sending email; normal tool permissions and approvals still apply.
@@ -112,9 +124,9 @@ Branches and restored history keep the source version, as do reset boundaries
 and compaction within an existing transcript. Adoption leaves retained history
 untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
 rejected before model submission. Provider message roles remain unchanged to
-preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
-uses a separate launch contract and still needs this hardening; see
-[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+preserve retained-thinking prefix compatibility. Cloud-worker turns use the same
+Gateway-owned prompt projection before launch and carry trusted runtime context
+separately to the worker, which adds its execution-host facts.
 
 Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 

@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -39,13 +38,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createControllerHost(): ReactiveControllerHost {
-  return {
+function createControllerFixture(withClient = false) {
+  const controller = new ChatStateController<ChatPageHost>({
     addController: () => undefined,
     removeController: () => undefined,
     requestUpdate: () => undefined,
     updateComplete: Promise.resolve(true),
-  };
+  });
+  controller.hostConnected();
+  const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
+    dispatchEvent: () => true,
+    querySelector: () => null,
+  });
+  if (withClient) {
+    state.client = createTestGatewayClient(async () => ({}));
+  }
+  controller.attach(state);
+  return { controller, state };
 }
 
 describe("queued edit page callbacks", () => {
@@ -66,18 +75,7 @@ describe("queued edit page callbacks", () => {
   ] as const)(
     "clears only resolved edit feedback when opening a queued editor (%s, %s)",
     (lastError, chatError, expectedLastError, expectedChatError) => {
-      const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-      controller.hostConnected();
-      const state = createPageState(
-        createInitializationContext(),
-        controller.createRenderLifecycle(),
-        {
-          dispatchEvent: () => true,
-          querySelector: () => null,
-        },
-      );
-      state.client = createTestGatewayClient(async () => ({}));
-      controller.attach(state);
+      const { controller, state } = createControllerFixture(true);
       try {
         const queued = enqueueChatMessage(state, "queued original")!;
         state.chatMessage = "separate composer draft";
@@ -97,18 +95,7 @@ describe("queued edit page callbacks", () => {
   );
 
   it("releases a queued correction reload hold when its pane is disposed", () => {
-    const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-    controller.hostConnected();
-    const state = createPageState(
-      createInitializationContext(),
-      controller.createRenderLifecycle(),
-      {
-        dispatchEvent: () => true,
-        querySelector: () => null,
-      },
-    );
-    state.client = createTestGatewayClient(async () => ({}));
-    controller.attach(state);
+    const { controller, state } = createControllerFixture(true);
     try {
       const queued = enqueueChatMessage(state, "queued original")!;
       expect(beginQueuedMessageEdit(state, queued.id)).toBe("started");
@@ -121,17 +108,7 @@ describe("queued edit page callbacks", () => {
   it.each(["later edit", "another reload guard", "confirmed discard", "private fallback"] as const)(
     "keeps private-draft discard scoped during %s",
     async (scenario) => {
-      const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-      controller.hostConnected();
-      const state = createPageState(
-        createInitializationContext(),
-        controller.createRenderLifecycle(),
-        {
-          dispatchEvent: () => true,
-          querySelector: () => null,
-        },
-      );
-      controller.attach(state);
+      const { controller, state } = createControllerFixture();
       state.sessionKey = "agent:main:dashboard:incognito-private-review";
       state.chatMessage = "captured private text";
       if (scenario === "private fallback") {

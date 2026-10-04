@@ -43,11 +43,17 @@ type DashboardSessionTitleRequest = {
   storePath: string;
 };
 
+/** Reply gate for chat-turn naming; `released` reports whether its turn was still running. */
+type DashboardSessionTitleTurn = {
+  released: Promise<boolean>;
+  settled: Promise<void>;
+};
+
 export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
-  ready: Promise<void>,
+  turn: DashboardSessionTitleTurn,
 ): void {
-  scheduleDashboardSessionTitle(params, "session", ready);
+  scheduleDashboardSessionTitle(params, "session", turn);
 }
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -84,7 +90,7 @@ export function scheduleCreatedDashboardSessionTitle(
 function scheduleDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   admissionScope: "session" | "gateway",
-  ready?: Promise<void>,
+  turn?: DashboardSessionTitleTurn,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -98,9 +104,7 @@ function scheduleDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const generateTitle = async () => {
       // Retain admission and the caller's context while reply progress releases the gate.
-      if (ready) {
-        await ready;
-      }
+      const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -109,6 +113,11 @@ function scheduleDashboardSessionTitle(
         storePath: params.storePath,
         currentUserMessage: params.request.rawMessage,
         userMessage: titleSource,
+        ...(retryAfter ? { retryAfter } : {}),
+        onFallback: () =>
+          params.context.logGateway.warn(
+            "dashboard session title generation exhausted; using a crustacean fallback name",
+          ),
       });
       if (updated) {
         emitSessionsChanged(params.context, {

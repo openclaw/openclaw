@@ -23,7 +23,6 @@ export async function preflightLocalOverrides(params: {
   );
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];

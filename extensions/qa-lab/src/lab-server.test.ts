@@ -11,8 +11,10 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -232,60 +234,6 @@ async function createQaLabRepoRootFixture(params?: {
   return repoRoot;
 }
 
-type QaLabSuiteScenarioFixture = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: unknown[];
-  details?: string;
-};
-
-async function createQaLabSuiteResultFixture(params?: {
-  scenarios?: QaLabSuiteScenarioFixture[];
-  watchUrl?: string;
-}) {
-  const outputDir = await makeTempDir("qa-lab-suite-result-");
-  const scenarios = params?.scenarios ?? [
-    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
-  ];
-  const report = "# QA report\n";
-  const evidencePath = path.join(outputDir, "qa-evidence.json");
-  const reportPath = path.join(outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  await Promise.all([
-    writeFile(
-      evidencePath,
-      JSON.stringify({
-        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
-      }),
-      "utf8",
-    ),
-    writeFile(reportPath, report, "utf8"),
-    writeFile(
-      summaryPath,
-      JSON.stringify({
-        run: { status: "completed" },
-        counts: {
-          total: scenarios.length,
-          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
-        },
-        scenarios,
-      }),
-      "utf8",
-    ),
-  ]);
-  return {
-    evidencePath,
-    outputDir,
-    report,
-    reportPath,
-    scenarios,
-    summaryPath,
-    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
-  };
-}
-
 async function writeEvidenceFixture(
   evidenceDir: string,
   id: string,
@@ -360,7 +308,7 @@ describe("qa-lab server", () => {
       executionKind: "suite",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -438,7 +386,7 @@ describe("qa-lab server", () => {
     async ({ status }) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture({
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
       suiteLaunchMock.runQaSuite.mockResolvedValue({
@@ -506,7 +454,7 @@ describe("qa-lab server", () => {
     async (invalidResult) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture();
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"));
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
       suiteLaunchMock.runQaSuite.mockResolvedValue({
         executionKind: "flow",
@@ -536,7 +484,7 @@ describe("qa-lab server", () => {
   it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(lab.stop);
-    const result = await createQaLabSuiteResultFixture({
+    const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
       scenarios: [
         { name: "Channel chat baseline", status: "pass", steps: [] },
         {
@@ -577,7 +525,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: "http://runtime-watch.invalid",
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -613,7 +563,7 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -651,7 +601,17 @@ describe("qa-lab server", () => {
     );
   });
 
-  it("allows only one concurrent request to commit a resolved suite plan", async () => {
+  it("allows only one concurrent request to commit a resolved suite plan", async ({ signal }) => {
+    const summaryValidated = Promise.withResolvers<number>();
+    const readSummary = suiteSummary.readQaSuiteFailedOrSkippedScenarioCountFromFile;
+    using _ = vi
+      .spyOn(suiteSummary, "readQaSuiteFailedOrSkippedScenarioCountFromFile")
+      .mockImplementation((...args) => {
+        const validation = readSummary(...args);
+        // Returning the same promise lets the server publish status before this test resumes.
+        void validation.then(summaryValidated.resolve, summaryValidated.reject);
+        return validation;
+      });
     const lab = await startQaLabServerForTest();
     cleanups.push(lab.stop);
     let finishSuite: ((value: unknown) => void) | undefined;
@@ -678,14 +638,13 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
-    await vi.waitFor(async () => {
-      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
-        runner: { status: string };
-      };
-      expect(bootstrap.runner.status).toBe("completed");
-    });
+    await withinTest(summaryValidated.promise, signal);
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      runner: { status: string };
+    };
+    expect(bootstrap.runner.status).toBe("completed");
   });
 
   it("rejects empty and unknown explicit selections before dispatch", async () => {
@@ -706,7 +665,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: lab.baseUrl,
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {

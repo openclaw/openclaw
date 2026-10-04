@@ -8,7 +8,7 @@ import {
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
 import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
 
 type DashboardOptions = {
@@ -44,14 +44,10 @@ async function ensureDashboardTargetReady(params: {
   yes?: boolean;
   allowRecovery?: boolean;
 }) {
-  return ensureGatewayReadyForOperation({
+  return ensureDashboardGatewayReady({
     runtime: params.runtime,
-    operation: "open the dashboard",
     yes: params.yes,
     probeUrl: params.target.probeUrl,
-    // First-time CLI probes intentionally lack paired operator scope. Gateway
-    // handshake evidence plus the same-PID alias check below proves the target.
-    readyWhenReachable: true,
     ...(params.allowRecovery === false ? { allowInstall: false, interactive: false } : {}),
   });
 }

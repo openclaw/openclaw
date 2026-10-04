@@ -1,5 +1,6 @@
 /** Tests merging bundled MCP defaults with OpenClaw user MCP configuration. */
 import { describe, expect, it, vi } from "vitest";
+import type { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,10 +14,11 @@ const mocks = vi.hoisted(() => ({
       },
     },
     diagnostics: [],
+    pluginIdsByServer: { bundleProbe: "bundle-probe" },
     prepareDataDirsByServer: {
       bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
     },
-  },
+  } satisfies ReturnType<typeof loadEnabledBundleMcpConfig>,
 }));
 
 vi.mock("../plugins/bundle-mcp.js", () => ({
@@ -49,6 +51,7 @@ describe("loadMergedBundleMcpConfig", () => {
       url: "https://mcp.example.com/mcp",
     });
     expect(merged.prepareDataDirsByServer).toStrictEqual({});
+    expect(merged.pluginIdsByServer).toStrictEqual({});
   });
 
   it("preserves Agent Plugins launch ownership for unshadowed bundle servers", () => {
@@ -57,6 +60,7 @@ describe("loadMergedBundleMcpConfig", () => {
     });
 
     expect(merged.config.mcpServers.bundleProbe).toMatchObject({ command: "node" });
+    expect(merged.pluginIdsByServer).toEqual({ bundleProbe: "bundle-probe" });
     expect(merged.prepareDataDirsByServer).toEqual({
       bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
     });
@@ -115,6 +119,7 @@ describe("loadMergedBundleMcpConfig", () => {
 
     expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
     expect(merged.prepareDataDirsByServer).toStrictEqual({});
+    expect(merged.pluginIdsByServer).toStrictEqual({});
   });
 
   it.each([

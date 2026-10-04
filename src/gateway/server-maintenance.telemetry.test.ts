@@ -46,10 +46,10 @@ vi.mock("../agents/worktrees/owner-protection.js", () => ({
   createManagedWorktreeOwnerPolicy: () => forbiddenDefaultAdapter("worktree owner policy"),
 }));
 
+// mock-isolation: Worker-free timers inject GC and reject accidental default worktree access.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
-  resolveWorktreeCleanupLimits: () => forbiddenDefaultAdapter("worktree cleanup limits"),
 }));
 
 vi.mock("../infra/delivery-queue-sqlite.js", () => ({
@@ -94,8 +94,13 @@ vi.mock("./server/health-state.js", () => ({
 
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
+  failure?: Error,
 ): Promise<void> {
-  await timers.stopPeriodicTasks();
+  if (failure) {
+    await expect(timers.stopPeriodicTasks()).rejects.toMatchObject({ errors: [failure] });
+  } else {
+    await timers.stopPeriodicTasks();
+  }
   await timers.skillUsageCleanup();
 }
 
@@ -114,107 +119,132 @@ describe("gateway telemetry maintenance", () => {
   });
 
   it.each([
-    ["health", "first"],
-    ["health", "next"],
-    ["worktree", "first"],
-    ["worktree", "next"],
-    ["device-pair", "first"],
-    ["device-pair", "next"],
-    ["plugin-state", "first"],
-    ["plugin-state", "next"],
-  ] as const)("joins admitted %s %s work and its cleanup before stopping", async (owner, phase) => {
-    vi.useFakeTimers();
-    generateSecureIntMock.mockReturnValue(0);
-    checkTelemetryUpdateMock.mockResolvedValue(null);
-    const operation = createDeferredCore();
-    const cleanup = createDeferredCore();
-    const cleanupStarted = createDeferredCore();
-    let calls = 0;
-    let cleanupWork: Promise<void> | undefined;
-    const run = async () => {
-      calls += 1;
-      if (calls !== (phase === "first" ? 1 : 2)) {
-        return;
+    ["health", false],
+    ["worktree", false],
+    ["device-pair", false],
+    ["plugin-state", false],
+    ["worktree", true],
+  ] as const)(
+    "joins admitted %s work and cleanup before settling stop (failure=%s)",
+    async (owner, fails) => {
+      vi.useFakeTimers();
+      generateSecureIntMock.mockReturnValue(0);
+      checkTelemetryUpdateMock.mockResolvedValue(null);
+      const failure = fails ? new Error("cold-storage stop failed") : undefined;
+      if (failure) {
+        const coldStorage = await import("./session-cold-storage-maintenance.js");
+        const start = coldStorage.startSessionColdStorageMaintenance;
+        vi.spyOn(coldStorage, "startSessionColdStorageMaintenance").mockImplementation((params) => {
+          const maintenance = start(params);
+          const stop = maintenance.stop;
+          maintenance.stop = async () => {
+            await stop();
+            throw failure;
+          };
+          return maintenance;
+        });
       }
-      await operation.promise;
-      cleanupWork = trackAsyncWork(() => cleanup.promise);
-      cleanupStarted.resolve();
-    };
-    const state = createGatewayMaintenanceStateForTest();
-    devicePairCleanupMock.mockImplementation(async () => {
-      if (owner === "device-pair") {
-        await run();
-      }
-      return 0;
-    });
-    pluginStateCleanupMock.mockImplementation(async () => {
-      if (owner === "plugin-state") {
-        await run();
-      }
-    });
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const timers = startGatewayMaintenanceTimers({
-      ...state,
-      refreshGatewayHealthSnapshot: async () => {
-        if (owner === "health") {
+      const blockedCall = fails ? 1 : 2;
+      const operation = createDeferredCore();
+      const cleanup = createDeferredCore();
+      const cleanupStarted = createDeferredCore();
+      let calls = 0;
+      let cleanupWork: Promise<void> | undefined;
+      const run = async () => {
+        calls += 1;
+        if (calls !== blockedCall) {
+          return;
+        }
+        await operation.promise;
+        cleanupWork = trackAsyncWork(() => cleanup.promise);
+        cleanupStarted.resolve();
+      };
+      const state = createGatewayMaintenanceStateForTest();
+      devicePairCleanupMock.mockImplementation(async () => {
+        if (owner === "device-pair") {
           await run();
         }
-        return await state.refreshGatewayHealthSnapshot();
-      },
-      runWorktreeGc: async () => {
-        if (owner === "worktree") {
-          await run();
-        }
-      },
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(
-        owner === "worktree"
-          ? (phase === "first" ? 1 : 2) * 60 * 60_000
-          : phase === "first"
-            ? 0
-            : 60_000,
-      );
-      expect(calls).toBe(phase === "first" ? 1 : 2);
-      if (owner === "plugin-state") {
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(calls).toBe(phase === "first" ? 1 : 2);
-      }
-      markGatewayRestartDraining();
-      if (owner === "plugin-state") {
-        state.scheduler.beginClose();
-        const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
-        expect(admission?.assertActive).toBeTypeOf("function");
-        expect(() => admission?.assertActive()).not.toThrow();
-      }
-      let stopped = false;
-      const stopping = timers.stopPeriodicTasks().then(() => {
-        stopped = true;
+        return 0;
       });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+      pluginStateCleanupMock.mockImplementation(async () => {
+        if (owner === "plugin-state") {
+          await run();
+        }
+      });
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const timers = startGatewayMaintenanceTimers({
+        ...state,
+        refreshGatewayHealthSnapshot: async () => {
+          if (owner === "health") {
+            await run();
+          }
+          return await state.refreshGatewayHealthSnapshot();
+        },
+        runWorktreeGc: async () => {
+          if (owner === "worktree") {
+            await run();
+          }
+        },
+        runDeliveryQueueMediaGc: async () => undefined,
+        runManagedOutgoingMediaGc: async () => undefined,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(
+          owner === "worktree" ? blockedCall * 60 * 60_000 + 1 : 60_000,
+        );
+        expect(calls).toBe(blockedCall);
+        if (owner === "plugin-state") {
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(calls).toBe(blockedCall);
+        }
+        if (!fails) {
+          markGatewayRestartDraining();
+        }
+        if (owner === "plugin-state") {
+          state.scheduler.beginClose();
+          const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
+          expect(admission?.assertActive).toBeTypeOf("function");
+          expect(() => admission?.assertActive()).not.toThrow();
+        }
+        let stopped = false;
+        const stopping = timers.stopPeriodicTasks().then(
+          () => {
+            stopped = true;
+          },
+          (error: unknown) => {
+            stopped = true;
+            return error;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
 
-      operation.resolve();
-      await cleanupStarted.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+        operation.resolve();
+        await cleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
 
-      cleanup.resolve();
-      await stopping;
-      expect(stopped).toBe(true);
-      if (owner === "plugin-state") {
-        const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
-        expect(() => admission?.assertActive()).toThrow();
+        cleanup.resolve();
+        const error = await stopping;
+        expect(stopped).toBe(true);
+        if (failure) {
+          expect(error).toBeInstanceOf(AggregateError);
+          expect(error).toMatchObject({ errors: [failure] });
+        } else {
+          expect(error).toBeUndefined();
+        }
+        if (owner === "plugin-state") {
+          const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
+          expect(() => admission?.assertActive()).toThrow();
+        }
+      } finally {
+        operation.resolve();
+        cleanup.resolve();
+        await stopMaintenanceTimers(timers, failure);
+        await cleanupWork;
       }
-    } finally {
-      operation.resolve();
-      cleanup.resolve();
-      await stopMaintenanceTimers(timers);
-      await cleanupWork;
-    }
-  });
+    },
+  );
 
   it.each(["restart", "local", "scheduler"] as const)(
     "retires periodic producers at %s drain before their owners close",
@@ -290,74 +320,13 @@ describe("gateway telemetry maintenance", () => {
     },
   );
 
-  it("joins admitted callbacks and cleanup before reporting another periodic owner's stop failure", async () => {
-    vi.useFakeTimers();
-    generateSecureIntMock.mockReturnValue(0);
-    const failure = new Error("cold-storage stop failed");
-    const coldStorage = await import("./session-cold-storage-maintenance.js");
-    const startColdStorage = coldStorage.startSessionColdStorageMaintenance;
-    vi.spyOn(coldStorage, "startSessionColdStorageMaintenance").mockImplementation((params) => {
-      const owner = startColdStorage(params);
-      const stop = owner.stop;
-      owner.stop = async () => {
-        await stop();
-        throw failure;
-      };
-      return owner;
-    });
-    const operation = createDeferredCore();
-    const cleanup = createDeferredCore();
-    const cleanupStarted = createDeferredCore();
-    let cleanupWork: Promise<void> | undefined;
-    const runWorktreeGc = vi.fn(async () => {
-      await operation.promise;
-      cleanupWork = trackAsyncWork(() => cleanup.promise);
-      cleanupStarted.resolve();
-    });
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const timers = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
-      runWorktreeGc,
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
-    });
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    let settled = false;
-    const stopping = timers.stopPeriodicTasks().then(
-      () => {
-        settled = true;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
-    try {
-      expect(runWorktreeGc).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
-      operation.resolve();
-      await cleanupStarted.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
-      cleanup.resolve();
-
-      const error = await stopping;
-      expect(error).toBeInstanceOf(AggregateError);
-      expect(error).toMatchObject({ errors: [failure] });
-    } finally {
-      operation.resolve();
-      cleanup.resolve();
-      await stopping;
-      await cleanupWork;
-      await timers.skillUsageCleanup();
-    }
-  });
-
-  it("uses one jittered maintenance schedule and silently retries failed checks", async () => {
+  it("jitter-retries failed checks, coalesces pending checks and joins them on stop", async () => {
     vi.useFakeTimers();
     generateSecureIntMock.mockReturnValue(150_000);
-    checkTelemetryUpdateMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(null);
+    const check = createDeferredCore<null>();
+    checkTelemetryUpdateMock
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValue(check.promise);
     const logHealth = { info: vi.fn(), error: vi.fn() };
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const maintenanceState = createGatewayMaintenanceStateForTest();
@@ -387,42 +356,22 @@ describe("gateway telemetry maintenance", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
 
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("coalesces pending checks and joins them before stopping future telemetry admission", async () => {
-    vi.useFakeTimers();
-    generateSecureIntMock.mockReturnValue(0);
-    const check = createDeferredCore<null>();
-    checkTelemetryUpdateMock.mockReturnValue(check.promise);
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const timers = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
-      runWorktreeGc: async () => undefined,
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
-    });
-
     try {
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
-
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
       let stopped = false;
       const stopping = timers.stopPeriodicTasks().then(() => {
         stopped = true;
       });
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(stopped).toBe(false);
-      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
-
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
       check.resolve(null);
       await stopping;
       expect(stopped).toBe(true);
       await timers.stopPeriodicTasks();
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
     } finally {
       check.resolve(null);
       await stopMaintenanceTimers(timers);

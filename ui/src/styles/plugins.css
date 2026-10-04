@@ -64,7 +64,8 @@
   gap: var(--space-3);
 }
 
-.installed-plugins-card__art {
+.installed-plugins-card__art,
+.plugins-tile {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
@@ -72,6 +73,9 @@
   place-items: center;
   overflow: hidden;
   border-radius: 10px;
+}
+
+.installed-plugins-card__art {
   background: var(--bg);
 }
 
@@ -114,11 +118,6 @@
 
 .plugin-card-title-row :is(h2, h3) {
   min-width: 0;
-}
-
-.installed-plugins-card__status-notice {
-  align-self: center;
-  margin-inline-start: auto;
 }
 
 .plugin-card-author {
@@ -290,6 +289,13 @@
   min-width: 0;
 }
 
+.plugin-catalog-section--expandable {
+  /* Overview shelves show at most two rows at every breakpoint. Remember their
+     height so offscreen cards skip layout without collapsing the scrollbar. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 280px;
+}
+
 .plugin-catalog-section__header {
   display: flex;
   align-items: center;
@@ -442,8 +448,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 7) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7) {
     display: none;
   }
 }
@@ -453,8 +458,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 5) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5) {
     display: none;
   }
 }
@@ -470,8 +474,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 3) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3) {
     display: none;
   }
 }
@@ -660,13 +663,6 @@ h3.settings-row__title {
 }
 
 .plugins-tile {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 10px;
   background: var(--bg-elevated);
 }
 
@@ -969,14 +965,14 @@ openclaw-plugins-page
 .plugin-catalog-detail__content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 196px;
-  grid-template-areas: "panel sidebar" "readme sidebar";
+  grid-template-areas: "main sidebar";
   align-items: start;
   gap: 32px;
 }
 
 .plugin-catalog-detail--no-sidebar .plugin-catalog-detail__content {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "panel" "readme";
+  grid-template-areas: "main";
 }
 
 .plugin-catalog-detail__back {
@@ -1256,6 +1252,7 @@ openclaw-plugins-page
   border-bottom: 1px solid var(--border);
 }
 .plugin-capability > button,
+.plugin-capability__disclosure > summary,
 .plugin-capability__static {
   display: flex;
   align-items: center;
@@ -1269,15 +1266,51 @@ openclaw-plugins-page
   text-align: left;
   font: inherit;
 }
-.plugin-capability > button {
+.plugin-capability > button,
+.plugin-capability__disclosure > summary {
   cursor: var(--cursor-action);
 }
-.plugin-capability > button:hover {
+.plugin-capability > button:hover,
+.plugin-capability__disclosure > summary:hover {
   background: var(--bg-elevated);
 }
-.plugin-capability > button:focus-visible {
+.plugin-capability > button:focus-visible,
+.plugin-capability__disclosure > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+.plugin-capability__disclosure > summary {
+  list-style: none;
+}
+.plugin-capability__disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-capability__chevron {
+  display: inline-flex;
+}
+.plugin-capability__disclosure[open] .plugin-capability__chevron {
+  transform: rotate(90deg);
+}
+.plugin-capability__details {
+  padding: 0 12px 12px;
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-capability__details p {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.plugin-mcp-details {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+  margin: 12px 0 0;
+}
+.plugin-mcp-details dt {
+  color: var(--muted);
+}
+.plugin-mcp-details dd {
+  margin: 0;
 }
 .plugin-capability__icon {
   display: grid;
@@ -1314,7 +1347,6 @@ openclaw-plugins-page
   line-height: 1.5;
 }
 .plugin-catalog-detail__readme-section {
-  grid-area: readme;
   min-width: 0;
 }
 .plugin-tool-dialog {
@@ -1384,7 +1416,7 @@ openclaw-plugins-page
 @container (max-width: 768px) {
   .plugin-catalog-detail__content {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "panel" "sidebar" "readme";
+    grid-template-areas: "main" "sidebar";
     gap: 24px;
   }
   .plugin-catalog-detail__hero {
@@ -1435,9 +1467,23 @@ openclaw-plugins-page
   margin-bottom: 12px;
 }
 
-.plugin-catalog-detail__panel {
-  grid-area: panel;
+.plugin-catalog-detail__main {
+  grid-area: main;
+  display: grid;
+  gap: 28px;
   min-width: 0;
+}
+
+.plugin-catalog-detail__panel {
+  min-width: 0;
+}
+
+.plugin-catalog-detail__panel:empty {
+  display: none;
+}
+
+.plugin-catalog-detail__panel > .plugin-capabilities:last-child {
+  margin-bottom: 0;
 }
 
 .plugin-catalog-detail__readme {

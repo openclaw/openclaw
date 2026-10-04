@@ -248,7 +248,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff retries back off and stop after three attempts`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.maximumAttempts == 3)
         #expect(policy.failureAction(
@@ -271,7 +271,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff timeout scales with system load`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.timeoutMilliseconds(loadAverage: nil, activeProcessorCount: 12) == 15000)
         #expect(policy.timeoutMilliseconds(loadAverage: 12, activeProcessorCount: 12) == 15000)
@@ -415,11 +415,11 @@ struct ApplicationRelocatorTests {
             executable: executable.path,
             keepAlive: true
         )
-        #expect(ApplicationRelocator.relaunchStrategy(
+        #expect(ApplicationRelocator.verifiedKeepAliveSupervisor(
             xpcServiceName: serviceName,
             executableURL: executable,
             homeDirectory: home
-        ) == .externalSupervisor)
+        ) != nil)
 
         try writeLaunchAgentPlist(
             at: launchAgentURL,
@@ -427,21 +427,21 @@ struct ApplicationRelocatorTests {
             executable: executable.path,
             keepAlive: false
         )
-        #expect(ApplicationRelocator.relaunchStrategy(
+        #expect(ApplicationRelocator.verifiedKeepAliveSupervisor(
             xpcServiceName: serviceName,
             executableURL: executable,
             homeDirectory: home
-        ) == .openAfterTermination)
-        #expect(ApplicationRelocator.relaunchStrategy(
+        ) == nil)
+        #expect(ApplicationRelocator.verifiedKeepAliveSupervisor(
             xpcServiceName: "application.ai.openclaw.mac.123",
             executableURL: executable,
             homeDirectory: home
-        ) == .openAfterTermination)
-        #expect(ApplicationRelocator.relaunchStrategy(
+        ) == nil)
+        #expect(ApplicationRelocator.verifiedKeepAliveSupervisor(
             xpcServiceName: nil,
             executableURL: executable,
             homeDirectory: home
-        ) == .openAfterTermination)
+        ) == nil)
     }
 
     @Test

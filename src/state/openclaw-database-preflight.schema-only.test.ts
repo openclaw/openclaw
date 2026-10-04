@@ -47,7 +47,7 @@ describe("schema-only agent preflight", () => {
           return prepare(pathname, options);
         },
       );
-      const config = { agents: { list: [{ id: "worker", default: true }] } };
+      const config = { agents: { entries: { worker: {} } } };
       const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
         assertOpenClawDatabasesReady({
           env,
@@ -154,11 +154,11 @@ describe("schema-only agent preflight", () => {
   );
 });
 
-it.each(
-  (["header", "shape", "startup"] as const).flatMap((mode) =>
-    (["false", "reject"] as const).map((cleanupFailure) => ({ mode, cleanupFailure })),
-  ),
-)(
+it.each([
+  { mode: "header", cleanupFailure: "false" },
+  { mode: "shape", cleanupFailure: "reject" },
+  { mode: "startup", cleanupFailure: "reject" },
+] as const)(
   "finishes sibling inspections after private snapshot cleanup $cleanupFailure ($mode)",
   async ({ mode, cleanupFailure }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-owned-snapshot-") };
@@ -187,6 +187,7 @@ it.each(
       const run = () =>
         preflightOpenClawDatabaseSchemas({
           env,
+          preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,

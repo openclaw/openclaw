@@ -1,5 +1,6 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
 import { isIP } from "node:net";
+import { constants } from "node:os";
 import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
@@ -129,7 +130,7 @@ function sanitizeFactIdentifier(value: string, context: UpdateFailureReportConte
 type ReportedFailedStep = Pick<
   UpdateStepResult,
   "name" | "exitCode" | "termination" | "failureFacts" | "stderrTail"
-> & { detail?: string };
+> & { detail?: string; signal?: string | null };
 
 function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep[] {
   const direct = new Map(input.result.steps.map((step) => [updateRunStepKey(step.name), step]));
@@ -154,6 +155,9 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
               exitCode: step.exitCode ?? null,
               failureFacts: step.failureFacts,
               detail: step.detail,
+              termination: step.termination,
+              signal: step.signal,
+              stderrTail: step.stderrTail,
             },
           ]
         : [];
@@ -279,7 +283,11 @@ async function renderBoundedDiagnostics(
   }
   for (const step of selectUpdateFailureReportSteps(steps)) {
     const phase = sanitizeFactIdentifier(step.name, context);
-    const termination = step.termination ? `, termination ${step.termination}` : "";
+    const signal =
+      step.signal && Object.hasOwn(constants.signals, step.signal) ? step.signal : null;
+    const termination = step.termination
+      ? `, termination ${step.termination}${signal ? ` (${signal})` : ""}`
+      : "";
     const message = [
       ...(step.failureFacts ?? []).flatMap((fact) => [fact.message, fact.code]),
       step.detail,

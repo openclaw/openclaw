@@ -12,10 +12,9 @@ const frame = {
 };
 
 describe("node invoke progress writer", () => {
-  it("chunks output to 16 KiB and pauses its producer for backpressure", async () => {
+  it("chunks output to 16 KiB", async () => {
     const request = vi.fn(async () => ({}));
     const client = { request } as NodeHostClient;
-    const pausable = { pause: vi.fn(), resume: vi.fn() };
     const writer = createNodeInvokeProgressWriter({
       client,
       frame,
@@ -23,10 +22,8 @@ describe("node invoke progress writer", () => {
       onError: vi.fn(),
     });
 
-    await writer.write("é".repeat(10_000), pausable);
+    await writer.write("é".repeat(10_000));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(pausable.pause).toHaveBeenCalledOnce();
-    expect(pausable.resume).toHaveBeenCalledOnce();
     for (const [, params] of request.mock.calls as unknown as Array<[string, { chunk: string }]>) {
       expect(Buffer.byteLength(params.chunk, "utf8")).toBeLessThanOrEqual(16 * 1024);
     }

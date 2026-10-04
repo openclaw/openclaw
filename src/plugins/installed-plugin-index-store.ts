@@ -14,6 +14,7 @@ import {
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
+import { SourceAdmissionReceiptSchema } from "./plugin-source-admission.types.js";
 
 export {
   resolveInstalledPluginIndexStorePath,
@@ -45,45 +46,6 @@ const InstalledPluginFileSignatureSchema = z.object({
   size: z.number(),
   mtimeMs: z.number(),
   ctimeMs: z.number().optional(),
-});
-
-const SourceAdmissionReceiptSchema = z.object({
-  signature: z.string().min(1),
-  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  nativeArtifacts: z.record(
-    z.string(),
-    z.object({
-      sourceIdentity: z.string().min(1),
-      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
-      sizeBytes: z.number().int().nonnegative().safe(),
-      capturedPath: z.string().min(1),
-      namespace: z.string().min(1),
-      capturedIdentity: z.string().min(1),
-    }),
-  ),
-  nativeNamespaces: z.record(
-    z.string(),
-    z.object({
-      sourceDirectory: z.string().min(1),
-      capturedRoot: z.string().min(1),
-      managed: z.boolean(),
-      referenceRoot: z.string().min(1).optional(),
-      members: z.record(
-        z.string(),
-        z.object({
-          source: z.string().min(1),
-          sourceIdentity: z.string().min(1),
-          capturedIdentity: z.string().min(1),
-          boundaryChecked: z.boolean(),
-          contentHash: z
-            .string()
-            .regex(/^[a-f0-9]{64}$/)
-            .optional(),
-          sizeBytes: z.number().int().nonnegative().safe().optional(),
-        }),
-      ),
-    }),
-  ),
 });
 
 const InstalledPluginIndexRecordSchema = z.object({

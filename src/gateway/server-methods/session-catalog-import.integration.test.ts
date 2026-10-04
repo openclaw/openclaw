@@ -386,7 +386,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       );
       expect(readSessionUpstreamLink(fixture.key, "main")).toBeUndefined();
       expect(
-        listSessionStateEventsSince(fixture.key, "main", 0).events.filter(
+        (await listSessionStateEventsSince(fixture.key, "main", 0)).events.filter(
           (event) => event.kind === "imported",
         ),
       ).toMatchObject([

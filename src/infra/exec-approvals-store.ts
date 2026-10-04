@@ -57,13 +57,6 @@ class ExecApprovalsStoreUnavailableError extends Error {
   }
 }
 
-function readExecApprovalsSnapshotFromDatabase(
-  options: OpenClawStateDatabaseOptions = {},
-): ExecApprovalsSnapshot {
-  assertNoPendingLegacyExecApprovals();
-  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
-}
-
 function readExecApprovalsSnapshotFromDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions,
 ): ExecApprovalsSnapshot {
@@ -81,7 +74,8 @@ function readExecApprovalsSnapshotWithOptions(
   options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot {
   try {
-    return readExecApprovalsSnapshotFromDatabase(options);
+    assertNoPendingLegacyExecApprovals();
+    return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -167,6 +161,7 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
 type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+  assertCurrent?: () => void;
 };
 
 export function replaceExecApprovalsSnapshot(
@@ -202,6 +197,7 @@ function updateExecApprovalsInTransaction(
   assertNoPendingLegacyExecApprovals();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      params.assertCurrent?.();
       const current = snapshotFromExecApprovalsRow({
         path: resolveExecApprovalsDisplayPath(),
         row: readExecApprovalsConfigRow(db),
@@ -225,10 +221,11 @@ function updateExecApprovalsInTransaction(
       if (current.exists && current.raw === raw) {
         return current;
       }
-      writeExecApprovalsConfigRow({ db, file: next, raw });
+      const persistedRaw = writeExecApprovalsConfigRow({ db, file: next });
+      params.assertCurrent?.();
       return snapshotFromExecApprovalsRow({
         path: current.path,
-        row: { raw_json: raw },
+        row: { raw_json: persistedRaw },
       });
     },
     options,
@@ -450,16 +447,7 @@ function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
   };
 }
 
-function requireInitializedExecApprovals(
-  snapshot: ExecApprovalsSnapshot | null,
-): ExecApprovalsSnapshot {
-  if (!snapshot) {
-    throw new Error("Failed to initialize exec approvals");
-  }
-  return snapshot;
-}
-
-function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
+export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
   const snapshot = readExecApprovalsSnapshot();
   if (
     snapshot.file.socket?.path?.trim() &&
@@ -468,11 +456,9 @@ function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
   ) {
     return snapshot;
   }
-  return requireInitializedExecApprovals(
-    updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket }),
-  );
-}
-
-export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
-  return ensureExecApprovalsSnapshotSync();
+  const initialized = updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket });
+  if (!initialized) {
+    throw new Error("Failed to initialize exec approvals");
+  }
+  return initialized;
 }

@@ -589,7 +589,7 @@ describe("config io write", () => {
       io.loadConfig();
       expect(warn).toHaveBeenCalledTimes(1);
 
-      await io.writeConfigFile({});
+      await io.writeConfigFile({}, { allowConfigSizeDrop: true });
       await io.writeConfigFile(staleConfig);
       expect(warn).toHaveBeenCalledTimes(2);
     },
@@ -611,7 +611,7 @@ describe("config io write", () => {
       expect(io.configPath).toBe(path.join(overrideDir, "openclaw.json"));
 
       await io.writeConfigFile({
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         gateway: { mode: "local" },
         session: { mainKey: "main", store: path.join(overrideDir, "sessions.json") },
       });
@@ -817,7 +817,11 @@ describe("config io write", () => {
     const configPath = configPathForHome(home);
     const cleanConfig = {
       gateway: { mode: "local" },
-      agents: { entries: { main: { default: true }, "discord-dm": {} } },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, "discord-dm": {} },
+      },
     } satisfies ConfigFileSnapshot["config"];
     const cleanRaw = formatConfig(cleanConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -861,7 +865,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const cleanConfig = {
         gateway: { mode: "local" },
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
       } satisfies ConfigFileSnapshot["config"];
       const cleanRaw = formatConfig(cleanConfig);
       const warn = vi.fn();
@@ -1437,7 +1441,7 @@ describe("config io write", () => {
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persisted.agents?.entries).toBeUndefined();
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("persists an explicitly authored bootstrap roster on first write", async (home) => {
@@ -1452,7 +1456,7 @@ describe("config io write", () => {
 
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.entries).toEqual({ main: {} });
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("forwards explicitly authorized agent roster removals", async (home) => {
@@ -1591,7 +1595,7 @@ describe("config io write", () => {
         includePath,
         `${JSON.stringify({
           defaults: { workspace: "/srv/old" },
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         })}\n`,
         "utf-8",
       );
@@ -1641,7 +1645,7 @@ describe("config io write", () => {
         agentsPath,
         `${JSON.stringify({
           defaults: { workspace: "/srv/old" },
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         })}\n`,
         "utf-8",
       );
@@ -1688,7 +1692,7 @@ describe("config io write", () => {
         agentsPath,
         `${JSON.stringify({
           defaults: { workspace: "/srv/old" },
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         })}\n`,
         "utf-8",
       );
@@ -1923,7 +1927,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const agentsPath = path.join(home, ".openclaw", "agents.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(agentsPath, { entries: { main: { default: true } } });
+      await writeConfigJson(agentsPath, { entries: { main: {} } });
       await writeConfigJson(configPath, {
         agents: { $include: "./agents.json5" },
         plugins: {
@@ -3413,7 +3417,7 @@ describe("config io write", () => {
       try {
         // Plugin is enabled but missing required "token" — validation fails without skip.
         const cfg: OpenClawConfig = {
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
           plugins: { entries: { "strict-plugin": { enabled: true } } },
         };
 

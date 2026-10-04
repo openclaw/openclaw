@@ -264,13 +264,21 @@ export function renderChatComposer(props: ChatComposerProps) {
     requestUpdate,
     sendShortcut,
     canSubmitDraft,
-    commitDraft: (draft) => commitComposerDraft(props, draft),
     syncDraftAfterSend: syncComposerDraftAfterSend,
     showAbortableUi,
     alternateFollowUpMode,
     goalComposer,
   });
 
+  const updateEmojiMenu = (target: HTMLTextAreaElement) =>
+    state.emojiMenu.update(
+      target,
+      requestUpdate,
+      !state.composerComposing &&
+        !state.skillMenuOpen &&
+        !state.slashMenuOpen &&
+        !state.mentionMenu.open,
+    );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
@@ -295,14 +303,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       const mentionIntent = typedAtSign ? "trigger" : "input";
       state.mentionMenu.update(target, requestUpdate, mentionIntent);
     }
-    state.emojiMenu.update(
-      target,
-      requestUpdate,
-      !state.composerComposing &&
-        !state.skillMenuOpen &&
-        !state.slashMenuOpen &&
-        !state.mentionMenu.open,
-    );
+    updateEmojiMenu(target);
     // The textarea owns ordinary edits; only redraw the pane when surrounding
     // controls change. Slash and skill menus invalidate their own presentation.
     if (
@@ -359,14 +360,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
-    state.emojiMenu.update(
-      target,
-      requestUpdate,
-      !state.composerComposing &&
-        !state.skillMenuOpen &&
-        !state.slashMenuOpen &&
-        !state.mentionMenu.open,
-    );
+    updateEmojiMenu(target);
     if (goalComposer.active) {
       return;
     }

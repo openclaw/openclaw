@@ -57,6 +57,7 @@ type PreparedBackupArchive = {
   result: BackupVerifyResult;
   hardlinkTargets: ReadonlyMap<string, string>;
   symbolicLinks: BackupSymbolicLink[];
+  regularFileExtractionBytes: number;
 };
 
 type ArchiveEntry = {
@@ -166,6 +167,23 @@ function findPortableArchiveEntryPathCollision(
 
 function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
+}
+
+function resolveRegularFileExtractionBytes(entries: NormalizedArchiveEntry[]): number {
+  let totalBytes = 0;
+  for (const entry of entries) {
+    if (!isRegularArchiveFile(entry.type)) {
+      continue;
+    }
+    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
+      throw new Error(`Archive regular file has an invalid size: ${entry.normalized}`);
+    }
+    totalBytes += entry.size ?? 0;
+    if (!Number.isSafeInteger(totalBytes)) {
+      throw new Error("Archive extraction size exceeds the supported integer range.");
+    }
+  }
+  return totalBytes;
 }
 
 function assertCanonicalStateAssetRoot(manifest: BackupManifest): void {
@@ -654,6 +672,7 @@ async function verifyResolvedBackupArchive(
   }
   const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
   verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
+  const regularFileExtractionBytes = resolveRegularFileExtractionBytes(entries);
 
   const result: BackupVerifyResult = {
     ok: true,
@@ -668,7 +687,12 @@ async function verifyResolvedBackupArchive(
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 
-  return { result, hardlinkTargets, symbolicLinks: preparedSymbolicLinks };
+  return {
+    result,
+    hardlinkTargets,
+    symbolicLinks: preparedSymbolicLinks,
+    regularFileExtractionBytes,
+  };
 }
 
 /** Verify an archive and prepare the exact hardlink targets needed by extraction. */

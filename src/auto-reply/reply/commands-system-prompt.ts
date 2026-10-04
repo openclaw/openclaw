@@ -24,6 +24,7 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../../skills/types.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -292,6 +293,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     workspaceDir,
   });
   const systemPrompt = buildConfiguredAgentSystemPrompt({
+    preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
     preparedModelRuntime,
     agentId: sessionAgentId,

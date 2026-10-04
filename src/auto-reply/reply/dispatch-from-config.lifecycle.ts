@@ -5,7 +5,10 @@ import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,7 +35,6 @@ import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
 } from "./dispatch-from-config.context.js";
-import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
@@ -114,12 +116,12 @@ async function restoreArchivedDispatchSession(params: {
       return false;
     }
   };
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("restore", {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {
       const scope = { sessionKey, storePath };
-      const currentEntry = loadSessionStoreEntry(scope);
+      const currentEntry = loadSessionEntryReadOnly(scope);
       if (!currentEntry || !canRestore(currentEntry)) {
         return currentEntry;
       }
@@ -175,6 +177,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionWorkAdmissionLease | undefined;
+  let removePreDispatchLifecycleAbortListener: (() => void) | undefined;
   let preDispatchLifecycleAbortController: AbortController | undefined;
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
@@ -212,6 +215,8 @@ export function createDispatchReplyOperationCoordinator(params: {
   const releasePreDispatchLifecycleAdmission = async (
     afterWorkBarrier?: () => PromiseLike<unknown>,
   ): Promise<void> => {
+    removePreDispatchLifecycleAbortListener?.();
+    removePreDispatchLifecycleAbortListener = undefined;
     const admission = preDispatchLifecycleAdmission;
     const preDispatchAbortController = preDispatchLifecycleAbortController;
     const dispatchAbortController = dispatchLifecycleAbortController;
@@ -244,6 +249,26 @@ export function createDispatchReplyOperationCoordinator(params: {
     } finally {
       clearAbortControllers();
       admission.release();
+    }
+  };
+
+  const armPreDispatchLifecycleAbortRelease = () => {
+    const abortSignal =
+      params.replyOptions?.turnAdoptionLifecycle?.abortSignal ?? params.replyOptions?.abortSignal;
+    if (!abortSignal || !preDispatchLifecycleAdmission) {
+      return;
+    }
+    removePreDispatchLifecycleAbortListener?.();
+    const onAbort = () => {
+      void releasePreDispatchLifecycleAdmission(() =>
+        waitForReplyDispatcherIdle(params.dispatcher),
+      );
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    removePreDispatchLifecycleAbortListener = () =>
+      abortSignal.removeEventListener("abort", onAbort);
+    if (abortSignal.aborted) {
+      onAbort();
     }
   };
 
@@ -452,6 +477,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         } else {
           dispatchLifecycleAbortController = lifecycleOnlyAbortController;
         }
+        armPreDispatchLifecycleAbortRelease();
         return { status: "ready" };
       }
       if (
@@ -464,6 +490,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       ) {
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;
         dispatchLifecycleAbortController = lifecycleOnlyAbortController;
+        armPreDispatchLifecycleAbortRelease();
         logVerbose(
           `dispatch-from-config: allowing Slack routed thread ${params.routeThreadId} while ${dispatchOperationSessionKey} has an active reply operation in another Slack thread`,
         );

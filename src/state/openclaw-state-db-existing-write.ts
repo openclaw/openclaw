@@ -12,7 +12,11 @@ import {
   getCanonicalSqliteTableNames,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
+  readSqliteCacheDataVersion,
+} from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
@@ -179,6 +183,7 @@ function createExistingOpenClawStateWriter(
       }
       // Facts rebuilt outside BEGIN survive ordinary transaction commits.
       if (admitted) {
+        readSqliteCacheDataVersion(db);
         getAdmittedSqliteSchemaFacts(db);
       }
       const busyTimeoutMs =
@@ -196,6 +201,7 @@ function createExistingOpenClawStateWriter(
           });
           let needsAdmission = !admitted;
           if (admitted) {
+            readSqliteCacheDataVersion(db);
             const facts = getAdmittedSqliteSchemaFacts(db);
             if (!facts) {
               throw new Error("Existing-state writer schema facts are unavailable.");

@@ -30,6 +30,28 @@ describe("tool image sanitizing", () => {
     return createSolidPngBuffer(420, 120, { r: 0x7f, g: 0x7f, b: 0x7f });
   };
 
+  it.each([
+    { name: "nonempty text", block: { type: "text", text: "hello" }, admitted: true },
+    { name: "empty text", block: { type: "text", text: "" }, admitted: true },
+    { name: "missing text", block: { type: "text" }, admitted: false },
+    { name: "nonstring text", block: { type: "text", text: 42 }, admitted: false },
+    { name: "toolResult tag", block: { type: "toolResult", text: "hello" }, admitted: false },
+  ])("preserves text-only admission and identity for $name", async ({ block, admitted }) => {
+    const content = [block] as Parameters<typeof sanitizeToolResultImages>[0]["content"];
+    const details = { marker: "retained" };
+    const result = { content, details };
+    const original = structuredClone(result);
+
+    const sanitized = await sanitizeToolResultImages(result, "test:text");
+
+    expect(sanitized === result).toBe(!admitted);
+    expect(sanitized.content === content).toBe(!admitted);
+    expect(sanitized.content).toHaveLength(1);
+    expect(sanitized.content[0]).toBe(block);
+    expect(sanitized.details).toBe(details);
+    expect(result).toEqual(original);
+  });
+
   it("shrinks oversized images to the configured byte limit", async () => {
     const maxBytes = 64 * 1024;
     const width = 300;

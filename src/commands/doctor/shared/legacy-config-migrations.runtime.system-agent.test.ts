@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type {
   AgentDefaultsConfig,
   AgentEntryConfig,
@@ -22,7 +23,10 @@ beforeAll(async () => {
 afterAll(() => restore?.());
 const migrate = (raw: unknown) =>
   applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
-function roster(entries: Record<string, AgentEntryConfig>, shape: string) {
+type LegacyAgentEntries = NonNullable<
+  NonNullable<OpenClawConfigWithLegacyRoster["agents"]>["entries"]
+>;
+function roster(entries: LegacyAgentEntries, shape: string) {
   return shape === "entries"
     ? { entries }
     : {
@@ -41,7 +45,9 @@ it("removes crestodian without mutating the separately retired systemAgent block
 
 describe("ambient owner migration", () => {
   it.each(["entries", "list"])("restores ownership from markerless %s rosters", (shape) => {
-    const raw: OpenClawConfig = { agents: roster({ ops: {}, main: {} }, shape) };
+    const raw: OpenClawConfigWithLegacyRoster = {
+      agents: roster({ ops: {}, main: {} }, shape),
+    };
     expect(() => resolveAmbientOwnerAgentId(raw)).toThrow("no explicit owner");
     expect(resolveHeartbeatAgents(raw)).toEqual([]);
     expect(findLegacyConfigIssues(raw)).not.toContainEqual(
@@ -60,22 +66,30 @@ describe("ambient owner migration", () => {
     expect(raw.agents?.defaults).toBeUndefined();
   });
 
-  it.each<{ entries: Record<string, AgentEntryConfig>; owner: string }>([
-    { entries: { ops: {} }, owner: "ops" },
-    { entries: { main: {}, ops: { default: true } }, owner: "ops" },
-  ])("keeps resolved owners quiet: $entries", ({ entries, owner }) => {
-    const raw: OpenClawConfig = { agents: { entries } };
-    expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
-    expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
-    const migrated: OpenClawConfig = migrate(raw).next ?? raw;
-    expect(migrated.agents?.defaults?.systemAgent).toBeUndefined();
-    expect(migrated.agents?.defaults?.heartbeat).toBeUndefined();
-    expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
-    expect(migrate(migrated)).toEqual({ next: null, changes: [] });
-  });
+  it.each<{ entries: LegacyAgentEntries; owner: string; materialized: boolean }>([
+    { entries: { ops: {} }, owner: "ops", materialized: false },
+    { entries: { main: {}, ops: { default: true } }, owner: "ops", materialized: true },
+  ])(
+    "preserves resolved owners while retiring markers: $entries",
+    ({ entries, owner, materialized }) => {
+      const raw: OpenClawConfigWithLegacyRoster = { agents: { entries } };
+      expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
+      expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
+      const migrated: OpenClawConfig = migrate(raw).next ?? raw;
+      expect(migrated.agents?.defaults?.systemAgent).toEqual(
+        materialized ? { agentId: owner } : undefined,
+      );
+      expect(migrated.agents?.defaults?.heartbeat).toEqual(
+        materialized ? { agentId: owner } : undefined,
+      );
+      expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
+      expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
+      expect(migrate(migrated)).toEqual({ next: null, changes: [] });
+    },
+  );
 
   it("seeds a marked default ignored by explicit ownership", () => {
-    const raw: OpenClawConfig = {
+    const raw: OpenClawConfigWithLegacyRoster = {
       agents: { ownership: "explicit", entries: { main: {}, ops: { default: true } } },
     };
     expect(() => resolveAmbientOwnerAgentId(raw)).toThrow("no explicit owner");

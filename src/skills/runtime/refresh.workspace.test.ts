@@ -7,13 +7,13 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
 } from "../loading/workspace-skill-sources.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";

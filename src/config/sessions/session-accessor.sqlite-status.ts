@@ -127,7 +127,7 @@ export function hasSessionEntriesByStatus(
 }
 
 export function readSessionEntriesByStatus(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   statuses: readonly SessionEntryStatus[],
   sessionKeys?: readonly string[],
 ): SessionEntrySummary[] {

@@ -15,24 +15,19 @@ import {
 } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  type NativeI18nSite,
+  type NativeI18nSurface,
+  serializeNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
-
-type NativeI18nSurface = "android" | "apple";
 
 export { NATIVE_I18N_LOCALES };
 
-export type NativeI18nEntry = {
-  id: string;
-  source: string;
-  surface: NativeI18nSurface;
-  sites: NativeI18nSite[];
+export type NativeI18nEntry = NativeI18nInventoryEntry & {
   /** Request-only owner excerpt; never persisted in the source inventory. */
   sourceContext?: string;
-};
-
-export type NativeI18nSite = {
-  kind: string;
-  path: string;
 };
 
 type NativeInterpolation = {
@@ -1129,27 +1124,15 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
     );
 }
 
-async function readNativeI18nInventory(): Promise<{
-  raw: string;
-}> {
-  let raw: string;
+async function readNativeI18nInventory(): Promise<string> {
   try {
-    raw = await readFile(OUTPUT_PATH, "utf8");
+    return await readFile(OUTPUT_PATH, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { raw: "" };
+      return "";
     }
     throw error;
   }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.entries)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  return { raw };
 }
 
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
@@ -1226,31 +1209,15 @@ export function collectNativeI18nEntriesFromSources(
   return assignNativeI18nIds(entries);
 }
 
-export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
-  return [
-    "{",
-    '  "version": 2,',
-    '  "entries": [',
-    ...entries.map(
-      ({ id, source, surface, sites }, index) =>
-        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
-    ),
-    "  ]",
-    "}",
-    "",
-  ].join("\n");
-}
-
 async function syncNativeI18n(options: {
   checkInventory: boolean;
   checkLocales: boolean;
   reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
-  const currentInventory = await readNativeI18nInventory();
+  const current = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
   const expected = serializeNativeI18nInventory(entries);
-  const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
       "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",

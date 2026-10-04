@@ -5,7 +5,6 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
@@ -60,10 +59,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-const loadReplyResolverRuntime = createLazyRuntimeModule(
-  () => import("./reply-resolver.runtime.js"),
-);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;
@@ -130,7 +125,7 @@ export async function monitorWebChannel(
   tuning: WebMonitorTuning = {},
 ) {
   const activeReplyResolver =
-    replyResolver ?? (await loadReplyResolverRuntime()).getReplyFromConfig;
+    replyResolver ?? (await import("./reply-resolver.runtime.js")).getReplyFromConfig;
   const runId = newConnectionId();
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });

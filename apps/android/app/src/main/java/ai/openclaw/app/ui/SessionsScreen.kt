@@ -65,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -120,8 +121,12 @@ internal fun SessionsScreen(
   var deleteSessionTarget by
     rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
-  var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
-  var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var renameGroupTarget by key("rename-group-owner") {
+    rememberSaveable(stateSaver = SessionGroupActionTargetSaver) { mutableStateOf<SessionGroupActionTarget?>(null) }
+  }
+  var deleteGroupTarget by key("delete-group-owner") {
+    rememberSaveable(stateSaver = SessionGroupActionTargetSaver) { mutableStateOf<SessionGroupActionTarget?>(null) }
+  }
   var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
   val searchState =
     rememberSessionBrowserSearchState(
@@ -158,6 +163,8 @@ internal fun SessionsScreen(
     renameSessionTarget = renameSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
     groupSessionTarget = groupSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
     deleteSessionTarget = deleteSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
+    renameGroupTarget = renameGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
+    deleteGroupTarget = deleteGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
   }
 
   LaunchedEffect(isConnected, filter) {
@@ -349,9 +356,9 @@ internal fun SessionsScreen(
               if (section.isCategory) {
                 SessionGroupHeader(
                   title = title,
-                  onRename = { renameGroupName = title },
+                  onRename = { renameGroupTarget = SessionGroupActionTarget(activeGatewayStableId, title) },
                   onNewGroup = { newGroupDialogVisible = true },
-                  onDelete = { deleteGroupName = title },
+                  onDelete = { deleteGroupTarget = SessionGroupActionTarget(activeGatewayStableId, title) },
                 )
               } else {
                 Text(
@@ -527,19 +534,22 @@ internal fun SessionsScreen(
     )
   }
 
-  renameGroupName?.let { group ->
+  renameGroupTarget?.let { target ->
     SessionTextDialog(
       title = nativeString("Rename group"),
-      stateKey = "group-rename:$group",
-      initialValue = group,
+      stateKey = "group-rename:${target.gatewayStableId}:${target.name}",
+      initialValue = target.name,
       confirmLabel = nativeString("Rename"),
       allowEmpty = false,
-      onDismiss = { renameGroupName = null },
+      onDismiss = { renameGroupTarget = null },
       onConfirm = { value ->
-        renameGroupName = null
+        renameGroupTarget = null
+        if (target.gatewayStableId != viewModel.activeGatewayStableId.value) return@SessionTextDialog
         val next = value.trim()
-        if (next.isNotEmpty() && next != group) {
-          coroutineScope.launch { viewModel.renameChatSessionGroup(from = group, to = next) }
+        if (next.isNotEmpty() && next != target.name) {
+          coroutineScope.launch {
+            viewModel.renameChatSessionGroup(from = target.name, to = next, expectedGatewayStableId = target.gatewayStableId)
+          }
         }
       },
     )
@@ -560,14 +570,18 @@ internal fun SessionsScreen(
     )
   }
 
-  deleteGroupName?.let { group ->
+  deleteGroupTarget?.let { target ->
+    val group = target.name
     SessionDeleteDialog(
       title = nativeString("Delete group?"),
       text = nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group),
-      onDismiss = { deleteGroupName = null },
+      onDismiss = { deleteGroupTarget = null },
       onConfirm = {
-        deleteGroupName = null
-        coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
+        deleteGroupTarget = null
+        if (target.gatewayStableId != viewModel.activeGatewayStableId.value) return@SessionDeleteDialog
+        coroutineScope.launch {
+          viewModel.deleteChatSessionGroup(group, expectedGatewayStableId = target.gatewayStableId)
+        }
       },
     )
   }
@@ -1425,6 +1439,19 @@ internal data class SessionActionTarget(
 
   fun matchesGateway(activeGatewayStableId: String?): Boolean = gatewayStableId == activeGatewayStableId
 }
+
+private data class SessionGroupActionTarget(
+  val gatewayStableId: String?,
+  val name: String,
+)
+
+private val SessionGroupActionTargetSaver =
+  Saver<SessionGroupActionTarget?, ArrayList<String>>(
+    save = { target -> target?.let { arrayListOf(it.gatewayStableId.orEmpty(), it.name) } ?: arrayListOf() },
+    restore = { values ->
+      if (values.size == 2) SessionGroupActionTarget(values[0].ifEmpty { null }, values[1]) else null
+    },
+  )
 
 private const val SESSION_ACTION_TARGET_STATE_FIELDS = 9
 

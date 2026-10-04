@@ -3,6 +3,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
   WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
@@ -939,19 +940,11 @@ export class WhatsAppConnectionController {
 
   private async waitForSetupStep<T>(task: Promise<T>): Promise<T> {
     this.throwIfSetupStopped();
-    const signal = this.setupAbortController.signal;
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(stoppedControllerError());
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      return await Promise.race([task, aborted]);
-    } finally {
-      if (onAbort) {
-        signal.removeEventListener("abort", onAbort);
-      }
-    }
+    return await racePromiseWithAbortSignal(
+      task,
+      this.setupAbortController.signal,
+      stoppedControllerError,
+    );
   }
 
   private async ensureConnectionOwnership(): Promise<void> {

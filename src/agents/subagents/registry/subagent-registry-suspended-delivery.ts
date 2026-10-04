@@ -1,7 +1,10 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -96,7 +99,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
   });
-  if ((entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) && isHookCurrent()) {
+  if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
     await safeRemoveAttachmentsDir(entry, isHookCurrent);
   }
   assertCurrent();

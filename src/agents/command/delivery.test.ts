@@ -93,7 +93,7 @@ function deliverAgentCommandResultForTest({
 }: DeliveryFixture) {
   return deliverAgentCommandResult({
     cfg: (workspace
-      ? { agents: { list: [{ id: "tester", workspace: "/tmp/agent-workspace" }] } }
+      ? { agents: { entries: { tester: { workspace: "/tmp/agent-workspace" } } } }
       : {}) as OpenClawConfig,
     deps: {},
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

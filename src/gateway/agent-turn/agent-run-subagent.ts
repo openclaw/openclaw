@@ -1,5 +1,7 @@
 /** Native subagent registration and paused-run adoption precede Gateway acceptance. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   readFollowupRequest,
@@ -29,6 +31,7 @@ export async function prepareGatewaySubagentRun(params: {
   cfg: OpenClawConfig;
   client: AgentTurnPrincipal | null;
   resolvedSessionKey?: string;
+  activeSessionAgentId?: string;
   inputProvenance?: InputProvenance;
   sessionEntry?: SessionEntry;
   request: Pick<AgentRunRequest, "message">;
@@ -104,6 +107,7 @@ export async function prepareGatewaySubagentRun(params: {
         getLatestLiveSubagentRunByChildSessionKey(
           sessionKey,
           (entry) => entry.pauseReason === "sessions_yield",
+          params.activeSessionAgentId,
         )
       : internalOwner === "plugin_subagent"),
   );
@@ -115,6 +119,7 @@ export async function prepareGatewaySubagentRun(params: {
         cfg: params.cfg,
         runId: params.runId,
         childSessionKey: sessionKey,
+        childAgentId: params.activeSessionAgentId,
         task: params.request.message.trim(),
         requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
@@ -131,19 +136,28 @@ export async function prepareGatewaySubagentRun(params: {
       });
     }
   }
-  return {
-    pluginSubagent,
-    // Operator follow-ups may continue a child; inter-session delivery retains its own owner.
-    reactivateSubagent: Boolean(
-      sessionKey &&
-      !params.isOneShotModelRun &&
-      !interSession &&
-      !pluginSubagent &&
-      internalOwner !== "native_subagent" &&
-      !params.sessionEntry?.acp &&
-      !isAcpSessionKey(sessionKey),
-    ),
-  };
+  // Operator follow-ups may continue a child; inter-session delivery retains its own owner.
+  const reactivateSubagent = Boolean(
+    sessionKey &&
+    !params.isOneShotModelRun &&
+    !interSession &&
+    !pluginSubagent &&
+    internalOwner !== "native_subagent" &&
+    !isAcpSessionKey(sessionKey),
+  );
+  if (!reactivateSubagent || !sessionKey) {
+    return { pluginSubagent, reactivateSubagent: false };
+  }
+  const entry = params.assertResumeAdmissionCurrent() ?? params.sessionEntry;
+  const agentId =
+    params.activeSessionAgentId ??
+    resolveSessionStorePathForAcp({ cfg: params.cfg, sessionKey }).agentId;
+  const [acpMeta] = await readAcpSessionMetaForEntries({
+    cfg: params.cfg,
+    entries: [{ agentId, sessionKey, entry }],
+  });
+  params.assertResumeAdmissionCurrent();
+  return { pluginSubagent, reactivateSubagent: acpMeta == null };
 }
 
 /** Rejection may settle only the exact physical execution already adopted by this admission. */
@@ -197,4 +211,25 @@ export async function settleUnstartedGatewayFollowup(params: {
       params.context.logGateway,
     ).warning(`failed to settle unstarted follow-up ${params.runId}`)(error);
   }
+}
+
+/** A registered subagent run passes its timeout only to the turn admitted for its own session. */
+export function resolveRegisteredSubagentTimeoutSeconds(params: {
+  sessionKey?: string;
+  agentId?: string;
+  admittedSessionId: string;
+  admittedSessionEntry: SessionEntry | undefined;
+}): number | undefined {
+  const registeredRun = params.sessionKey
+    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionKey, undefined, params.agentId)
+    : undefined;
+  const registeredSession = registeredRun?.childSessionIdentity;
+  // Admission may adopt a replacement; retained rows must match its final identity.
+  const inherits =
+    registeredRun &&
+    !registeredRun.execution.suppressSessionEffects &&
+    registeredSession?.sessionId === params.admittedSessionId &&
+    registeredSession.sessionId === params.admittedSessionEntry?.sessionId &&
+    registeredSession.lifecycleRevision === params.admittedSessionEntry.lifecycleRevision;
+  return inherits ? (registeredRun.runTimeoutSeconds ?? 0) : undefined;
 }

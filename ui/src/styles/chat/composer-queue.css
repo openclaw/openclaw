@@ -251,7 +251,10 @@
   grid-column: 1;
 }
 
-.chat-queue__leading svg {
+.chat-queue__leading svg,
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -463,18 +466,6 @@
 .chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.chat-queue__remove svg,
-.chat-queue__edit-submit svg,
-.chat-queue__edit-cancel svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-queue__more svg {

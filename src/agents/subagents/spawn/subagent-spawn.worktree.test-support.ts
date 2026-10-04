@@ -182,7 +182,10 @@ export function registerManagedWorktreeSpawnCases(options: {
             : { expectsCompletionMessage: false }),
         })();
         const spawned = await withinTest(spawn, signal);
-        expect(spawned.details).toMatchObject({ status: "accepted", context: "isolated" });
+        expect(spawned.details, JSON.stringify(spawned)).toMatchObject({
+          status: "accepted",
+          context: "isolated",
+        });
         const details = expectDefined(
           normalizeAcceptedSessionSpawnResult(spawned),
           "accepted spawn",
@@ -247,6 +250,13 @@ export function registerManagedWorktreeSpawnCases(options: {
         modelResult.resolve({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
         await withinTest(executionIdle, signal);
         await withinTest(options.settleRegistry(), signal);
+        await withinTest(
+          AsyncWorkScope.runWhenAllIdle(
+            () => [bound.execution],
+            () => {},
+          ),
+          signal,
+        );
         if (cleanup === "delete") {
           expect(loadSessionEntry(childScope)).toBeUndefined();
           await expect(fs.stat(checkout.path)).rejects.toMatchObject({ code: "ENOENT" });

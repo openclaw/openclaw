@@ -201,12 +201,14 @@ describe("current attachments in an active remote placement", () => {
                 : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
             );
             request.onDispatchReady?.();
-            const transcriptLeafId = openSessionManager().appendMessage({
+            const transcriptLeafId = await (
+              await openSessionManager()
+            ).appendMessageAsync({
               role: "assistant",
               content: [{ type: "text", text: "Read both" }],
               api: "openai-responses",
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               usage: {
                 input: 1,
                 output: 1,

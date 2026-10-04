@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
@@ -19,6 +20,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
@@ -307,9 +309,19 @@ describe("worker turn launcher local placement", () => {
       await expect(provider.executeTurn(claim, turn(), runLocal)).rejects.toThrow(
         "needs a cloud worker",
       );
-      await expect(provider.executeLocalTurn(claim, runLocal)).rejects.toThrow(
-        "needs a cloud worker",
-      );
+      const sql = observeHostDataSql();
+      try {
+        await expect(provider.executeLocalTurn(claim, runLocal)).rejects.toThrow(
+          "needs a cloud worker",
+        );
+        expect(
+          sql.queries.filter((query) =>
+            /\bsession_(?:nodes|windows|participants|entry_snapshots)\b/.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(runLocal).not.toHaveBeenCalled();
 
       // Publication can retain the old repository row after an explicit move.
@@ -324,6 +336,45 @@ describe("worker turn launcher local placement", () => {
       expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
     },
   );
+
+  it("rejects local placement when caller authority ends after the metadata read", async () => {
+    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const controller = new AbortController();
+    const revoked = new Error("local turn source retired");
+    const read = sessionEntryReader.readSessionEntryReadOnlyInWorker;
+    const heldRead = vi
+      .spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await read(...args);
+        controller.abort(revoked);
+        return entry;
+      });
+    const claimTurn = vi.spyOn(placements, "claimTurn");
+    const runLocal = vi.fn(async () => "local execution started");
+    try {
+      await expect(
+        provider.executeLocalTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "revoked-local",
+          },
+          runLocal,
+          () => controller.signal.throwIfAborted(),
+        ),
+      ).rejects.toBe(revoked);
+      expect(claimTurn).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      heldRead.mockRestore();
+      claimTurn.mockRestore();
+    }
+  });
 
   it("mints a fresh claim token when a later turn reuses the run id", async () => {
     const environments = unusedEnvironments();
@@ -566,7 +617,7 @@ describe("worker turn launcher local placement", () => {
               agents: {
                 defaults: {
                   models: {
-                    "openai/gpt-test": { agentRuntime: { id: runtimeId } },
+                    "openai/gpt-5.6-luna": { agentRuntime: { id: runtimeId } },
                   },
                 },
               },
@@ -624,7 +675,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "active") {
           throw new Error("expected an active placement");
         }
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: SESSION_ID,
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,
@@ -718,7 +769,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "failed" || placement.turnClaim !== null) {
           throw new Error("expected terminal placement before teardown recovery");
         }
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -759,7 +810,7 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: expect.stringContaining(expectedTerminalReason),
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 
@@ -863,7 +914,7 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(reconcileWorkspace).not.toHaveBeenCalled();
       expect(reconcileActivePlacement).not.toHaveBeenCalled();
 

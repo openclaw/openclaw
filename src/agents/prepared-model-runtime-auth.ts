@@ -6,6 +6,7 @@ import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { SelectedModelCredential } from "./model-auth-selected-credential.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -90,6 +91,22 @@ export function hasSamePreparedModelCatalogAuth(
 
 /** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
 export type PreparedAccountCatalogAccess = {
+  reconcileAuth: (
+    authStore: AuthProfileStore,
+    includesProvider: (provider: string) => boolean,
+    profileIds?: readonly string[],
+  ) => void;
+  readServiceTiers: (params: {
+    identityKey: string;
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+  }) => readonly string[] | undefined;
+  prepareServiceTierObserver: (params: {
+    selectedCredential: SelectedModelCredential;
+    credential?: AuthProfileCredential;
+  }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
   acquire: (params: {
     profileId: string;
     credential: AuthProfileCredential;

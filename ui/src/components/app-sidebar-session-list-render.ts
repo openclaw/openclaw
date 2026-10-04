@@ -52,6 +52,7 @@ type SidebarSessionListHost = SessionListHost & {
       SessionDataController,
       | "context"
       | "sessionsLoading"
+      | "sessionsStartingUp"
       | "sessionsResult"
       | "sessionCatalogs"
       | "sessionCatalogLive"
@@ -515,7 +516,6 @@ function renderSessionCatalog(params: {
   return html`
     ${renderer({
       catalogs: [catalog],
-      connected: host.connected,
       basePath: snapshot.basePath,
       routeSessionKey: snapshot.routeSessionKey,
       newSessionAgentId: snapshot.newSessionAgentId,
@@ -695,6 +695,17 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
+      ${
+        host.sessionData.sessionsStartingUp
+          ? html`<div
+              class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="btn__spinner" aria-hidden="true"></span> ${t("agentStartup.short")}
+            </div>`
+          : nothing
+      }
       ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
       ${renderSessionMutationError(host)} ${body}
     </section>

@@ -160,7 +160,13 @@ class PortalsPage extends OpenClawLightDomElement {
   private async loadPendingEnvironment(): Promise<void> {
     const environmentId = this.pendingEnvironmentId;
     const scope = this.gateway.capture();
-    if (!environmentId || !scope || this.environmentLoading || (this.embedded && !this.presented)) {
+    if (
+      !environmentId ||
+      !scope ||
+      !this.canReadPortalState ||
+      this.environmentLoading ||
+      (this.embedded && !this.presented)
+    ) {
       return;
     }
     const generation = ++this.environmentRequestGeneration;
@@ -200,6 +206,15 @@ class PortalsPage extends OpenClawLightDomElement {
 
   private get portalListSupported(): boolean {
     return isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, "portal.list") !== false;
+  }
+
+  private get canReadPortalState(): boolean {
+    return canCallGatewayMethod(
+      this.gateway.snapshot,
+      this.pendingEnvironmentId ? "environments.status" : "portal.list",
+      "operator.read",
+      { requireAdvertisement: false },
+    );
   }
 
   private get canClosePortal(): boolean {
@@ -295,7 +310,7 @@ class PortalsPage extends OpenClawLightDomElement {
   private async loadPortals() {
     if (
       this.pendingEnvironmentId ||
-      !this.gateway.connected ||
+      !this.canReadPortalState ||
       !this.portalListSupported ||
       this.loading ||
       (this.embedded && !this.presented)
@@ -363,6 +378,13 @@ class PortalsPage extends OpenClawLightDomElement {
 
   private renderEmptyState() {
     const unsupported = !this.portalListSupported;
+    if (this.gateway.connected && !this.canReadPortalState) {
+      return html`<section class="portals-empty" role="status" aria-live="polite">
+        <div class="portals-empty__note">
+          ${t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
+        </div>
+      </section>`;
+    }
     return html`
       <section class="portals-empty" role="status" aria-live="polite">
         ${
@@ -502,7 +524,7 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.pendingEnvironmentId) {
+    if (this.pendingEnvironmentId && (!this.gateway.connected || this.canReadPortalState)) {
       const environment =
         this.pendingEnvironment?.id === this.pendingEnvironmentId ? this.pendingEnvironment : null;
       const error =

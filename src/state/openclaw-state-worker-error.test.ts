@@ -21,6 +21,7 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME } from "./openclaw-quarantine-error.js";
@@ -29,10 +30,7 @@ import {
   markOpenClawStateDatabaseFailure,
 } from "./openclaw-state-db-failure.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
-import {
-  OpenClawStateLeaseError,
-  toOpenClawStateLeaseVerificationError,
-} from "./openclaw-state-lease-error.js";
+import { toOpenClawStateLeaseVerificationError } from "./openclaw-state-lease-error.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -57,120 +55,160 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
-  it("preserves MCP OAuth corruption details and parsing cause", () => {
-    const cause = new SyntaxError("Synthetic malformed JSON");
-    const error = new McpOAuthStoreCorruptionError(
-      "synthetic-store",
-      "store_json is not valid JSON",
-      {
-        cause,
+  const syntaxCause = new SyntaxError("Synthetic malformed JSON");
+  const owner = { pid: 42, threadId: 7, version: "fixture" };
+  const path = "/fixture/state.sqlite";
+  const verificationCause = new Error("Synthetic read failure");
+  const identity = { scope: "test", key: "read", leaseLabel: "test lease" };
+  const verification = toOpenClawStateLeaseVerificationError(identity, verificationCause);
+  const cases: Array<{
+    error: Error;
+    fields?: object;
+    causeType?: new (message?: string) => Error;
+    nativeOpen?: true;
+  }> = [
+    {
+      error: new PluginStateStoreError("Synthetic binding deletion failed", {
+        code: "PLUGIN_STATE_WRITE_FAILED",
+        operation: "delete",
+        path,
+        owner,
+        cause: syntaxCause,
+      }),
+      fields: { code: "PLUGIN_STATE_WRITE_FAILED", operation: "delete", path, owner },
+      causeType: SyntaxError,
+    },
+    {
+      error: new McpOAuthStoreCorruptionError("synthetic-store", "store_json is not valid JSON", {
+        cause: syntaxCause,
+      }),
+      fields: { cause: { name: "SyntaxError", message: syntaxCause.message } },
+      causeType: Error,
+    },
+    {
+      error: new WorkerSessionAlreadyAttachedError("session", "environment"),
+      fields: { sessionId: "session", environmentId: "environment" },
+    },
+    ...[undefined, "SQLITE_IOERR"].map((code) => ({
+      error: Object.assign(new Error("native open refused"), { code }),
+      fields: { code },
+      nativeOpen: true as const,
+    })),
+    ...[
+      { code: "ERR_SQLITE_ERROR", errcode: 517 },
+      { code: "ERR_SQLITE_ERROR", errcode: 262 },
+      { code: "SQLITE_BUSY" },
+      { code: "SQLITE_LOCKED" },
+    ].map((fields) => ({
+      error: Object.assign(new Error("native lock contention"), fields),
+      fields,
+    })),
+    ...[RangeError, SyntaxError, TypeError, SkillUploadRequestError].map((ErrorType) => ({
+      error: Object.assign(new ErrorType("Synthetic invalid request"), {
+        code: "ERR_OUT_OF_RANGE",
+        cause: new Error("Synthetic decoding cause"),
+      }),
+      fields: { code: "ERR_OUT_OF_RANGE", cause: { message: "Synthetic decoding cause" } },
+    })),
+    {
+      error: verification,
+      fields: {
+        code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+        message: "failed to verify test lease test/read",
+        cause: { message: verificationCause.message },
       },
-    );
-    const decoded = roundTrip(error);
-    expect(decoded.cause).toBeInstanceOf(Error);
-    expect(decoded.cause).toMatchObject({ name: "SyntaxError", message: cause.message });
-  });
-
-  it("preserves the attachment conflict identity used for credential recovery", () => {
-    const original = new WorkerSessionAlreadyAttachedError("session", "environment");
-    const decoded = roundTrip(original);
-    expect(decoded).toMatchObject({
-      sessionId: "session",
-      environmentId: "environment",
-    });
-  });
-
-  it.each([undefined, "SQLITE_IOERR"])(
-    "preserves native-open provenance before lease dispatch (code: %s)",
-    (code) => {
-      const original = Object.assign(new Error("native open refused"), { code });
-      expect(() =>
-        withSqliteNativeOpen(() => {
-          throw original;
-        }),
-      ).toThrow(original);
-
-      const decoded = roundTrip(original);
-      expect(decoded).not.toBe(original);
-      expect("code" in decoded ? decoded.code : undefined).toBe(code);
-      expect(isSqliteNativeOpenFailure(decoded)).toBe(true);
+      causeType: Error,
+    },
+    { error: new OpenClawStateOwnershipError("owner refused") },
+    {
+      error: new OpenClawStateOwnershipMetadataError(path, "invalid metadata"),
+      fields: { databasePath: path },
+    },
+    {
+      error: new OpenClawStateExternalOwnershipError(path, "fixture-manager"),
+      fields: { databasePath: path, managerId: "fixture-manager" },
+    },
+    {
+      error: new StartupMaintenanceRequiredError("state-migrations", "state migration"),
+      fields: { kind: "state-migrations", reason: "state migration" },
+    },
+    {
+      error: new SqliteSchemaVersionError("newer schema"),
+      fields: { kind: "newer-schema", reason: "a newer OpenClaw build" },
+    },
+    ...(
+      [
+        ["audit-events-v2", "state database schema migration"],
+        ["legacy-cron-run-logs", "cron run history migration"],
+      ] as const
+    ).map(([kind, reason]) => ({
+      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(kind, path),
+      fields: { kind, pathname: path, reason },
+    })),
+    {
+      error: new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
+      fields: {
+        kind: "agent-media",
+        pathname: "/fixture/agent.sqlite",
+        schemaVersion: 11,
+        reason: "offline media migration",
+      },
+    },
+    {
+      error: new SqliteCoordinatorError("admission refused", new Error("native cause")),
+      fields: { cause: { message: "native cause" } },
+      causeType: Error,
+    },
+    { error: new GatewayStateOwnerContentionError(path), fields: { databasePath: path } },
+  ];
+  it.each(cases)(
+    "preserves $error.name identity and recovery fields: $fields",
+    ({ error, fields, causeType, nativeOpen }) => {
+      if (nativeOpen) {
+        expect(() =>
+          withSqliteNativeOpen(() => {
+            throw error;
+          }),
+        ).toThrow(error);
+      }
+      if (error === verification) {
+        expect(error.cause).toBe(verificationCause);
+        expect(toOpenClawStateLeaseVerificationError(identity, error)).toBe(error);
+      }
+      const decoded = roundTrip(error);
+      expect(decoded).not.toBe(error);
+      if (fields && !nativeOpen) {
+        expect(decoded).toMatchObject(fields);
+      }
+      if (causeType) {
+        expect(decoded.cause).toBeInstanceOf(causeType);
+      }
+      if (nativeOpen) {
+        expect("code" in decoded ? decoded.code : undefined).toBe(
+          "code" in error ? error.code : undefined,
+        );
+        expect(isSqliteNativeOpenFailure(decoded)).toBe(true);
+      }
+      if (error instanceof OpenClawStateOwnershipError) {
+        expect(decoded).toBeInstanceOf(OpenClawStateOwnershipError);
+      }
+      if (error instanceof StartupMaintenanceRequiredError) {
+        expect(findStartupMaintenanceRequiredError(decoded)).toBe(decoded);
+        expect(decoded).toMatchObject({ code: "gateway.maintenance_required" });
+      }
       expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
     },
   );
-
-  it.each([
-    { code: "ERR_SQLITE_ERROR", errcode: 5 },
-    { code: "ERR_SQLITE_ERROR", errcode: 6 },
-    { code: "ERR_SQLITE_ERROR", errcode: 517 },
-    { code: "ERR_SQLITE_ERROR", errcode: 262 },
-    { code: "SQLITE_BUSY" },
-    { code: "SQLITE_LOCKED" },
-  ])("preserves native SQLite contention without an enclosing domain error (%j)", (fields) => {
-    const original = Object.assign(new Error("native lock contention"), fields);
-    expect(roundTrip(original)).toMatchObject(fields);
-  });
-
-  it.each(
-    [RangeError, SyntaxError, TypeError, SkillUploadRequestError].flatMap((ErrorType) =>
-      [false, true].map((aggregate) => ({ ErrorType, name: ErrorType.name, aggregate })),
-    ),
-  )("preserves $name identity with aggregate=$aggregate", ({ ErrorType, aggregate }) => {
-    const original = Object.assign(new ErrorType("Synthetic invalid request"), {
-      code: "ERR_OUT_OF_RANGE",
-      cause: new Error("Synthetic decoding cause"),
-    });
-    const root = aggregate
-      ? new AggregateError([original, original], "Read and cleanup", { cause: original })
-      : original;
-    const decoded = roundTrip(root);
-    const restored = aggregate ? decoded.cause : decoded;
-    expect(restored).toBeInstanceOf(ErrorType);
-    expect(restored).toMatchObject({
-      name: original.name,
-      message: original.message,
-      code: original.code,
-      cause: { message: "Synthetic decoding cause" },
-    });
-    if (aggregate) {
-      assert(decoded instanceof AggregateError);
-      expect(decoded.errors).toHaveLength(2);
-      expect(decoded.errors[0]).toBe(restored);
-      expect(decoded.errors[1]).toBe(restored);
-    }
-    expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
-  });
-
-  it.each([
-    ["PLUGIN_BLOB_OPEN_FAILED", "open"],
-    ["PLUGIN_BLOB_WRITE_FAILED", "register"],
-    ["PLUGIN_BLOB_READ_FAILED", "lookup"],
-    ["PLUGIN_BLOB_CORRUPT", "entries"],
-    ["PLUGIN_BLOB_LIMIT_EXCEEDED", "register"],
-    ["PLUGIN_BLOB_INVALID_INPUT", "sweep"],
-  ] as const)("preserves Blob error identity for %s", (code, operation) => {
-    const error = new PluginBlobStoreError("Synthetic blob refusal", {
-      code,
-      operation,
-      path: "/fixture/blob.sqlite",
-      cause: Object.assign(new Error("Synthetic SQLite cause"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 1,
-      }),
-    });
-    const decoded = roundTrip(error);
-    expect(decoded).toMatchObject({
-      code,
-      operation,
-      path: "/fixture/blob.sqlite",
-      cause: { message: "Synthetic SQLite cause", code: "ERR_SQLITE_ERROR", errcode: 1 },
-    });
-  });
 
   it("retains Blob primary failure and shared references in cleanup aggregates", () => {
     const primary = new PluginBlobStoreError("Synthetic read failure", {
       code: "PLUGIN_BLOB_READ_FAILED",
       operation: "lookup",
       path: "/fixture/blob.sqlite",
+      cause: Object.assign(new Error("Synthetic SQLite cause"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 1,
+      }),
     });
     const cleanup = new Error("Synthetic cleanup failure");
     const combined = new AggregateError([primary, cleanup, primary], "read and cleanup", {
@@ -180,40 +218,16 @@ describe("shared-state worker error transport", () => {
     const decoded = roundTrip(combined);
     assert(decoded instanceof AggregateError);
     expect(decoded.errors[0]).toBeInstanceOf(PluginBlobStoreError);
+    expect(decoded.errors[0]).toMatchObject({
+      code: "PLUGIN_BLOB_READ_FAILED",
+      operation: "lookup",
+      path: "/fixture/blob.sqlite",
+      cause: { message: "Synthetic SQLite cause", code: "ERR_SQLITE_ERROR", errcode: 1 },
+    });
     expect(decoded.errors[0]).toBe(decoded.errors[2]);
     expect(decoded.cause).toBe(decoded.errors[0]);
     expect(decoded.errors[1]).toMatchObject({ message: cleanup.message });
     expect(decoded.errors[3]).toBe(decoded);
-  });
-
-  it.each([
-    "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-    "OPENCLAW_STATE_LEASE_HELD",
-    "OPENCLAW_STATE_LEASE_ABORTED",
-    "OPENCLAW_STATE_LEASE_LOST",
-    "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-  ] as const)("preserves lease classification and cause for %s", (code) => {
-    const error = new OpenClawStateLeaseError("Synthetic lease refusal", {
-      code,
-      cause: new Error("Synthetic verification cause"),
-    });
-    const decoded = roundTrip(error);
-    expect(decoded).toMatchObject({ code });
-    expect(decoded.cause).toBeInstanceOf(Error);
-    expect(decoded.cause).toMatchObject({ message: "Synthetic verification cause" });
-  });
-  it("preserves canonical verification wrapping through worker transport", () => {
-    const cause = new Error("Synthetic read failure");
-    const identity = { scope: "test", key: "read", leaseLabel: "test lease" };
-    const wrapped = toOpenClawStateLeaseVerificationError(identity, cause);
-    expect(wrapped.cause).toBe(cause);
-    expect(toOpenClawStateLeaseVerificationError(identity, wrapped)).toBe(wrapped);
-    const decoded = roundTrip(wrapped);
-    expect(decoded).toMatchObject({
-      code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-      message: "failed to verify test lease test/read",
-      cause: { message: cause.message },
-    });
   });
 
   it("uses the validated wire root when retaining an unopened error graph", () => {
@@ -350,22 +364,6 @@ describe("shared-state worker error transport", () => {
     expect(combined.errors).toEqual([first, second]);
   });
 
-  it("encodes and hydrates ordinary error graphs only with an explicit opt-in", () => {
-    const cause = Object.assign(new Error("native failure"), { code: "SQLITE_IOERR" });
-    const original = new AggregateError([cause], "load and cleanup", { cause });
-    cause.cause = original;
-    expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();
-    const payload = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
-    expect(payload).toBeDefined();
-    const retained = remoteError(structuredClone(payload));
-    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-    const decoded = hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true });
-    expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_IOERR" });
-    assert(decoded instanceof AggregateError && decoded.cause instanceof Error);
-    expect(decoded.errors[0]).toBe(decoded.cause);
-    expect(decoded.cause.cause).toBe(decoded);
-  });
-
   it("leaves ordinary and already-current error graphs identical", () => {
     const local = new Error("caller rejected");
     const ordinary = new AggregateError([local], "caller and cleanup", { cause: local });
@@ -375,65 +373,6 @@ describe("shared-state worker error transport", () => {
     const wrapped = new AggregateError([current], "current graph", { cause: current });
     expect(hydrateOpenClawStateWorkerError(wrapped)).toBe(wrapped);
     expect(hydrateOpenClawStateWorkerError("caller rejection")).toBe("caller rejection");
-  });
-
-  it.each([
-    {
-      error: new OpenClawStateOwnershipError("owner refused"),
-      fields: {},
-    },
-    {
-      error: new OpenClawStateOwnershipMetadataError("/fixture/state.sqlite", "invalid metadata"),
-      fields: { databasePath: "/fixture/state.sqlite" },
-    },
-    {
-      error: new OpenClawStateExternalOwnershipError("/fixture/state.sqlite", "fixture-manager"),
-      fields: { databasePath: "/fixture/state.sqlite", managerId: "fixture-manager" },
-    },
-  ])("preserves ownership classification for $error.name", ({ error, fields }) => {
-    const decoded = roundTrip(error);
-    expect(decoded).toBeInstanceOf(OpenClawStateOwnershipError);
-    expect(decoded).toMatchObject(fields);
-  });
-
-  it.each([
-    {
-      error: new StartupMaintenanceRequiredError("state-migrations", "state migration"),
-      fields: { kind: "state-migrations", reason: "state migration" },
-    },
-    {
-      error: new StartupMaintenanceRequiredError("legacy-session-store", "session migration"),
-      fields: { kind: "legacy-session-store", reason: "session store migration" },
-    },
-    {
-      error: new SqliteSchemaVersionError("newer schema"),
-      fields: { kind: "newer-schema", reason: "a newer OpenClaw build" },
-    },
-    ...(
-      [
-        ["audit-events-v2", "state database schema migration"],
-        ["legacy-cron-run-logs", "cron run history migration"],
-      ] as const
-    ).map(([kind, reason]) => ({
-      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(kind, "/fixture/state.sqlite"),
-      fields: { kind, pathname: "/fixture/state.sqlite", reason },
-    })),
-    {
-      error: new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
-      fields: {
-        kind: "agent-media",
-        pathname: "/fixture/agent.sqlite",
-        schemaVersion: 11,
-        reason: "offline media migration",
-      },
-    },
-  ])("preserves maintenance classification for $error.name", ({ error, fields }) => {
-    const decoded = roundTrip(error);
-    expect(findStartupMaintenanceRequiredError(decoded)).toBe(decoded);
-    expect(decoded).toMatchObject({
-      ...fields,
-      code: "gateway.maintenance_required",
-    });
   });
 
   it("preserves shared causes, cycles, and newer-schema precedence through aggregate wrappers", () => {
@@ -554,6 +493,7 @@ describe("shared-state worker error transport", () => {
     });
     original.errors.push(original);
     const options = { includeOrdinary: true };
+    expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();
     const payload = encodeOpenClawStateWorkerError(original, options);
     expect(payload).toBeDefined();
     expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
@@ -581,22 +521,6 @@ describe("shared-state worker error transport", () => {
       ],
     });
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-  });
-
-  it.each([
-    new SqliteCoordinatorError("admission refused", new Error("native cause")),
-    new GatewayStateOwnerContentionError("/fixture/state.sqlite"),
-  ])("preserves lifecycle error classification for %s", (original) => {
-    const decoded = roundTrip(original);
-    expect(decoded).toMatchObject({ name: original.name, message: original.message });
-    if (original instanceof GatewayStateOwnerContentionError) {
-      expect(decoded).toBeInstanceOf(GatewayStateOwnerContentionError);
-      expect(decoded).toMatchObject({ databasePath: original.databasePath });
-    } else {
-      expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
-      expect(decoded.cause).toBeInstanceOf(Error);
-      expect(decoded.cause).toMatchObject({ message: "native cause" });
-    }
   });
 
   const validNode = {

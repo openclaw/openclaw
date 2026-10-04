@@ -10,6 +10,7 @@ import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
 } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 
 const TERMINAL_DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -62,8 +63,13 @@ function formatQuestionTerminalStatusLine(
     if (question.isSecret || question.options.length === 0) {
       return [];
     }
-    const optionLabels = new Set(question.options.map((option) => option.label));
-    return (answers[question.questionId] ?? []).filter((answer) => optionLabels.has(answer));
+    const optionLabels = new Map(
+      question.options.map((option) => [option.value ?? option.label, option.label]),
+    );
+    return (answers[question.questionId] ?? []).flatMap((answer) => {
+      const label = optionLabels.get(answer);
+      return label ? [label] : [];
+    });
   });
   return labels.length > 0 ? `Answered: ${labels.join(", ")}` : "Answered";
 }
@@ -151,11 +157,13 @@ export function createQuestionChannelRuntime(
         finalizeDelivery(entry, deliveryId, finalize);
       }
       if (retainedEntries.has(entry)) {
-        entry.cleanupJob = entry.scheduler.schedule({
-          id: `question-delivery:${randomUUID()}`,
-          delayMs: TERMINAL_DELIVERY_RETENTION_MS,
-          run: () => releaseEntry(entry),
-        });
+        entry.cleanupJob = runInDetachedAsyncContext(() =>
+          entry.scheduler.schedule({
+            id: `question-delivery:${randomUUID()}`,
+            delayMs: TERMINAL_DELIVERY_RETENTION_MS,
+            run: () => releaseEntry(entry),
+          }),
+        );
       }
     },
     runWithDeliveries(questionIds, run, deliveryOptions) {

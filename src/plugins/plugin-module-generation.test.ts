@@ -35,6 +35,32 @@ function load(rootDir: string, entry: string, standalone = false) {
 }
 
 describe("plugin module generations", () => {
+  it.runIf(Boolean(process.versions.bun))(
+    "keeps Bun-native plugin generations when Node module hooks are available",
+    () => {
+      const root = temp.make("plugin-bun-native-owner-");
+      fs.writeFileSync(path.join(root, "index.ts"), "export const value: number = 42;");
+      fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 42;");
+      const previous = Object.getOwnPropertyDescriptor(Module, "registerHooks");
+      Object.defineProperty(Module, "registerHooks", {
+        configurable: true,
+        value: () => {
+          throw new Error("Bun plugin loading must not install Node module hooks");
+        },
+      });
+      try {
+        expect(load(root, "index.ts").value).toMatchObject({ value: 42 });
+        expect(load(root, "index.cjs").value).toMatchObject({ value: 42 });
+      } finally {
+        if (previous) {
+          Object.defineProperty(Module, "registerHooks", previous);
+        } else {
+          Reflect.deleteProperty(Module, "registerHooks");
+        }
+      }
+    },
+  );
+
   it.each([
     ...["ts", "mts", "mtsx"].flatMap((extension) =>
       ["commonjs", undefined].map((type) => ({ extension, type, importOnly: false })),
@@ -118,9 +144,9 @@ describe("plugin module generations", () => {
       const first = load(root, entry).value as StartupPlugin;
       expect(first).toMatchObject(expected);
       expect(first.resolveThenRequire()).toBe(value);
-      expect(first.requireProperties()).toEqual(
-        process.versions.bun ? [true, true, true, false, true] : [true, true, true, true, true],
-      );
+      // Bun's lookup-path support follows its Jiti require, including native API improvements.
+      const lookupPaths = process.versions.bun ? legacy.requireProperties()[3] : true;
+      expect(first.requireProperties()).toEqual([true, true, true, lookupPaths, true]);
       expect(first.resolve()).toMatch(importOnly ? /import\.mjs$/ : /require\.cjs$/);
       if (importOnly) {
         expect(legacy.alias()).toBe(value);

@@ -3,6 +3,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { resolveGatewayReadRetryDelayMs } from "../../lib/gateway-availability.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -16,7 +17,6 @@ import {
   CHAT_HISTORY_RETRY_WINDOW_MS,
   formatChatHistoryLoadError,
   isRetryableChatReadError,
-  resolveChatReadRetryDelayMs,
 } from "./chat-history-retry.ts";
 import {
   chatHistoryRequests,
@@ -90,7 +90,6 @@ async function releaseDetachedSessionMessageSubscription(
   subscription: SessionMessageSubscription,
   isCurrent?: () => boolean,
 ): Promise<void> {
-  let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
   for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
     try {
       await unsubscribeMessages(subscription);
@@ -99,10 +98,7 @@ async function releaseDetachedSessionMessageSubscription(
       if (isCurrent?.() || attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
         throw error;
       }
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, retryDelayMs);
-      });
-      retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+      await sleepWithAbort(SESSION_MESSAGE_RELEASE_RETRY_MS * 2 ** attempt);
     }
   }
 }
@@ -282,7 +278,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         }
         setChatHistoryRetrying(state, "subscription", true);
         await sleepWithAbort(
-          Math.min(resolveChatReadRetryDelayMs(error, attempt++), remaining),
+          Math.min(resolveGatewayReadRetryDelayMs(error, attempt++), remaining),
           signal,
         );
         if (!isCurrent()) {

@@ -11,6 +11,7 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   extractCanvasFromDetails,
   extractCanvasFromText,
@@ -151,7 +152,12 @@ export function resolveToolCardOutcome(
       case "running":
         return runActive === true && card.live === true ? "running" : "unknown";
       default:
-        return "unknown";
+        return card.activity.phase !== "end" &&
+          runActive === true &&
+          card.live === true &&
+          card.completed !== true
+          ? "running"
+          : "unknown";
     }
   }
   if (isToolCardError(card)) {
@@ -241,6 +247,12 @@ function serializeToolInput(args: unknown): string | undefined {
   } catch {
     return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
   }
+}
+
+/** Rendering only: extraction and result retrieval retain the original card. */
+export function resolveToolCardDisplay(card: ToolCard): ToolCard {
+  const call = unwrapToolCallForDisplay(card);
+  return call === card ? card : { ...card, ...call, inputText: serializeToolInput(call.args) };
 }
 
 export function formatCollapsedToolSummaryText(value: string | undefined): string | undefined {
@@ -371,7 +383,12 @@ function extractToolCards(message: unknown): ToolCard[] {
         inputText: serializeToolInput(args),
         ...(details !== undefined ? { details } : {}),
         ...(isLiveToolStream
-          ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
+          ? {
+              live: true,
+              completed:
+                m["__openclawToolStreamResultReceived"] === true ||
+                m["__openclawToolStreamItemEnded"] === true,
+            }
           : {}),
         ...(liveDiffStat ? { liveDiffStat } : {}),
         messageId: transcriptMessageId,
@@ -428,7 +445,7 @@ function extractToolCards(message: unknown): ToolCard[] {
         existing.parentToolCallId ??= parentToolCallId;
         // Live tool-stream messages emit a toolresult block for partial
         // `update` output too; completion there is owned by the stream's
-        // resultReceived marker (set at card creation), not block presence —
+        // terminal markers (set at card creation), not block presence —
         // otherwise a running tool flips to "succeeded" mid-execution.
         if (!isLiveToolStream) {
           existing.completed = true;

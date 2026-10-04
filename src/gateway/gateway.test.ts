@@ -621,7 +621,7 @@ describe("gateway e2e", () => {
             },
             // The request below runs sessionKey "agent:dev:mock-openai"; the
             // gateway rejects session keys whose agent id is not declared.
-            entries: { dev: { default: true } },
+            entries: { dev: {} },
           },
           models: {
             mode: "replace",
@@ -717,7 +717,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
+          entries: { main: { tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],

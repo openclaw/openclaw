@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -466,23 +469,15 @@ export function adoptPreparedLocation(
   requireCleanup = false,
   onCleanupFailure?: (report: CleanupFailureReport) => void,
 ): PreparedSqliteReadOnlyLocation {
-  return createPreparedLocation(location, ownedRoot, requireCleanup, onCleanupFailure);
+  return adoptRetainedPreparedLocation(location, ownedRoot, requireCleanup, onCleanupFailure);
 }
 
 export function adoptRetainedPreparedLocation(
   location: string,
-  ownedRoot: string,
+  ownedRoot?: string,
   requireCleanup = false,
-): PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation {
-  return createPreparedLocation(location, ownedRoot, requireCleanup);
-}
-
-function createPreparedLocation(
-  location: string,
-  ownedRoot: string | undefined,
-  requireCleanup: boolean,
   onCleanupFailure?: (report: CleanupFailureReport) => void,
-) {
+): PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation {
   const tempDir = ownedRoot ?? path.dirname(location);
   registerSnapshotTempDirectory(tempDir);
   const originalOwner = snapshotDirectory(tempDir);

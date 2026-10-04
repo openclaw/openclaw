@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.session-mocks.test-support.js";
 import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,6 +29,7 @@ import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -185,24 +187,21 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getEntries: vi.fn(() => []),
     getBranch: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
-    branch: vi.fn(),
-    resetLeaf: vi.fn(),
+    branchAsync: vi.fn(async () => undefined),
+    resetLeafAsync: vi.fn(async () => undefined),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
-    appendCustomEntry: vi.fn(),
-    appendCustomEntryAsync: vi.fn(),
-    appendMessage: vi.fn(),
-    appendMessageAsync: async (...args: unknown[]): Promise<unknown> =>
-      sessionManager.appendMessage(...args),
-    appendSessionInfo: vi.fn(),
-    appendLabelChange: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendMessageAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendSessionInfoAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendLabelChangeAsync: vi.fn(async (..._args: unknown[]) => undefined),
     flushPendingPersistence: vi.fn(),
-    flushPendingToolResults: vi.fn(),
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
     clearPendingToolResults: vi.fn(),
-    reloadPersistedTranscript: vi.fn(),
+    reloadPersistedTranscriptAsync: vi.fn(async () => undefined),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
-    removeTrailingEntries: vi.fn(() => 0),
+    removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -350,7 +349,7 @@ vi.mock("../../sessions/index.js", () => {
 
   return {
     AuthStorage,
-    createAgentSession: (options: CreateAgentSessionOptions = {}) =>
+    createAgentSession: (options: CreateAgentSessionOptions) =>
       hoisted.createAgentSessionMock(options),
     estimateTokens,
     generateSummary: async () => "",
@@ -362,26 +361,11 @@ vi.mock("../../sessions/index.js", () => {
   };
 });
 
+// mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
+  createAgentSession: (options: CreateAgentSessionOptions) =>
     hoisted.createAgentSessionMock(options),
 }));
-
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
-  const readSessionEntryInWorker: typeof actual.readSessionEntryInWorker = async (
-    _scope,
-    assertCurrent,
-  ) => {
-    // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
-    assertCurrent();
-    await Promise.resolve();
-    assertCurrent();
-    return undefined;
-  };
-  return { ...actual, readSessionEntryInWorker };
-});
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -558,15 +542,11 @@ vi.mock("../../system-prompt-report.js", () => ({
   buildSystemPromptReport: () => undefined,
 }));
 
-vi.mock("../system-prompt.js", async () => {
-  const actual = await vi.importActual<typeof import("../system-prompt.js")>("../system-prompt.js");
+vi.mock("../../system-prompt-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
     ...actual,
-    applySystemPromptToSession: (session: MutableSession, systemPrompt: string) => {
-      hoisted.systemPromptTexts.push(systemPrompt);
-      session.setBaseSystemPrompt(systemPrompt);
-    },
-    buildEmbeddedSystemPrompt: (params: unknown) => {
+    buildConfiguredAgentSystemPrompt: (params: unknown) => {
       hoisted.embeddedSystemPromptInputs.push(params);
       return "system prompt";
     },
@@ -685,18 +665,11 @@ vi.mock("../../tool-fs-policy.js", () => ({
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
 
-vi.mock("../../transcript-policy.js", () => ({
-  resolveTranscriptPolicy: () => ({
-    allowSyntheticToolResults: false,
-    repairToolUseResultPairing: true,
-  }),
-}));
-
 vi.mock("../cache-ttl.js", () => ({
   appendCacheTtlTimestamp: (
-    sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
+    sessionManager: { appendCustomEntryAsync?: (customType: string, data: unknown) => void },
     data: unknown,
-  ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
+  ) => sessionManager.appendCustomEntryAsync?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
   readLastCacheTtlTimestamp: (...args: Parameters<typeof readMockSessionCacheTtlTimestamp>) =>
     readMockSessionCacheTtlTimestamp(...args),
@@ -814,7 +787,7 @@ type MutableSession = {
   isStreaming: boolean;
   subscribe: AgentSession["subscribe"];
   agent: {
-    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
+    convertToLlm: Agent["convertToLlm"];
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
@@ -862,12 +835,7 @@ type SessionPromptOverride = (
   options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
-type TestAgentStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createCompletedAssistantStream(): TestAgentStream {
+function createCompletedAssistantStream() {
   return {
     async result() {
       return { role: "assistant", content: "done" };
@@ -1013,6 +981,7 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     subscribe: () => () => {},
     agent: {
+      convertToLlm,
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),
@@ -1056,6 +1025,7 @@ export function createDefaultEmbeddedSession(params?: {
       activeToolNames = [...toolNames];
     },
     setBaseSystemPrompt: (systemPrompt) => {
+      hoisted.systemPromptTexts.push(systemPrompt);
       session.agent.state.systemPrompt = systemPrompt;
     },
     prompt: async (prompt, options) => {

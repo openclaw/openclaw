@@ -125,7 +125,10 @@ and scripts that the import graph cannot discover.
 Explicit policy watches retain their matching tests in PR CI even when the broader
 tooling or runtime suite is deferred. This includes wrapper dependency checks,
 Gateway client callsite scans, and upgrade-survivor package checks. Unrelated
-deferred tests stay excluded.
+deferred tests stay excluded. Changed test files that no Vitest config routes,
+such as skill `node:test` and Python suites, are never direct targets; the watch
+for their Vitest wrapper must cover those test files too, or test-only edits run
+in no PR job.
 
 Aggressive PR selection keeps changed tests and direct runtime import consumers,
 including package and SDK aliases. A changed module with fewer than 20 direct

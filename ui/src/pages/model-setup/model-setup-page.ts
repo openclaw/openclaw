@@ -48,8 +48,6 @@ import {
 import { renderModelSetup, revealModelSetupFeedback } from "./view.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
-export type { ModelSetupRouteData } from "./first-run-setup.ts";
-
 export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly actionsDisabled = (): boolean =>
     this.login.busy ||
@@ -176,6 +174,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           ),
     onBackgroundCompletion: (completion) =>
       this.runWizardMutation(() => Promise.resolve(completion), true),
+    onSessionMissing: () => {
+      this.firstRun.wizardMissing();
+      void this.detect();
+    },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -211,6 +213,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         agentId: outcome.agentId,
       });
       this.pageState = { phase: "ready", result: outcome.value };
+      this.firstRun.reconcileMissingWizard(outcome.value);
       if (
         !outcome.value.manualProviders.some((provider) => provider.id === this.manualProviderId)
       ) {

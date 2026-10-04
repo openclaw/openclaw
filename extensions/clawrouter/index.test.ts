@@ -97,7 +97,7 @@ describe("ClawRouter plugin", () => {
       resolveDynamicModel: expect.any(Function),
       resolveThinkingProfile: expect.any(Function),
       resolveUsageAuth: expect.any(Function),
-      sanitizeReplayHistory: expect.any(Function),
+      sanitizeReplayHistoryAsync: expect.any(Function),
       wrapSimpleCompletionStreamFn: expect.any(Function),
       wrapStreamFn: expect.any(Function),
     });

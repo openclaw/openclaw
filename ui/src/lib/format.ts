@@ -31,7 +31,7 @@ type FormatRelativeTimestampOptions = {
 let localeFormatters:
   | {
       locale: string;
-      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      units: Partial<Record<`${DurationPart["unit"]}:${"narrow" | "long"}`, Intl.NumberFormat>>;
       relative?: Intl.RelativeTimeFormat;
     }
   | undefined;
@@ -46,12 +46,17 @@ function getLocaleFormatters() {
   return localeFormatters;
 }
 
-export function formatUnit({ value, unit }: DurationPart): string {
+export function formatUnit({
+  value,
+  unit,
+  unitDisplay = "narrow",
+}: DurationPart & { unitDisplay?: "narrow" | "long" }): string {
   const formatters = getLocaleFormatters();
-  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
+  const key = `${unit}:${unitDisplay}` as const;
+  return (formatters.units[key] ??= new Intl.NumberFormat(formatters.locale, {
     style: "unit",
     unit,
-    unitDisplay: "narrow",
+    unitDisplay,
     maximumFractionDigits: 0,
   })).format(value);
 }

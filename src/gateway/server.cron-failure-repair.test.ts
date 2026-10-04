@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import type WebSocket from "ws";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   agentCommandMock,
@@ -41,7 +42,9 @@ async function runAndWaitForFinished(ws: WebSocket, jobId: string) {
   await finished;
 }
 
-test("repairs an owned job with an ordinary owner-topic turn whatever the heartbeat config", async () => {
+test("repairs an owned job with an ordinary owner-topic turn whatever the heartbeat config", async ({
+  signal,
+}) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-repair-"));
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
@@ -95,6 +98,10 @@ test("repairs an owned job with an ordinary owner-topic turn whatever the heartb
   });
   await connectOk(ws);
   await prepareGatewayReplyRuntimeForTest({ force: true });
+  const repairTurnStarted = createDeferred();
+  agentCommandMock.mockImplementationOnce(async () => {
+    repairTurnStarted.resolve();
+  });
   cronIsolatedRun.mockResolvedValue({ status: "error", error: "scripts/sync.md is missing" });
   const added = await rpcReq(ws, "cron.add", {
     name: "meeting sync",
@@ -115,7 +122,8 @@ test("repairs an owned job with an ordinary owner-topic turn whatever the heartb
   await runAndWaitForFinished(ws, jobId);
   await runAndWaitForFinished(ws, jobId);
 
-  await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
+  await withinTest(repairTurnStarted.promise, signal);
+  expect(agentCommandMock).toHaveBeenCalledOnce();
   // The owner topic's own session and route: no `:heartbeat` side session, no dropped reply,
   // and only the turn's authored reply is delivered (no runtime timeout warning).
   expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({

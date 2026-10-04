@@ -90,7 +90,7 @@ export async function handleCodexPluginsSubcommand(
     }
     const current = await io.readConfig();
     return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+      text: formatPluginList(current.plugins ?? {}, current.enabled === true),
     };
   }
 
@@ -583,9 +583,8 @@ async function installCodexPlugin(
 
 function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
-  options: { globalEnabled?: boolean } = {},
+  globalEnabled: boolean,
 ): string {
-  const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";

@@ -1,10 +1,8 @@
-import type { SessionFreshness } from "../../config/sessions/reset.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   createSessionResetBoundaryId,
   type SessionResetBoundaryRequest,
 } from "../../config/sessions/session-reset-boundary-event.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import type {
   PluginHookSessionEndEvent,
@@ -29,13 +27,6 @@ export function resolveExplicitSessionEndReason(
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
-export function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-}): ReplySessionEndReason | undefined {
-  return params.entry ? params.freshness?.staleReason : undefined;
-}
-
 export function createReplySessionResetBoundary(params: {
   cwd: string;
   explicitReason: Extract<SessionResetBoundaryRequest["reason"], "new" | "reset">;
@@ -46,19 +37,14 @@ export function createReplySessionResetBoundary(params: {
     params.previousReason === "idle" || params.previousReason === "daily"
       ? params.previousReason
       : "reset";
-  return params.resetTriggered
-    ? {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "clear",
-        cwd: params.cwd,
-        reason: params.explicitReason,
-      }
-    : {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "preserve-tail",
-        cwd: params.cwd,
-        reason: continuityReason,
-      };
+  const request: SessionResetBoundaryRequest = params.resetTriggered
+    ? { context: "clear", reason: params.explicitReason }
+    : { context: "preserve-tail", reason: continuityReason };
+  return {
+    boundaryId: createSessionResetBoundaryId(),
+    cwd: params.cwd,
+    ...request,
+  };
 }
 
 type SessionHookContext = {

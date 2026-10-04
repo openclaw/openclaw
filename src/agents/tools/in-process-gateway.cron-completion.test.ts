@@ -40,57 +40,45 @@ function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]
 describe("Cron mutation completion through in-process Gateway", () => {
   beforeEach(() => mocks.dispatch.mockReset().mockResolvedValue({ ok: true }));
 
-  it.each(["cron.add", "cron.update", "cron.remove", "cron.run", "cron.scratch.set"])(
-    "preserves the accepted %s result when its caller is revoked after commit",
-    async (method) => {
-      const caller = createCaller({ method, params: {} });
-      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-        options.sessionMutationCommitGuard();
-        captureCronMutationCommit(method)?.();
-        caller.revoke();
-        return { committed: true };
-      });
-      await expect(caller.invoke()).resolves.toEqual({ committed: true });
-    },
-  );
-
   it.each([
-    ["cron.add", { created: false, updated: false, job: { id: "existing" } }],
-    ["cron.add", { created: true, job: { id: "unattested" } }],
-    ["cron.update", { id: "unattested" }],
-    ["cron.remove", { ok: true, removed: false }],
-    ["cron.scratch.set", { ok: true, currentRevision: 0, scratch: null }],
-    ["cron.scratch.set", { ok: false, reason: "revision-conflict", currentRevision: 1 }],
-    ["cron.run", { ok: true, ran: false, reason: "already-running" }],
+    ...["cron.add", "cron.update", "cron.remove", "cron.run", "cron.scratch.set"].map(
+      (method) => [method, { committed: true }, true] as const,
+    ),
+    ["cron.add", { created: false, updated: false, job: { id: "existing" } }, false],
+    ["cron.add", { created: true, job: { id: "unattested" } }, false],
+    ["cron.update", { id: "unattested" }, false],
+    ["cron.remove", { ok: true, removed: false }, false],
+    ["cron.scratch.set", { ok: true, currentRevision: 0, scratch: null }, false],
+    ["cron.scratch.set", { ok: false, reason: "revision-conflict", currentRevision: 1 }, false],
+    ["cron.run", { ok: true, ran: false, reason: "already-running" }, false],
+    ...[false, true].map(
+      (committed) => ["cron.remove", new Error("mutation detail"), committed] as const,
+    ),
+    ["cron.get", { privateJob: true }, false],
   ] as const)(
-    "does not exempt an uncommitted %s result from caller checks",
-    async (method, result) => {
-      const caller = createCaller({ method, params: {} });
-      mocks.dispatch.mockImplementationOnce(async () => {
-        caller.revoke();
-        return result;
-      });
-      await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
-    },
-  );
-
-  it.each([false, true])(
-    "preserves an error only after its mutation committed: %s",
-    async (committed) => {
-      const caller = createCaller({ method: "cron.remove", params: {} });
-      const error = new Error("mutation detail");
-      mocks.dispatch.mockImplementationOnce(async () => {
+    "settles revoked %s result %o only with a commit receipt: %s",
+    async (method, result, committed) => {
+      const caller = createCaller({ method, params: method === "cron.get" ? { id: "job" } : {} });
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
         if (committed) {
-          captureCronMutationCommit("cron.remove")?.();
+          if (!(result instanceof Error)) {
+            options.sessionMutationCommitGuard();
+          }
+          captureCronMutationCommit(method)?.();
         }
         caller.revoke();
-        throw error;
+        if (result instanceof Error) {
+          throw result;
+        }
+        return result;
       });
-      const result = caller.invoke();
-      if (committed) {
-        await expect(result).rejects.toBe(error);
+      const pending = caller.invoke();
+      if (!committed) {
+        await expect(pending).rejects.toThrow(/authority.*no longer active/i);
+      } else if (result instanceof Error) {
+        await expect(pending).rejects.toBe(result);
       } else {
-        await expect(result).rejects.toThrow(/authority.*no longer active/i);
+        await expect(pending).resolves.toEqual(result);
       }
     },
   );
@@ -160,15 +148,6 @@ describe("Cron mutation completion through in-process Gateway", () => {
       previousCommit?.();
       caller.revoke();
       return { id: "successor" };
-    });
-    await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
-  });
-
-  it("still withholds Cron read results after the caller is revoked", async () => {
-    const caller = createCaller({ method: "cron.get", params: { id: "job" } });
-    mocks.dispatch.mockImplementationOnce(async () => {
-      caller.revoke();
-      return { privateJob: true };
     });
     await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
   });

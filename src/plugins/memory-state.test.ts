@@ -5,6 +5,7 @@ import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
+  getMemoryProviderRuntime,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
@@ -22,6 +23,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   clearActivePluginRegistry,
   getActivePluginRegistry,
+  setActivePluginRegistry,
   withPluginRegistrationContext,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -72,6 +74,7 @@ function expectClearedMemoryState() {
     [],
   );
   expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+  expect(getMemoryProviderRuntime()).toBeUndefined();
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
@@ -191,15 +194,18 @@ describe("memory plugin state", () => {
 
   it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
     const runtime = createMemoryRuntime();
+    const providerRuntime = { open: async () => ({ provider: null }) };
     const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
 
     registerMemoryCapability("memory-core", {
       flushPlanResolver,
+      providerRuntime,
       runtime,
     });
     registerArtifacts("memory-lancedb", [memoryArtifact()]);
 
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
+    expect(resolveMemoryFlushPlan({})?.plan).toMatchObject({ relativePath: "memory/sidecar.md" });
+    expect(getMemoryProviderRuntime()).toBe(providerRuntime);
     expect(getMemoryRuntime()).toBe(runtime);
     expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
@@ -217,7 +223,65 @@ describe("memory plugin state", () => {
     });
 
     expect(getMemoryRuntime()).toBe(runtime);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/same-owner.md");
+    expect(resolveMemoryFlushPlan({})?.plan).toMatchObject({
+      relativePath: "memory/same-owner.md",
+    });
+  });
+
+  it.each([
+    { ownerFirst: true, ownerResolver: "provider" },
+    { ownerFirst: false, ownerResolver: "provider" },
+    { ownerFirst: true, ownerResolver: "released" },
+    { ownerFirst: false, ownerResolver: "released" },
+    { ownerFirst: true, ownerResolver: undefined },
+    { ownerFirst: false, ownerResolver: undefined },
+  ] as const)("retains effective flush resolver provenance through sidecars: %j", (testCase) => {
+    const registry = createEmptyPluginRegistry();
+    const ownerFilePlan = createMemoryFlushPlan("memory/owner.md");
+    const toolsPlan = (prompt: string) => ({
+      prompt,
+      systemPrompt: "Persist durable memories",
+      persistenceToolNames: ["save_memory"],
+    });
+    const ownerToolsPlan = toolsPlan("Save through owner tools");
+    const sidecarToolsPlan = toolsPlan("Save through sidecar tools");
+    const owner = {
+      pluginId: "memory-provider",
+      memorySlotSelected: true,
+      capability:
+        testCase.ownerResolver === "provider"
+          ? { providerFlushPlanResolver: () => ownerToolsPlan }
+          : testCase.ownerResolver === "released"
+            ? { flushPlanResolver: () => ownerFilePlan }
+            : {},
+    };
+    // The sidecar offers both resolvers; neither may be combined with the owner's.
+    const sidecar = {
+      pluginId: "memory-sidecar",
+      capability: {
+        flushPlanResolver: () => createMemoryFlushPlan("memory/sidecar.md"),
+        providerFlushPlanResolver: () => sidecarToolsPlan,
+      },
+    };
+    registry.memoryCapabilities.push(
+      ...(testCase.ownerFirst ? [owner, sidecar] : [sidecar, owner]),
+      // A later merge must not relabel an inherited resolver as slot-owned.
+      {
+        pluginId: "artifacts-sidecar",
+        capability: { publicArtifacts: { listArtifacts: async () => [] } },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    expect(resolveMemoryFlushPlan({})).toEqual(
+      testCase.ownerResolver
+        ? {
+            plan: testCase.ownerResolver === "provider" ? ownerToolsPlan : ownerFilePlan,
+            pluginId: "memory-provider",
+            selectedSlotOwner: true,
+          }
+        : { plan: sidecarToolsPlan, pluginId: "memory-sidecar", selectedSlotOwner: false },
+    );
   });
 
   it("passes agent context through the primary and supplemental prompt builders", () => {

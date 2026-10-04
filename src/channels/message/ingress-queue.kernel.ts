@@ -477,23 +477,25 @@ export function pruneChannelIngressInDatabase(
       continue;
     }
     // Protected rows occupy their original retention slots.
-    const candidates = kysely
+    const overflow = kysely
       .selectFrom("channel_ingress_events")
       .select("event_id")
       .where("queue_name", "=", input.queueName)
       .where("status", "=", policy.status)
       .orderBy("updated_at", "desc")
       .orderBy("event_id", "desc")
-      .limit(500)
+      .limit(-1)
       .offset(Math.max(0, Math.floor(policy.max)));
-    let query = kysely
+    let candidates = kysely.selectFrom(overflow.as("overflow")).select("event_id").limit(500);
+    if (protectedMaxIds.length) {
+      // Apply protection before the batch limit so a protected page cannot hide later overflow.
+      candidates = candidates.where("event_id", "not in", sqliteStringSet(protectedMaxIds));
+    }
+    const query = kysely
       .deleteFrom("channel_ingress_events")
       .where("queue_name", "=", input.queueName)
       .where("status", "=", policy.status)
       .where("event_id", "in", candidates);
-    if (protectedMaxIds.length) {
-      query = query.where("event_id", "not in", sqliteStringSet(protectedMaxIds));
-    }
     while (true) {
       const removed = affectedRows(executeSqliteQuerySync(db, query));
       if (!removed) {

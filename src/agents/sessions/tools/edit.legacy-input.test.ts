@@ -71,13 +71,15 @@ describe("legacy edit input", () => {
     },
   );
 
-  it.each(["array", "serialized"] as const)(
-    "applies a legacy pair already present in %s edits only once",
+  it.each(["array", "serialized", "distinct"] as const)(
+    "applies the batch and legacy pair once with %s edits",
     async (shape) => {
       const { tool, filePath } = await createFixture();
       const edits = [
         { oldText: "alpha", newText: "ALPHA" },
-        { oldText: "before", newText: "after", reason: "extra model metadata" },
+        ...(shape === "distinct"
+          ? []
+          : [{ oldText: "before", newText: "after", reason: "extra model metadata" }]),
       ];
       const prepared = prepare(tool, {
         path: filePath,
@@ -89,18 +91,6 @@ describe("legacy edit input", () => {
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("ALPHA\nafter\nomega\n");
     },
   );
-
-  it("retains a distinct legacy replacement with an existing batch", async () => {
-    const { tool, filePath } = await createFixture();
-    const prepared = prepare(tool, {
-      path: filePath,
-      edits: [{ oldText: "alpha", newText: "ALPHA" }],
-      oldText: "before",
-      newText: "after",
-    });
-    await tool.execute("legacy-distinct", prepared, undefined);
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("ALPHA\nafter\nomega\n");
-  });
 
   it.each(["conflicting legacy pair", "duplicate batch entries"] as const)(
     "continues rejecting %s without writing",

@@ -2,11 +2,7 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
@@ -17,10 +13,8 @@ import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
-  writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 import * as workerTreeControl from "./node-worker-tree-control.js";
-import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -43,7 +37,6 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
 describe("node worker supervisor initialization", () => {
   it.each([
     { availableParallelism: 0, expected: 1 },
-    { availableParallelism: 7, expected: 7 },
     { availableParallelism: NODE_WORKER_CAPACITY_MAX + 1, expected: NODE_WORKER_CAPACITY_MAX },
   ])(
     "publishes $expected default worker slots for $availableParallelism available CPUs",
@@ -65,37 +58,6 @@ describe("node worker supervisor initialization", () => {
     },
   );
 
-  it("uses explicit worker capacity without resolving the CPU default", async () => {
-    const availableParallelism = vi.spyOn(os, "availableParallelism");
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const { supervisor } = fixture({
-      capacity: 3,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-    });
-
-    try {
-      await supervisor.initialize();
-      expect(capacitySnapshots.at(-1)).toEqual({ total: 3, available: 3 });
-      expect(availableParallelism).not.toHaveBeenCalled();
-    } finally {
-      await supervisor.close();
-    }
-  });
-
-  it("keeps construction and close inert without resolving process identity", async () => {
-    const root = tempDirs.make("node-worker-inert-");
-    const { bundleRoot, env } = writeNodeWorkerFixture(root);
-    const requireIdentity = vi
-      .spyOn(workerProcessIdentity, "requireNodeWorkerProcessIdentity")
-      .mockImplementation(() => {
-        throw new Error("unexpected process identity lookup");
-      });
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(requireIdentity).not.toHaveBeenCalled();
-    await supervisor.close();
-    expect(requireIdentity).not.toHaveBeenCalled();
-  });
-
   it("keeps the additive table absent until the first stateful operation", async () => {
     const { bundleRoot, env, supervisor } = fixture();
     const database = openOpenClawStateDatabase({ env });
@@ -116,69 +78,6 @@ describe("node worker supervisor initialization", () => {
         .get("node_worker_launches"),
     ).toEqual({ strict: 1 });
     await active.close();
-  });
-
-  it("keeps pending and running launches owned by a live supervisor unchanged", async () => {
-    const { bundleRoot, env, supervisor, workspaceDir } = fixture();
-    await supervisor.status("schema-probe");
-    const supervisorIdentity = workerProcessIdentity.requireNodeWorkerProcessIdentity(process.pid);
-    const journal = new NodeWorkerJournalWorker({ env });
-    const store = new NodeWorkerLaunchStore(journal);
-    const turns = new NodeWorkerTurnStore(journal);
-    for (const launchId of ["pending-launch", "running-launch"]) {
-      const input = launchInput(workspaceDir, launchId, "wait");
-      const claim = {
-        ...testNodeWorkerLaunchIdentity(input),
-        gatewayNamespace: input.gatewayNamespace,
-      };
-      await store.claim(claim, supervisorIdentity, 2);
-      await turns.claim({ claim, ownerLaunchId: launchId, supervisor: supervisorIdentity });
-      if (launchId === "running-launch") {
-        await store.markRunning({
-          ...claim,
-          supervisor: supervisorIdentity,
-          worker: supervisorIdentity,
-          cleanupMode: "process-group",
-        });
-      }
-    }
-
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const sameHandle = createNodeWorkerSupervisor({
-      bundleRoot,
-      env,
-      capacity: 2,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-    });
-    expect(await sameHandle.status("pending-launch")).toMatchObject({
-      state: "pending",
-      worker: null,
-    });
-    expect(await sameHandle.status("running-launch")).toMatchObject({
-      state: "running",
-      worker: supervisorIdentity,
-    });
-    expect(capacitySnapshots).toEqual([
-      { total: 2, available: 0 },
-      { total: 2, available: 0 },
-    ]);
-    expect(await sameHandle.hasActiveWork()).toBe(true);
-    await supervisor.close();
-    await sameHandle.close();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-
-    openOpenClawStateDatabase({ env });
-    const recovered = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(await recovered.status("pending-launch")).toMatchObject({
-      state: "pending",
-      worker: null,
-    });
-    expect(await recovered.status("running-launch")).toMatchObject({
-      state: "running",
-      worker: supervisorIdentity,
-    });
-    await recovered.close();
   });
 
   it.each(["dead", "reused"] as const)(

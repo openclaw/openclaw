@@ -104,6 +104,9 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
       .fn<NodeWorkerSupervisorControl["retainWorkspaces"]>()
       .mockResolvedValue({ applied: true, deleted: 0, hasMore: false }),
     cancel: vi.fn<NodeWorkerSupervisorControl["cancel"]>().mockResolvedValue(receipt),
+    observeProcesses: vi
+      .fn<NodeWorkerSupervisorControl["observeProcesses"]>()
+      .mockResolvedValue({ sessionId: "session-1", processes: [], truncated: false }),
     stopEnvironment: vi
       .fn<NodeWorkerSupervisorControl["stopEnvironment"]>()
       .mockResolvedValue(undefined),

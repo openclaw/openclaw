@@ -9,7 +9,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -17,21 +17,26 @@ import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
-import { revokeAgentDatabaseResources } from "./openclaw-agent-db-resources.js";
+import {
+  captureAgentDatabaseCloseFence,
+  registerOpenClawAgentDatabaseAsyncResource,
+  revokeAgentDatabaseResources,
+} from "./openclaw-agent-db-resources.js";
 import { withOpenClawAgentDatabaseWrite } from "./openclaw-agent-db-write.js";
 import {
   openOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
+  withOpenClawAgentDatabaseAdmission,
+  withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
-} from "./openclaw-agent-execution.js";
+import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
@@ -41,6 +46,7 @@ import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
+import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -163,7 +169,7 @@ it("retains an idle agent executor for thirty minutes and renews the window afte
   }
 });
 
-it("keeps accepted publications on one lease through restart drain and joins it on close", async () => {
+it("keeps one publication lease during grace and releases it before shutdown cleanup settles", async () => {
   const { db, worker } = await setup();
   const shared = openOpenClawStateDatabase();
   const releaseState = retainOpenClawStateDatabaseForIdle(shared);
@@ -194,19 +200,124 @@ it("keeps accepted publications on one lease through restart drain and joins it 
       () => undefined,
     );
     expect(readLeases()).toEqual(retainedLeases);
-    await worker.close();
+    beginGatewayShutdownCleanup();
+    await worker.execute({ type: "append", input: { value: "cleanup" } }, () => undefined);
     expect(readLeases()).toEqual(hostLeases);
     expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
       { value: "first" },
       { value: "second" },
       { value: "third" },
+      { value: "cleanup" },
     ]);
+    await worker.close();
+    expect(db.isOpen).toBe(false);
+    expect(readLeases()).toEqual([]);
+    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
   } finally {
     await worker.close();
     resetGatewayWorkAdmission();
     releaseState();
   }
 });
+
+it("records a clean sibling receipt while an admitted worker publication still owns its database", ({
+  signal,
+}) =>
+  fixture.run(async () => {
+    const { db, worker } = await setup();
+    const heldPath = options.path;
+    const healthy = openOpenClawAgentDatabase({
+      agentId: "healthy",
+      path: path.join(root, "healthy.sqlite"),
+    });
+    const shared = openOpenClawStateDatabase();
+    const readLeases = (pathname: string) =>
+      shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(pathname);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const healthyClosed = createDeferredCore();
+    const nativeClose = healthy.db.close.bind(healthy.db);
+    vi.spyOn(healthy.db, "close").mockImplementation(() => {
+      nativeClose();
+      healthyClosed.resolve();
+    });
+    const publication = worker.run(
+      async (scope) => {
+        const result = await scope.execute({ type: "append", input: { value: "committed" } });
+        entered.resolve();
+        await release.promise;
+        return result;
+      },
+      () => undefined,
+    );
+    let closing: Promise<void> | undefined;
+    let closed = false;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          publication,
+          "Worker publication was not retained",
+        ),
+        signal,
+      );
+      expect(readLeases(heldPath)).toHaveLength(2);
+      expect(readLeases(healthy.path)).toHaveLength(1);
+      closing = closeOpenClawAgentDatabasesAsync(root).then(() => {
+        closed = true;
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          healthyClosed.promise,
+          closing,
+          "Root close settled before the healthy database closed",
+        ),
+        signal,
+      );
+      expect(healthy.db.isOpen).toBe(false);
+      expect(readLeases(healthy.path)).toEqual([]);
+      expect(readOpenClawAgentIntegrityVerification(healthy.path)?.clean_close).toBe(1);
+      expect(db.isOpen).toBe(true);
+      expect(readLeases(heldPath)).toHaveLength(2);
+      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(0);
+      expect(closed).toBe(false);
+      expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
+      const later = { agentId: "late", path: path.join(root, "late.sqlite") };
+      expect(() => openOpenClawAgentDatabase(later)).toThrow("resources are closing");
+      await expect(withOpenClawAgentDatabaseAsync(later, (database) => database)).rejects.toThrow(
+        "resources are closing",
+      );
+      await expect(
+        withOpenClawAgentDatabaseAdmission(
+          later,
+          async (run) => run(() => {}),
+          (database) => database,
+        ),
+      ).rejects.toThrow("resources are closing");
+      expect(fs.existsSync(later.path)).toBe(false);
+      expect(readLeases(later.path)).toEqual([]);
+      expect(openOpenClawAgentDatabase(options).db).toBe(db);
+      expect(() =>
+        registerOpenClawAgentDatabaseAsyncResource({
+          agentId: "new",
+          path: path.join(root, "new.sqlite"),
+          revoke() {},
+          close: async () => {},
+        }),
+      ).toThrow("resources are closing");
+      release.resolve();
+      await withinTest(publication, signal);
+      await withinTest(closing, signal);
+      expect(db.isOpen).toBe(false);
+      expect(readLeases(heldPath)).toEqual([]);
+      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(1);
+      expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
+      expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([publication, closing]);
+    }
+  }));
 
 describe.each(["borrowed", "captured"] as const)(
   "pooled agent publication owner (%s source)",

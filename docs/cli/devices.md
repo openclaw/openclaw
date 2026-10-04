@@ -64,6 +64,10 @@ Approval behavior:
 
 Reject a pending device pairing request.
 
+A connected waiting Control UI browser shows **Access request declined** and
+stops retrying automatically. It can submit a new request with **Request again**;
+reloading the page can also request again. Rejection does not persist a device ban.
+
 ```bash
 openclaw devices reject <requestId>
 ```

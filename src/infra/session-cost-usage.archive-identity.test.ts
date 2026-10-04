@@ -361,7 +361,7 @@ describe("usage archive identity", () => {
     };
     const coldConfig = {
       ...config,
-      agents: { list: [{ id: scope.agentId }] },
+      agents: { entries: { [scope.agentId]: {} } },
       session: {
         store: scope.storePath,
         maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

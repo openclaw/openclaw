@@ -196,7 +196,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             service: service)["X-Owner"] == "exact")
     }
 
-    @Test func `legacy gateway defaults cannot alias encoded owner keys`() {
+    @Test func `legacy selected agent defaults cannot alias encoded owner keys`() {
         let exactOwner = "gateway-\(UUID().uuidString)"
         let component = Data(exactOwner.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -204,20 +204,14 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             .replacingOccurrences(of: "=", with: "")
         let collidingLegacyOwner = "v2.\(component)"
         defer {
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: nil)
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
         }
 
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: "exact-client")
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: "exact-agent")
 
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: collidingLegacyOwner) == nil)
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: collidingLegacyOwner) == nil)
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: exactOwner) == "exact-client")
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: exactOwner) == "exact-agent")
     }
 

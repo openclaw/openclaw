@@ -262,9 +262,10 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(
-  messages: AgentMessage[],
-): { usage: Usage; index: number } | undefined {
+/** Estimate context tokens for messages using provider usage when available. */
+export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+  let usageTokens = 0;
+  let lastUsageIndex: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages.at(i);
     if (!message) {
@@ -273,22 +274,17 @@ function getLastAssistantUsageInfo(
     if (isUnavailableContextBarrier(message)) {
       // Synthetic CLI markers invalidate older usage without contributing a
       // replacement. Estimate the whole transcript instead of scanning past it.
-      return undefined;
+      break;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
-      return { usage, index: i };
+      usageTokens = calculateContextTokens(usage);
+      lastUsageIndex = i;
+      break;
     }
   }
-  return undefined;
-}
-
-/** Estimate context tokens for messages using provider usage when available. */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-  const usageInfo = getLastAssistantUsageInfo(messages);
-  const usageTokens = usageInfo ? calculateContextTokens(usageInfo.usage) : 0;
   let trailingTokens = 0;
-  for (const message of usageInfo ? messages.slice(usageInfo.index + 1) : messages) {
+  for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
     trailingTokens += estimateTokens(message);
   }
 
@@ -296,7 +292,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     tokens: usageTokens + trailingTokens,
     usageTokens,
     trailingTokens,
-    lastUsageIndex: usageInfo?.index ?? null,
+    lastUsageIndex,
   };
 }
 
@@ -579,7 +575,7 @@ const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation mes
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
 - ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
 - If something is no longer relevant, you may remove it

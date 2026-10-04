@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import * as chatMessage from "./chat-message.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import {
   getTranscriptState,
   renderTranscriptSearch,
@@ -132,7 +132,6 @@ describe("chat transcript replies", () => {
       revision: 0,
       navigationId: null,
       read: () => undefined,
-      request: vi.fn(),
       open,
     };
     try {
@@ -165,7 +164,6 @@ describe("chat transcript replies", () => {
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       let resolvedMessage: unknown = undefined;
-      const request = vi.fn();
       const open = vi.fn();
       const props = {
         ...threadProps("pane-reply-hydration", "agent:main:main", [followUp]),
@@ -175,7 +173,6 @@ describe("chat transcript replies", () => {
           revision: 0,
           navigationId: null,
           read: () => resolvedMessage,
-          request,
           open,
         },
       };
@@ -188,7 +185,6 @@ describe("chat transcript replies", () => {
         transcript.hostConnected();
         await flushDeferredRowPrune();
 
-        expect(request).toHaveBeenCalledWith("source-message");
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
 
         resolvedMessage = { ...sourceMessage, content: "The original message" };
@@ -224,7 +220,6 @@ describe("chat transcript replies", () => {
         revision: 0,
         navigationId: null,
         read: () => sourceMessage,
-        request: vi.fn(),
         open,
       };
       const rerender = () => {
@@ -475,7 +470,6 @@ describe("chat transcript replies", () => {
         revision: 0,
         navigationId: null,
         read: () => undefined,
-        request: vi.fn(),
         open,
       };
     }

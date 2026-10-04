@@ -294,7 +294,6 @@ export async function validateClawProject(
     const read = await sourceRoot.read("package.json", {
       hardlinks: "reject",
       maxBytes: MAX_PACKAGE_JSON_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     packageValue = JSON.parse(read.buffer.toString("utf8"));

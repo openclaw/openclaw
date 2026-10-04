@@ -786,7 +786,7 @@ describe("sessions.abort agent scope", () => {
     const activeRun = createActiveRun("main");
     const context = createContext({
       activeRuns: [["run-work", activeRun]],
-      agents: [{ id: "work", default: true }],
+      agents: [{ id: "work" }],
     });
 
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
@@ -850,7 +850,7 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("rejects unknown explicit agentId before session mutations", async () => {
-    const context = createContext({ agents: [{ id: "main", default: true }] });
+    const context = createContext({ agents: [{ id: "main" }] });
     const respond = await callSessions(
       "sessions.patch",
       { key: "global", agentId: "work", label: "Work" },

@@ -54,14 +54,19 @@ describe("createReplyTimingTracker", () => {
 
   it("records and logs spans when the profiler flag is enabled", () => {
     const warn = vi.fn();
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyTimingTracker({
       log: { warn },
-      env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } as NodeJS.ProcessEnv,
-      totalWarnMs: 0,
-      stageWarnMs: 0,
+      enabled: isReplyProfilerEnabled({ env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } }),
     });
 
-    expect(tracker.measureSync("sync", () => 7)).toBe(7);
+    expect(
+      tracker.measureSync("sync", () => {
+        nowMs += 500;
+        return 7;
+      }),
+    ).toBe(7);
     tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
     tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
 
@@ -75,10 +80,13 @@ describe("createReplyTimingTracker", () => {
 
   it("retains failed-stage timings and propagates the original failures", async () => {
     const warn = vi.fn();
-    const tracker = createReplyTimingTracker({ log: { warn }, enabled: true, totalWarnMs: 0 });
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const tracker = createReplyTimingTracker({ log: { warn }, enabled: true });
 
     expect(() =>
       tracker.measureSync("sync_failure", () => {
+        nowMs += 500;
         throw new Error("sync failed");
       }),
     ).toThrow("sync failed");

@@ -5,23 +5,29 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createToolCallOccurrenceQueue } from "../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import { createExternalGates } from "../src/agents/subagents/announce/subagent-external-gate.test-support.js";
-import { saveSubagentRegistryChangesToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import {
+  prepareToolSearchDispatcherArguments,
+  readToolSearchCallArgs,
+} from "../src/agents/tool-search-request.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveSessionStorePathCore } from "../src/config/sessions.js";
 import {
   loadExactSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntryCore,
 } from "../src/config/sessions/session-accessor.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { redactSecrets } from "../src/logging/redact.js";
-import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
-import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
+import {
+  extractAssistantPhaseText,
+  extractFirstTextBlock,
+} from "../src/shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -107,15 +113,14 @@ function fetchCommand(url: string): string {
     .join(" ");
 }
 
-function recoveredWorkerRequests(requests: readonly string[], parentKey: string, startAt: number) {
+function workerRequests(
+  requests: readonly string[],
+  startAt: number,
+  matchesInput: (text: string) => boolean,
+) {
   return requests.slice(startAt).flatMap((body, index) => {
     const request = asOptionalRecord(JSON.parse(body));
-    if (
-      !request ||
-      !Array.isArray(request.input) ||
-      !Array.isArray(request.tools) ||
-      !request.tools.some((tool) => asOptionalRecord(tool)?.name === "exec")
-    ) {
+    if (!request || !Array.isArray(request.input)) {
       return [];
     }
     const matches = request.input.some((item) => {
@@ -125,11 +130,7 @@ function recoveredWorkerRequests(requests: readonly string[], parentKey: string,
         Array.isArray(message.content) &&
         message.content.some((block) => {
           const text = asOptionalRecord(block)?.text;
-          return (
-            typeof text === "string" &&
-            text.includes(`sourceSession=${parentKey} `) &&
-            text.includes("sourceTool=subagent_interrupted_resume ")
-          );
+          return typeof text === "string" && matchesInput(text);
         })
       );
     });
@@ -137,8 +138,93 @@ function recoveredWorkerRequests(requests: readonly string[], parentKey: string,
   });
 }
 
+function inspectToolHistory(messages: readonly Record<string, unknown>[]) {
+  const calls = createToolCallOccurrenceQueue<{
+    args: Record<string, unknown>;
+    callIndex: number;
+  }>();
+  const exchanges: Array<{
+    name: string;
+    args: Record<string, unknown>;
+    callIndex: number;
+    resultIndex: number;
+    result: Record<string, unknown>;
+    isError: boolean;
+  }> = [];
+  const commandCalls: Record<string, unknown>[] = [];
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const value of message.content) {
+        const block = asOptionalRecord(value);
+        if (block?.type !== "toolCall") {
+          continue;
+        }
+        const selectors =
+          block.name === "tool_call"
+            ? asOptionalRecord(prepareToolSearchDispatcherArguments(block.arguments))
+            : undefined;
+        if (
+          block.name === "exec" ||
+          block.name === "process" ||
+          ["id", "toolId", "name"].some((key) => {
+            const selector = selectors?.[key];
+            return (
+              typeof selector === "string" &&
+              ["exec", "process", "openclaw:core:exec", "openclaw:core:process"].includes(
+                selector.trim(),
+              )
+            );
+          })
+        ) {
+          commandCalls.push(block);
+        }
+        const args = asOptionalRecord(block?.arguments);
+        if (typeof block.id !== "string" || !args) {
+          continue;
+        }
+        calls.add(block.id, { args, callIndex: index });
+      }
+    }
+    if (message.role !== "toolResult" || typeof message.toolCallId !== "string") {
+      continue;
+    }
+    const call = calls.claim(message.toolCallId);
+    if (!call) {
+      continue;
+    }
+    const persistedDetails = asOptionalRecord(message.details);
+    // Diagnostic metadata is capped independently of the model-visible receipt.
+    const details =
+      persistedDetails?.persistedDetailsTruncated === true
+        ? asOptionalRecord(JSON.parse(extractFirstTextBlock(message) ?? "null"))
+        : persistedDetails;
+    const wrapped = message.toolName === "tool_call";
+    const name = wrapped ? asOptionalRecord(details?.tool)?.name : message.toolName;
+    const result = wrapped ? asOptionalRecord(asOptionalRecord(details?.result)?.details) : details;
+    if (typeof name !== "string" || !result) {
+      continue;
+    }
+    const args = wrapped
+      ? asOptionalRecord(
+          readToolSearchCallArgs(prepareToolSearchDispatcherArguments(call.args)).input,
+        )
+      : call.args;
+    if (args) {
+      exchanges.push({
+        name,
+        args,
+        callIndex: call.callIndex,
+        resultIndex: index,
+        result,
+        isError: message.isError === true,
+      });
+    }
+  }
+  return { exchanges, commandCalls };
+}
+
 it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
-  "preserves recovered tool results across two cold restarts and refuses stale hard-kill replay",
+  "preserves tool results through parent-owned follow-ups across two cold restarts without orphan replay",
   { timeout: 900_000 },
   async () => {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -162,7 +248,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
     });
     let client: GatewayClient | undefined;
     let provider: Awaited<ReturnType<typeof observeOpenAiResponses>> | undefined;
-    let secondRecoveryRequest: ReturnType<typeof recoveredWorkerRequests>[number] | undefined;
+    let secondRecoveryRequest: ReturnType<typeof workerRequests>[number] | undefined;
     let gates: Awaited<ReturnType<typeof createExternalGates>> | undefined;
     const parents = new Set<string>();
     let fixtureStateBound = false;
@@ -206,6 +292,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             defaults: {
               workspace: instance.state.workspaceDir,
               model: { primary: modelRef },
+              modelPolicy: { allow: [modelRef] },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
               heartbeat: { every: "0m" },
@@ -214,10 +301,18 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               timeoutSeconds: 600,
               subagents: { allowAgents: ["*"], runTimeoutSeconds: 600, announceTimeoutMs: 180_000 },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           tools: {
-            allow: ["sessions_spawn", "sessions_yield", "exec", "process"],
+            allow: [
+              "sessions_spawn",
+              "sessions_yield",
+              "sessions_send",
+              "sessions_history",
+              "subagents",
+              "exec",
+              "process",
+            ],
             exec: { mode: "full", host: "gateway" },
             codeMode: { enabled: false },
           },
@@ -271,10 +366,26 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           await instance.stopGateway();
           return processOwner.pid;
         };
-        const childFor = (parent: string) =>
-          [...loadSubagentRegistryFromSqlite().values()].find(
+        const onlyChildFor = (parent: string) => {
+          const children = [...loadSubagentRegistryFromSqlite().values()].filter(
             (run) => run.requesterSessionKey === parent,
           );
+          expect(children.length).toBeLessThanOrEqual(1);
+          return children[0];
+        };
+        const transcript = async (sessionKey: string) => {
+          const scope = { agentId: "main", storePath, sessionKey };
+          const entry = loadExactSessionEntry(scope)?.entry;
+          if (!entry) {
+            throw new Error(`Missing fixture session: ${sessionKey}`);
+          }
+          return (await loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).flatMap(
+            (event) => {
+              const message = asOptionalRecord(asOptionalRecord(event)?.message);
+              return message ? [message] : [];
+            },
+          );
+        };
         const history = async (sessionKey: string) => {
           const result = await client!.request<{
             messages: Array<{ role: string; content?: unknown }>;
@@ -318,6 +429,111 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           "Gateway restarts may interrupt a pending command. After recovery, ignore old process handles and rerun only the interrupted command. Preserve all earlier successful stdout from your transcript.",
           "After both commands succeed, reply with exactly the first command's stdout on the first line and the second command's stdout on the second line. No other content.",
         ].join("\n");
+        const followupMessage =
+          "Continue the original two-command task from your retained history. The previous " +
+          "execution has stopped. Preserve every successful stdout already recorded; do not " +
+          "repeat its command. These fixture HTTP requests only read results, so rerun only " +
+          "a command interrupted without successful stdout. Ignore old process handles. " +
+          "Return the original exact two-line result when both commands have succeeded.";
+        const followupFor = async (previous: SubagentRunRecord, count: number, after: number) => {
+          const { exchanges, commandCalls } = inspectToolHistory(await transcript(parentKey));
+          const sends = exchanges.filter((exchange) => exchange.name === "sessions_send");
+          expect(sends).toHaveLength(count);
+          const sent = sends[count - 1]!;
+          expect(sent.callIndex).toBeGreaterThanOrEqual(after);
+          expect(sent.isError).toBe(false);
+          expect(sent.args).toMatchObject({
+            sessionKey: previous.childSessionKey,
+            mode: "followup",
+            timeoutSeconds: 0,
+          });
+          expect(sent.result).toMatchObject({
+            status: "accepted",
+            runId: expect.any(String),
+            sessionKey: previous.childSessionKey,
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          });
+          const inspections = exchanges.filter(
+            (exchange) => exchange.callIndex >= after && exchange.resultIndex < sent.callIndex,
+          );
+          const stopped = inspections.find(
+            (exchange) =>
+              exchange.name === "subagents" &&
+              exchange.args.action === "wait" &&
+              exchange.args.timeoutSeconds === 0 &&
+              Array.isArray(exchange.args.runIds) &&
+              exchange.args.runIds.includes(previous.runId) &&
+              !exchange.isError &&
+              exchange.result.status === "ok" &&
+              exchange.result.reason === "completed" &&
+              Array.isArray(exchange.result.runs) &&
+              exchange.result.runs.some((value) => {
+                const run = asOptionalRecord(value);
+                return run?.runId === previous.runId && run.status === "terminal";
+              }),
+          );
+          expect(stopped?.result).toMatchObject({
+            status: "ok",
+            reason: "completed",
+            runs: expect.arrayContaining([
+              expect.objectContaining({ runId: previous.runId, status: "terminal" }),
+            ]),
+          });
+          const inspected = inspections.find(
+            (exchange) =>
+              exchange.name === "sessions_history" &&
+              exchange.args.sessionKey === previous.childSessionKey &&
+              exchange.args.includeTools === true &&
+              !exchange.isError &&
+              exchange.result.sessionKey === previous.childSessionKey &&
+              Array.isArray(exchange.result.messages) &&
+              (count !== 2 || JSON.stringify(exchange.result.messages).includes(firstMarker)),
+          );
+          expect(inspected?.result).toMatchObject({
+            sessionKey: previous.childSessionKey,
+            messages: expect.any(Array),
+          });
+          if (count === 2) {
+            expect(JSON.stringify(inspected?.result.messages)).toContain(firstMarker);
+          }
+          expect(commandCalls).toEqual([]);
+          expect(
+            exchanges.filter(
+              (exchange) =>
+                exchange.name === "sessions_yield" &&
+                exchange.result.status === "yielded" &&
+                !exchange.isError,
+            ),
+          ).toHaveLength(count + 1);
+          const runs = loadSubagentRegistryFromSqlite();
+          expect(
+            [...runs.values()].filter(
+              (run) =>
+                run.requesterSessionKey === parentKey &&
+                run.childSessionKey === previous.childSessionKey,
+            ),
+          ).toHaveLength(count + 1);
+          expect(runs.get(previous.runId)).toMatchObject({
+            execution: { status: "terminal", interruptionReason: "gateway-restart" },
+          });
+          if (typeof sent.result.runId !== "string") {
+            throw new Error("Follow-up acceptance has no run ID");
+          }
+          const continued = runs.get(sent.result.runId);
+          if (!continued) {
+            throw new Error("Accepted child follow-up has no registered completion owner");
+          }
+          expect(continued).toMatchObject({
+            childSessionKey: previous.childSessionKey,
+            requesterSessionKey: parentKey,
+            taskRunId: continued.runId,
+            expectsCompletionMessage: true,
+          });
+          expect(continued.runId).not.toBe(previous.runId);
+          expect(continued.generation).toBeGreaterThan(previous.generation ?? 0);
+          return continued;
+        };
         await instance.startGateway();
         client = await connect();
         evidence.phase = "initial-checkpoint";
@@ -326,26 +542,42 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           parentKey,
           [
             `Call sessions_spawn exactly once with ${JSON.stringify({ taskName: "restart_worker", task: childTask, cleanup: "keep", context: "isolated" })}.`,
-            "Immediately call sessions_yield after acceptance. Do not call other tools; wait for the actual child completion.",
+            "Immediately call sessions_yield after acceptance. Wait for the actual child completion; never execute the child's commands yourself or spawn a replacement.",
+            "If the Gateway interrupts a child, call subagents with action wait, runIds containing that interrupted run ID, and timeoutSeconds 0. Continue only after it confirms the old run is terminal.",
+            "Then inspect that same child's saved history with sessions_history, includeTools true. Reconcile successful stdout and the interrupted read-only HTTP command before continuing.",
+            `After those checks call sessions_send on that same retained child session with mode followup, timeoutSeconds 0, and a message following this guidance: ${JSON.stringify(followupMessage)}.`,
+            "Immediately call sessions_yield after accepted follow-up. Repeat these inspection and follow-up steps if another Gateway restart interrupts it. Never repeat a send whose acceptance is uncertain.",
             `Your only final reply must be ${finalMarker} followed by the child's exact two-line result.`,
           ].join("\n"),
         );
         const initial = await vi.waitUntil(
-          () => {
-            const child = childFor(parentKey);
+          async () => {
+            const child = onlyChildFor(parentKey);
             if (child?.execution.status === "terminal") {
               throw new Error(
                 `Child ended before the initial HTTP checkpoint: ${JSON.stringify(child.execution.outcome)}`,
               );
             }
             return first.snapshot().waiting > 0 &&
-              child?.requesterSettleWake?.requesterYieldBatch === true
+              child?.requesterSettleWake?.requesterYieldBatch === true &&
+              inspectToolHistory(await transcript(parentKey)).exchanges.some(
+                (exchange) =>
+                  exchange.name === "sessions_yield" &&
+                  exchange.result.status === "yielded" &&
+                  !exchange.isError,
+              )
               ? child
               : undefined;
           },
           { timeout: WAIT_MS },
         );
         expect(initial.runId).toBeTruthy();
+        const childSessionId = loadExactSessionEntry({
+          agentId: "main",
+          storePath,
+          sessionKey: initial.childSessionKey,
+        })!.entry.sessionId;
+        const parentBeforeFirstRestart = (await transcript(parentKey)).length;
         const initialPid = await killOwnedGateway();
         first.release(firstMarker);
         evidence.phase = "first-recovery-checkpoint";
@@ -355,21 +587,28 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         await vi.waitFor(
           async () => {
             expect(second.snapshot().waiting).toBeGreaterThan(0);
-            const recovered = childFor(parentKey);
-            expect(recovered?.runId).not.toBe(initial.runId);
-            expect(recovered?.execution.restartRecovery).toBeUndefined();
-            const target = recovered?.execution.transcriptTarget;
-            expect(target?.sessionId).toBeTruthy();
+            const recovered = await followupFor(initial, 1, parentBeforeFirstRestart);
+            expect(recovered.requesterSettleWake).toMatchObject({
+              requesterYieldBatch: true,
+              batchRunIds: [recovered.runId],
+            });
             expect(
-              JSON.stringify(
-                await loadTranscriptEvents({ ...target!, sessionId: target!.sessionId! }),
-              ),
-            ).toContain(firstMarker);
+              loadExactSessionEntry({
+                agentId: "main",
+                storePath,
+                sessionKey: initial.childSessionKey,
+              })?.entry,
+            ).toMatchObject({ sessionId: childSessionId, lifecycleRunId: recovered.runId });
+            expect(JSON.stringify(await transcript(initial.childSessionKey))).toContain(
+              firstMarker,
+            );
           },
           { timeout: WAIT_MS },
         );
-        const recovered = childFor(parentKey)!;
+        const recovered = await followupFor(initial, 1, parentBeforeFirstRestart);
         const firstRequests = first.snapshot().requests;
+        expect(firstRequests).toBe(2);
+        const parentBeforeSecondRestart = (await transcript(parentKey)).length;
         const recoveredPid = await killOwnedGateway();
         const providerBeforeSecondRestart = provider.requests.length;
         evidence.providerBeforeSecondRestart = providerBeforeSecondRestart;
@@ -380,7 +619,13 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         client = await connect();
         secondRecoveryRequest = await vi.waitUntil(
           () =>
-            recoveredWorkerRequests(provider!.requests, parentKey, providerBeforeSecondRestart)[0],
+            workerRequests(
+              provider!.requests,
+              providerBeforeSecondRestart,
+              (text) =>
+                text.includes(`sourceSession=${parentKey} `) &&
+                text.includes("sourceTool=sessions_send "),
+            )[0],
           { timeout: WAIT_MS },
         );
         evidence.secondRecoveryRequestIndex = secondRecoveryRequest.index;
@@ -397,18 +642,30 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           async () => {
             expect(await history(parentKey)).toContain(expectedFinal);
             await expectSessionDone(parentKey);
-            expect(childFor(parentKey)).toMatchObject({
+            const completed = await followupFor(recovered, 2, parentBeforeSecondRestart);
+            expect(completed).toMatchObject({
               execution: { outcome: { status: "ok" } },
               delivery: { status: "delivered" },
             });
+            expect(completed.requesterSettleWake).toBeUndefined();
           },
           { timeout: WAIT_MS },
         );
-        const completed = childFor(parentKey)!;
-        expect(completed.taskRunId).toBe(initial.taskRunId ?? initial.runId);
-        expect(completed.runId).not.toBe(recovered.runId);
+        const completed = await followupFor(recovered, 2, parentBeforeSecondRestart);
         expect((await history(parentKey)).filter((text) => text === expectedFinal)).toHaveLength(1);
+        const finalDeliveries = (await transcript(parentKey)).filter((message) => {
+          const provenance = asOptionalRecord(message.provenance);
+          return (
+            message.role === "user" &&
+            provenance?.sourceTool === "subagent_settle" &&
+            provenance.sourceSessionKey === initial.childSessionKey &&
+            JSON.stringify(message.content).includes(firstMarker) &&
+            JSON.stringify(message.content).includes(secondMarker)
+          );
+        });
+        expect(finalDeliveries).toHaveLength(1);
         expect(first.snapshot().requests).toBe(firstRequests);
+        expect(second.snapshot().requests).toBe(2);
         Object.assign(evidence, {
           initialPid,
           recoveredPid,
@@ -417,87 +674,69 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           executionRunIds: [initial.runId, recovered.runId, completed.runId],
           recoveredMarkerReachedProvider: true,
           successfulFirstCommandRepeated: false,
+          successfulSecondCommandRepeated: false,
           parentFinalCount: 1,
         });
 
-        const staleParent = `agent:main:stale-parent-${randomUUID()}`;
-        const staleGate = gates.create();
-        const staleParentFinal = `STALE_CHILD_SPAWNED_${randomUUID()}`;
-        evidence.phase = "stale-child-checkpoint";
+        const orphanParent = `agent:main:orphan-parent-${randomUUID()}`;
+        const orphanGate = gates.create();
+        const orphanParentFinal = `ORPHAN_CHILD_SPAWNED_${randomUUID()}`;
+        evidence.phase = "orphan-child-checkpoint";
         await start(
-          staleParent,
+          orphanParent,
           [
-            `Call sessions_spawn exactly once with ${JSON.stringify({ taskName: "stale_worker", task: `Run ${fetchCommand(staleGate.url)} with exec, timeoutSeconds 300, then use process to wait and reply with stdout. Do not spawn or write files.`, cleanup: "keep", context: "isolated", expectsCompletionMessage: false })}.`,
-            `After acceptance reply exactly ${staleParentFinal}. Do not yield or wait; this child sends no completion notification.`,
+            `Call sessions_spawn exactly once with ${JSON.stringify({ taskName: "orphan_worker", task: `Run ${fetchCommand(orphanGate.url)} with exec, timeoutSeconds 300, then use process to wait and reply with stdout. Do not spawn or write files.`, cleanup: "keep", context: "isolated", expectsCompletionMessage: false })}.`,
+            `After acceptance reply exactly ${orphanParentFinal}. Do not yield or wait; this child sends no completion notification.`,
           ].join("\n"),
         );
         await vi.waitFor(
           async () => {
-            expect(staleGate.snapshot().waiting).toBeGreaterThan(0);
-            expect(await history(staleParent)).toContain(staleParentFinal);
-            await expectSessionDone(staleParent);
+            expect(orphanGate.snapshot().waiting).toBeGreaterThan(0);
+            expect(await history(orphanParent)).toContain(orphanParentFinal);
+            await expectSessionDone(orphanParent);
           },
           { timeout: WAIT_MS },
         );
-        const stale = childFor(staleParent)!;
-        expect(stale.expectsCompletionMessage).toBe(false);
+        const orphan = onlyChildFor(orphanParent)!;
+        expect(orphan.expectsCompletionMessage).toBe(false);
         await killOwnedGateway();
-        const runs = loadSubagentRegistryFromSqlite();
-        const owned = runs.get(stale.runId)!;
-        const staleAt = Date.now() - 3 * 24 * 60 * 60_000;
-        owned.createdAt = staleAt;
-        owned.sessionStartedAt = staleAt;
-        owned.execution.startedAt = staleAt;
-        expect(owned.execution.status).toBe("running");
-        expect(owned.execution.interruptedAt).toBeUndefined();
-        saveSubagentRegistryChangesToSqlite(runs, [owned.runId]);
-        const scope = { agentId: "main", storePath, sessionKey: owned.childSessionKey };
-        const childEntry = loadExactSessionEntry(scope)!.entry;
-        expect(childEntry.lifecycleRunId).toBe(owned.runId);
-        await patchSessionEntryCore(
-          scope,
-          (current) => ({
-            ...current,
-            updatedAt: staleAt,
-            startedAt: staleAt,
-            abortedLastRun: false,
-          }),
-          {
-            assertCommitAllowed: () => expect(instance.child).toBeUndefined(),
-            replaceEntry: true,
-          },
-        );
-        expect(loadExactSessionEntry(scope)!.entry.updatedAt).toBe(staleAt);
-        await cleanupSessionStateForTest({ stateDir: instance.stateDir });
-        const providerBeforeStaleRestart = provider.requests.length;
-        const staleGateRequests = staleGate.snapshot().requests;
-        evidence.providerBeforeStaleRestart = providerBeforeStaleRestart;
-        staleGate.release("STALE_GATE_RELEASED");
-        evidence.phase = "stale-child-restart";
-        logLiveProgress("subagent restart: stopped fixture aged three days; verifying no replay");
+        const providerBeforeOrphanRestart = provider.requests.length;
+        const orphanGateRequests = orphanGate.snapshot().requests;
+        evidence.providerBeforeOrphanRestart = providerBeforeOrphanRestart;
+        orphanGate.release("ORPHAN_GATE_RELEASED");
+        evidence.phase = "orphan-child-restart";
+        logLiveProgress("subagent restart: nonannouncing orphan interrupted; verifying no replay");
         await instance.startGateway();
         client = await connect();
-        await vi.waitFor(
-          () =>
-            expect(childFor(staleParent)?.execution.outcome).toMatchObject({
-              status: "error",
-              error: expect.stringContaining("stale aborted subagent run not resumed"),
-            }),
+        const settledOrphan = await vi.waitFor(
+          () => {
+            const settled = onlyChildFor(orphanParent);
+            expect(settled).toMatchObject({
+              runId: orphan.runId,
+              terminalOwner: "interrupted-recovery",
+              cleanupCompletedAt: expect.any(Number),
+              execution: {
+                status: "terminal",
+                interruptionReason: "gateway-restart",
+              },
+            });
+            expect(settled?.requesterSettleWake).toBeUndefined();
+            return settled!;
+          },
           { timeout: 30_000 },
         );
-        expect(childFor(staleParent)?.runId).toBe(owned.runId);
-        const staleProviderDispatches = recoveredWorkerRequests(
+        const orphanProviderDispatches = workerRequests(
           provider.requests,
-          staleParent,
-          providerBeforeStaleRestart,
+          providerBeforeOrphanRestart,
+          (text) => text.includes("[Subagent Task]") && text.includes(orphanGate.url),
         ).length;
-        expect(staleProviderDispatches).toBe(0);
-        expect(staleGate.snapshot().requests).toBe(staleGateRequests);
+        expect(orphanProviderDispatches).toBe(0);
+        expect(orphanGate.snapshot().requests).toBe(orphanGateRequests);
         Object.assign(evidence, {
           phase: "passed",
-          staleRunId: owned.runId,
-          staleAt,
-          staleProviderDispatches,
+          orphanRunId: orphan.runId,
+          orphanCleanupCompletedAt: settledOrphan.cleanupCompletedAt,
+          orphanProviderDispatches,
         });
         logLiveProgress(`subagent cold restart proof passed; evidence=${artifactDir}`);
       },
@@ -521,14 +760,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         const runs = [...loadSubagentRegistryFromSqlite().values()].filter((run) =>
           parents.has(run.requesterSessionKey),
         );
-        const sessionKeys = new Set([
-          ...parents,
-          ...runs.flatMap((run) =>
-            [run.childSessionKey, run.execution.transcriptTarget?.sessionKey].filter(
-              (key): key is string => Boolean(key),
-            ),
-          ),
-        ]);
+        const sessionKeys = new Set([...parents, ...runs.map((run) => run.childSessionKey)]);
         const storePath = resolveSessionStorePathCore(undefined, {
           agentId: "main",
           env: instance.env,

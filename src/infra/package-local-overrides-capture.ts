@@ -23,7 +23,6 @@ import {
   type LocalOverridePackageRoot,
   type LocalPackageOverrideChange,
   type LocalPackageOverridesPlan,
-  type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
 async function copyOverridePayload(params: {
@@ -190,7 +189,6 @@ export async function captureLocalPackageOverrides(params: {
   const baseline = await readPackageDistContentInventoryIfPresent(params.packageRoot);
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
 
@@ -330,14 +328,10 @@ export async function captureLocalPackageOverrides(params: {
     }
     const finalRecoveryDir = await ensureRecoveryDir();
 
-    const counts = countChanges(changes);
-    const result: LocalPackageOverridesResult = {
-      status: "none",
-      ...counts,
-      applied: 0,
-      conflicts: [],
+    const result = {
+      ...emptyResult("none"),
+      ...countChanges(changes),
       recoveryDir: finalRecoveryDir,
-      warnings: [],
     };
     await fs.writeFile(
       path.join(finalRecoveryDir, "manifest.json"),

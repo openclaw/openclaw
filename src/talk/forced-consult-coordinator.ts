@@ -15,7 +15,7 @@ const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_LIMIT = 12;
 
 /** Timer abstraction used so tests can inject deterministic fake timers. */
-export type RealtimeVoiceForcedConsultTimer = {
+type RealtimeVoiceForcedConsultTimer = {
   clear(): void;
 };
 
@@ -37,7 +37,7 @@ export type RealtimeVoiceForcedConsultHandle<TContext = unknown> = {
 };
 
 /** Classification of a native provider consult relative to forced consult state. */
-export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
+type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
   | { kind: "none"; question?: string }
   | { kind: "pending"; question?: string; handle: RealtimeVoiceForcedConsultHandle<TContext> }
   | { kind: "in_flight"; question?: string; handle: RealtimeVoiceForcedConsultHandle<TContext> }
@@ -47,7 +47,7 @@ export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
       handle: RealtimeVoiceForcedConsultHandle<TContext>;
     };
 
-export type RealtimeVoiceForcedConsultNativeRecentOptions = {
+type RealtimeVoiceForcedConsultNativeRecentOptions = {
   /** Treat native calls without readable questions as recent generic consults. */
   allowUnknownQuestion?: boolean;
 };

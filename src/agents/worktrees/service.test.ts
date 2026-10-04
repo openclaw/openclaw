@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import * as worktreeGit from "./git.js";
+import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
@@ -617,13 +618,14 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses to overwrite a branch recreated before restore", async () => {
+  it("refuses to overwrite a branch advanced after removal", async () => {
     const created = await materializeDownstreamFixture("restore-collision");
     await service.remove({ id: created.id, reason: "test" });
+    await git(repo, "commit", "--allow-empty", "-m", "new branch state");
     await git(repo, "branch", created.branch, "HEAD");
     const branchTip = await git(repo, "rev-parse", created.branch);
 
-    await expect(service.restore({ id: created.id })).rejects.toThrow("already exists");
+    await expect(service.restore({ id: created.id })).rejects.toThrow("Recorded branch moved");
 
     expect(await git(repo, "rev-parse", created.branch)).toBe(branchTip);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -838,9 +840,11 @@ describe("ManagedWorktreeService", () => {
       const created = await materialize("claim-failure");
       const lease = await acquireWorktreeRunLease(created.id, { env });
       const failure = new Error("synthetic removal claim failure");
-      runLeaseTesting.setDeadPidResolverForTest(() => {
-        throw failure;
-      });
+      const removalClaim = vi
+        .spyOn(worktreeRegistry, "claimWorktreeRemovalRow")
+        .mockImplementation(() => {
+          throw failure;
+        });
 
       await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
 
@@ -852,7 +856,7 @@ describe("ManagedWorktreeService", () => {
         },
       });
       await expect(fs.access(created.path)).resolves.toBeUndefined();
-      runLeaseTesting.setDeadPidResolverForTest(null);
+      removalClaim.mockRestore();
       await lease.release();
     });
   });

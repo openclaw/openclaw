@@ -13,6 +13,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -41,7 +42,7 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("reuses selection through transcript refreshes and refreshes metadata ordering", async () => {
+it("maintains list order across metadata changes and archived-row rematerialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const first = "agent:main:first";
@@ -59,7 +60,7 @@ it("reuses selection through transcript refreshes and refreshes metadata orderin
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const scan = vi.spyOn(projection, "selectEntries");
     try {
-      const list = async (sortBy?: "lastInteractionAt") =>
+      const list = async (sortBy?: "lastInteractionAt" | "activity") =>
         (await listProjectedSessions({ projection, opts: { limit: 1, sortBy } })).sessions;
       expect((await list())[0]?.key).toBe(first);
       scan.mockClear();
@@ -69,12 +70,88 @@ it("reuses selection through transcript refreshes and refreshes metadata orderin
       expect((await list())[0]?.key).toBe(first);
       expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
       expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
+      expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list())[0]?.key).toBe(first);
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: second },
         { sessionId: second, updatedAt: 3, label: "Changed metadata" },
       );
       expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+      const third = "agent:main:third";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3 },
+      );
+      expect((await list())[0]?.key).toBe(third);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(third);
+      expect(
+        await listProjectedSessions({ projection, opts: { limit: 1, offset: 1 } }),
+      ).toMatchObject({
+        totalCount: 3,
+        nextOffset: 2,
+        hasMore: true,
+        sessions: [{ key: second }],
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3, archivedAt: 5 },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      const archived = await listProjectedSessions({ projection, opts: { archived: true } });
+      expect(archived.sessions.map((row) => row.key)).toEqual([third]);
+      const archivedQuery = { agentId: "main", key: third };
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      await projection.ensureMaterialized();
+      expect(projection.isMaterialized(archivedQuery)).toBe(false);
+      const rematerialized = await listProjectedSessions({
+        projection,
+        opts: { archived: true },
+      });
+      expect(rematerialized.sessions.map((row) => row.key)).toEqual([third]);
+      expect(rematerialized.totalCount).toBe(1);
+      expect(projection.isMaterialized(archivedQuery)).toBe(true);
+      expect((await list())[0]?.key).toBe(second);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: projection.capture({ agentId: "main", key: third })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: third, storeKeys: [third] },
+      });
+      const remaining = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", sortBy: "activity" },
+      });
+      expect(remaining.sessions.map((row) => row.key)).toEqual([second, first]);
+      expect(remaining).toMatchObject({ totalCount: 2, nextOffset: null, hasMore: false });
+      // Deletion publishes topology; keyed updates must reuse the rebuilt scope.
+      scan.mockClear();
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 2, lastInteractionAt: 1, pinnedAt: 10 },
+      );
+      expect((await list())[0]?.key).toBe(first);
+      expect((await list("activity"))[0]?.key).toBe(second);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(first);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 2, lastInteractionAt: 1, label: "Unpinned" },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      projection.onSelectionChange(() => {
+        throw new Error("Synthetic selection observer failure");
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 5, label: "Changed despite observer failure" },
+      );
+      expect((await list())[0]).toMatchObject({
+        key: first,
+        label: "Changed despite observer failure",
+      });
+      expect(() => projection.dispose()).not.toThrow();
+      expect(projection.selectEntries()).toEqual([]);
     } finally {
       scan.mockRestore();
       projection.dispose();
@@ -307,7 +384,7 @@ it.each([false, true])(
 
 it("rejects duplicate ordinary keys introduced after store admission before filtering or pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";

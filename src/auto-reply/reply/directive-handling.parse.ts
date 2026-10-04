@@ -53,7 +53,6 @@ export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];
-    disableElevated?: boolean;
     allowStatusDirective?: boolean;
     command?: { kind: "native" | "text"; name: ReplyDirectiveCommand };
   },
@@ -75,37 +74,22 @@ export function parseInlineSessionDirectives(
   let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
     commandName: ReplyDirectiveCommand,
-    extract: (value: string) => T,
-    enabled = true,
+    extract: (value: string, options: { strict: boolean }) => T,
   ): T => {
     const parsed =
-      enabled && (!command || command === commandName)
-        ? extract(cleaned)
+      !command || command === commandName
+        ? extract(cleaned, { strict: command === commandName })
         : ({ cleaned, hasDirective: false } as T);
     cleaned = parsed.cleaned;
     hasAnyDirective ||= parsed.hasDirective;
     return parsed;
   };
-  const think = parseScopedDirective("think", (value) =>
-    extractThinkDirective(value, { strict: command === "think" }),
-  );
-  const verbose = parseScopedDirective("verbose", (value) =>
-    extractVerboseDirective(value, { strict: command === "verbose" }),
-  );
-  const trace = parseScopedDirective("trace", (value) =>
-    extractTraceDirective(value, { strict: command === "trace" }),
-  );
-  const fast = parseScopedDirective("fast", (value) =>
-    extractFastDirective(value, { strict: command === "fast" }),
-  );
-  const reasoning = parseScopedDirective("reasoning", (value) =>
-    extractReasoningDirective(value, { strict: command === "reasoning" }),
-  );
-  const elevated = parseScopedDirective(
-    "elevated",
-    (value) => extractElevatedDirective(value, { strict: command === "elevated" }),
-    !options?.disableElevated,
-  );
+  const think = parseScopedDirective("think", extractThinkDirective);
+  const verbose = parseScopedDirective("verbose", extractVerboseDirective);
+  const trace = parseScopedDirective("trace", extractTraceDirective);
+  const fast = parseScopedDirective("fast", extractFastDirective);
+  const reasoning = parseScopedDirective("reasoning", extractReasoningDirective);
+  const elevated = parseScopedDirective("elevated", extractElevatedDirective);
   const exec = parseScopedDirective("exec", extractExecDirective);
   const allowStatusDirective = options?.allowStatusDirective !== false && !command;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective

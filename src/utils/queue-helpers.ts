@@ -6,18 +6,14 @@ import { expectDefined } from "@openclaw/normalization-core";
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy for future admissions. */
-type QueueDropPolicy = "summarize" | "old" | "new";
-
-/** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
@@ -73,12 +69,9 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
-/** Normalize whitespace and elide one dropped item for queue summaries. */
-function buildQueueSummaryLine(text: string, limit = 160): string {
+function buildQueueSummaryLine(text: string): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length <= limit
-    ? cleaned
-    : `${truncateUtf16Safe(cleaned, Math.max(0, limit - 1)).trimEnd()}…`;
+  return cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`;
 }
 
 /** Count identities that are still pending in the queue, excluding active deliveries. */
@@ -175,15 +168,10 @@ export function waitForQueueDebounce(
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let observedEnqueuedAt: number | undefined;
     let observedAtMs = 0;
     const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       if (timer !== undefined) {
         clearTimeout(timer);
       }

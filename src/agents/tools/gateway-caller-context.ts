@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
@@ -37,6 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
+import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -64,6 +66,7 @@ type GatewayToolCallerIdentity = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Synchronous host-owned fence for tool effects and decision receipts. */
   receiptAuthority?: () => boolean | void;
+  receiptAdmissions?: readonly GatewayToolCallerReceiptAdmission[];
   /** Captured conversation policy for tools delegated through another tool's transport. */
   assertToolAllowed?: (toolName: string) => void;
   /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
@@ -106,6 +109,18 @@ type GatewayToolCallerSource = {
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
 
+const receiptAdmissionStorage = new AsyncLocalStorage<
+  ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>
+>();
+
+export function evaluateGatewayToolCallerReceiptAdmission(
+  admission: GatewayToolCallerReceiptAdmission,
+  otherwise: () => boolean,
+): boolean {
+  const prepared = receiptAdmissionStorage.getStore()?.get(admission);
+  return prepared ? prepared() : otherwise();
+}
+
 export type GatewayToolOperatorSelection = Readonly<{
   /** Raw host-issued source; custody transfers must not retain the turn-bound assertion. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -143,6 +158,7 @@ function bindGatewayToolContextResolver(
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
   receiptAuthority?: () => boolean | void;
+  receiptAdmission?: GatewayToolCallerReceiptAdmission;
   cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
   approvalSignals?: readonly AbortSignal[];
@@ -206,6 +222,7 @@ export function createAdmittedGatewayToolCallerIdentity(
         getAdmittedRunDelegatedAuthority(params.admittedRunContext) === delegatedAuthority,
       params.receiptAuthority,
     ),
+    ...(params.receiptAdmission ? { receiptAdmissions: [params.receiptAdmission] } : {}),
     ...(params.approvalSignals?.length ? { approvalSignals: params.approvalSignals } : {}),
     ...(params.mintCronRequesterGrant
       ? { mintCronRequesterGrant: params.mintCronRequesterGrant }
@@ -356,6 +373,53 @@ export function captureGatewayToolCallerAssertion(): ((method?: string) => void)
   };
 }
 
+/** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
+export async function prepareGatewayToolCallerAssertion(): Promise<{
+  assertCurrent?: () => void;
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck;
+  release(): void;
+}> {
+  const caller = getGatewayToolCallerIdentity();
+  const assertion = captureGatewayToolCallerAssertion();
+  const admissions = [...new Set(caller?.receiptAdmissions ?? [])];
+  const prepared = await Promise.all(admissions.map((admission) => admission.prepare()));
+  const predicates = new Map(
+    admissions.map((admission, index) => [admission, () => prepared[index]!.isCurrent()] as const),
+  );
+  let active = true;
+  const assertCurrent = () => {
+    if (!active) {
+      throw new Error("agent tool caller admission is no longer active");
+    }
+    receiptAdmissionStorage.run(predicates, () => assertion?.());
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    ...(prepared.length
+      ? {
+          sessionEntriesCurrent: {
+            sources: prepared.flatMap((entry) => entry.current.sources),
+            assertCurrent(entries) {
+              let offset = 0;
+              for (const entry of prepared) {
+                entry.current.assertCurrent(
+                  entries.slice(offset, offset + entry.current.sources.length),
+                );
+                offset += entry.current.sources.length;
+              }
+              assertCurrent();
+            },
+          },
+        }
+      : {}),
+    release() {
+      active = false;
+      predicates.clear();
+    },
+  };
+}
+
 /** Process-owned work must not retain the turn that authorized its launch. */
 export function withoutGatewayToolCallerIdentity<T>(run: () => T): T {
   return gatewayToolCallerStorage.exit(run);
@@ -417,6 +481,12 @@ export async function withGatewayToolCallerIdentity<T>(
     inheritedOwner?.receiptAuthority,
     identity.receiptAuthority,
   );
+  const receiptAdmissions = [
+    ...new Set([
+      ...(inheritedOwner?.receiptAdmissions ?? []),
+      ...(identity.receiptAdmissions ?? []),
+    ]),
+  ];
   const toolPolicyAssertions = [
     ...new Set(
       [inheritedOwner?.assertToolAllowed, identity.assertToolAllowed].filter(
@@ -495,6 +565,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
+      ...(receiptAdmissions.length ? { receiptAdmissions } : {}),
       ...(assertToolAllowed ? { assertToolAllowed } : {}),
       ...(approvalSignals.length ? { approvalSignals } : {}),
       ...(workerTurnClaim ? { workerTurnClaim } : {}),

@@ -68,13 +68,18 @@ export function renderPluginDetailShell(props: {
       </div>
     </div>
     <div class="plugin-catalog-detail__content">
-      <section class="plugin-catalog-detail__panel">${props.panel}</section>
+      <div class="plugin-catalog-detail__main">
+        <section class="plugin-catalog-detail__panel">${props.panel}</section>
+        ${
+          props.readme
+            ? html`<section class="plugin-catalog-detail__readme-section">
+                <h2>${t("pluginsPage.detailTabs.readme")}</h2>
+                ${props.readme}
+              </section>`
+            : nothing
+        }
+      </div>
       ${props.sidebar ? html`<aside class="plugin-catalog-detail__sidebar">${props.sidebar}</aside>` : nothing}
-      ${
-        props.readme
-          ? html`<section class="plugin-catalog-detail__readme-section">${props.readme}</section>`
-          : nothing
-      }
     </div>
   </section>`;
 }

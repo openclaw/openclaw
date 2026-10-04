@@ -14,10 +14,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
-import {
-  resolveSkillUploadDatabaseOptions,
-  type SkillUploadMetadataRow,
-} from "./upload-store.sqlite.js";
+import type { SkillUploadMetadataRow } from "./upload-store.sqlite.js";
 import type { SkillUploadWorkerOperations } from "./upload-store.worker-contract.js";
 type SkillUploadScope = Pick<SqliteWorkerStore<SkillUploadWorkerOperations>, "execute">;
 
@@ -161,26 +158,18 @@ async function cleanupExpiredUploads(
 
 function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string) {
   return {
-    version: 1 as const,
-    kind: "skill-archive" as const,
-    uploadId: row.upload_id,
     slug: row.slug,
     force: row.force === 1,
-    sizeBytes: row.size_bytes,
-    ...(row.sha256 ? { sha256: row.sha256 } : {}),
     ...(row.actual_sha256 ? { actualSha256: row.actual_sha256 } : {}),
-    receivedBytes: row.received_bytes,
     archivePath,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    committed: row.committed === 1,
-    ...(row.committed_at !== null ? { committedAt: row.committed_at } : {}),
-    ...(row.idempotency_key_hash ? { idempotencyKeyHash: row.idempotency_key_hash } : {}),
   };
 }
 
 function createSkillUploadStore(options?: SkillUploadStoreOptions) {
-  const stateOptions = resolveSkillUploadDatabaseOptions(options ?? {});
+  const stateOptions: OpenClawStateDatabaseOptions = {
+    ...(options?.env ? { env: options.env } : {}),
+    ...(options?.path ? { path: options.path } : {}),
+  };
   const ttlMs = options?.ttlMs ?? SKILL_UPLOAD_TTL_MS;
   const tempRootDir = options?.tempRootDir;
   const installLeaseMs = resolvePositiveDuration(

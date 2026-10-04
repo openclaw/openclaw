@@ -55,6 +55,7 @@ function createScenario() {
     },
   });
   const session = new AgentSession({
+    systemPrompt: "Prepared Code Mode prompt",
     agent,
     cwd: process.cwd(),
     sessionManager: SessionManager.inMemory(process.cwd()),
@@ -62,10 +63,7 @@ function createScenario() {
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     resourceLoader,
     customTools: [definition],
-    initialActiveToolNames: ["exec"],
     allowedToolNames: ["exec"],
-    disableBuiltInTools: true,
-    baseToolsOverride: {},
     extensionRunnerRef,
   });
   function current() {

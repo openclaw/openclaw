@@ -19,55 +19,6 @@ type TranscriptReplaySanitizerHelpers = {
   redactTranscriptText: (value: string, cfg?: OpenClawConfig) => string;
 };
 
-type TranscriptReplayDescriptor = {
-  replayTypes: readonly string[];
-  suppressionType: string;
-  matchesRoute: (
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => boolean;
-  matchesApi: (
-    api: unknown,
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => boolean;
-  sanitizeData: (
-    data: string,
-    cfg: OpenClawConfig | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => string | undefined;
-  readId?: (
-    value: Record<string, unknown>,
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => string | undefined;
-};
-
-const OPENAI_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayTypes: ["openai-responses-compaction", "openai-responses-retained-compaction"],
-  suppressionType: "openai-responses-compaction-suppression",
-  matchesRoute: (route, helpers) => helpers.isOpenAIResponsesRoute(route),
-  matchesApi: (api, _route, helpers) =>
-    typeof api === "string" && helpers.isOpenAIResponsesApi(api),
-  sanitizeData: (data, _cfg, helpers) =>
-    helpers.isStructurallyValidOpaqueReplayToken(data) ? data : undefined,
-  readId: (value, route, helpers) =>
-    typeof value.id === "string" && helpers.isOpenAIResponseItemId(value.id, route)
-      ? value.id
-      : undefined,
-};
-
-const ANTHROPIC_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayTypes: ["anthropic-compaction"],
-  suppressionType: "anthropic-compaction-suppression",
-  matchesRoute: (route, helpers) => helpers.isAnthropicReasoningRoute(route),
-  matchesApi: (api, route) => api === route?.api,
-  sanitizeData: (data, cfg, helpers) =>
-    data.length > 0 ? helpers.redactTranscriptText(data, cfg) : undefined,
-};
-
-const REPLAY_DESCRIPTORS = [OPENAI_REPLAY_DESCRIPTOR, ANTHROPIC_REPLAY_DESCRIPTOR];
-
 function sanitizeCompactedWindow(
   replay: { data: string; id?: string; compactedWindow?: unknown },
   cfg: OpenClawConfig | undefined,
@@ -103,14 +54,19 @@ export function sanitizeCompactionReplayState(
     return undefined;
   }
   const replayType = typeof value.type === "string" ? value.type : "";
-  const descriptor = REPLAY_DESCRIPTORS.find(
-    ({ replayTypes, suppressionType }) =>
-      replayTypes.includes(replayType) || replayType === suppressionType,
-  );
-  const isSuppression = value.type === descriptor?.suppressionType;
+  const openAISuppression = replayType === "openai-responses-compaction-suppression";
+  const anthropicSuppression = replayType === "anthropic-compaction-suppression";
+  const isOpenAI =
+    openAISuppression ||
+    replayType === "openai-responses-compaction" ||
+    replayType === "openai-responses-retained-compaction";
+  const isAnthropic = anthropicSuppression || replayType === "anthropic-compaction";
+  const isSuppression = openAISuppression || anthropicSuppression;
   if (
-    !descriptor ||
-    !descriptor.matchesRoute(route, helpers) ||
+    (!isOpenAI && !isAnthropic) ||
+    !(isOpenAI
+      ? helpers.isOpenAIResponsesRoute(route)
+      : helpers.isAnthropicReasoningRoute(route)) ||
     value.v !== 1 ||
     typeof value.data !== "string" ||
     (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
@@ -119,7 +75,9 @@ export function sanitizeCompactionReplayState(
         !Number.isSafeInteger(value.replayIndex) ||
         (value.replayIndex as number) < 0)) ||
     value.provider !== route?.provider ||
-    !descriptor.matchesApi(value.api, route, helpers) ||
+    !(isOpenAI
+      ? typeof value.api === "string" && helpers.isOpenAIResponsesApi(value.api)
+      : value.api === route?.api) ||
     value.model !== route?.model ||
     !helpers.isOpenAIReplayContextHash(value.baseUrlHash) ||
     (value.sessionHash !== undefined && !helpers.isOpenAIReplayContextHash(value.sessionHash)) ||
@@ -132,14 +90,17 @@ export function sanitizeCompactionReplayState(
     ? value.data === "rejected"
       ? value.data
       : undefined
-    : descriptor.sanitizeData(value.data, cfg, helpers);
+    : isOpenAI
+      ? helpers.isStructurallyValidOpaqueReplayToken(value.data)
+        ? value.data
+        : undefined
+      : value.data.length > 0
+        ? helpers.redactTranscriptText(value.data, cfg)
+        : undefined;
   if (data === undefined) {
     return undefined;
   }
-  const encryptedContent =
-    !isSuppression && descriptor === ANTHROPIC_REPLAY_DESCRIPTOR
-      ? value.encryptedContent
-      : undefined;
+  const encryptedContent = !isSuppression && isAnthropic ? value.encryptedContent : undefined;
   if (
     encryptedContent !== undefined &&
     encryptedContent !== null &&
@@ -148,7 +109,13 @@ export function sanitizeCompactionReplayState(
   ) {
     return undefined;
   }
-  const replayId = isSuppression ? undefined : descriptor.readId?.(value, route, helpers);
+  const replayId =
+    !isSuppression &&
+    isOpenAI &&
+    typeof value.id === "string" &&
+    helpers.isOpenAIResponseItemId(value.id, route)
+      ? value.id
+      : undefined;
   return {
     v: 1,
     type: value.type,
@@ -162,9 +129,7 @@ export function sanitizeCompactionReplayState(
     baseUrlHash: value.baseUrlHash,
     ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
     ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
-    ...(!isSuppression &&
-    descriptor === OPENAI_REPLAY_DESCRIPTOR &&
-    value.compactedWindow !== undefined
+    ...(!isSuppression && isOpenAI && value.compactedWindow !== undefined
       ? {
           // Keep the newest fenced barrier when its canonical plaintext cannot
           // survive redaction; dropping it could expose an older checkpoint.

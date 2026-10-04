@@ -65,6 +65,7 @@ import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   createFixture,
   createNativeReclamationSource,
@@ -355,13 +356,14 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
 test("retained reclamation operations share the first full scan until the Gateway owner invalidates it", async () => {
   const { options, database, scopes } = createFixture(["parent", "child"]);
   const databaseOptions = { ...options, path: database.path };
-  const plan = reclamation.createHistoryEvictionReclamationPlan({
-    databaseOptions,
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
     diskBudget: {},
     materializedPlans: [],
-    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    protectedSessionIds: [...new Set(scopes.map((scope) => scope.sessionId))],
     sessionId: "already-removed-history",
-  });
+  } satisfies SqliteSessionReclamationPlan;
   for (const scope of scopes) {
     expect(appendTranscriptEventSync(scope, { type: "integrity-proof-survivor" })).toEqual({
       ok: true,
@@ -614,7 +616,7 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+test("retains reclamation Workers across alternating databases and retires all idle heaps under pressure", async () => {
   const pressure = channel("openclaw.memory.critical");
   expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
@@ -627,11 +629,12 @@ test("retains maintenance Workers across alternating databases and retires all i
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const plan =
       pass % 3 === 0
-        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        ? fixture.plans[0]!
         : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
     await expect(
       runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
     ).resolves.toMatchObject({ kind: plan.kind });
+    expect(diagnostics.workerThreadId).toBe(spawned[index]!.threadId);
     threads[index]!.add(diagnostics.workerThreadId!);
   }
   expect(spawned).toHaveLength(2);
@@ -654,10 +657,7 @@ test("retains maintenance Workers across alternating databases and retires all i
   const fixture = fixtures[0]!;
   await runSqliteSessionReclamation({
     forceInProcess: false,
-    plan: reclamation.createSessionMaintenanceStatisticsOperation({
-      ...fixture.options,
-      path: fixture.database.path,
-    }),
+    plan: fixture.plans[1]!,
   });
   expect(spawned).toHaveLength(3);
   expect(pressure.hasSubscribers).toBe(true);

@@ -14,9 +14,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode, TtsProvider } from "../config/types.tts.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 /** Routing context used to layer global, agent, channel, and account TTS config. */
@@ -147,6 +147,7 @@ export function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | 
 /** Return whether this payload should attempt TTS based on session, prefs, and config. */
 export function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences: PreparedTtsPreferences;
   ttsAuto?: string;
   agentId?: string;
   channelId?: string;
@@ -159,9 +160,13 @@ export function shouldAttemptTtsPayload(params: {
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
   const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
-  const machinePrefsPath = readConfigMachineState<string>("tts.prefsPath");
   const prefsAuto = resolveTtsAutoModeFromPrefs(
-    readTtsPrefs(resolveTtsPrefsPathValue(scopedPrefsPath, () => machinePrefsPath)),
+    readTtsPrefs(
+      resolveTtsPrefsPathValue(
+        scopedPrefsPath,
+        () => params.preparedTtsPreferences.machinePrefsPath,
+      ),
+    ),
   );
   if (prefsAuto) {
     return prefsAuto !== "off";

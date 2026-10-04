@@ -171,7 +171,7 @@ describe("Telegram media acquisition through grammY and the media store", () => 
         expect(fixture.requests).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
         expect(await outcome).toMatchObject({
-          media: { kind: "document", contentType: "image/png" },
+          media: { contentType: "image/png" },
         });
         expect(fixture.requests).toHaveLength(2);
       } else {

@@ -538,7 +538,7 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
-  it("accepts documented agents.list[].params overrides", () => {
+  it("accepts documented agents.entries.<id>.params overrides", () => {
     const res = validateConfigObject({
       agents: {
         entries: {
@@ -556,7 +556,7 @@ describe("config strict validation", () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.agents?.list?.[0]?.params).toEqual({
+      expect(res.config.agents?.entries?.main?.params).toEqual({
         cacheRetention: "none",
         temperature: 0.4,
         maxTokens: 8192,
@@ -657,14 +657,13 @@ describe("config strict validation", () => {
               perSession: true,
             },
           },
-          list: [
-            {
-              id: "openclaw",
+          entries: {
+            openclaw: {
               sandbox: {
                 perSession: false,
               },
             },
-          ],
+          },
         },
       });
 
@@ -677,7 +676,7 @@ describe("config strict validation", () => {
       expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
         perSession: true,
       });
-      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+      expect(snap.sourceConfigBeforeMigrations?.agents?.entries?.openclaw?.sandbox).toEqual({
         perSession: false,
       });
       expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({

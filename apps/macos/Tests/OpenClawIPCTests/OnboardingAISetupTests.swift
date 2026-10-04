@@ -1915,10 +1915,10 @@ struct OnboardingAISetupTests {
         }
 
         await startGate.waitUntilStarted()
-        model.cancelProviderAuth()
+        let cancellation = try #require(model.cancelProviderAuth())
         try #require(model.activeAuthOption != nil)
         do {
-            _ = try await waitForAISetupRequests(harness.recorder, count: 3)
+            await cancellation.value
             await startGate.release()
             try await TestWait.observed("settled provider auth") { model.activeAuthOption == nil }
             try #require(model.activeAuthOption == nil)

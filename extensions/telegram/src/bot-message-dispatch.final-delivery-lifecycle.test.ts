@@ -112,203 +112,133 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
   });
 
   it.each([
-    {
-      failure: "retired plugin instance",
-      error: retiredPluginError(),
-    },
-    { failure: "definite no-send", error: undefined },
-  ])(
-    "retains progress without claiming final delivery after $failure and permits the next turn",
-    async ({ error }) => {
+    { failure: "retired instance", mode: "progress" },
+    { failure: "definite no-send", mode: "progress" },
+    { failure: "retired instance", mode: "off" },
+    { failure: "rejected tail", mode: "off" },
+  ] as const)(
+    "preserves accepted content and reports $failure with streaming $mode",
+    async ({ failure, mode }) => {
       const { bot, messages, sendMessage, deleteMessage } = await setupObservedProgressTransport();
       const failedStatus = createStatusReactionController();
-      const finalText = "The completed answer that never reached Telegram";
-      if (error) {
-        deliverInboundReplyWithMessageSendContext.mockRejectedValueOnce(error);
-      } else {
-        // A confirmed non-send may be retried by the delivery owner, without rerunning the model.
-        deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-          status: "handled_no_send",
+      const prefix = "Accepted final prefix";
+      const tail = "Rejected final tail";
+      const partial = failure === "rejected tail";
+      const finalText = partial
+        ? `${prefix}\n\n${tail}`
+        : "The answer whose delivery cannot be confirmed";
+      if (partial) {
+        deliverInboundReplyWithMessageSendContext.mockImplementationOnce(async () => {
+          const accepted = await bot.api.sendMessage(123, prefix);
+          sendMessage.mockRejectedValueOnce(new Error("final tail rejected"));
+          try {
+            await bot.api.sendMessage(123, tail);
+          } catch (error) {
+            throw createChannelPartialDeliveryError(
+              error,
+              createAcceptedChannelDeliveryResult({
+                results: [{ messageId: String(accepted.message_id) }],
+                content: prefix,
+              }),
+            );
+          }
+          throw new Error("Expected the final tail send to reject");
         });
+      } else if (failure === "retired instance") {
+        deliverInboundReplyWithMessageSendContext.mockRejectedValueOnce(retiredPluginError());
+      } else {
+        // A confirmed non-send may be retried without rerunning the model.
+        deliverInboundReplyWithMessageSendContext.mockResolvedValue({ status: "handled_no_send" });
       }
       const replyResolver = vi.fn<
         NonNullable<DispatchReplyWithBufferedBlockDispatcherArgs["replyResolver"]>
       >(async (_ctx, options) => {
-        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "failed-1" });
-        expect([...messages.values()]).toEqual([expect.stringContaining("Exec")]);
+        if (mode === "progress") {
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "failed-1" });
+          expect([...messages.values()]).toEqual([expect.stringContaining("Exec")]);
+        }
         return { text: finalText };
       });
       dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
         dispatchThroughSharedOwner({ ...params, replyResolver }),
       );
-
+      const telegramCfg = mode === "progress" ? progressConfig : { streaming: { mode } };
       const result = await dispatchWithContext({
         bot,
         context: progressContext(failedStatus),
-        streamMode: "progress",
-        telegramCfg: progressConfig,
+        streamMode: mode,
+        telegramCfg,
         retryDispatchErrors: true,
         suppressFailureFallback: true,
       });
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect([...messages.values()]).toEqual([expect.stringMatching(/Exec|chat history/i)]);
+      expect([...messages.values()]).toEqual([
+        ...(partial ? [prefix] : []),
+        expect.stringMatching(mode === "progress" ? /Exec|chat history/i : /chat history/i),
+      ]);
       expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
       expect(replyResolver).toHaveBeenCalledOnce();
-      expect(deliverReplies).not.toHaveBeenCalled();
-      expect(deleteMessage).not.toHaveBeenCalled();
       expect(failedStatus.setError).toHaveBeenCalledOnce();
       expect(failedStatus.setDone).not.toHaveBeenCalled();
-      if (error) {
+      if (failure !== "definite no-send") {
         expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledOnce();
         expect(result).toEqual({ kind: "completed" });
+      }
+      if (mode === "progress") {
+        expect(deliverReplies).not.toHaveBeenCalled();
+        expect(deleteMessage).not.toHaveBeenCalled();
+      } else if (!partial) {
+        expect(sendMessage).toHaveBeenCalledOnce();
+      }
+      if (partial) {
+        expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+          prefix,
+          tail,
+          expect.stringMatching(/chat history/i),
+        ]);
+        return;
       }
 
       const retainedFailure = [...messages.entries()];
       const nextStatus = createStatusReactionController();
-      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-        status: "unsupported",
-        reason: "missing_outbound_handler",
-      });
+      if (mode === "progress") {
+        deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+          status: "unsupported",
+          reason: "missing_outbound_handler",
+        });
+      }
+      const nextText = "The next turn succeeds";
       dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
         dispatchThroughSharedOwner({
           ...params,
           replyResolver: async (_ctx, options) => {
-            await emitToolStart(options, { name: "read", phase: "start", toolCallId: "next-1" });
-            return { text: "The next turn succeeds" };
+            if (mode === "progress") {
+              await emitToolStart(options, { name: "read", phase: "start", toolCallId: "next-1" });
+            }
+            return { text: nextText };
           },
         }),
       );
       await dispatchWithContext({
         bot,
         context: progressContext(nextStatus, 457),
-        streamMode: "progress",
-        telegramCfg: progressConfig,
+        streamMode: mode,
+        telegramCfg,
       });
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect([...messages.entries()]).toEqual([
-        ...retainedFailure,
-        [expect.any(Number), "The next turn succeeds"],
-      ]);
-      expect(
-        sendMessage.mock.calls.filter(([, text]) => text === "The next turn succeeds"),
-      ).toHaveLength(1);
+      expect([...messages.entries()]).toEqual([...retainedFailure, [expect.any(Number), nextText]]);
+      expect(sendMessage.mock.calls.filter(([, text]) => text === nextText)).toHaveLength(1);
+      if (mode === "off") {
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        expect(replyResolver).toHaveBeenCalledOnce();
+      }
       expect(nextStatus.setDone).toHaveBeenCalledOnce();
       expect(nextStatus.setError).not.toHaveBeenCalled();
       expect(failedStatus.setDone).not.toHaveBeenCalled();
     },
   );
-
-  it("sends one delivery-only notice without a preview when a retired instance rejects the final", async () => {
-    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
-    const failedStatus = createStatusReactionController();
-    const finalText = "The answer whose delivery cannot be confirmed";
-    deliverInboundReplyWithMessageSendContext.mockRejectedValueOnce(retiredPluginError());
-    const replyResolver = vi.fn<
-      NonNullable<DispatchReplyWithBufferedBlockDispatcherArgs["replyResolver"]>
-    >(async () => ({ text: finalText }));
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
-      dispatchThroughSharedOwner({ ...params, replyResolver }),
-    );
-
-    const result = await dispatchWithContext({
-      bot,
-      context: progressContext(failedStatus),
-      streamMode: "off",
-      telegramCfg: { streaming: { mode: "off" } },
-      retryDispatchErrors: true,
-      suppressFailureFallback: true,
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(result).toEqual({ kind: "completed" });
-    expect([...messages.values()]).toEqual([expect.stringMatching(/chat history/i)]);
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(failedStatus.setError).toHaveBeenCalledOnce();
-    expect(failedStatus.setDone).not.toHaveBeenCalled();
-
-    const retainedNotice = [...messages.entries()];
-    const nextStatus = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
-      dispatchThroughSharedOwner({
-        ...params,
-        replyResolver: async () => ({ text: "The next unstreamed turn succeeds" }),
-      }),
-    );
-    await dispatchWithContext({
-      bot,
-      context: progressContext(nextStatus, 457),
-      streamMode: "off",
-      telegramCfg: { streaming: { mode: "off" } },
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect([...messages.entries()]).toEqual([
-      ...retainedNotice,
-      [expect.any(Number), "The next unstreamed turn succeeds"],
-    ]);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(nextStatus.setDone).toHaveBeenCalledOnce();
-    expect(nextStatus.setError).not.toHaveBeenCalled();
-    expect(failedStatus.setDone).not.toHaveBeenCalled();
-  });
-
-  it("preserves an accepted final prefix and reports the rejected tail without replaying the answer", async () => {
-    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
-    const status = createStatusReactionController();
-    const prefix = "Accepted final prefix";
-    const tail = "Rejected final tail";
-    const finalText = `${prefix}\n\n${tail}`;
-    const tailError = new Error("final tail rejected");
-    deliverInboundReplyWithMessageSendContext.mockImplementationOnce(async () => {
-      const accepted = await bot.api.sendMessage(123, prefix);
-      sendMessage.mockRejectedValueOnce(tailError);
-      try {
-        await bot.api.sendMessage(123, tail);
-      } catch (error) {
-        throw createChannelPartialDeliveryError(
-          error,
-          createAcceptedChannelDeliveryResult({
-            results: [{ messageId: String(accepted.message_id) }],
-            content: prefix,
-          }),
-        );
-      }
-      throw new Error("Expected the final tail send to reject");
-    });
-    const replyResolver = vi.fn<
-      NonNullable<DispatchReplyWithBufferedBlockDispatcherArgs["replyResolver"]>
-    >(async () => ({ text: finalText }));
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
-      dispatchThroughSharedOwner({ ...params, replyResolver }),
-    );
-
-    const result = await dispatchWithContext({
-      bot,
-      context: progressContext(status),
-      streamMode: "off",
-      telegramCfg: { streaming: { mode: "off" } },
-      retryDispatchErrors: true,
-      suppressFailureFallback: true,
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(result).toEqual({ kind: "completed" });
-    expect([...messages.values()]).toEqual([prefix, expect.stringMatching(/chat history/i)]);
-    expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
-      prefix,
-      tail,
-      expect.stringMatching(/chat history/i),
-    ]);
-    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledOnce();
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(status.setError).toHaveBeenCalledOnce();
-    expect(status.setDone).not.toHaveBeenCalled();
-  });
 
   it("keeps a confirmed streamed answer when prompt-context recording fails", async () => {
     const { bot, messages, sendMessage } = await setupObservedProgressTransport();
@@ -351,6 +281,42 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     expect(recordContext).toHaveBeenCalledWith(
       expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
     );
+  });
+
+  it("retires a repositioned preview after a rejected replacement once the final lands", async () => {
+    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+    const preTool = "Let me check the workspace first";
+    const final = "The workspace has three projects";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: preTool });
+      await createTelegramDraftStream.mock.results[0]?.value?.flush();
+      expect([...messages.values()]).toEqual([preTool]);
+      return dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async (_ctx, options) => {
+          sendMessage.mockRejectedValueOnce(new Error("replacement preview rejected"));
+          await emitToolStart(options, { name: "read", phase: "start", toolCallId: "read-1" });
+          return { text: final };
+        },
+      });
+    });
+
+    const result = await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+      preTool,
+      expect.stringContaining("Read"),
+      final,
+    ]);
+    expect(result).toEqual({ kind: "completed" });
+    expect([...messages.values()]).toEqual([final]);
   });
 
   it("does not retry or erase an accepted final after late cancellation", async () => {

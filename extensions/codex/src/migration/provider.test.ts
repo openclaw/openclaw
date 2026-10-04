@@ -106,10 +106,7 @@ describe("buildCodexMigrationProvider", () => {
     const config = {
       agents: {
         defaults: { workspace: fixture.workspaceDir },
-        list: [
-          { id: "main", default: true },
-          { id: "research", workspace: targetWorkspace },
-        ],
+        entries: { main: {}, research: { workspace: targetWorkspace } },
       },
     } as MigrationProviderContext["config"];
     const context = contextFor(fixture, {
@@ -457,7 +454,7 @@ describe("buildCodexMigrationProvider", () => {
           model: { fallbacks: [] },
           workspace: fixture.workspaceDir,
         },
-        list: [{ id: "main", default: true }, { id: "research" }],
+        entries: { main: {}, research: {} },
       },
     } as MigrationProviderContext["config"];
     const accessToken = fakeJwt({

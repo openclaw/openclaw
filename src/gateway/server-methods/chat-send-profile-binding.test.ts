@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -116,14 +116,29 @@ describe("native profile-bound input admission", () => {
               await release.promise;
             });
             await entered.promise;
-            request = fixture.send(undefined, { expectedProfileId: source.id });
-            await vi.waitFor(() =>
-              expect(
-                fixture.context.dedupe.has(
-                  `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`,
-                ),
-              ).toBe(true),
-            );
+            const pendingKey = `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`;
+            const reserved = createDeferred();
+            const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
+            const observeReservation = vi
+              .spyOn(fixture.context.dedupe, "set")
+              .mockImplementation((key, entry) => {
+                const result = setDedupe(key, entry);
+                if (key === pendingKey) {
+                  reserved.resolve();
+                }
+                return result;
+              });
+            try {
+              request = fixture.send(undefined, { expectedProfileId: source.id });
+              await awaitGateBeforeSettlement(
+                reserved.promise,
+                request,
+                "chat.send settled before its pending reservation",
+              );
+              expect(fixture.context.dedupe.has(pendingKey)).toBe(true);
+            } finally {
+              observeReservation.mockRestore();
+            }
             linkEmail(email, target.id);
             release.resolve();
             await writer;
@@ -141,7 +156,7 @@ describe("native profile-bound input admission", () => {
           );
         }
         expect(loadSessionEntry(fixture.scope)).toEqual(before);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
         expect(fixture.context.chatAbortControllers.size).toBe(0);
         expect(fixture.context.chatQueuedTurns.size).toBe(0);
@@ -215,7 +230,7 @@ describe("native profile-bound input admission", () => {
       );
       expect.soft(fixture.context.chatAbortControllers.size).toBe(0);
       expect.soft(fixture.context.chatQueuedTurns.size).toBe(0);
-      expect.soft(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
       await fixture.cleanup();
     }
@@ -285,7 +300,7 @@ describe("native profile-bound input admission", () => {
         expect(await recorder.persistApproved()).toEqual(committed);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(accepted);
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       } finally {
         await fixture.cleanup();
@@ -460,7 +475,7 @@ describe("native profile-bound input admission", () => {
         expect(authority.profileId).toBe(profile.id);
         expect(authority.scopes).toEqual(fixture.client.connect.scopes);
         expect(authority.assertCurrent).not.toThrow();
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
           total: 1,
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
@@ -607,7 +622,7 @@ describe("native profile-bound input admission", () => {
         expect(ack).toHaveBeenCalledOnce();
         expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
         const originalAck = structuredClone(ack.mock.calls);
-        const pending = listSessionPendingInputs(fixture.scope);
+        const pending = await listSessionPendingInputs(fixture.scope);
         expect(pending).toMatchObject({
           total: 1,
           items: [{ state: "queued", message: { content: fixture.params.message } }],
@@ -633,7 +648,7 @@ describe("native profile-bound input admission", () => {
               entry.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
           ),
         ).toEqual([]);
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
           total: 1,
           items: [
             {

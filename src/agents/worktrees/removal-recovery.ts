@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { requireWorktreeDiskSpace } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
@@ -11,7 +12,7 @@ import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import {
-  assertWorktreeRemovalClaim,
+  createWorktreeRemovalClaimsGuard,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
@@ -28,7 +29,7 @@ import { resolveRepository } from "./service-preparation.js";
 const preserved = (reason: string) =>
   new Error(`${reason}; remaining source and original snapshot preserved`);
 
-/** CLI-only recovery: reconstitute a clean checkout without replacing any surviving file,
+/** Explicit recovery: reconstitute a clean checkout without replacing any surviving file,
  * then let native non-force Git removal own deletion. Dirty/exact-state captures keep their
  * existing recovery owners; neither their index nor their snapshots can be reconstructed here.
  */
@@ -36,8 +37,10 @@ export async function recoverManagedWorktreeRemoval(
   params: { id: string; snapshot: string; signal?: AbortSignal; commitGuard?: () => void },
   context: { env: NodeJS.ProcessEnv; now: () => number },
 ) {
-  return await withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
-    recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+  return await withGitProcessOperation("worktree.recovery", () =>
+    withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
+      recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+    ),
   );
 }
 
@@ -184,10 +187,11 @@ async function recoverRemovalWithAllocation(params: {
     ...(retiredRegistration ? { retiredRemoval: true as const } : {}),
     assertCurrent: assertRecord,
   });
+  const assertClaim = createWorktreeRemovalClaimsGuard(params.env, [record.id], token);
   const assertCurrent = () => {
     assertRecord();
     assertDirectRefFiles();
-    assertWorktreeRemovalClaim(params.env, record.id, token);
+    assertClaim();
   };
   const options = {
     signal: params.signal,
@@ -528,7 +532,7 @@ async function recoverRemovalWithAllocation(params: {
       beforeRun: () => {
         params.commitGuard?.();
         assertDirectRefFiles();
-        assertWorktreeRemovalClaim(params.env, record.id, token);
+        assertClaim();
         if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== finalized) {
           throw preserved("Completed removal lifecycle changed");
         }

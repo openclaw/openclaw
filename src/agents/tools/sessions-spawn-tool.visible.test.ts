@@ -75,7 +75,7 @@ describe("sessions_spawn visible work receipts", () => {
       config: {
         agents: {
           defaults: { model: "mock-provider/primary" },
-          list: [{ id: "main", identity: { name: "Roboclaw" } }],
+          entries: { main: { identity: { name: "Roboclaw" } } },
         },
         gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
       },
@@ -111,6 +111,7 @@ describe("sessions_spawn visible work receipts", () => {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: false,
         completionOwnerSessionKey: "agent:main:main",
         spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
         inheritedToolPolicy: {

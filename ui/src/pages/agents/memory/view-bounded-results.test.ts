@@ -36,7 +36,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     promotedCount: 0,
     shortTermEntries: [],
     promotedEntries: [],
-    dreamingOf: null,
     nextCycle: null,
     timezone: null,
     statusError: null,

@@ -1,8 +1,8 @@
 /** LaunchAgent plist, environment-file, and atomic publication ownership. */
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
@@ -238,9 +238,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
         if (
           !isDeepStrictEqual(state, await readServiceFileState(file)) ||
           (state === null) !== (contents === null) ||
-          (state &&
-            contents &&
-            createHash("sha256").update(contents).digest("hex") !== state.sha256)
+          (state && contents && sha256Hex(contents) !== state.sha256)
         ) {
           throw new Error("LaunchAgent artifact changed while capturing its original definition.");
         }
@@ -305,7 +303,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
         !pending ||
         !matchesServiceFilePublication(current, pending) ||
         contents === null ||
-        current?.sha256 !== createHash("sha256").update(contents).digest("hex")
+        current?.sha256 !== sha256Hex(contents)
       ) {
         throw new Error(`LaunchAgent artifact changed after publication: ${file}`);
       }

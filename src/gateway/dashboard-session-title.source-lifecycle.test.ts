@@ -280,171 +280,116 @@ describe("worktree title source lifecycle", () => {
     }
   });
 
-  it("joins async resource cleanup before rejecting a generation source unwind failure", async () => {
-    const context = new AsyncLocalStorage<string>();
-    const owner = new AsyncWorkScope();
-    const failure = new Error("source scope unwind failed");
-    const generationAcquired = createDeferredCore();
-    const source = sourceStages(context, { after: generationAcquired.promise, error: failure });
-    const cleanupStarted = createDeferredCore();
-    const finishCleanup = createDeferredCore();
-    const events: string[] = [];
-    let signal: AbortSignal | undefined;
-    let cancellationContext: string | undefined;
-    let cleanupContext: string | undefined;
-    let requestSettled = false;
-    mocks.generate.mockImplementation(({ abortSignal }: { abortSignal?: AbortSignal }) => {
-      signal = abortSignal;
-      if (abortSignal) {
-        abortSignal.addEventListener(
+  it.each(["source unwind", "parent close"] as const)(
+    "joins owned resource cleanup before rejecting %s",
+    async (cause) => {
+      const context = new AsyncLocalStorage<string>();
+      const owner = new AsyncWorkScope();
+      const failure = new Error(
+        cause === "source unwind" ? "source scope unwind failed" : "title owner closed",
+      );
+      const started = createDeferredCore();
+      const generation = createDeferredCore<string>();
+      const source = sourceStages(
+        context,
+        cause === "source unwind" ? { after: started.promise, error: failure } : undefined,
+      );
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const events: string[] = [];
+      let signal: AbortSignal | undefined;
+      let cancellationContext: string | undefined;
+      let cleanupContext: string | undefined;
+      let requestSettled = false;
+      mocks.generate.mockImplementation(({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        signal = abortSignal;
+        abortSignal?.addEventListener(
           "abort",
           () => {
             cancellationContext = context.getStore();
             events.push("cancelled");
+            if (cause === "parent close") {
+              generation.reject(abortSignal.reason);
+            }
           },
           { once: true },
         );
-      }
-      return runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({
-          release: async () => {
-            cleanupContext = context.getStore();
-            events.push("cleanup-started");
-            cleanupStarted.resolve();
-            await finishCleanup.promise;
-            events.push("cleanup-finished");
-          },
+        return runWithAsyncWorkResources(async (onAcquired) => {
+          onAcquired({
+            release: async () => {
+              cleanupContext = context.getStore();
+              events.push("cleanup-started");
+              cleanupStarted.resolve();
+              await finishCleanup.promise;
+              events.push("cleanup-finished");
+            },
+          });
+          started.resolve();
+          if (cause === "parent close") {
+            return await generation.promise;
+          }
+          events.push("logical-result");
+          return "Unpublished title";
         });
-        generationAcquired.resolve();
-        events.push("logical-result");
-        return "Unpublished title";
       });
-    });
-    const request = context.run("caller", () =>
-      owner.run(() =>
-        maybeGenerateSessionTitle({ ...titleParams("unwind"), withSource: source.withSource }),
-      ),
-    );
-    const outcome = request.then(
-      (value) => {
-        requestSettled = true;
-        events.push("resolved");
-        return { value };
-      },
-      (error: unknown) => {
-        requestSettled = true;
-        events.push("rejected");
-        return { error };
-      },
-    );
-    try {
-      await Promise.race([
-        cleanupStarted.promise,
-        outcome.then(() => {
-          throw new Error("title settled before cleanup started");
-        }),
-      ]);
-      await nextTurn();
-      expect(source.closed).toEqual(["source:1"]);
-      expect(signal?.aborted).toBe(true);
-      expect(signal?.reason).toBe(failure);
-      expect(cancellationContext).toBe("caller");
-      expect(cleanupContext).toBe("caller");
-      expect(events).toContain("logical-result");
-      expect(requestSettled).toBe(false);
-      expect(mocks.patch).not.toHaveBeenCalled();
-      finishCleanup.resolve();
-      await expect(outcome).resolves.toEqual({ error: failure });
-      expect(events.indexOf("cleanup-finished")).toBeLessThan(events.indexOf("rejected"));
-      expect(current).toEqual(baseEntry);
-    } finally {
-      generationAcquired.resolve();
-      finishCleanup.resolve();
-      await outcome;
-      await owner.drain();
-      context.disable();
-    }
-  });
-
-  it("cancels generation when its parent closes and joins its owned resource cleanup", async () => {
-    const context = new AsyncLocalStorage<string>();
-    const owner = new AsyncWorkScope();
-    const source = sourceStages(context);
-    const started = createDeferredCore();
-    const generation = createDeferredCore<string>();
-    const cleanupStarted = createDeferredCore();
-    const finishCleanup = createDeferredCore();
-    let signal: AbortSignal | undefined;
-    let cancellationContext: string | undefined;
-    let cleanupContext: string | undefined;
-    let cleanupFinished = false;
-    let requestSettled = false;
-    mocks.generate.mockImplementation(({ abortSignal }: { abortSignal?: AbortSignal }) => {
-      signal = abortSignal;
-      abortSignal?.addEventListener(
-        "abort",
-        () => {
-          cancellationContext = context.getStore();
-          generation.reject(abortSignal.reason);
-        },
-        { once: true },
+      const request = context.run("caller", () =>
+        owner.run(() =>
+          maybeGenerateSessionTitle({ ...titleParams(cause), withSource: source.withSource }),
+        ),
       );
-      return runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({
-          release: async () => {
-            cleanupContext = context.getStore();
-            cleanupStarted.resolve();
-            await finishCleanup.promise;
-            cleanupFinished = true;
-          },
-        });
-        started.resolve();
-        return await generation.promise;
-      });
-    });
-    const request = context.run("caller", () =>
-      owner.run(() =>
-        maybeGenerateSessionTitle({ ...titleParams("timeout"), withSource: source.withSource }),
-      ),
-    );
-    const outcome = request.then(
-      (value) => {
-        requestSettled = true;
-        return { value };
-      },
-      (error: unknown) => {
-        requestSettled = true;
-        return { error };
-      },
-    );
-    try {
-      await started.promise;
-      await nextTurn();
-      expect(source.closed).toEqual(source.entered);
-      const cancellation = new Error("title owner closed");
-      context.run("unrelated", () => owner.beginClose(cancellation));
-      await nextTurn();
-      expect(signal?.aborted).toBe(true);
-      expect(signal?.reason).toBe(cancellation);
-      expect(cancellationContext).toBe("caller");
-      await cleanupStarted.promise;
-      expect(cleanupContext).toBe("caller");
-      expect(requestSettled).toBe(false);
-      expect(mocks.patch).not.toHaveBeenCalled();
-      finishCleanup.resolve();
-      await expect(outcome).resolves.toEqual({ error: signal?.reason });
-      expect(cleanupFinished).toBe(true);
-      expect(current).toEqual(baseEntry);
-    } finally {
-      context.run("caller", () => owner.beginClose(new Error("Fixture cleanup")));
-      generation.resolve("Fixture cleanup");
-      finishCleanup.resolve();
+      const outcome = request.then(
+        (value) => {
+          requestSettled = true;
+          events.push("resolved");
+          return { value };
+        },
+        (error: unknown) => {
+          requestSettled = true;
+          events.push("rejected");
+          return { error };
+        },
+      );
       try {
-        await outcome;
-        await owner.drain();
+        if (cause === "parent close") {
+          await started.promise;
+          await nextTurn();
+          expect(source.closed).toEqual(source.entered);
+          context.run("unrelated", () => owner.beginClose(failure));
+        }
+        await Promise.race([
+          cleanupStarted.promise,
+          outcome.then(() => {
+            throw new Error("title settled before cleanup started");
+          }),
+        ]);
+        await nextTurn();
+        if (cause === "source unwind") {
+          expect(source.closed).toEqual(["source:1"]);
+          expect(events).toContain("logical-result");
+        }
+        expect(signal?.aborted).toBe(true);
+        expect(signal?.reason).toBe(failure);
+        expect(cancellationContext).toBe("caller");
+        expect(cleanupContext).toBe("caller");
+        expect(requestSettled).toBe(false);
+        expect(mocks.patch).not.toHaveBeenCalled();
+        finishCleanup.resolve();
+        await expect(outcome).resolves.toEqual({ error: failure });
+        expect(events).toContain("cleanup-finished");
+        expect(events.indexOf("cleanup-finished")).toBeLessThan(events.indexOf("rejected"));
+        expect(current).toEqual(baseEntry);
       } finally {
-        context.disable();
+        context.run("caller", () => owner.beginClose(new Error("Fixture cleanup")));
+        started.resolve();
+        generation.resolve("Fixture cleanup");
+        finishCleanup.resolve();
+        try {
+          await outcome;
+          await owner.drain();
+        } finally {
+          context.disable();
+        }
       }
-    }
-  });
+    },
+  );
 });

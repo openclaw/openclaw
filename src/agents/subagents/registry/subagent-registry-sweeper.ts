@@ -7,6 +7,7 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   blockSubagentCompletionDelivery,
@@ -88,7 +89,10 @@ export function createSubagentRegistrySweeper(params: {
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   getRunsForCollectorGroup: (
     requesterSessionKey: string,
     groupId: string,
@@ -135,10 +139,12 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     clearTimeout(scheduled?.timer);
-    const timer = setTimeout(() => {
-      scheduled = undefined;
-      void trackWork(runTick);
-    }, delayMs);
+    const timer = runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        scheduled = undefined;
+        void trackWork(runTick);
+      }, delayMs),
+    );
     timer.unref?.();
     scheduled = { timer, at: nextAt };
   }
@@ -585,7 +591,7 @@ export function createSubagentRegistrySweeper(params: {
                 const updated = await mutateCleanup(
                   runs,
                   current,
-                  (row) => Boolean(isCollectorArchiveReady(row, now)),
+                  (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.execution.suppressSessionEffects = true;
                     return draft;
@@ -628,7 +634,7 @@ export function createSubagentRegistrySweeper(params: {
                 !(await mutateCleanup(
                   runs,
                   current,
-                  (row) => Boolean(isCollectorArchiveReady(row, now)),
+                  (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.contextEngineCleanupCompletedAt = Date.now();
                     return draft;

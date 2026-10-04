@@ -37,6 +37,8 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    rowMode: "compact",
+    source: "dashboard",
     hasBoard: true,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
@@ -51,6 +53,7 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    source: "dashboard",
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -74,6 +77,8 @@ export function buildSessionRequestParams(
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
   const params: SessionsListParams = {
+    rowMode: "compact",
+    source: options.source ?? "chat-pane",
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
@@ -149,6 +154,11 @@ export function normalizeManagedSessionListQuery(
     limit,
     ...(options.pageSize ? { pageSize: options.pageSize } : {}),
   });
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+  return JSON.stringify(query);
 }
 
 export async function requestSessionList(

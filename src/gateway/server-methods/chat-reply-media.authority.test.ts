@@ -61,7 +61,7 @@ it.each([
     await fs.writeFile(audioSource, AUDIO_BYTES);
     const cfg: OpenClawConfig = {
       tools: { allow: ["read"], fs: { workspaceOnly: true } },
-      agents: { list: [{ id: "main", workspace }] },
+      agents: { entries: { main: { workspace } } },
     };
     const target = {
       sessionKey: SESSION_KEY,

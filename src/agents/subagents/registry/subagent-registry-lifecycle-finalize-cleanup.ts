@@ -59,7 +59,7 @@ export const finalizeSubagentCleanup = async (
   let runId = entry.runId;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
   if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-    await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+    await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     return;
   }
   const assertCurrent = () => {

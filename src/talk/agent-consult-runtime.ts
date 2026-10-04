@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
+import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -239,6 +240,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   spawnedBy?: string | null;
+  senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   deliveryContext?: DeliveryContext;
   storePath: string;
@@ -266,6 +268,14 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       requesterSessionKey ? { type: "agent", id: requesterSessionKey } : undefined,
     ),
   });
+  // A consult child records the same lineage receipt as a native spawn: the requester's
+  // exact incarnation and the caller's ingress-authenticated owner bit.
+  const spawnLineage = requesterSessionKey
+    ? {
+        spawnedBy: requesterSessionKey,
+        ...buildSpawnAuthorityReceipt(requesterEntry, params.senderIsOwner),
+      }
+    : {};
   const shouldFork =
     params.contextMode === "fork" &&
     requesterSessionKey &&
@@ -290,7 +300,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       skipPatch: () => ({ ...deliveryFields, updatedAt: now }),
       patch: () => ({
         ...deliveryFields,
-        spawnedBy: requesterSessionKey,
+        ...spawnLineage,
         updatedAt: now,
       }),
     });
@@ -320,7 +330,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       return {
         ...deliveryFields,
         sessionId: randomUUID(),
-        ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
+        ...spawnLineage,
         updatedAt: now,
       };
     },
@@ -418,13 +428,13 @@ export async function consultRealtimeVoiceAgent(params: {
   };
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
   const lifecycleAbortController = new AbortController();
+  const lifecycleInterruption = new Error(
+    "Realtime voice agent consult interrupted by a session lifecycle change.",
+  );
   const sessionWorkAdmission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: [params.sessionKey, initialSessionEntry?.sessionId],
-    onInterrupt: () =>
-      lifecycleAbortController.abort(
-        new Error("Realtime voice agent consult interrupted by a session lifecycle change."),
-      ),
+    onInterrupt: () => lifecycleAbortController.abort(lifecycleInterruption),
     assertAllowed: () => {
       const currentEntry = params.agentRuntime.session.getSessionEntry({
         agentId,
@@ -454,7 +464,17 @@ export async function consultRealtimeVoiceAgent(params: {
 
   try {
     return await sessionWorkAdmission.run(async () => {
-      await params.agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
+      await params.agentRuntime.ensureAgentWorkspace({
+        dir: workspaceDir,
+        guard: {
+          assertHost: () => {
+            lifecycleAbortController.signal.throwIfAborted();
+            if (!sessionWorkAdmission.isActive()) {
+              throw lifecycleInterruption;
+            }
+          },
+        },
+      });
 
       // The consult session stores normal session metadata so subsequent voice turns can keep
       // routing and, in fork mode, recover useful conversation context from the requester.
@@ -471,6 +491,7 @@ export async function consultRealtimeVoiceAgent(params: {
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         spawnedBy: params.spawnedBy,
+        senderIsOwner: params.senderIsOwner,
         contextMode: params.contextMode,
         deliveryContext: resolvedDeliveryContext,
         storePath,

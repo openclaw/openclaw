@@ -3,17 +3,17 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = (
-  context: InternalBeforeToolBatchContext,
-  signal?: AbortSignal,
-) => Promise<InternalBeforeToolBatchResult | undefined>;
+export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
+
+export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+
+const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
@@ -42,6 +42,7 @@ const syncSteeringGetterByCallback = new WeakMap<
 
 export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
+  drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -93,6 +94,23 @@ export function setInternalBeforeToolBatch(
 
 export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
   return beforeToolBatchByAgent.get(agent);
+}
+
+export function setInternalToolTurnCompletion(
+  agent: object,
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnCompletionByAgent.set(agent, hook);
+  } else {
+    toolTurnCompletionByAgent.delete(agent);
+  }
+}
+
+export function getInternalToolTurnCompletion(
+  agent: object,
+): InternalToolTurnCompletionHook | undefined {
+  return toolTurnCompletionByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */

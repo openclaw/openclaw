@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -14,6 +14,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -27,16 +29,18 @@ import type {
   MembershipPublication,
   SessionSharingWorkerOperations,
 } from "./session-sharing-store.types.js";
+import {
+  addSessionSuggestion,
+  claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaim,
+  releaseSessionSuggestionDispatch,
+} from "./session-suggestion-store.js";
 export type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
 /** The canonical agent executor retains the connection and both live admission checks. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<SessionSharingWorkerOperations> {
   const db = context.database;
   let categoryPlan:
@@ -80,6 +84,7 @@ export function bindSqliteWorkerBackend(
       }
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
+      let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
       const unsubscribe =
         command.type !== "category.apply"
           ? sessionChanges.subscribeFacts((change) => {
@@ -94,15 +99,40 @@ export function bindSqliteWorkerBackend(
                 if (membershipResult && change.facts?.kind === "member") {
                   membershipResult.facts = change.facts;
                 }
+                if (ownerResult && change.facts?.kind === "owner") {
+                  ownerResult.facts = change.facts;
+                }
               }
             })
           : undefined;
       try {
         return withSqlitePostCommitPublications(db, () =>
-          runSqliteImmediateTransactionSync(
-            db,
+          runSqliteWorkerTransactionSync(
+            context,
             () => {
-              context.admit("transaction");
+              if (command.type === "involvement") {
+                return updatePreparedSessionProfileInvolvement(
+                  scope,
+                  command.input.params,
+                  command.input.profiles,
+                );
+              }
+              if (command.type === "owner.assign") {
+                ownerResult = { value: assignSessionOwner(scope, command.input.params) };
+                return ownerResult;
+              }
+              if (command.type === "suggestion.add") {
+                return addSessionSuggestion(scope, command.input.params);
+              }
+              if (command.type === "suggestion.claim") {
+                return claimSessionSuggestionDispatch(scope, command.input.params);
+              }
+              if (command.type === "suggestion.release") {
+                return releaseSessionSuggestionDispatch(scope, command.input.params);
+              }
+              if (command.type === "suggestion.finalize") {
+                return finalizeSessionSuggestionClaim(scope, command.input.params);
+              }
               if (command.type === "category.apply") {
                 const database = categoryDatabase(scope);
                 if (
@@ -150,7 +180,6 @@ export function bindSqliteWorkerBackend(
               busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
               databaseLabel: context.databasePath,
               withCommit(commit) {
-                context.admit("commit");
                 if (command.type === "category.apply") {
                   assertSessionGroupCategoryDestination(
                     command.input.to,

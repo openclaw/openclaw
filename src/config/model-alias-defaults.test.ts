@@ -316,9 +316,8 @@ describe("applyModelDefaults", () => {
   it("normalizes retired Gemini per-agent model refs", () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -327,17 +326,17 @@ describe("applyModelDefaults", () => {
               "google/gemini-3-pro-preview": {},
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.list?.[0]?.model).toEqual({
+    expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(next.agents?.list?.[0]?.models).toEqual({
+    expect(next.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {},
     });
   });

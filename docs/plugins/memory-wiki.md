@@ -426,11 +426,18 @@ normalized agent id:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "support" },
+      systemAgent: { agentId: "support" },
+      authInheritance: { agentId: "support" },
+    },
     entries: {
-      support: { default: true },
+      support: { workspace: "~/.openclaw/workspace" },
       marketing: {},
     },
   },
+  talk: { agentId: "support" },
   plugins: {
     entries: {
       "memory-wiki": {

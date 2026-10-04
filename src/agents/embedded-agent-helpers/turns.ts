@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import { isAnthropicApi } from "./anthropic-api.js";
 
 const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);

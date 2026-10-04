@@ -262,7 +262,10 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
     ? [step.stdoutTail, step.stderrTail]
     : updateStepDiagnostics(step).tails;
   for (const output of tails) {
-    for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
+    for (const line of (output ?? "")
+      .trimEnd()
+      .split("\n")
+      .slice(step.termination === "signal" ? -80 : -10)) {
       if (line.trim()) {
         defaultRuntime.log(`    ${color(line)}`);
       }

@@ -1,34 +1,10 @@
-// Compaction watchdog ownership must survive registry projection proxies and duplicate dist chunks.
+// The host compaction watchdog is keyed by the abort signal it hands to the engine.
+// Engines that delegate pass that signal through, so the canonical runtime delegate
+// can refresh the watchdog however many plugin wrappers sit in between. The registry
+// lives on globalThis so duplicated dist chunks share it.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { ContextEngine } from "./types.js";
 
-const RUNTIME_COMPACTION_DELEGATES = Symbol.for("openclaw.runtimeCompactionDelegates");
-const runtimeCompactionDelegates = resolveGlobalSingleton<WeakSet<ContextEngine["compact"]>>(
-  RUNTIME_COMPACTION_DELEGATES,
-  () => new WeakSet(),
+export const compactionWatchdogResets = resolveGlobalSingleton<WeakMap<AbortSignal, () => void>>(
+  Symbol.for("openclaw.compactionWatchdogResets"),
+  () => new WeakMap(),
 );
-
-export function markRuntimeCompactionDelegate<T extends ContextEngine["compact"]>(compact: T): T {
-  runtimeCompactionDelegates.add(compact);
-  return compact;
-}
-
-export function inheritRuntimeCompactionDelegate(
-  source: ContextEngine["compact"],
-  wrapped: ContextEngine["compact"],
-): ContextEngine["compact"] {
-  return runtimeCompactionDelegates.has(source) ? markRuntimeCompactionDelegate(wrapped) : wrapped;
-}
-
-export function bindContextEngineCompaction(owner: {
-  readonly compact: ContextEngine["compact"];
-}): ContextEngine["compact"] {
-  // Projection proxies can return a fresh method on each read. Bind and tag
-  // the same captured method so watchdog ownership matches the invoked backend.
-  const compact = owner.compact;
-  return inheritRuntimeCompactionDelegate(compact, compact.bind(owner));
-}
-
-export function isRuntimeCompactionDelegate(compact: ContextEngine["compact"]): boolean {
-  return runtimeCompactionDelegates.has(compact);
-}

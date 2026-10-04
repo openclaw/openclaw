@@ -56,21 +56,14 @@ function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
 function copyTrustedPolicyRegistrations(
   registry: TrustedToolPolicyRegistry,
 ): TrustedPolicyRegistration[] {
-  let policies: unknown;
   try {
-    policies = registry?.trustedToolPolicies;
-  } catch {
-    return [unreadableTrustedPolicyRegistration()];
-  }
-  if (!policies) {
-    return [];
-  }
-
-  try {
-    if (!Array.isArray(policies)) {
-      return [unreadableTrustedPolicyRegistration()];
+    const policies: unknown = registry?.trustedToolPolicies;
+    if (!policies) {
+      return [];
     }
-    return policies.map((policy) => policy);
+    return Array.isArray(policies)
+      ? policies.map((policy) => policy)
+      : [unreadableTrustedPolicyRegistration()];
   } catch {
     return [unreadableTrustedPolicyRegistration()];
   }
@@ -92,31 +85,25 @@ function trustedPolicyDiagnosticPluginId(registration: TrustedPolicyRegistration
   return readTrustedPolicyPluginString(registration, "pluginId") ?? "unknown-plugin";
 }
 
-function readTrustedPolicy(registration: TrustedPolicyRegistration):
-  | {
-      ok: true;
-      policy: PluginTrustedToolPolicyRegistration;
-    }
-  | {
-      ok: false;
-    } {
+function readTrustedPolicy(
+  registration: TrustedPolicyRegistration,
+): PluginTrustedToolPolicyRegistration | undefined {
   try {
     const policy = registration.policy;
-    return policy && typeof policy.evaluate === "function" ? { ok: true, policy } : { ok: false };
+    return policy && typeof policy.evaluate === "function" ? policy : undefined;
   } catch {
-    return { ok: false };
+    return undefined;
   }
 }
 
-function readTrustedPolicyMatcher(policy: PluginTrustedToolPolicyRegistration):
-  | { ok: true; matcher: PluginToolMatcher | undefined }
-  | {
-      ok: false;
-    } {
+// Undefined is a valid unrestricted matcher; null marks an unreadable policy.
+function readTrustedPolicyMatcher(
+  policy: PluginTrustedToolPolicyRegistration,
+): PluginToolMatcher | null | undefined {
   try {
-    return { ok: true, matcher: normalizePluginToolMatcher(policy.matcher) };
+    return normalizePluginToolMatcher(policy.matcher);
   } catch {
-    return { ok: false };
+    return null;
   }
 }
 
@@ -126,12 +113,12 @@ export function getTrustedToolPolicyMatcherScope(
   return createPluginToolMatcherScope(
     copyTrustedPolicyRegistrations(registry).map((registration) => {
       const policy = readTrustedPolicy(registration);
-      if (!policy.ok) {
+      if (!policy) {
         return undefined;
       }
-      const matcher = readTrustedPolicyMatcher(policy.policy);
+      const matcher = readTrustedPolicyMatcher(policy);
       // Relay every tool so malformed trusted policy state reaches the fail-closed runtime check.
-      return matcher.ok ? matcher.matcher : undefined;
+      return matcher ?? undefined;
     }),
   );
 }
@@ -139,11 +126,11 @@ export function getTrustedToolPolicyMatcherScope(
 function readTrustedPolicyId(registration: TrustedPolicyRegistration): string {
   const fallback = trustedPolicyDiagnosticPluginId(registration);
   const policy = readTrustedPolicy(registration);
-  if (!policy.ok) {
+  if (!policy) {
     return fallback;
   }
   try {
-    const id = policy.policy.id;
+    const id = policy.id;
     return typeof id === "string" && id.trim() ? id.trim() : fallback;
   } catch {
     return fallback;
@@ -290,20 +277,20 @@ export async function runTrustedToolPolicies(
       },
     };
     const policy = readTrustedPolicy(registration);
-    if (!policy.ok) {
+    if (!policy) {
       return trustedPolicyFailureResult(registration, "policy is unreadable");
     }
-    const matcher = readTrustedPolicyMatcher(policy.policy);
-    if (!matcher.ok) {
+    const matcher = readTrustedPolicyMatcher(policy);
+    if (matcher === null) {
       return trustedPolicyFailureResult(registration, "policy matcher is unreadable");
     }
-    if (!pluginToolMatcherCoversTool(matcher.matcher, event.toolName)) {
+    if (!pluginToolMatcherCoversTool(matcher, event.toolName)) {
       continue;
     }
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
     try {
-      decision = await policy.policy.evaluate(buildEvent(adjustedParams), policyCtx);
+      decision = await policy.evaluate(buildEvent(adjustedParams), policyCtx);
     } catch {
       return trustedPolicyFailureResult(registration, "policy evaluation failed");
     }

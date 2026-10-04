@@ -11,6 +11,7 @@ import {
   executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,7 +20,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -28,6 +29,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 type WorktreeListEntry = {
   path: string;
+  head?: string;
   lockedReason?: string;
   branch?: string | null;
 };
@@ -196,7 +198,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -283,6 +285,8 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current = {
         path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
       };
+    } else if (current && field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {

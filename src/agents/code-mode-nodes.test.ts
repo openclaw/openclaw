@@ -83,9 +83,6 @@ function createHarness() {
   applyCodeModeCatalog({
     tools: [...codeModeTools, nodesTool],
     config,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
-    runId: ctx.runId,
     catalogRef,
   });
   return {

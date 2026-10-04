@@ -38,10 +38,10 @@ async function replyOptions(
         },
         ...(params.perAgent
           ? {
-              list: [
-                { id: "main", default: true },
-                { id: "ops", workspace: tmpDir, heartbeat: params.perAgent },
-              ],
+              entries: {
+                main: {},
+                ops: { workspace: tmpDir, heartbeat: params.perAgent },
+              },
             }
           : {}),
       },

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
@@ -76,10 +77,7 @@ it("backfills eligible mixed rows and refuses retries for visible read-only sess
 it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const sessions = Array.from({ length: 22 }, (_, index) => row(`agent:main:notes-${index}`));
-  let finish!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   let currentRows = sessions;
   const batches: string[][] = [];
   const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
@@ -189,10 +187,7 @@ it("keeps cached recaps readable without requesting generation on a read-only co
 
 it("does not let a delayed backfill response overwrite a newer session-list recap", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  let finish!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   const oldRow = row();
   const newRow = row(oldRow.key, {
     updatedAt: 2,
@@ -219,10 +214,7 @@ it("backfills newly visible sessions after the current batch settles", async () 
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const first = row();
   const added = row("agent:main:newly-visible");
-  let finish!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   const request = vi
     .spyOn(client, "request")
     .mockResolvedValueOnce(listing([first]))
@@ -273,10 +265,7 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
         : {
             sessions: [{ ...source, activitySummary: { state: "updating", canEnsure: true } }],
           };
-    let finish!: (value: unknown) => void;
-    const pending = new Promise((resolve) => {
-      finish = resolve;
-    });
+    const { promise: pending, resolve: finish } = createDeferred<unknown>();
     let held = false;
     const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
@@ -350,10 +339,7 @@ it("retains a failed recap and retries it without turning the session list into 
 it("stops queued backfill batches when write access is revoked", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const sessions = Array.from({ length: 25 }, (_, index) => row(`agent:main:notes-${index}`));
-  let finish!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   const request = vi
     .spyOn(client, "request")
     .mockResolvedValueOnce(listing(sessions))
@@ -387,10 +373,7 @@ it("keeps an explicit retry queued while another visible batch is pending", asyn
     },
   });
   const pendingRow = row();
-  let finish!: (value: unknown) => void;
-  const pending = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   const request = vi
     .spyOn(client, "request")
     .mockResolvedValueOnce(listing([retryRow, pendingRow]))

@@ -14,7 +14,6 @@ import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-c
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { finalizeCaptureStore } from "./store-lifecycle.js";
 import {
@@ -167,24 +166,6 @@ function openPathBasedDebugProxyCaptureStore(
   }
 }
 
-type SharedDebugProxyCaptureState = {
-  database: OpenClawStateDatabase;
-  env?: NodeJS.ProcessEnv;
-};
-
-const sharedDebugProxyCaptureStates = new WeakMap<object, SharedDebugProxyCaptureState>();
-
-function runSharedDebugProxyCaptureWrite<T>(owner: object, operation: () => T): T {
-  const shared = sharedDebugProxyCaptureStates.get(owner);
-  if (!shared) {
-    throw new Error("shared debug proxy capture state is unavailable");
-  }
-  return runOpenClawStateWriteTransaction(() => operation(), {
-    database: shared.database,
-    env: shared.env ?? process.env,
-  });
-}
-
 class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
   private readonly releaseIdleReference?: () => void;
@@ -205,25 +186,28 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
         dbPath: optionsOrDbPath,
         blobDir: legacyBlobDir,
         pathBased: opened.pathBased,
-        runWrite: (operation) => runSharedDebugProxyCaptureWrite(this, operation),
+        runWrite: () => {
+          throw new Error("shared debug proxy capture state is unavailable");
+        },
       });
       this.pathBased = opened.pathBased;
       this.closed = false;
       this.closing = false;
       return;
     }
-    const database = openOpenClawStateDatabase({ env: optionsOrDbPath.env });
+    const env = optionsOrDbPath.env;
+    const database = openOpenClawStateDatabase({ env });
     super({
       db: database.db,
       dbPath: database.path,
       // Retain the shipped public property while shared-state blobs live in this DB.
       blobDir: database.path,
-      runWrite: (operation) => runSharedDebugProxyCaptureWrite(this, operation),
+      runWrite: (operation) =>
+        runOpenClawStateWriteTransaction(operation, { database, env: env ?? process.env }),
     });
     this.closed = false;
     this.closing = false;
     this.releaseIdleReference = retainOpenClawStateDatabaseForIdle(database);
-    sharedDebugProxyCaptureStates.set(this, { database, env: optionsOrDbPath.env });
   }
 
   close(): void {

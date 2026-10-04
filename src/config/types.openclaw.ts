@@ -98,6 +98,8 @@ export type OpenClawConfig = {
   worktreeRoot?: string;
   /** Use filesystem acceleration for new worktrees when supported (default: true). */
   worktreeAcceleration?: boolean;
+  /** Global live managed-worktree cap; oldest idle checkouts may lose unsaved data (default: 4096). */
+  worktreeMaxCount?: number;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
@@ -176,12 +178,8 @@ export type ConfigValidationIssue = {
   allowedValuesHiddenCount?: number;
 };
 
-export type LegacyConfigIssue = {
-  /** Dot-path to the legacy config value. */
-  path: string;
-  /** Human-readable migration or rejection message. */
-  message: string;
-};
+/** Dot-path and migration or rejection message for a legacy config value. */
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */

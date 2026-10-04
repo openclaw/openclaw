@@ -20,6 +20,8 @@ These tool-visibility and exec rules describe OpenClaw-managed tools. Native har
 
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
+Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
+
 In `workspace` mode, an exec reviewer denial returns a reason to the agent without creating a human approval card. The agent must choose a materially safer alternative or ask the user; it must not work around the denial. Reviewer `ask` verdicts and review failures request human approval. Three consecutive gateway reviewer denials also escalate to a human. Existing command-binding checks and explicit human-approval requirements remain in force; see [Exec modes](/tools/exec#modes).
 
 Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). POSIX login or interactive shell wrappers skip auto-review and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.

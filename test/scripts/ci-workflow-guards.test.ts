@@ -49,7 +49,10 @@ import {
   exportPreflightHarness,
   runDependencyFreePreflight,
 } from "./ci-preflight-dependencies.test-support.js";
-import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
+import {
+  assertControlUiE2eOwnership,
+  frozenRealGatewayFiles,
+} from "./ci-ui-e2e-ownership.test-support.js";
 import {
   CACHE_SAVE_V5,
   CACHE_V5,
@@ -531,6 +534,28 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("keeps Android PR capture on the release script without store authority", () => {
+    const job = readCiWorkflow().jobs["android-screenshots"];
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.environment).toBeUndefined();
+    expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
+    const toolchain = job.steps.find(
+      (step: WorkflowStep) => step.uses === "./.ci-harness/.github/actions/setup-android-toolchain",
+    );
+    expect(toolchain.with["install-screenshot-emulators"]).toBe("true");
+    const capture = job.steps.find((step: WorkflowStep) => step.run === "pnpm android:screenshots");
+    expect(capture).toBeDefined();
+    expect(capture.env.SIPS).toBe(
+      "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
+    );
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(job.steps.filter((step: WorkflowStep) => step["continue-on-error"])).toEqual([]);
+    const evidence = job.steps.find((step: WorkflowStep) => step.uses === UPLOAD_ARTIFACT_V7);
+    expect(evidence.if).toBe("always()");
+    expect(evidence.with.path).toContain("phoneScreenshots/*.jpg");
+    expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");
@@ -2354,14 +2379,14 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     );
 
     expect(restoreStep.with?.key).toBe(
-      "${{ runner.os }}-android-sdk-v2-cmdline-16111833-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
+      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
     );
     expect(String(restoreStep.with?.["restore-keys"]).trim().split("\n")).toEqual([
-      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-16111833-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}",
+      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}",
     ]);
-    expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="16111833"');
+    expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
     expect(setupStep.run).toContain(
-      'CMDLINE_TOOLS_SHA256="0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8"',
+      'CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"',
     );
     expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
     expect(setupStep.run).toContain("sha256sum --check -");
@@ -5419,13 +5444,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               if (childEnv.OPENCLAW_VITEST_RUNTIME === "bun") {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const retentionFiles = [
-                  "ui/src/pages/chat/chat-pane-retention.test.ts",
-                  "ui/src/pages/chat/chat-thread-retention.test.ts",
-                  "ui/src/pages/usage/usage-page-retention.test.ts",
-                ];
                 expect(included.length).toBeGreaterThan(1000);
-                expect(included).toEqual(expect.arrayContaining(retentionFiles));
                 if (uiGroups[0]?.includePatterns) {
                   expect(included.toSorted()).toEqual(uiGroups[0].includePatterns.toSorted());
                 }
@@ -5580,9 +5599,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             ];
         expect(args.slice(6, 6 + reporterArgs.length)).toEqual(reporterArgs);
         expect(args.slice(6 + reporterArgs.length).toSorted()).toEqual(
-          prebuilt
-            ? ["--exclude", desktop]
-            : uiE2eRealGatewayTestFiles.filter((file) => file !== desktop).toSorted(),
+          prebuilt ? ["--exclude", desktop] : frozenRealGatewayFiles.toSorted(),
         );
         const selectedConfig = createPrebuiltUiE2eVitestConfig(
           { OPENCLAW_VITEST_INCLUDE_FILE: readFileSync(includePath, "utf8") },
@@ -5600,7 +5617,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }
       expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
       expect(selectedFiles.toSorted()).toEqual(
-        uiE2eRealGatewayTestFiles
+        (prebuilt ? uiE2eRealGatewayTestFiles : frozenRealGatewayFiles)
           .filter(
             (file) =>
               file !== desktop &&

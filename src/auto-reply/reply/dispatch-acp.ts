@@ -41,7 +41,6 @@ import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
-import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import {
   stripExtractedFileImageMetadata,
@@ -53,6 +52,7 @@ import { prepareChannelParticipantObservation } from "../../sessions/session-par
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import type {
   GetReplyOptions,
   ReplyDispatchRun,
@@ -69,16 +69,14 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
-import {
-  createAcpDispatchDeliveryCoordinator,
-  type AcpDispatchDeliveryCoordinator,
-} from "./dispatch-acp-delivery.js";
+import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
+import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 const loadDispatchAcpManagerRuntime = createLazyPromise(
@@ -104,23 +102,6 @@ function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
     return String(id);
   }
   return generateSecureUuid();
-}
-
-function resolveAcpTurnText(params: {
-  promptText: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-}): string {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
-    return params.promptText;
-  }
-  const guidance = prefixSystemMessage(
-    [
-      "Source channel delivery is private by default for this turn.",
-      "Normal ACP final output will not be automatically posted to the source channel.",
-      "To send visible output, use message(action=send). The target defaults to the current source channel.",
-    ].join(" "),
-  );
-  return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
 }
 
 function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -164,49 +145,12 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
-type AcpDispatchStatsSnapshot = {
-  turns: { queueDepth: number };
-  runtimeCache: { activeSessions: number };
-};
-type AcpDispatchOutcome = { kind: "ok" } | { kind: "error"; error: AcpRuntimeError };
-
-function finishAcpDispatchAttempt(params: {
-  queuedFinal: boolean;
-  dispatcher: ReplyDispatcher;
-  delivery: AcpDispatchDeliveryCoordinator;
-  getStats: () => AcpDispatchStatsSnapshot;
-  sessionKey: string;
-  startedAt: number;
-  outcome: AcpDispatchOutcome;
-  recordProcessed: DispatchProcessedRecorder;
-  markIdle: (reason: string) => void;
-}): AcpDispatchAttemptResult {
-  const counts = params.dispatcher.getQueuedCounts();
-  params.delivery.applyRoutedCounts(counts);
-  const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || params.queuedFinal;
-  const suppressionReason = hasQueuedDelivery
-    ? undefined
-    : params.delivery.getDeliverySuppressionReason();
-  const acpStats = params.getStats();
-  if (params.outcome.kind === "ok") {
-    logVerbose(
-      `acp-dispatch: session=${params.sessionKey} outcome=ok latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
-    params.recordProcessed("completed", { reason: suppressionReason ?? "acp_dispatch" });
-  } else {
-    logVerbose(
-      `acp-dispatch: session=${params.sessionKey} outcome=error code=${params.outcome.error.code} latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
-    params.recordProcessed("completed", {
-      reason: `acp_error:${normalizeLowercaseStringOrEmpty(params.outcome.error.code)}`,
-    });
-  }
-  params.markIdle("message_completed");
-  return { queuedFinal: params.queuedFinal, counts };
-}
-
 export async function tryDispatchAcpReplyCore(
-  params: Omit<AcpDispatchDeliveryParams, "agentId" | "ctx" | "suppressBlockUserDelivery"> & {
+  params: Omit<
+    AcpDispatchDeliveryParams,
+    "agentId" | "ctx" | "suppressBlockUserDelivery" | "preparedTtsPreferences"
+  > & {
+    preparedTtsPreferences?: PreparedTtsPreferences;
     ctx: FinalizedRuntimeMsgContext;
     toolsAllow?: string[];
     images?: Array<{ data: string; mimeType: string }>;
@@ -310,7 +254,10 @@ export async function tryDispatchAcpReplyCore(
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+  const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  assertInputCurrent();
   const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+    preparedTtsPreferences,
     cfg: params.cfg,
     ttsAuto: params.sessionTtsAuto,
     agentId: acpAgentId,
@@ -320,6 +267,7 @@ export async function tryDispatchAcpReplyCore(
   });
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences,
     cfg: params.cfg,
     agentId: acpAgentId,
     ctx: params.ctx,
@@ -419,17 +367,28 @@ export async function tryDispatchAcpReplyCore(
   });
 
   const acpDispatchStartedAt = Date.now();
-  const finishAttempt = (options: { queuedFinal: boolean; outcome: AcpDispatchOutcome }) =>
-    finishAcpDispatchAttempt({
-      ...options,
-      dispatcher: params.dispatcher,
-      delivery,
-      getStats: () => acpManager.getObservabilitySnapshot(),
-      sessionKey,
-      startedAt: acpDispatchStartedAt,
-      recordProcessed: params.recordProcessed,
-      markIdle: params.markIdle,
+  const finishAttempt = (
+    finalQueued: boolean,
+    error?: AcpRuntimeError,
+  ): AcpDispatchAttemptResult => {
+    const counts = params.dispatcher.getQueuedCounts();
+    delivery.applyRoutedCounts(counts);
+    const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || finalQueued;
+    const suppressionReason = hasQueuedDelivery
+      ? undefined
+      : delivery.getDeliverySuppressionReason();
+    const acpStats = acpManager.getObservabilitySnapshot();
+    logVerbose(
+      `acp-dispatch: session=${sessionKey} outcome=${error ? `error code=${error.code}` : "ok"} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+    );
+    params.recordProcessed("completed", {
+      reason: error
+        ? `acp_error:${normalizeLowercaseStringOrEmpty(error.code)}`
+        : (suppressionReason ?? "acp_dispatch"),
     });
+    params.markIdle("message_completed");
+    return { queuedFinal: finalQueued, counts };
+  };
   const requestId = resolveAcpRequestId(params.ctx);
   const existingRunId = normalizeOptionalString(params.runId);
   const auditOnly = existingRunId === undefined;
@@ -595,10 +554,7 @@ export async function tryDispatchAcpReplyCore(
         text: formatAcpRuntimeErrorText(acpResolution.error),
         isError: true,
       });
-      return finishAttempt({
-        queuedFinal: delivered,
-        outcome: { kind: "error", error: acpResolution.error },
-      });
+      return finishAttempt(delivered, acpResolution.error);
     }
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {
@@ -609,7 +565,6 @@ export async function tryDispatchAcpReplyCore(
     const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
-      includeAttachmentIndexes: true,
     });
     let extractedFileImages = params.extractedFileImages ?? [];
     if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
@@ -776,6 +731,7 @@ export async function tryDispatchAcpReplyCore(
     if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
       queuedFinal =
         (await finalizeAcpTurnOutput({
+          preparedTtsPreferences,
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
           agentId: acpAgentId,
@@ -809,10 +765,7 @@ export async function tryDispatchAcpReplyCore(
 
     await persistTranscript(delivery.getAccumulatedTranscriptText());
 
-    const result = finishAttempt({
-      queuedFinal,
-      outcome: { kind: "ok" },
-    });
+    const result = finishAttempt(queuedFinal);
     emitAuditEnd();
     return result;
   } catch (err) {
@@ -845,10 +798,7 @@ export async function tryDispatchAcpReplyCore(
       await persistTranscript(partialText ? `${partialText}\n\n${errorText}` : errorText);
     }
     queuedFinal = queuedFinal || delivered;
-    return finishAttempt({
-      queuedFinal,
-      outcome: { kind: "error", error: acpError },
-    });
+    return finishAttempt(queuedFinal, acpError);
   } finally {
     if (admittedRunContext) {
       closeAdmittedRunDelegatedAuthority(admittedRunContext);

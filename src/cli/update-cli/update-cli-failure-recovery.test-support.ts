@@ -97,7 +97,17 @@ export function registerForegroundFailureRecoveryTests({
           readyz: true,
           settled: true,
         },
-        steps: [recoveryVerificationStep(undefined, root)],
+        steps: [
+          recoveryVerificationStep(undefined, root),
+          {
+            name: "update",
+            command: "openclaw update",
+            cwd: root,
+            durationMs: 0,
+            exitCode: null,
+            failureFacts: [{ check: "update", code: "update-failed" }],
+          },
+        ],
       });
       expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
@@ -150,17 +160,36 @@ export function registerFailureSelectorTests({
           expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
         } else {
           expect(error).toBe(failure);
+          const failedStep = {
+            name: "update",
+            command: "openclaw update",
+            cwd,
+            durationMs: expect.any(Number),
+            exitCode: 1,
+            failureFacts: [
+              {
+                check: "update",
+                code: "Error",
+                errorName: "Error",
+                message: failure.message,
+                location: expect.any(String),
+              },
+            ],
+          };
           expect(triageCall?.failure).toEqual({
             error: failure.message,
             result: {
               status: "error",
               mode: "unknown",
               root: cwd,
+              reason: "update-failed",
               durationMs: expect.any(Number),
               recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
               rollbackOutcome: undefined,
               verification: {},
+              failedStep,
               steps: [
+                failedStep,
                 recoveryVerificationStep([
                   {
                     check: "gateway-recovery",

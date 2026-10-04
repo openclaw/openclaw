@@ -9,6 +9,7 @@ import {
   createPage,
   createRequest,
   cronListResponse,
+  operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
@@ -20,6 +21,111 @@ afterEach(() => {
 });
 
 describe("CronPage lifecycle", () => {
+  it.each(["catalog-needed", "configured-alternative"])(
+    "preserves catalog provider identity through model selection and save (%s)",
+    async (source) => {
+      const configuredAlternatives = source === "configured-alternative";
+      const models = [
+        { provider: "alpha", id: "shared-model", name: "Alpha shared" },
+        { provider: "beta", id: "shared-model", name: "Beta shared" },
+        // Keep the catalog-needed cell dependent on qualifying the raw beta row.
+        ...(configuredAlternatives
+          ? [{ provider: "beta", id: "beta/shared-model", name: "Qualified beta shared" }]
+          : []),
+        {
+          provider: "beta",
+          id: "hidden-model",
+          name: "Hidden model",
+          manualSelectionAllowed: false,
+        },
+      ];
+      const fallback = createRequest();
+      const request = vi.fn((method: string, _params?: unknown) => {
+        if (method === "models.list") {
+          return { models };
+        }
+        if (method === "cron.add") {
+          return { id: "identity-job" };
+        }
+        if (method === "cron.list") {
+          return cronListResponse([]);
+        }
+        return fallback(method);
+      });
+      const gateway = createGateway(createTestGatewayClient(request), true);
+      gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
+      const context = createContext(gateway);
+      Object.assign(context.runtimeConfig.state, {
+        configForm: {
+          agents: {
+            defaults: {
+              model: { primary: "alpha/shared-model" },
+              modelPolicy: { allow: ["alpha/shared-model", "beta/shared-model"] },
+              ...(configuredAlternatives
+                ? { models: { "alpha/shared-model": {}, "beta/shared-model": {} } }
+                : {}),
+            },
+          },
+          models: {
+            providers: {
+              alpha: {
+                baseUrl: "https://alpha.invalid",
+                models: [{ id: "shared-model", name: "Alpha shared" }],
+              },
+              beta: {
+                baseUrl: "https://beta.invalid",
+                models: [{ id: "shared-model", name: "Beta shared" }],
+              },
+            },
+          },
+        },
+      });
+      const page = createPage(context, { render: true });
+      await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();
+      await waitForCronPage(() =>
+        expect(page.querySelector("fieldset.cron-editor")).not.toBeNull(),
+      );
+
+      const name = page.querySelector<HTMLInputElement>("#cron-name")!;
+      name.value = "Provider identity";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      const prompt = page.querySelector<HTMLTextAreaElement>("#cron-payload-text")!;
+      prompt.value = "Use the selected model";
+      prompt.dispatchEvent(new Event("input", { bubbles: true }));
+      await waitForCronPage(() => expect(page.cronModelSuggestions.length).toBeGreaterThan(0));
+      await page.updateComplete;
+
+      const trigger = page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!;
+      const picker = trigger.closest("openclaw-select-picker")!;
+      trigger.click();
+      await waitForCronPage(() => {
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(
+          Array.from(picker.querySelectorAll<HTMLElement>('[role="option"]')).map(
+            (option) => option.dataset.value,
+          ),
+        ).toEqual(["", "alpha/shared-model", "beta/shared-model", "__openclaw_custom_model__"]);
+      });
+      picker.querySelector<HTMLElement>('[role="option"][data-value="beta/shared-model"]')!.click();
+      await page.updateComplete;
+      const save = page.querySelector<HTMLButtonElement>('[data-test-id="cron-submit"]')!;
+      expect(save.disabled).toBe(false);
+      save.click();
+      await waitForCronPage(() => {
+        const adds = request.mock.calls.filter(([method]) => method === "cron.add");
+        expect(adds).toHaveLength(1);
+        expect(adds[0]?.[1]).toHaveProperty("payload", {
+          kind: "agentTurn",
+          message: "Use the selected model",
+          model: "beta/shared-model",
+        });
+      });
+      await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
+    },
+  );
+
   it.each([false, true])(
     "shows an internal catalog failure and empty recovery (retained rows: %s)",
     async (hasRows) => {
@@ -33,7 +139,7 @@ describe("CronPage lifecycle", () => {
       );
       const gateway = createGateway(client, true);
       const page = createPage(createContext(gateway), { render: true });
-      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["obsolete"]));
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fixture/obsolete"]));
 
       result = {
         models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
@@ -41,7 +147,7 @@ describe("CronPage lifecycle", () => {
       };
       gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
       await waitForCronPage(() =>
-        expect(page.cronModelSuggestions).toEqual(hasRows ? ["current"] : []),
+        expect(page.cronModelSuggestions).toEqual(hasRows ? ["fixture/current"] : []),
       );
       expect(page.textContent).toContain(
         hasRows

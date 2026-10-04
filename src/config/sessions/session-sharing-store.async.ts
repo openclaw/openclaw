@@ -28,7 +28,10 @@ import {
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import type { SessionSharingWorkerOperations } from "./session-sharing-store.worker.js";
+import type {
+  MembershipPublication,
+  SessionSharingWorkerOperations,
+} from "./session-sharing-store.types.js";
 
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
@@ -46,7 +49,7 @@ export async function runSessionCollaborationWrite<
   prepare?: (
     operation: Pick<SqliteWorkerStore<SessionSharingWorkerOperations>, "execute">,
     scope: SessionAccessScope,
-  ) => Promise<void>,
+  ) => Promise<void | SessionSharingWorkerOperations[Key]["input"]>,
   uncertainCategoryKeys?: () => readonly string[] | undefined,
 ): Promise<T> {
   const resolved = resolveSqliteScope(scope);
@@ -113,7 +116,10 @@ export async function runSessionCollaborationWrite<
             try {
               return await worker.run(async (operation) => {
                 if (prepare) {
-                  await prepare(operation, commandScope);
+                  const prepared = await prepare(operation, commandScope);
+                  if (prepared) {
+                    capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
+                  }
                 }
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";
@@ -127,6 +133,7 @@ export async function runSessionCollaborationWrite<
             } catch (error) {
               if (
                 mutationDispatched &&
+                !capturedCommand.type.startsWith("suggestion.") &&
                 !published &&
                 (resultReceived ||
                   collectNestedErrorCandidates(error).some(
@@ -135,7 +142,10 @@ export async function runSessionCollaborationWrite<
               ) {
                 // The broker has joined physical settlement. Fence old authority until the
                 // projection's existing read worker reconciles the committed store, without replay.
-                if (capturedCommand.type === "category.apply") {
+                if (
+                  capturedCommand.type === "category.apply" ||
+                  capturedCommand.type === "involvement"
+                ) {
                   discardCommittedSessionEntryCache(database.db);
                 }
                 const categoryKeys =
@@ -172,6 +182,18 @@ export async function runSessionCollaborationWrite<
   }
 }
 
+function publishSessionMembership(
+  { facts }: MembershipPublication,
+  location: { agentId: string; storePath: string; sessionKey: string },
+  database: OpenClawAgentDatabase,
+) {
+  if (facts) {
+    publishSessionSharingMemberChange(database, location.sessionKey, facts, location.agentId);
+  } else {
+    sessionChanges.emit({ ...location, factsInvalidated: true });
+  }
+}
+
 export function addSessionMemberInWorker(
   scope: SessionAccessScope,
   params: Parameters<typeof addSessionMember>[1],
@@ -184,16 +206,7 @@ export function addSessionMemberInWorker(
     (capturedScope) => addSessionMember(capturedScope, capturedParams),
     (result, location, database) => {
       if (result.value.inserted) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },
@@ -236,16 +249,7 @@ export function removeSessionMemberInWorker(
       ),
     (result, location, database) => {
       if (result.value) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },

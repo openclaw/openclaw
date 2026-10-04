@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  pluginAdvancedSchema,
-  pluginConfigSchema,
-  pluginEntryValue,
-  pluginHostControlsSchema,
-} from "./settings-model.ts";
+import { pluginConfigSchema, pluginEntryValue } from "./settings-model.ts";
 
 const schema = {
   type: "object",
@@ -12,11 +7,6 @@ const schema = {
     plugins: {
       type: "object",
       properties: {
-        enabled: { type: "boolean" },
-        allow: { type: "array" },
-        deny: { type: "array" },
-        load: { type: "object" },
-        slots: { type: "object" },
         entries: {
           type: "object",
           properties: {
@@ -24,9 +14,6 @@ const schema = {
               type: "object",
               properties: {
                 config: { type: "object", properties: { token: { type: "string" } } },
-                hooks: { type: "object" },
-                llm: { type: "object" },
-                subagent: { type: "object" },
               },
             },
           },
@@ -41,27 +28,9 @@ const schema = {
 };
 
 describe("plugin settings model", () => {
-  it("projects global policy without anonymous plugin entries", () => {
-    expect(Object.keys(pluginAdvancedSchema(schema)?.properties ?? {})).toEqual([
-      "enabled",
-      "allow",
-      "deny",
-      "load",
-      "slots",
-    ]);
-  });
-
   it("resolves named and wildcard plugin configuration schemas", () => {
     expect(pluginConfigSchema(schema, "workboard")?.properties).toHaveProperty("token");
     expect(pluginConfigSchema(schema, "other")?.type).toBe("object");
-  });
-
-  it("preserves editable host-owned plugin controls outside plugin config", () => {
-    expect(Object.keys(pluginHostControlsSchema(schema, "workboard")?.properties ?? {})).toEqual([
-      "hooks",
-      "llm",
-      "subagent",
-    ]);
   });
 
   it("never reads inherited plugin ids from schema or config", () => {

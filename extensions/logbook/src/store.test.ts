@@ -90,7 +90,7 @@ describe("LogbookStore", () => {
       frameIds: (await store.unbatchedActiveFrames(10)).map((frame) => frame.id),
     });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
-    expect(await store.batchFrames(batchId)).toHaveLength(2);
+    expect(await store.batchImages(batchId)).toHaveLength(2);
   });
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
@@ -207,7 +207,16 @@ describe("LogbookStore", () => {
     },
   );
 
-  it("restores missing schema-1 indexes on reopen without changing the version", async () => {
+  it("upgrades indexes on a populated schema-1 database without changing rows or version", async () => {
+    const frameId = await insertFrame(1000);
+    const batchId = await store.createBatch({
+      day: DAY,
+      startMs: 1000,
+      endMs: 2000,
+      frameIds: [frameId],
+    });
+    await store.setBatchStatus(batchId, "done", undefined, "synthetic/model");
+    const batch = await store.latestBatch();
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
     const database = new DatabaseSync(databasePath);
@@ -216,11 +225,17 @@ describe("LogbookStore", () => {
       DROP INDEX IF EXISTS idx_logbook_frames_batch;
       DROP INDEX IF EXISTS idx_logbook_observations_batch;
       DROP INDEX IF EXISTS idx_logbook_cards_keyframe;
+      DROP INDEX IF EXISTS idx_logbook_batches_pending;
+      CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
     `);
+    const batches = database.prepare("SELECT * FROM batches ORDER BY id").all();
+    const frames = database.prepare("SELECT * FROM frames ORDER BY id").all();
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     database.close();
 
     store = await LogbookStore.open(dir, workerModuleUrl);
+    expect(await store.latestBatch()).toEqual(batch);
+    expect(await store.nextPendingBatch()).toBeNull();
 
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -229,6 +244,8 @@ describe("LogbookStore", () => {
           `SELECT name FROM sqlite_schema
            WHERE type = 'index'
              AND name IN (
+               'idx_logbook_batches_day',
+               'idx_logbook_batches_pending',
                'idx_logbook_frames_batch',
                'idx_logbook_frames_captured_at',
                'idx_logbook_observations_batch',
@@ -238,12 +255,15 @@ describe("LogbookStore", () => {
         )
         .all();
       expect(indexes).toEqual([
+        { name: "idx_logbook_batches_pending" },
         { name: "idx_logbook_cards_keyframe" },
         { name: "idx_logbook_frames_batch" },
         { name: "idx_logbook_frames_captured_at" },
         { name: "idx_logbook_observations_batch" },
       ]);
       expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(reopened.prepare("SELECT * FROM batches ORDER BY id").all()).toEqual(batches);
+      expect(reopened.prepare("SELECT * FROM frames ORDER BY id").all()).toEqual(frames);
     } finally {
       reopened.close();
     }
@@ -287,7 +307,9 @@ describe("LogbookStore", () => {
     ).rejects.toThrow(`Logbook frame ${firstFrame} is missing or already batched`);
 
     expect((await store.latestBatch())?.id).toBe(firstBatch);
-    expect((await store.batchFrames(firstBatch)).map((frame) => frame.id)).toEqual([firstFrame]);
+    expect((await store.batchImages(firstBatch)).map(({ frame }) => frame.id)).toEqual([
+      firstFrame,
+    ]);
     expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([secondFrame]);
   });
 
@@ -528,9 +550,11 @@ describe("LogbookStore", () => {
 
     store = await LogbookStore.open(dir, workerModuleUrl);
 
-    expect((await store.batchFrames(7)).map((frame) => frame.id)).toEqual([11]);
     const migrated = new DatabaseSync(databasePath, { readOnly: true });
     try {
+      expect(migrated.prepare("SELECT id, batch_id FROM frames").all()).toEqual([
+        { id: 11, batch_id: 7 },
+      ]);
       expect(
         migrated
           .prepare(

@@ -2,6 +2,10 @@ import path from "node:path";
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
+import type {
+  SqliteReadOnlyOperationCommand,
+  SqliteReadOnlyOperationResult,
+} from "./sqlite-readonly-operation-types.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -14,6 +18,7 @@ export type SqliteReadOnlyWorkerMode =
   | "consolidated"
   | "reclaim"
   | "auth-profile-rows"
+  | "operation"
   | "staging-create"
   | "staging-create-legacy"
   | "staging-reconcile"
@@ -51,10 +56,15 @@ export type SqliteAuthProfileReadOptions = {
   signal?: AbortSignal;
   stagingRoot?: never;
 };
+export type SqliteReadOnlyOperationOptions = Omit<SqliteAuthProfileReadOptions, "mode"> & {
+  mode: "operation";
+  command: SqliteReadOnlyOperationCommand;
+};
 export type SqliteReadOnlyWorkerOptions =
   | SqliteAuthProfileReadOptions
+  | SqliteReadOnlyOperationOptions
   | {
-      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows">;
+      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | "operation">;
       stagingRoot?: string;
       signal?: AbortSignal;
       expectedSourceIdentity?: DatabaseFileIdentity;
@@ -66,7 +76,9 @@ export function sqliteReadOnlyWorkerRequestArgs(
   const args = [options.mode, path.resolve(pathname)];
   const stagingRoot = options.stagingRoot && path.resolve(options.stagingRoot);
   const expected =
-    options.mode === "auth-profile-rows" ? undefined : options.expectedSourceIdentity;
+    options.mode === "auth-profile-rows" || options.mode === "operation"
+      ? undefined
+      : options.expectedSourceIdentity;
   if (expected !== undefined) {
     if (options.mode !== "sync") {
       throw new Error(
@@ -81,7 +93,11 @@ export function sqliteReadOnlyWorkerRequestArgs(
 }
 
 export type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
-export type SqliteReadOnlyWorkerValue = string | string[] | SqliteAuthProfileRows;
+export type SqliteReadOnlyWorkerValue =
+  | string
+  | string[]
+  | SqliteAuthProfileRows
+  | SqliteReadOnlyOperationResult;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 
 export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {

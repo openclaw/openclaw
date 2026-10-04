@@ -1,6 +1,7 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -8,6 +9,40 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import type {
+  OpenClawStateReadCommand,
+  OpenClawStateReadResult,
+} from "./openclaw-state-read.types.js";
+
+type ConfigMachineStateReadCommand = Extract<
+  OpenClawStateReadCommand,
+  { type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath" }
+>;
+
+export function isConfigMachineStateReadCommand(
+  command: OpenClawStateReadCommand,
+): command is ConfigMachineStateReadCommand {
+  return (
+    command.type === "nodeHost.config" ||
+    command.type === "operator.channelPolicy" ||
+    command.type === "tts.prefsPath"
+  );
+}
+
+export function readConfigMachineStateCommandInDatabase(
+  database: DatabaseSync,
+  command: ConfigMachineStateReadCommand,
+): Extract<OpenClawStateReadResult, { type: ConfigMachineStateReadCommand["type"] }> {
+  return {
+    type: command.type,
+    // Activation may precede deferred publication; never issue authority before v19.
+    row:
+      command.type === "operator.channelPolicy" &&
+      (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) < 19
+        ? undefined
+        : readConfigMachineStateRowInDatabase(database, command.type),
+  };
+}
 
 export type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 

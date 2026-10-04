@@ -7,8 +7,10 @@ import {
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import type { RetainedLiveThread } from "./client-thread-owner.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
+import type { RpcRequest } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   setupRunAttemptTestHooks,
@@ -71,7 +73,7 @@ async function fixture() {
   onTestFinished(async () => {
     await wire.client.closeAndWait();
   });
-  const options: CodexStartOrResumeThreadParams = {
+  const options = {
     client: wire.client,
     bindingStore: store,
     params,
@@ -83,11 +85,13 @@ async function fixture() {
     mcpServersFingerprint: "mcp-before",
     mcpServersFingerprintEvaluated: true,
     appServerRuntimeFingerprint: "connection-A",
-  };
+  } satisfies CodexStartOrResumeThreadParams;
   const parent = await startOrResumeThread(options);
-  const releasePredecessor = vi.fn(async (threadId: string) => {
-    await wire.client.request("thread/unsubscribe", { threadId });
-  });
+  const releasePredecessor = vi.fn<RetainedLiveThread["release"]>(
+    async (threadId, assertCurrent, withCurrent) => {
+      await wire.client.request("thread/unsubscribe", { threadId }, { assertCurrent, withCurrent });
+    },
+  );
   await retainCodexAppServerLiveThread(
     wire.client,
     parent.threadId,
@@ -190,7 +194,11 @@ describe("native assignment custody across ordinary parent rotation", () => {
       ]);
       expect(f.readState()).toEqual(before);
       expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
-      expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(f.parent.threadId);
+      expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
+        f.parent.threadId,
+        undefined,
+        expect.any(Function),
+      );
     } finally {
       proceed.resolve();
       await settled;
@@ -228,11 +236,11 @@ describe("native assignment custody across ordinary parent rotation", () => {
       }
       if (failure === "abort") {
         const mutate = f.store.mutate.bind(f.store);
-        vi.spyOn(f.store, "mutate").mockImplementation((identity, mutation, assertCurrent) => {
-          if (mutation.kind === "replace-thread") {
+        vi.spyOn(f.store, "mutate").mockImplementation((...args) => {
+          if (args[1].kind === "replace-thread") {
             controller.abort(new Error("Rotation aborted"));
           }
-          return mutate(identity, mutation, assertCurrent);
+          return mutate(...args);
         });
       }
       f.setSuccessor(async () => {
@@ -271,9 +279,45 @@ describe("native assignment custody across ordinary parent rotation", () => {
           .filter(([method]) => method === "thread/delete")
           .map(([, params]) => params),
       ).toEqual(failure === "start" ? [] : [{ threadId: "parent-uncommitted" }]);
-      expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(f.parent.threadId);
+      expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
+        f.parent.threadId,
+        undefined,
+        expect.any(Function),
+      );
     },
   );
+
+  it("refuses a predecessor unsubscribe revoked immediately before its wire admission", async () => {
+    const f = await fixture();
+    const before = f.readState();
+    const controller = new AbortController();
+    const release = f.releasePredecessor.getMockImplementation();
+    assert(release);
+    f.releasePredecessor.mockImplementationOnce(async (...args) => {
+      controller.abort(new Error("Rotation revoked before unsubscribe"));
+      await release(...args);
+    });
+
+    await expect(f.rotate({ signal: controller.signal })).rejects.toThrow();
+
+    expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
+      f.parent.threadId,
+      undefined,
+      expect.any(Function),
+    );
+    expect(f.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual([
+      [
+        "thread/unsubscribe",
+        { threadId: f.parent.threadId },
+        { assertCurrent: undefined, withCurrent: expect.any(Function) },
+      ],
+    ]);
+    const methods = f.writes.map((line) => (JSON.parse(line) as RpcRequest).method);
+    expect(methods.filter((method) => method === "thread/unsubscribe")).toEqual([]);
+    expect(methods.filter((method) => method === "thread/start")).toHaveLength(1);
+    expect(f.readState()).toEqual(before);
+    expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+  });
 
   it("refuses a claimed predecessor before starting or committing a successor", async () => {
     const f = await fixture();
@@ -315,6 +359,10 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(replacement.lifecycle.preserveExistingBinding).toBeUndefined();
     expect(f.store.read(f.identity)?.threadId).toBe(replacement.threadId);
     expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
-    expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(f.parent.threadId);
+    expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
+      f.parent.threadId,
+      undefined,
+      expect.any(Function),
+    );
   });
 });

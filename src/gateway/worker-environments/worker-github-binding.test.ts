@@ -33,6 +33,14 @@ vi.mock("../../agents/worktrees/service.js", () => ({
   },
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.session(params.key, { agentId: params.agentId }),
+}));
 vi.mock("../../state/session-repository-workspaces.js", () => ({
   getSessionRepositoryWorkspaceStore: () => ({
     prepare: async () => ({
@@ -110,7 +118,9 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       gitAuthor: { name: "Shared Bot" },
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token);
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.github.com",
+    });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
   });
 

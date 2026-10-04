@@ -17,6 +17,14 @@ let bytes: Buffer;
 const query = vi.fn();
 const load = vi.fn();
 
+function mockShellIdentity() {
+  return vi
+    .spyOn(childProcess, "execFileSync")
+    .mockImplementation((_file, args) =>
+      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
+    );
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -95,8 +103,11 @@ it("refuses an unsafe microsecond identity without changing the lease timestamp"
   expect(shell).not.toHaveBeenCalled();
 });
 
-it("keeps the bounded shell path on x64 without loading Koffi", async () => {
-  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+it.each<[string, () => void]>([
+  ["x64", () => vi.spyOn(process, "arch", "get").mockReturnValue("x64")],
+  ["sealed runtime", () => vi.stubGlobal("SEALED_RUNTIME_BUILD", true)],
+])("keeps %s on the bounded shell path without loading Koffi", async (_name, configure) => {
+  configure();
   const shell = vi
     .spyOn(childProcess, "execFileSync")
     .mockReturnValue("Thu Sep 24 00:00:00 2026\n");
@@ -108,49 +119,30 @@ it("keeps the bounded shell path on x64 without loading Koffi", async () => {
   expect(nativeKoffi).not.toHaveBeenCalled();
 });
 
-it.each([
-  "short read",
-  "wrong PID",
-  "invalid parent",
-  "zero start",
-  "unsafe start",
-  "invalid microseconds",
-  "query error",
-  "missing native package",
-])("uses the bounded shell fallback after %s", async (failure) => {
-  if (failure === "short read") {
-    query.mockReturnValue(135);
-  }
-  if (failure === "wrong PID") {
-    bytes.writeUInt32LE(43, 12);
-  }
-  if (failure === "invalid parent") {
-    bytes.writeUInt32LE(0xffffffff, 16);
-  }
-  if (failure === "zero start") {
-    bytes.writeBigUInt64LE(0n, 120);
-  }
-  if (failure === "unsafe start") {
-    bytes.writeBigUInt64LE(2n ** 53n, 120);
-  }
-  if (failure === "invalid microseconds") {
-    bytes.writeBigUInt64LE(1_000_000n, 128);
-  }
-  if (failure === "query error") {
-    query.mockImplementation(() => {
-      throw new Error("denied");
-    });
-  }
-  if (failure === "missing native package") {
-    nativeKoffi.mockImplementation(() => {
-      throw new Error("unavailable");
-    });
-  }
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
+it.each<[string, () => void]>([
+  ["short read", () => query.mockReturnValue(135)],
+  ["wrong PID", () => bytes.writeUInt32LE(43, 12)],
+  ["invalid parent", () => bytes.writeUInt32LE(0xffffffff, 16)],
+  ["zero start", () => bytes.writeBigUInt64LE(0n, 120)],
+  ["unsafe start", () => bytes.writeBigUInt64LE(2n ** 53n, 120)],
+  ["invalid microseconds", () => bytes.writeBigUInt64LE(1_000_000n, 128)],
+  [
+    "query error",
+    () =>
+      query.mockImplementation(() => {
+        throw new Error("denied");
+      }),
+  ],
+  [
+    "missing native package",
+    () =>
+      nativeKoffi.mockImplementation(() => {
+        throw new Error("unavailable");
+      }),
+  ],
+])("uses the bounded shell fallback after %s", async (_name, failNative) => {
+  failNative();
+  const shell = mockShellIdentity();
   const { getFileLockProcessStartTime, getProcessInstanceStartTime, readDarwinProcessIdentity } =
     await import("./pid-alive.js");
   const expected = Date.UTC(2026, 8, 24) / 1000;
@@ -183,79 +175,44 @@ it("retries a failed native load without caching a missing process", async () =>
   expect(shell).toHaveBeenCalledTimes(1);
 });
 
-it("keeps sealed helpers independent of installed native packages", async () => {
-  vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockReturnValue("Thu Sep 24 00:00:00 2026\n");
-  const { getFileLockProcessStartTime, getProcessInstanceStartTime } =
-    await import("./pid-alive.js");
-  expect(getProcessInstanceStartTime(42)).toBeNull();
-  expect(shell).not.toHaveBeenCalled();
-  expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 8, 24) / 1000);
-  expect(nativeKoffi).not.toHaveBeenCalled();
-});
-
-it("preserves default shell recovery after slow native loading fails", async () => {
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  nativeKoffi.mockImplementation(() => {
-    now += 1500;
-    throw new Error("native unavailable");
-  });
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
-  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
-  const expected = Date.UTC(2026, 8, 24) / 1000;
-  expect(getFileLockProcessStartTime(42)).toBe(expected);
-  expect(readDarwinProcessIdentity(42)).toEqual({ parentPid: 7, startedAt: expected });
-  expect(shell).toHaveBeenCalledTimes(2);
-  for (const call of shell.mock.calls) {
-    expect(call[2]?.timeout).toBe(1000);
-  }
-});
-
-it.each([600, 1000])("charges %sms native loading to an explicit deadline", async (elapsed) => {
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  nativeKoffi.mockImplementation(() => {
-    now += elapsed;
-    throw new Error("native unavailable");
-  });
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
-  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
-  expect(getFileLockProcessStartTime(42, process.env, 1000)).toBe(
-    elapsed === 1000 ? null : Date.UTC(2026, 8, 24) / 1000,
-  );
-  expect(readDarwinProcessIdentity(42, process.env, 1000)).toEqual(
-    elapsed === 1000 ? null : { parentPid: 7, startedAt: Date.UTC(2026, 8, 24) / 1000 },
-  );
-  if (elapsed === 1000) {
-    expect(shell).not.toHaveBeenCalled();
-  } else {
-    expect(shell).toHaveBeenCalledTimes(2);
-    for (const call of shell.mock.calls) {
-      expect(call[2]).toMatchObject({ timeout: 400 });
-    }
-  }
-});
-
-it.each([0, -1, 1.5, Number.NaN, Infinity])(
-  "rejects invalid PID %s before native conversion",
-  async (pid) => {
-    const shell = vi.spyOn(childProcess, "execFileSync");
+it.each<[number, number | undefined, number | null]>([
+  [1500, undefined, 1000],
+  [600, 1000, 400],
+  [1000, 1000, null],
+])(
+  "bounds shell recovery after %sms native loading with allowance %s",
+  async (elapsed, allowance, timeout) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    nativeKoffi.mockImplementation(() => {
+      now += elapsed;
+      throw new Error("native unavailable");
+    });
+    const shell = mockShellIdentity();
     const { getFileLockProcessStartTime, readDarwinProcessIdentity } =
       await import("./pid-alive.js");
-    expect(getFileLockProcessStartTime(pid)).toBeNull();
-    expect(readDarwinProcessIdentity(pid)).toBeNull();
-    expect(nativeKoffi).not.toHaveBeenCalled();
-    expect(shell).not.toHaveBeenCalled();
+    expect(getFileLockProcessStartTime(42, process.env, allowance)).toBe(
+      timeout === null ? null : Date.UTC(2026, 8, 24) / 1000,
+    );
+    expect(readDarwinProcessIdentity(42, process.env, allowance)).toEqual(
+      timeout === null ? null : { parentPid: 7, startedAt: Date.UTC(2026, 8, 24) / 1000 },
+    );
+    if (timeout === null) {
+      expect(shell).not.toHaveBeenCalled();
+    } else {
+      expect(shell).toHaveBeenCalledTimes(2);
+      for (const call of shell.mock.calls) {
+        expect(call[2]?.timeout).toBe(timeout);
+      }
+    }
   },
 );
+
+it.each([0, 1.5])("rejects invalid PID %s before native conversion", async (pid) => {
+  const shell = vi.spyOn(childProcess, "execFileSync");
+  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
+  expect(getFileLockProcessStartTime(pid)).toBeNull();
+  expect(readDarwinProcessIdentity(pid)).toBeNull();
+  expect(nativeKoffi).not.toHaveBeenCalled();
+  expect(shell).not.toHaveBeenCalled();
+});

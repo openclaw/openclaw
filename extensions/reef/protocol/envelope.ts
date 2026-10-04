@@ -22,7 +22,6 @@ export interface ReplayStore {
   /** Renews an in-flight claim while slow guard or review work is active. */
   refresh?(peer: string, id: string): Promise<void>;
   complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
-  consume(peer: string, id: string): Promise<void>;
   release(peer: string, id: string): Promise<void>;
   completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
 }
@@ -179,21 +178,6 @@ export function seal(options: SealOptions): Envelope {
     ...unsigned,
     sig: base64(ed25519.sign(canonicalBytes(unsigned), decodeKey(options.senderSigningSecretKey))),
   };
-}
-
-export async function open(options: OpenOptions): Promise<MessageBody> {
-  const result = await openClaimed(options);
-  if (result.claim === "duplicate") {
-    throw new ReplayedError("duplicate envelope");
-  }
-  const peer = parseHandleEpoch(options.envelope.from).handle;
-  try {
-    await options.replayStore.consume(peer, options.envelope.id);
-    return result.body;
-  } catch (error) {
-    await options.replayStore.release(peer, options.envelope.id);
-    throw error;
-  }
 }
 
 export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResult> {

@@ -113,7 +113,7 @@ it.each([true, false])(
       completion = fixture.finishDispatch();
       await detached.promise;
       expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
-      const pending = listSessionPendingInputs(fixture.scope);
+      const pending = await listSessionPendingInputs(fixture.scope);
       expect(pending.total).toBe(1);
       for (const grant of [["operator.read"], ["operator.admin"], undefined] as const) {
         const next = structuredClone(current);
@@ -129,7 +129,7 @@ it.each([true, false])(
         expect(client.invalidated).not.toBe(true);
         expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
         expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
       }
       const narrowed = structuredClone(current);
       narrowed.gateway!.auth!.identityScopes![identity] = ["operator.read"];
@@ -153,7 +153,7 @@ it.each([true, false])(
         expect(active.controller.signal.aborted).toBe(false);
         expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
         expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
       }
     } finally {
       clearFollowupQueue(fixture.scope.sessionKey);

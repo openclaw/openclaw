@@ -609,7 +609,7 @@ describe("gateway server chat", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "orion" }],
+      entries: { main: {}, orion: {} },
     };
     try {
       await writeSessionStore({ entries: {} });
@@ -1204,7 +1204,7 @@ describe("gateway server chat", () => {
   });
 
   const contextOverflowCopy =
-    "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
+    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
 
   test.each([
     {
@@ -1222,8 +1222,7 @@ describe("gateway server chat", () => {
         errorCode: "rate_limit_exceeded",
         errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
       },
-      expected:
-        "⚠️ LLM request failed (rate limited, HTTP 413). This is usually temporary — try again shortly.",
+      expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
     {
       name: "private upstream failure",
