@@ -54,6 +54,7 @@ import {
   resolveUpdateInstallKind,
   runCommandWithTimeout,
   runExec,
+  runUtf8CommandWithTimeout,
   updateCommand,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
@@ -348,12 +349,13 @@ export function createUpdateCliFixture() {
     workspaceSuggestions?: boolean;
   }) => {
     const calls = vi
-      .mocked(runExec)
+      .mocked(runUtf8CommandWithTimeout)
       .mock.calls.filter(
-        ([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT && args[1] === "doctor",
+        ([argv]) => argv[1] === FRESH_POST_UPDATE_ENTRYPOINT && argv[2] === "doctor",
       );
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[1]).toEqual([
+    expect(calls[0]?.[0]).toEqual([
+      expect.any(String),
       FRESH_POST_UPDATE_ENTRYPOINT,
       "doctor",
       "--repair",

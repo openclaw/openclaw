@@ -59,6 +59,66 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
+  const mockFreshDoctorProcess = (params: { failure?: string; onRepair?: () => void } = {}) => {
+    const runOtherCommand = vi.mocked(runUtf8CommandWithTimeout).getMockImplementation();
+    if (!runOtherCommand) {
+      throw new Error("Missing update command fixture");
+    }
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (argv[2] === "doctor") {
+        if (argv.includes("--lint")) {
+          return {
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            cleanup: "normal",
+            stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
+            stderr: "",
+          };
+        }
+        params.onRepair?.();
+        return {
+          code: params.failure ? 1 : 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          cleanup: "normal",
+          stdout: "",
+          stderr: params.failure ?? "",
+        };
+      }
+      const result = await runOtherCommand(argv, options);
+      if (argv.at(-1) !== "--doctor") {
+        return result;
+      }
+      params.onRepair?.();
+      return params.failure ? { ...result, code: 1, stderr: params.failure } : result;
+    });
+  };
+
+  const finalizationProcessCalls = (entrypoint: string) =>
+    [
+      ...vi
+        .mocked(runUtf8CommandWithTimeout)
+        .map(([argv], index) => ({
+          runner: argv[0],
+          commandArgs: argv.slice(2),
+          order: vi.mocked(runUtf8CommandWithTimeout).mock.invocationCallOrder[index] ?? 0,
+          entrypoint: argv[1],
+        }))
+        .filter((call) => call.entrypoint === entrypoint && call.commandArgs[0] === "doctor"),
+      ...vi
+        .mocked(runExec)
+        .map(([runner, args], index) => ({
+          runner,
+          commandArgs: args.slice(1),
+          order: vi.mocked(runExec).mock.invocationCallOrder[index] ?? 0,
+          entrypoint: args[0],
+        }))
+        .filter((call) => call.entrypoint === entrypoint && call.commandArgs[0] === "config"),
+    ].toSorted((left, right) => left.order - right.order);
+
   it.each([
     { name: "Node", bun: undefined },
     { name: "Bun", bun: "1.4.3" },
@@ -88,30 +148,12 @@ describe("update-cli", () => {
       vi.mocked(readiness.applyPostPluginUpdateReadiness).mockImplementation(
         actualReadiness.applyPostPluginUpdateReadiness,
       );
-      const runOtherCommand = vi.mocked(runUtf8CommandWithTimeout).getMockImplementation();
-      vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
-        if (argv[2] === "doctor" && argv.includes("--lint")) {
-          return {
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit" as const,
-            stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
-            stderr: "",
-          };
-        }
-        if (!runOtherCommand) {
-          throw new Error("Missing update command fixture");
-        }
-        return runOtherCommand(argv, options);
-      });
+      mockFreshDoctorProcess();
 
       await updateFinalizeCommand({ json: true, yes: true, timeout: "9" });
 
-      const maintenance = vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT);
-      expect(maintenance.map(([runner, args]) => [runner].concat(args.slice(1)))).toEqual([
+      const maintenance = finalizationProcessCalls(FRESH_POST_UPDATE_ENTRYPOINT);
+      expect(maintenance.map(({ runner, commandArgs }) => [runner, ...commandArgs])).toEqual([
         [expectedRunner, "doctor", "--repair", "--non-interactive", "--yes"],
         [
           expectedRunner,
@@ -151,7 +193,7 @@ describe("update-cli", () => {
     });
     try {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
-      vi.mocked(runExec).mockRejectedValueOnce(new Error("Doctor could not complete"));
+      mockFreshDoctorProcess({ failure: "Doctor could not complete" });
 
       await expect(updateFinalizeCommand({ json: true, yes: true, timeout: "9" })).rejects.toThrow(
         "Doctor could not complete",
@@ -291,10 +333,7 @@ describe("update-cli", () => {
     } satisfies Record<string, PluginInstallRecord>;
     let currentSnapshot = preDoctorSnapshot;
     vi.mocked(readConfigFileSnapshot).mockImplementation(async () => currentSnapshot);
-    vi.mocked(runExec).mockImplementationOnce(async () => {
-      currentSnapshot = postDoctorSnapshot;
-      return { stdout: "", stderr: "" };
-    });
+    mockFreshDoctorProcess({ onRepair: () => (currentSnapshot = postDoctorSnapshot) });
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
     syncPluginsForUpdateChannel.mockImplementationOnce(
       async (params: { config?: OpenClawConfig }) =>
@@ -308,18 +347,17 @@ describe("update-cli", () => {
 
     expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     const freshDoctorCall = vi
-      .mocked(runExec)
-      .mock.calls.find(
-        ([, args]) => args[0] === "/tmp/openclaw-entry.mjs" && args.includes("doctor"),
-      );
-    expect(freshDoctorCall?.[1]).toEqual([
+      .mocked(runUtf8CommandWithTimeout)
+      .mock.calls.find(([argv]) => argv[1] === "/tmp/openclaw-entry.mjs" && argv[2] === "doctor");
+    expect(freshDoctorCall?.[0]).toEqual([
+      expect.any(String),
       "/tmp/openclaw-entry.mjs",
       "doctor",
       "--repair",
       "--non-interactive",
       "--no-workspace-suggestions",
     ]);
-    expect(freshDoctorCall?.[2]).toMatchObject({
+    expect(freshDoctorCall?.[1]).toMatchObject({
       cwd: process.cwd(),
       env: {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -337,7 +375,7 @@ describe("update-cli", () => {
       },
     });
     expect(lastReplaceConfigCall()?.baseHash).toBe("post-doctor");
-    expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+    expect(vi.mocked(runUtf8CommandWithTimeout).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder[0] ?? 0,
     );
     expect((lastWriteJsonCall() as { channel?: string } | undefined)?.channel).toBe("beta");
@@ -371,6 +409,7 @@ describe("update-cli", () => {
       authoredConfig: preUpdateConfig,
     });
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(postDoctorSnapshot);
+    mockFreshDoctorProcess();
 
     await withEnvAsync(
       {
@@ -387,12 +426,9 @@ describe("update-cli", () => {
     expect(lastReplaceConfigCall()?.nextConfig?.channels?.whatsapp).toEqual(
       preUpdateConfig.channels?.whatsapp,
     );
-    const finalizationCommands = vi
-      .mocked(runExec)
-      .mock.calls.filter(
-        ([, args]) => args[0] === entryPath && ["doctor", "config"].includes(args[1] ?? ""),
-      )
-      .map(([, args]) => args.slice(1));
+    const finalizationCommands = finalizationProcessCalls(entryPath).map(
+      ({ commandArgs }) => commandArgs,
+    );
     expect(finalizationCommands).toEqual([
       ["doctor", "--repair", "--non-interactive"],
       ["doctor", "--repair", "--non-interactive", "--no-workspace-suggestions"],
@@ -416,10 +452,7 @@ describe("update-cli", () => {
     });
     let currentSnapshot = preDoctorSnapshot;
     vi.mocked(readConfigFileSnapshot).mockImplementation(async () => currentSnapshot);
-    vi.mocked(runExec).mockImplementationOnce(async () => {
-      currentSnapshot = postDoctorSnapshot;
-      return { stdout: "", stderr: "" };
-    });
+    mockFreshDoctorProcess({ onRepair: () => (currentSnapshot = postDoctorSnapshot) });
 
     await updateFinalizeCommand({ channel: "dev", json: true });
 
