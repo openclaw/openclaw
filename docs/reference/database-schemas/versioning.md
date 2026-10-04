@@ -20,7 +20,26 @@ When Gateway startup encounters a newer database schema, it exits with status 78
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
+companion table. Its launch-bound `linux-subreaper` certificate records kernel
+descendant extinction independently of `node_worker_launch_cleanup.lineage_settled`.
+The existing cleanup row retains `owned-anchor` with no synthetic lineage
+completion, so older readers retain uncertain custody rather than treating the new
+certificate as an older proof. Existing rows are not backfilled or reinterpreted.
+The companion row is pruned with its launch under the same retention policy; the
+schema version is unchanged.
+
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+
+The per-agent companion table `session_reactions` stores message reaction rows
+at the same schema version. The canonical database-open additive schema installs it on
+existing databases without changing `user_version`; older readers ignore the
+table. Rows bind the session key, transcript session ID, persisted message event
+ID, emoji, and reacting identity without changing transcript bytes. Deleting the
+session node cascades to its reactions. Transcript replacement and suffix removal
+delete reactions for removed message identities in the same transaction, while
+a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
+a supporting build returns. No transcript backfill or rewrite is required.
 
 Admitted agent and cached shared-state handles retain their schema version and
 table facts. The handle owner revokes these facts after local DDL or transaction
@@ -67,6 +86,45 @@ writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
 [accepted index design](https://github.com/openclaw/openclaw/issues/153533).
 
+Failed-delivery health counts use the shared-state delivery queue's existing
+`idx_delivery_queue_failed` index with columns `(status, queue_name, failed_at, id)`.
+This replaces the queue-first definition at the same schema version. Queue rows
+remain canonical; the nonunique index is derived. The canonical writable schema
+owner atomically rebuilds a mismatched definition during admission, including its
+integrity checks. No per-request repair or extra index is added. The rebuild uses
+startup I/O and temporary disk proportional to retained queue history, including
+a probe index and its replacement. Subsequent writes maintain the same index count.
+Older same-version writable owners can rebuild their queue-first definition on
+downgrade or binary rollback without changing rows; strict read-only validation
+may reject the changed index until that writable owner repairs it. Counts, null
+failure timestamps, ordering, retention, permissions, and durability are unchanged;
+no schema-version bump is required.
+
+Meeting caption retry lookups use a nonunique partial index on
+`meeting_transcript_utterances(session_id, session_started_at, utterance_id)`
+where `utterance_id IS NOT NULL`, without a schema-version bump. The transcript
+store owns the canonical caption rows; the index is derived and preserves
+same-ID revisions, exact-content retry matching, and append order. Read-only
+admission accepts a missing index; the shared-state canonical-index owner
+installs or repairs it on writable open, and the feature's first-use schema
+includes it. The schema fast path detects missing or drifted indexes before
+admitting the handle. Construction on existing databases scans the table and
+uses temporary disk for the repair owner's probe and final index. Subsequent
+writes maintain index entries only for non-null IDs. Stored content, retention,
+permissions, and transaction ownership are unchanged. Older same-version
+readers ignore the additional nonunique index, so binary rollback leaves both
+caption rows and the index intact.
+
+Logbook's plugin-local database keeps schema version 1 while replacing the unused
+batch-day index with a nonunique partial index on `batches(start_ms, id)` where
+`status = 'pending'`. The existing worker-owned schema open installs the index on
+populated databases before dropping the retired index. Batch rows remain canonical;
+the index is derived, and retention and recovery are unchanged. Initial construction
+scans batch history once and stores only pending entries. Older same-version builds
+can read and write the database safely, leaving the new index intact and recreating
+their day index; reopening with the current build retires it again. Binary rollback
+requires no row conversion or schema-version change.
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing
@@ -107,6 +165,18 @@ version: `session_watch_cursors.watcher_store_path`,
 Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
+
+Subagent runs record the known owning agent for raw child keys such as `global`
+in the optional `childAgentId` field inside `subagent_runs.payload_json`.
+Agent-qualified child keys do not record this field. This is a payload-only
+addition: no DDL, new column, or schema-version bump is required. The session
+store is derived from the agent and current configuration, just as it is for
+agent-qualified keys. Legacy rows without that binding continue to resolve their
+agent through the current configuration, without migration or backfill.
+Cancellation clears queues only for the resolved agent. Downgraded writers retain
+the field in `payload_json` because
+`normalizeSubagentRunState` mutates the parsed record in place rather than
+rebuilding it from known fields.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and

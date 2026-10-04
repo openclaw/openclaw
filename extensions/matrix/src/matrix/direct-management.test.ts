@@ -311,6 +311,29 @@ describe("promoteMatrixDirectRoomCandidate", () => {
     });
   });
 
+  it("preserves direct mappings when the account-data read fails", async () => {
+    const existing = { "@bob:example.org": ["!bob:example.org"] };
+    let directContent: Record<string, unknown> = existing;
+    const readError = new Error("account data unavailable");
+    const client = createClient({
+      getAccountData: vi.fn(async () => {
+        throw readError;
+      }),
+      setAccountData: vi.fn(async (_eventType: string, content: Record<string, unknown>) => {
+        directContent = { ...content };
+      }),
+    });
+
+    await expect(
+      persistMatrixDirectRoomMapping({
+        client,
+        remoteUserId: "@alice:example.org",
+        roomId: "!alice:example.org",
+      }),
+    ).rejects.toBe(readError);
+    expect(directContent).toEqual({ "@bob:example.org": ["!bob:example.org"] });
+  });
+
   it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
     let directContent: Record<string, string[]> = {};
     let releaseFirstWrite: (() => void) | undefined;

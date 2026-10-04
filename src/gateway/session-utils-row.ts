@@ -35,10 +35,10 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -65,7 +65,7 @@ import {
   deriveSessionTitle,
   prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  buildStoreChildSessionLinksWork,
+  readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildOwners,
 } from "./session-utils-core.js";
@@ -95,12 +95,13 @@ export function readSessionRowInputs(params: {
   key: string;
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedModelMetadata?: PluginMetadataSnapshot | null;
+  preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
-  transcriptUsageMaxBytes?: number;
-  storeChildSessionLinksByKey?: Map<string, SessionChildLink[]>;
+  childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
@@ -122,6 +123,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
+      preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
       rowContext,
@@ -142,7 +144,6 @@ export function readSessionRowInputs(params: {
             ...(rowContext.subagentRunsByChildSessionKey.get(key) ?? []).map((run) => run.model),
           ],
           allowPluginNormalization: !lightweight,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
           rowContext,
           agentId,
           storeAgentId: params.storeAgentId,
@@ -197,9 +198,10 @@ export function readSessionRowInputs(params: {
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
-  const repositoryWorkspace = entry?.repositoryWorkspaceId
-    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
-    : undefined;
+  if (entry?.repositoryWorkspaceId && params.preparedRepositoryWorkspace === undefined) {
+    throw new Error("Repository workspace facts must be prepared before presenting the session");
+  }
+  const repositoryWorkspace = params.preparedRepositoryWorkspace;
 
   return {
     inputs: {
@@ -215,7 +217,9 @@ export function readSessionRowInputs(params: {
       ),
       permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
       repository:
-        repositoryWorkspace?.agentId === agentId && repositoryWorkspace.sessionKey === key
+        repositoryWorkspace?.workspaceId === entry?.repositoryWorkspaceId &&
+        repositoryWorkspace?.agentId === agentId &&
+        repositoryWorkspace.sessionKey === key
           ? {
               url: repositoryWorkspace.url,
               ...(repositoryWorkspace.requestedRef
@@ -259,16 +263,13 @@ export function readSessionRowInputs(params: {
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
-      childLinks: (
-        params.storeChildSessionLinksByKey ??
-        runSynchronousWork(
-          buildStoreChildSessionLinksWork({
-            store,
-            keys: [key],
-            subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
-          }),
-        )
-      ).get(key),
+      childLinks:
+        params.childLinks ??
+        readStoreChildSessionLinks({
+          store,
+          key,
+          subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
+        }),
       usageByFallbackModel,
       freshSessionTotalTokens,
       estimatedCostUsd: lightweight
@@ -363,7 +364,12 @@ function channelAvatarRevision(reference: string): string {
 }
 
 /** Profile publications invalidate display facts independently of stored session metadata. */
-function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+function projectSessionRowProfiles(
+  input: Pick<
+    ReturnType<typeof readSessionRowInputs>["inputs"],
+    "entry" | "cfg" | "userProfileIdentityById" | "configuredAgentIds" | "identityProjection"
+  >,
+) {
   const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
   const owner = (identityProjection?.owner ?? projectSessionOwner)(
     entry,
@@ -404,6 +410,25 @@ export function refreshSessionRowProfiles(materialized: ReturnType<typeof materi
   Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
 }
 
+/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
+export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
+  return links?.map(({ key, entry }) => ({
+    key,
+    entry: {
+      sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      spawnedBy: entry.spawnedBy,
+      parentSessionKey: entry.parentSessionKey,
+      createdActor: entry.createdActor,
+      visibility: entry.visibility,
+      incognito: entry.incognito,
+    },
+  }));
+}
+
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -418,10 +443,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-      ? entry.pinnedAt
-      : undefined;
+  // Snooze shares the pin root-session rule.
+  const pinnable = isPinnableSessionEntry(key, entry);
+  const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
@@ -477,6 +501,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
+    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
@@ -487,6 +512,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,
+    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
+    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
@@ -504,6 +531,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
+    lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
@@ -581,7 +609,29 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
-  return { row, source: input };
+  return {
+    row,
+    source: {
+      cfg,
+      entry,
+      selectedModel: input.selectedModel,
+      rowModelIdentity: input.rowModelIdentity,
+      thinkingProjection: {
+        acpMeta: input.thinkingProjection.acpMeta,
+        agentRuntime: input.thinkingProjection.agentRuntime,
+      },
+      userProfileIdentityById: input.userProfileIdentityById,
+      identityProjection: input.identityProjection,
+      configuredAgentIds: input.configuredAgentIds,
+      lightweight: input.lightweight,
+      freshSessionTotalTokens: input.freshSessionTotalTokens,
+      usageByFallbackModel: input.usageByFallbackModel,
+      estimatedCostUsd: input.estimatedCostUsd,
+      subagentRunInputs: input.subagentRunInputs,
+      lastMessagePreview: input.lastMessagePreview,
+      childLinks: projectSessionRowChildLinks(input.childLinks),
+    },
+  };
 }
 
 export function presentSessionRow(

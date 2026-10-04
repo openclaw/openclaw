@@ -94,15 +94,7 @@ export async function sendReactionZalouser(params: {
   profile?: string;
   isGroup?: boolean;
 }): Promise<ZaloSendResult> {
-  const result = await sendZaloReaction({
-    profile: params.profile,
-    threadId: params.threadId,
-    isGroup: params.isGroup,
-    msgId: params.msgId,
-    cliMsgId: params.cliMsgId,
-    emoji: params.emoji,
-    remove: params.remove,
-  });
+  const result = await sendZaloReaction(params);
   return {
     ok: result.ok,
     error: result.error,
@@ -120,16 +112,11 @@ function splitStyledText(
     return [{ text, styles: undefined }];
   }
 
-  const chunks: StyledTextChunk[] = [];
-  for (const range of chunkTextRanges(text, {
+  return chunkTextRanges(text, {
     limit,
     mode: mode === "newline" ? "preferred" : "hard",
-  })) {
-    const { start, end } = range;
-    chunks.push({
-      text: text.slice(start, end),
-      styles: sliceTextStyles(styles, start, end),
-    });
-  }
-  return chunks;
+  }).map(({ start, end }) => ({
+    text: text.slice(start, end),
+    styles: sliceTextStyles(styles, start, end),
+  }));
 }

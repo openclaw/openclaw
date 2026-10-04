@@ -35,41 +35,17 @@ const GATEWAY_PROMPT_MODE = "extra";
 const PROMPT_TEXT = process.env.OPENCLAW_PROMPT_TEXT?.trim() ?? "";
 const PROMPT_LIST_JSON = process.env.OPENCLAW_PROMPT_LIST_JSON?.trim() ?? "";
 const USER_PROMPT = process.env.OPENCLAW_USER_PROMPT?.trim() || "is clawd here?";
-const ENABLE_CAPTURE = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_CAPTURE",
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE,
-});
-const INCLUDE_RAW = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_INCLUDE_RAW",
-  raw: process.env.OPENCLAW_PROMPT_INCLUDE_RAW,
-});
-const KEEP_TMP = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_KEEP_TMP",
-  raw: process.env.OPENCLAW_PROMPT_KEEP_TMP,
-});
+const ENABLE_CAPTURE = readBooleanEnv("OPENCLAW_PROMPT_CAPTURE");
+const INCLUDE_RAW = readBooleanEnv("OPENCLAW_PROMPT_INCLUDE_RAW");
+const KEEP_TMP = readBooleanEnv("OPENCLAW_PROMPT_KEEP_TMP");
 const CLAUDE_BIN = process.env.CLAUDE_BIN?.trim() || "claude";
 const NODE_BIN = process.env.OPENCLAW_NODE_BIN?.trim() || process.execPath;
-const TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 45_000,
-  label: "OPENCLAW_PROMPT_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_TIMEOUT_MS,
-});
-const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 120_000,
-  label: "OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
-});
-const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
-  fallback: 2 * 1024 * 1024,
-  label: "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
-});
+const TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_TIMEOUT_MS", 45_000);
+const GATEWAY_TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS", 120_000);
+const CAPTURE_PROXY_MAX_BODY_BYTES = readPositiveIntegerEnv(
+  "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
+  2 * 1024 * 1024,
+);
 const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
@@ -134,6 +110,14 @@ type ClosableLogFile = {
   appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
+
+function readBooleanEnv(name: string): boolean {
+  return parseBooleanEnv({ fallback: false, name, raw: process.env[name] });
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  return parseStrictIntegerOption({ fallback, label: name, min: 1, raw: process.env[name] });
+}
 
 function toHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join(", ") : value;
@@ -275,17 +259,14 @@ async function resolveSetupTokenSource(): Promise<TokenSource> {
     allowKeychainPrompt: false,
   });
   const candidates = listSetupTokenProfiles(store, normalizeProviderId);
-  if (SETUP_TOKEN_PROFILE) {
-    const match = candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE);
-    if (!match) {
-      throw new Error(`setup-token profile not found: ${SETUP_TOKEN_PROFILE}`);
-    }
-    return { profileId: match.id, token: validateSetupToken(match.token) };
-  }
-  const match = pickSetupTokenProfile(candidates);
+  const match = SETUP_TOKEN_PROFILE
+    ? candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE)
+    : pickSetupTokenProfile(candidates);
   if (!match) {
     throw new Error(
-      "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
+      SETUP_TOKEN_PROFILE
+        ? `setup-token profile not found: ${SETUP_TOKEN_PROFILE}`
+        : "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
     );
   }
   return { profileId: match.id, token: validateSetupToken(match.token) };

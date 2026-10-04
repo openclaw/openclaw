@@ -15,6 +15,7 @@ import {
   resolvePackageActivationJournalPath,
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
+  packageActivationIdentity,
 } from "./package-update-activation-journal.js";
 import {
   preparePackageActivationJournal,
@@ -40,7 +41,7 @@ function readPackageActivationContinuation(installKey: string) {
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
     throw new Error(
-      `Package publication recovery is pending. With an external Node, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
     );
   }
   assertPackageActivationLayout(anchor);
@@ -64,9 +65,12 @@ function readPackageActivationContinuation(installKey: string) {
     throw new Error("Package publication is incomplete; its original continuation cannot run.");
   }
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  if (record.phase === "superseded") {
+    throw new Error("Package recovery settlement is incomplete; run openclaw update repair.");
+  }
   if (record.phase !== "publication-complete") {
     throw new Error(
-      `Package publication is incomplete; its original continuation cannot run. With an external Node, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
   return record.descriptor.authority;
@@ -89,7 +93,7 @@ export function assertNoPendingPackageActivation(
   const anchor = resolvePackageActivationAnchor(installKey);
   const record = openPackageActivationJournal(anchor).read();
   throw new Error(
-    `Package publication recovery is pending. With an external Node, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -101,24 +105,21 @@ export async function preparePackageActivation(
   const options = { ...params.options, fence };
   if (
     process.platform === "win32" ||
-    process.versions.bun ||
     params.installTarget.manager !== "npm" ||
     params.installTarget.directNodeModulesRoot ||
     !(await fsp.lstat(params.stageRoot)).isDirectory()
   ) {
     return undefined;
   }
-  const nodeRunner = resolveExecutablePath(options.nodeRunner, { useCache: false });
+  const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });
   assertOriginal();
   if (!nodeRunner) {
     options.onUnavailable?.(
-      "Standalone package publication repair is unavailable: the selected Node executable could not be resolved.",
+      "Standalone package publication repair is unavailable: the selected runtime executable could not be resolved.",
     );
     return undefined;
   }
-  // Probe and seal the same selected runtime before the probe clears its environment.
-  options.nodeRunner = fs.realpathSync(nodeRunner);
-  const capable = await supportsPostCoreExecutor(params.stageRoot, options.nodeRunner);
+  const capable = await supportsPostCoreExecutor(params.stageRoot, nodeRunner);
   assertOriginal();
   if (!capable) {
     // Older targets keep their shipped update path, without a
@@ -129,7 +130,14 @@ export async function preparePackageActivation(
     return undefined;
   }
   const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
-  const owner = createPublicationOwner(prepared.anchor, prepared.journal, assertOriginal);
+  const owner = createPublicationOwner(
+    prepared.anchor,
+    prepared.journal,
+    assertOriginal,
+    prepared.initial,
+    undefined,
+    options.onWarning,
+  );
   return { ...prepared, ...owner };
 }
 
@@ -151,9 +159,52 @@ export function readPackageActivationReceipt(installKey: string):
   const record = openPackageActivationJournal(anchor).read();
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   const receipt = status(record);
-  return receipt.phase === "complete"
+  return receipt.phase === "complete" || record.phase === "superseded"
     ? receipt
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
+}
+
+/** A manual install supersedes old package custody, never pending database restoration. */
+export async function supersedePackageActivationAfterManualInstall(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    return undefined;
+  }
+  const journal = openPackageActivationJournal(anchor);
+  const admission = await journal.readForRecovery();
+  const initial = admission.record;
+  if (isPackageActivationComplete(anchor, initial)) {
+    return undefined;
+  }
+  const replacementIdentity = packageActivationIdentity(installKey, true);
+  if (
+    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
+      replacementIdentity,
+    )
+  ) {
+    assertNoPendingPackageActivation(installKey);
+    return undefined;
+  }
+  return withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(installKey);
+      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      admission.admit(fence.assertCurrent);
+      journal.assertCurrent(initial);
+      if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
+        throw new Error("The manually installed package changed before recovery settlement.");
+      }
+      const retained = await createPublicationOwner(
+        anchor,
+        journal,
+        fence.assertCurrent,
+        initial,
+      ).supersede();
+      return { operationId: initial.descriptor.operationId, retained };
+    },
+    { existingAuthority: initial.descriptor.authority },
+  );
 }
 export async function readPackageActivationStatus(
   anchor: string,

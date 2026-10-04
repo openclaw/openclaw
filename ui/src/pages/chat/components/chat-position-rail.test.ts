@@ -57,6 +57,9 @@ describe("conversation position rail", () => {
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 240);
+      }
       const marker = (id: string) =>
         marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
       const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
@@ -124,6 +127,7 @@ describe("conversation position rail", () => {
     "pointer",
     "reader",
     "reader-offset",
+    "hidden",
     "composer-resize-reversal-navigation",
   ] as const;
 
@@ -152,16 +156,18 @@ describe("conversation position rail", () => {
           Array.from({ length: count }, (_, index) => [`message-${index}`, `message-${index}`]),
         ),
       };
-      render(
-        transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
-          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-          return html`<div class="chat-thread" tabindex="0">
-            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-            ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
-          </div>`;
-        }),
-        container,
-      );
+      const renderRail = () =>
+        render(
+          transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
+            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+            return html`<div class="chat-thread" tabindex="0">
+              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
+            </div>`;
+          }),
+          container,
+        );
+      renderRail();
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       const marker = (index: number) =>
@@ -194,7 +200,30 @@ describe("conversation position rail", () => {
         flush();
         expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
         expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
-        if (scenario === "boot" || scenario === "boot-resize") {
+        if (scenario === "hidden") {
+          const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
+          marksHeight = 0;
+          railOffset = 0;
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, 0);
+          }
+          flushFrame();
+          renderRail();
+          flushFrame();
+          expect([...marks.querySelectorAll(".chat-position-rail__marker")]).toEqual(mounted);
+          expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("677px");
+
+          // Reader navigation while hidden must be reflected once the rail returns.
+          root.scrollTop = 0;
+          activeMessage.mockReturnValue("message-0");
+          marksHeight = 283;
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, 283);
+          }
+          flushFrame();
+          expect(marker(0).getAttribute("aria-current")).toBe("true");
+          expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("0px");
+        } else if (scenario === "boot" || scenario === "boot-resize") {
           height = 554;
           marksHeight = 240;
           flush();
@@ -368,6 +397,9 @@ describe("conversation position rail", () => {
             touching: false,
             programmatic: false,
           });
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, marksHeight);
+          }
           flushFrame();
           expect(marker(78).getAttribute("aria-current")).toBe("true");
         } else if (scenario === "pointer") {
@@ -441,6 +473,9 @@ describe("conversation position rail", () => {
       );
       assert(root && marks && original);
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 600);
+      }
       await settleFrames();
       expect(observed.has(original)).toBe(true);
       const query = vi.spyOn(root, "querySelectorAll");
@@ -653,7 +688,7 @@ describe("conversation position rail", () => {
   it.each([
     { role: "user", senderName: undefined, label: "User message" },
     { role: "user", senderName: "Alice Example", label: "Alice Example" },
-    { role: "assistant", senderName: "Alice Example", label: "Assistant message" },
+    { role: "assistant", senderName: "Alice Example", label: "Molty" },
   ])(
     "renders safe Markdown and attribution in $role previews ($label)",
     ({ role, senderName, label }) => {
@@ -669,6 +704,9 @@ describe("conversation position rail", () => {
       Object.assign(messages[0]!["__openclaw"], { senderName });
       const props = threadProps("rail-markdown", "agent:main:markdown", messages);
       props.userName = "Local Viewer";
+      if (role === "assistant") {
+        props.assistantAvatar = "🦞";
+      }
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
@@ -686,8 +724,26 @@ describe("conversation position rail", () => {
         );
         const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
         expect(avatar?.getAttribute("aria-label") ?? null).toBe(
-          role === "user" ? (senderName ?? null) : null,
+          role === "user" ? (senderName ?? null) : "Molty",
         );
+        if (role === "assistant") {
+          expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+            "🦞",
+          );
+          expect(
+            container.querySelector(".chat-position-rail__marker")?.getAttribute("aria-label"),
+          ).toContain("Molty");
+          props.assistantName = "Roboclaw";
+          rerender();
+          expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
+            "Roboclaw",
+          );
+          expect(
+            container
+              .querySelector(".chat-position-rail__preview .chat-author-avatar")
+              ?.getAttribute("aria-label"),
+          ).toBe("Roboclaw");
+        }
         expect(preview.querySelector("strong")?.textContent).toBe("Important");
         expect(preview.querySelector("em")?.textContent).toBe("detail");
         expect(preview.querySelector("code")?.textContent).toBe("code");
@@ -810,6 +866,9 @@ describe("conversation position rail", () => {
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 600);
+      }
       await settleFrames();
       expect(observed.has(streamBubble)).toBe(true);
       const query = vi.spyOn(root, "querySelectorAll");

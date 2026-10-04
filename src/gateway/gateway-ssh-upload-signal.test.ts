@@ -173,7 +173,7 @@ describe.runIf(process.platform !== "win32")("Gateway SSH workspace seeding", ()
                     ssh: { target: "fixture", command: transport, workspaceRoot: endpoint },
                   },
                 },
-                entries: { main: { default: true, skills: [] } },
+                entries: { main: { skills: [] } },
               },
               tools: { profile: "minimal", alsoAllow: ["read"] },
               models: {

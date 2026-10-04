@@ -1,6 +1,4 @@
 /**
- * Browser agent tool snapshot execution and inline page-state feedback.
- *
  * Owns the model-facing snapshot result shape (untrusted-content wrapping,
  * caps, dialog states) and attaches fresh page state to actions that changed
  * the page document so the model does not need a follow-up snapshot call.
@@ -15,6 +13,7 @@ import {
   truncateSanitizedExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -170,14 +169,11 @@ export function formatBrowserDebugLogResult(
       wrapped = wrap();
     }
   }
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      ...details(),
-      truncated: records.length < total || wrapped.truncated,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    ...details(),
+    truncated: records.length < total || wrapped.truncated,
+  });
 }
 
 function isAriaRefsUnsupportedError(err: unknown): boolean {
@@ -185,7 +181,6 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
   return msg.includes("refs=aria") && msg.includes("not support");
 }
 
-/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -306,7 +301,7 @@ export async function executeSnapshotAction(params: {
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
-    return { content: [{ type: "text", text }], details };
+    return textResult(text, details);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
@@ -368,14 +363,11 @@ export async function executeSnapshotAction(params: {
           ...dialogState,
         },
       });
-      return {
-        content: [{ type: "text" as const, text: wrapped.wrappedText }],
-        details: {
-          ...wrapped.safeDetails,
-          ...identity,
-          ...dialogState,
-        },
-      };
+      return textResult(wrapped.wrappedText, {
+        ...wrapped.safeDetails,
+        ...identity,
+        ...dialogState,
+      });
     }
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
@@ -399,33 +391,14 @@ export async function executeSnapshotAction(params: {
       kind: "snapshot",
       payload: snapshot,
     });
-    return {
-      content: [{ type: "text" as const, text: wrapped.wrappedText }],
-      details: {
-        ...wrapped.safeDetails,
-        ...identity,
-        nodeCount: snapshot.nodes.length,
-        ...dialogState,
-        externalContent,
-      },
-    };
+    return textResult(wrapped.wrappedText, {
+      ...wrapped.safeDetails,
+      ...identity,
+      nodeCount: snapshot.nodes.length,
+      ...dialogState,
+      externalContent,
+    });
   }
-}
-
-function withPageStateUnavailableHint(
-  result: AgentToolResult<unknown>,
-  reason: string,
-): AgentToolResult<unknown> {
-  return {
-    ...result,
-    content: [
-      ...result.content,
-      {
-        type: "text",
-        text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
-      },
-    ],
-  };
 }
 
 /**
@@ -461,13 +434,20 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    return withPageStateUnavailableHint(
-      params.result,
-      wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-        source: "browser",
-        includeWarning: false,
-      }),
-    );
+    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
+      source: "browser",
+      includeWarning: false,
+    });
+    return {
+      ...params.result,
+      content: [
+        ...params.result.content,
+        {
+          type: "text",
+          text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
+        },
+      ],
+    };
   }
   const baseDetails =
     params.result.details && typeof params.result.details === "object"

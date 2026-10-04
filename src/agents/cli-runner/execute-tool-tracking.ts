@@ -552,9 +552,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     if (pending) {
       pendingMessagingCalls.delete(event.toolCallId);
       commitMessagingToolResult({
-        toolName: pending.toolName,
-        target: pending.target,
-        args: pending.args,
+        ...pending,
         result: event.result,
         isError: event.isError,
       });

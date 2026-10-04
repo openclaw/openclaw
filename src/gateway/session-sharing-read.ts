@@ -189,19 +189,23 @@ export function prepareProjectedSessionSharing(params: {
   const profile = identity && retained?.aliases.has(identity.id) ? retained : undefined;
   const roleProfile =
     actor?.kind === "operator" && retained?.aliases.has(actor.profileId) ? retained : undefined;
-  const sessionCap =
+  const policy =
     actor?.kind === "system"
       ? undefined
       : resolveOperatorRolePolicyForAssignment(
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
-        )?.sessions.others;
-  return prepareSessionSharing(params, {
-    aliases: profile?.aliases ?? new Set(),
-    sessionCap,
-    isMember,
-  });
+          roleProfile?.githubLogin ?? null,
+        );
+  return {
+    ...prepareSessionSharing(params, {
+      aliases: profile?.aliases ?? new Set(),
+      sessionCap: policy?.sessions.others,
+      isMember,
+    }),
+    policy,
+  };
 }
 
 export function createSessionListEntryFilter(

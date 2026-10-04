@@ -1,11 +1,43 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveExecutablePath } from "./executable-path.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+
+const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+
+export function packageActivationRuntimeIdentity(file: string): string {
+  const stat = fs.lstatSync(file, { bigint: true });
+  // System runtimes may be root-owned even when the installation is user-owned.
+  if (!stat.isFile() || stat.ino === 0n) {
+    throw new Error("Package recovery requires a regular external runtime executable.");
+  }
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+export function capturePackageActivationRuntime(
+  kind: PackageActivationRuntime["kind"],
+  executable: string,
+): PackageActivationRuntime {
+  const resolved = resolveExecutablePath(executable, { useCache: false });
+  if (!resolved) {
+    throw new Error("The selected package recovery executable could not be resolved.");
+  }
+  const runtimePath = fs.realpathSync(resolved);
+  return { kind, path: runtimePath, identity: packageActivationRuntimeIdentity(runtimePath) };
+}
 
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);
-  return path.join(path.dirname(installKey), `.openclaw.package-activation-${key}`);
+  return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
+}
+
+export function isPackageActivationControlName(name: string): boolean {
+  return (
+    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
+    /^[a-f0-9]{24}\.control$/u.test(name.slice(PACKAGE_ACTIVATION_PREFIX.length))
+  );
 }
 
 export function resolvePackageActivationControl(anchor: string): string {
@@ -62,6 +94,24 @@ export function isPackageActivationComplete(
   anchor: string,
   record: PackageActivationRecord,
 ): boolean {
+  if (record.phase === "superseded") {
+    if (record.intent?.kind !== "superseded-by-manual-install") {
+      throw new Error("Package supersession fact is missing.");
+    }
+    if (
+      !record.intent.settled ||
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
+    ) {
+      return false;
+    }
+    const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+    return (
+      packageActivationIdentity(retained, true) === record.descriptor.anchorIdentity &&
+      packageActivationIdentity(path.join(retained, "recovery.mjs"), false) ===
+        record.descriptor.helperIdentity
+    );
+  }
   if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
     return false;
   }

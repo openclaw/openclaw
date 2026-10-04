@@ -4,7 +4,6 @@ import type {
   DmPolicy,
   OpenClawConfig,
   TelegramAccountConfig,
-  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -57,7 +56,6 @@ export interface TelegramHandlerAuthorization {
     chatTitle?: string;
     isGroup: boolean;
     senderId: string;
-    senderUsername: string;
     mode: TelegramEventAuthorizationMode;
     context: TelegramEventAuthorizationContext;
   }) => Promise<boolean>;
@@ -73,7 +71,6 @@ export interface TelegramHandlerAuthorization {
     isGroup: boolean;
     isForum: boolean;
     senderId: string;
-    senderUsername: string;
     requireConfiguredGroup: boolean;
     dmAccess: "challenge" | "silent";
   }) => Promise<TelegramInboundGate>;
@@ -190,7 +187,7 @@ export function createTelegramHandlerAuthorization({
   const authorizeTelegramEventSender = async (
     params: Parameters<TelegramHandlerAuthorization["authorizeTelegramEventSender"]>[0],
   ): Promise<boolean> => {
-    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context } = params;
+    const { chatId, chatTitle, isGroup, senderId, mode, context } = params;
     const {
       dmPolicy,
       resolvedThreadId,
@@ -218,7 +215,6 @@ export function createTelegramHandlerAuthorization({
         chatTitle,
         resolvedThreadId,
         senderId,
-        senderUsername,
         effectiveGroupAllow,
         hasGroupAllowOverride,
         groupConfig,
@@ -364,7 +360,6 @@ export function createTelegramHandlerAuthorization({
         chatTitle: params.msg.chat.title,
         resolvedThreadId,
         senderId: params.senderId,
-        senderUsername: params.senderUsername,
         effectiveGroupAllow,
         hasGroupAllowOverride,
         commandAuthorized: context.commandAuthorizedByConfig,
@@ -457,21 +452,14 @@ export function createTelegramHandlerAuthorization({
   };
 }
 
-type TelegramEventAuthorizationContext = {
+type TelegramEventAuthorizationContext = Awaited<
+  ReturnType<typeof resolveTelegramGroupAllowFromContext>
+> & {
   commandAuthorizedByConfig: boolean;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   dmPolicy: DmPolicy;
-  threadSpec: TelegramThreadSpec;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
-  storeAllowFrom: string[];
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-  groupAllowOverride?: Array<string | number>;
-  effectiveGroupAllow: NormalizedAllowFrom;
-  hasGroupAllowOverride: boolean;
 };
 
 type TelegramInboundGate =
@@ -492,7 +480,6 @@ function shouldSkipTelegramGroupMessage(
     chatTitle?: string;
     resolvedThreadId?: number;
     senderId: string;
-    senderUsername: string;
     effectiveGroupAllow: NormalizedAllowFrom;
     hasGroupAllowOverride: boolean;
     commandAuthorized?: boolean;
@@ -509,7 +496,6 @@ function shouldSkipTelegramGroupMessage(
     chatTitle,
     resolvedThreadId,
     senderId,
-    senderUsername,
     effectiveGroupAllow,
     hasGroupAllowOverride,
     groupConfig,
@@ -518,13 +504,11 @@ function shouldSkipTelegramGroupMessage(
     telegramCfg,
   } = params;
   const baseAccess = evaluateTelegramGroupBaseAccess({
-    isGroup,
     groupConfig,
     topicConfig,
     hasGroupAllowOverride,
     effectiveGroupAllow,
     senderId,
-    senderUsername,
     enforceAllowOverride: true,
     requireSenderForAllowOverride: true,
   });
@@ -554,13 +538,9 @@ function shouldSkipTelegramGroupMessage(
     groupConfig,
     effectiveGroupAllow,
     senderId,
-    senderUsername,
     resolveGroupPolicy: runtime.resolveGroupPolicy,
-    enforcePolicy: true,
     enforceAllowlistAuthorization: !params.commandAuthorized,
     allowEmptyAllowlistEntries: false,
-    requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: true,
   });
   if (policyAccess.allowed) {
     return false;

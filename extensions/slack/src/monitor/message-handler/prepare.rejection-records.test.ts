@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -8,14 +8,13 @@ import {
 } from "./prepare.test-helpers.js";
 
 const store = createSlackSessionStoreFixture("slack-rejection-record-");
-beforeAll(() => store.setup());
-afterAll(() => store.cleanup());
 afterEach(() => vi.restoreAllMocks());
-
 function fixture() {
-  const { storePath } = store.makeTmpStorePath();
   const ctx = createInboundSlackTestContext({
-    cfg: { session: { store: storePath }, channels: { slack: { enabled: true } } },
+    cfg: {
+      session: { store: store.makeTmpStorePath().storePath },
+      channels: { slack: { enabled: true } },
+    },
   });
   ctx.resolveUserName = async () => ({ name: "Synthetic sender" });
   ctx.resolveChannelName = async () => ({ name: "synthetic-room", type: "channel" });
@@ -30,66 +29,51 @@ function fixture() {
   };
   const prepare = (source: "message" | "app_mention" = "message") =>
     prepareSlackMessage({ ctx, account: createSlackTestAccount(), message, opts: { source } });
-  return { ctx, info, message, prepare };
-}
-
-describe("Slack preparation rejection records", () => {
-  it.each([
-    {
-      reason: "empty-content",
-      change: ({ message }: ReturnType<typeof fixture>) => {
-        message.text = "";
-      },
-    },
-    {
-      reason: "missing-user",
-      change: ({ message }: ReturnType<typeof fixture>) => {
-        message.user = undefined;
-      },
-    },
-    {
-      reason: "dm-disabled",
-      change: ({ ctx }: ReturnType<typeof fixture>) => {
-        ctx.dmPolicy = "disabled";
-      },
-    },
-    {
-      reason: "channel-not-allowed",
-      change: ({ ctx }: ReturnType<typeof fixture>) => {
-        ctx.dmEnabled = false;
-      },
-    },
-    {
-      reason: "dm-unauthorized",
-      change: ({ ctx }: ReturnType<typeof fixture>) => {
-        ctx.dmPolicy = "allowlist";
-        ctx.allowFrom = ["U_ALLOWED"];
-      },
-    },
-    {
-      reason: "bot-disabled",
-      change: ({ ctx, message }: ReturnType<typeof fixture>) => {
-        ctx.cfg.channels!.slack!.allowBots = false;
-        message.bot_id = "B_OTHER";
-        message.subtype = "bot_message";
-      },
-    },
-  ])("records only routing facts for $reason", async ({ reason, change }) => {
-    const test = fixture();
-    change(test);
-    expect(await test.prepare()).toBeNull();
-    expect(test.info).toHaveBeenCalledExactlyOnceWith(
+  const expectRejection = (reason: string, channelId = "D123") =>
+    expect(info).toHaveBeenCalledExactlyOnceWith(
       {
         provider: "slack",
         accountId: "default",
         teamId: "T1",
-        channelId: "D123",
+        channelId,
         messageTs: "1.000",
         source: "message",
         reason,
       },
       "Slack inbound event rejected during preparation",
     );
+  return { ctx, info, message, prepare, expectRejection };
+}
+
+describe("Slack preparation rejection records", () => {
+  it.each([
+    "missing-user",
+    "dm-disabled",
+    "dm-unauthorized",
+    "bot-disabled",
+    "channel-not-allowed",
+  ] as const)("records only routing facts for %s", async (reason) => {
+    const test = fixture();
+    if (reason === "missing-user") {
+      test.message.user = undefined;
+    }
+    if (reason === "dm-disabled") {
+      test.ctx.dmPolicy = "disabled";
+    }
+    if (reason === "channel-not-allowed") {
+      test.ctx.dmEnabled = false;
+    }
+    if (reason === "dm-unauthorized") {
+      test.ctx.dmPolicy = "allowlist";
+      test.ctx.allowFrom = ["U_ALLOWED"];
+    }
+    if (reason === "bot-disabled") {
+      test.ctx.cfg.channels!.slack!.allowBots = false;
+      test.message.bot_id = "B_OTHER";
+      test.message.subtype = "bot_message";
+    }
+    expect(await test.prepare()).toBeNull();
+    test.expectRejection(reason);
   });
 
   it("does not report self-message loop prevention as a rejected user attempt", async () => {
@@ -101,26 +85,14 @@ describe("Slack preparation rejection records", () => {
     expect(info).not.toHaveBeenCalled();
   });
 
-  it("records the unmentioned attempt while its app_mention twin still prepares", async () => {
-    const { ctx, message, info, prepare } = fixture();
-    message.channel = "C123";
-    message.channel_type = "channel";
-    ctx.historyLimit = 5;
-    expect(await prepare()).toBeNull();
-    expect(info).toHaveBeenCalledExactlyOnceWith(
-      {
-        provider: "slack",
-        accountId: "default",
-        teamId: "T1",
-        channelId: "C123",
-        messageTs: "1.000",
-        source: "message",
-        reason: "missing-mention",
-      },
-      "Slack inbound event rejected during preparation",
-    );
-    const prepared = await prepare("app_mention");
-    expect(prepared?.ctxPayload.MentionSource).toBe("explicit_bot");
-    expect(info).toHaveBeenCalledTimes(1);
+  it("records an unmentioned attempt while its app_mention twin still prepares", async () => {
+    const test = fixture();
+    test.message.channel = "C123";
+    test.message.channel_type = "channel";
+    test.ctx.historyLimit = 5;
+    expect(await test.prepare()).toBeNull();
+    test.expectRejection("missing-mention", "C123");
+    expect((await test.prepare("app_mention"))?.ctxPayload.MentionSource).toBe("explicit_bot");
+    expect(test.info).toHaveBeenCalledTimes(1);
   });
 });

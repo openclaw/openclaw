@@ -130,7 +130,12 @@ describe("automations output contract", () => {
         expect(cron.getJob(activeJob.id)).toBeUndefined();
         expect(result, JSON.stringify(result)).toMatchObject({
           status: "completed",
-          value: { ok: true, removed: true, sessionCleanup: "pending" },
+          value: {
+            ok: true,
+            removed: true,
+            activeRunCancellationRequested: true,
+            sessionCleanup: "pending",
+          },
         });
       } finally {
         clearCronJobActive(activeJob.id, marker);
@@ -159,6 +164,32 @@ describe("automations output contract", () => {
     const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
     const result = await tool.execute("call-full", { action: "list" });
     expect(gatewayCall).toHaveBeenCalledTimes(2);
+    expect(
+      Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+    ).toEqual([]);
+  });
+
+  it("still runs on a shipped Gateway that rejects the run wait", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid cron.run params: unexpected property 'waitTimeoutMs'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
+    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const result = await tool.execute("call-run", {
+      action: "run",
+      jobId: "job",
+      runMode: "force",
+    });
+    expect(gatewayCall.mock.calls.map((call) => call[2])).toEqual([
+      { id: "job", mode: "force", waitTimeoutMs: 60_000 },
+      { id: "job", mode: "force" },
+    ]);
+    expect(result.details).toMatchObject({ runId: "manual:job:1", note: expect.any(String) });
     expect(
       Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
     ).toEqual([]);
@@ -214,6 +245,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   listed.jobs[0].invoiceTotal;
   const removed = await automations({ action: "remove", jobId: "invoice-check" });
   if (removed.ok) {
+    const cancellation: true | undefined = removed.activeRunCancellationRequested;
     const cleanup: "pending" | undefined = removed.sessionCleanup;
   }
   const added = await automations({ action: "add", job: ${JSON.stringify(createJob)} });

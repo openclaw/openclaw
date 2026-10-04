@@ -9,16 +9,10 @@ import {
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
-function normalizeSlackId(value: string, label: string) {
-  const normalized = value.trim();
-  if (!/^[A-Z][A-Z0-9]+$/.test(normalized)) {
-    throw new Error(`${label} must be a Slack id like C123 or U123.`);
-  }
-  return normalized;
-}
-
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  normalizeSlackId(runtimeEnv.channelId, `${label} channelId`);
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId.trim())) {
+    throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
+  }
   return runtimeEnv;
 }
 
@@ -142,18 +136,13 @@ export function buildSlackQaConfig(
           : {}),
       }
     : codexAgentDefaults;
-  const qaAgentList = progressOverrides
-    ? baseCfg.agents?.list?.map((agent) => {
-        if (agent.id !== "qa") {
-          return agent;
-        }
-        // Slack draft edits cannot preserve custom authorship. Remove the
-        // synthetic QA identity so progress scenarios reach the draft path.
-        const qaAgent = { ...agent };
-        delete qaAgent.identity;
-        return qaAgent;
-      })
-    : baseCfg.agents?.list;
+  const qaAgentEntries = { ...baseCfg.agents?.entries };
+  if (progressOverrides && qaAgentEntries.qa) {
+    // Slack draft edits cannot preserve custom authorship. Remove the
+    // synthetic QA identity so progress scenarios reach the draft path.
+    qaAgentEntries.qa = { ...qaAgentEntries.qa };
+    delete qaAgentEntries.qa.identity;
+  }
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -216,7 +205,7 @@ export function buildSlackQaConfig(
           agents: {
             ...baseCfg.agents,
             ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
-            ...(qaAgentList ? { list: qaAgentList } : {}),
+            ...(baseCfg.agents?.entries ? { entries: qaAgentEntries } : {}),
           },
         }
       : {}),

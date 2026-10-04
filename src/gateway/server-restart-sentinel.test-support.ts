@@ -1,6 +1,28 @@
 import { expect } from "vitest";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
+
+type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
+  Partial<Pick<LoadedSessionEntryBase, "agentId">>;
+
+export function createRestartSentinelSessionFixture(
+  canonicalKey: string,
+  entry: RestartSentinelSessionFixture["entry"],
+  overrides: Partial<RestartSentinelSessionFixture> = {},
+): RestartSentinelSessionFixture {
+  return {
+    cfg: {},
+    entry,
+    store: {},
+    storePath: "/tmp/sessions.json",
+    canonicalKey,
+    storeKeys: [canonicalKey],
+    legacyKey: undefined,
+    ...overrides,
+  };
+}
 
 export async function appendRestartSentinelTranscriptReceipt(
   params: Parameters<
@@ -115,4 +137,35 @@ export function expectMockCallFields(
   callIndex = 0,
 ): Record<string, unknown> {
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
+}
+
+export function expectContinuationDispatchFields(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  expected: Record<string, unknown>,
+  expectedCtx?: Record<string, unknown>,
+  callIndex = 0,
+): Record<string, unknown> {
+  const params = expectMockCallFields(mock, expected, callIndex);
+  if (expectedCtx) {
+    expectRecordFields(params.ctxPayload, expectedCtx);
+  }
+  return params;
+}
+
+export function expectRestartSentinelTranscriptBroadcast(
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn,
+  params: { sessionKey: string; report: string; subscribers: ReadonlySet<string> },
+): void {
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "session.message",
+    expect.objectContaining({
+      sessionKey: params.sessionKey,
+      message: expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: params.report }],
+      }),
+    }),
+    params.subscribers,
+    { prepareSessionProjection: expect.any(Function) },
+  );
 }

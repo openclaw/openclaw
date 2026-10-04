@@ -1,18 +1,14 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PRESENCE_PROTOCOL_FEATURE,
-  type WorkerHelloOk,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -31,10 +27,7 @@ function toWorkerRuntimeError(value: unknown, fallback: string): Error {
 }
 
 function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undefined {
-  if (
-    state.kind === "fenced" &&
-    (state.reason === "credential-replaced" || state.reason === "owner-epoch-mismatch")
-  ) {
+  if (state.kind === "fenced") {
     return { status: "fenced", reason: state.reason };
   }
   return undefined;
@@ -81,6 +74,8 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
           throw failed.reason;
         }
         // Exec finalizers can open state; release its handle before Windows removes the file.
+        const { closeOpenClawStateDatabaseByPathAsync } =
+          await import("../state/openclaw-state-db-cache.js");
         await closeOpenClawStateDatabaseByPathAsync(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
         );
@@ -102,6 +97,19 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
         throw error;
       })),
   };
+}
+
+export async function loadWorkerTurnRuntime() {
+  const imports = [
+    import("./embedded-agent.runtime.js"),
+    import("./inference-stream.runtime.js"),
+  ] as const;
+  try {
+    return await Promise.all(imports);
+  } finally {
+    // Module evaluation must finish before the caller restores the worker environment.
+    await Promise.allSettled(imports);
+  }
 }
 
 export async function runWorkerDescriptor(
@@ -143,26 +151,9 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
-  function loadRuntimeImports() {
-    const imports = [
-      import("./embedded-agent.runtime.js"),
-      import("./inference-stream.runtime.js"),
-    ] as const;
-    const ready = Promise.all(imports);
-    // Rejected admission does not await ready; still observe errors and join both
-    // imports before restoring the process environment.
-    void ready.catch(() => undefined);
-    return { ready, settled: Promise.allSettled(imports) };
-  }
-  let runtimeImports: ReturnType<typeof loadRuntimeImports> | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onAdmissionRequestSent: () => {
-      if (!abortController.signal.aborted) {
-        runtimeImports ??= loadRuntimeImports();
-      }
-    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -220,8 +211,24 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
-    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
-      await (runtimeImports ??= loadRuntimeImports()).ready;
+    if (
+      !hello.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE) ||
+      !hello.toolSurface
+    ) {
+      throw new Error("Gateway does not support the admitted worker tool surface.");
+    }
+    const preparation = [
+      loadWorkerTurnRuntime(),
+      import("../agents/workspace.js").then(
+        ({ loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME }) =>
+          loadWorkspaceBootstrapFiles(workspaceDir, [DEFAULT_AGENTS_FILENAME]),
+      ),
+    ] as const;
+    const ready = Promise.all(preparation);
+    // Observe early rejection while joining every operation before environment cleanup.
+    await Promise.allSettled([ready, ...preparation]);
+    const [[{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }], bootstrapFiles] =
+      await ready;
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
@@ -264,18 +271,13 @@ export async function runWorkerDescriptor(
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
         skillResources: descriptor.assignment.skillResources,
-        skillAuthoring: descriptor.assignment.skillAuthoring,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
-          (name) =>
-            (name !== "portal" ||
-              hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE)) &&
-            (name !== "presence" ||
-              hello.protocolFeatures.includes(WORKER_PRESENCE_PROTOCOL_FEATURE)),
-        ),
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        toolSurface: hello.toolSurface,
+        bootstrapFiles,
         execAuthority: descriptor.assignment.toolAuthority.exec,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(descriptor.assignment.computer
@@ -301,7 +303,7 @@ export async function runWorkerDescriptor(
             resultFenceAcked = true;
           },
         },
-        sessions: connection,
+        gatewayTools: connection,
         signal: abortController.signal,
       });
       if (options.signal?.aborted && !options.environmentStateDir) {
@@ -346,7 +348,6 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
-    await runtimeImports?.settled;
     await environment?.close();
   }
 }

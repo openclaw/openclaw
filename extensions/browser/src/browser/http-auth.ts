@@ -7,6 +7,7 @@
 import type { IncomingMessage } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserControlAuth } from "./control-auth.js";
 
 function firstHeaderValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
@@ -41,10 +42,9 @@ function parseBasicPassword(authorization: string): string | undefined {
   }
 }
 
-/** Return true when request headers satisfy browser-control auth. */
 export function isAuthorizedBrowserRequest(
   req: IncomingMessage,
-  auth: { token?: string; password?: string },
+  auth: BrowserControlAuth,
 ): boolean {
   const authorization = firstHeaderValue(req.headers.authorization).trim();
 

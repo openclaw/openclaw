@@ -1,8 +1,18 @@
 name: OpenClaw Live And E2E Checks (Reusable)
 
+run-name: ${{ inputs.test_runtime == 'bun' && 'OpenClaw Live And E2E Checks (Bun advisory)' || 'OpenClaw Live And E2E Checks (Reusable)' }}
+
 on:
   workflow_dispatch:
     inputs:
+      test_runtime:
+        description: Native test runtime; Bun is advisory and Docker product lanes retain Node
+        required: false
+        default: node
+        type: choice
+        options:
+          - node
+          - bun
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -202,6 +212,11 @@ on:
         description: Docker image archive SHA-256
         value: ${{ jobs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
     inputs:
+      test_runtime:
+        description: Native test runtime (node or bun); Bun is advisory
+        required: false
+        default: node
+        type: string
       runner_group:
         description: Optional dedicated release runner group; empty retains the current labels
         required: false
@@ -462,6 +477,44 @@ on:
         default: true
         type: boolean
     secrets:
+      AZURE_SPEECH_KEY:
+        required: false
+      AZURE_SPEECH_REGION:
+        required: false
+      BASETEN_API_KEY:
+        required: false
+      OPENCLAW_LIVE_R2_ACCOUNT_ID:
+        required: false
+      OPENCLAW_LIVE_R2_BUCKET:
+        required: false
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID:
+        required: false
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY:
+        required: false
+      ELEVENLABS_API_KEY:
+        required: false
+      FEATHERLESS_API_KEY:
+        required: false
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN:
+        required: false
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING:
+        required: false
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID:
+        required: false
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET:
+        required: false
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN:
+        required: false
+      GRADIUM_API_KEY:
+        required: false
+      INWORLD_API_KEY:
+        required: false
+      MODEL_API_KEY:
+        required: false
+      VOLCENGINE_TTS_API_KEY:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN:
+        required: false
       OPENAI_API_KEY:
         required: false
       OPENAI_BASE_URL:
@@ -581,6 +634,7 @@ jobs:
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 30
     outputs:
+      test_bun_artifact_id: ${{ steps.test_bun_artifact.outputs.artifact-id }}
       fs_safe_native_contract: ${{ steps.frozen_admission.outputs.fs_safe_native_contract }}
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
@@ -591,6 +645,15 @@ jobs:
       upgrade_baselines: ${{ steps.upgrade_baselines.outputs.baselines }}
       upgrade_baseline_scope: ${{ steps.upgrade_baselines.outputs.baseline_scope }}
     steps:
+      - name: Validate test runtime
+        env:
+          TEST_RUNTIME: ${{ inputs.test_runtime }}
+        run: |
+          case "$TEST_RUNTIME" in
+            node|bun) ;;
+            *) echo "::error::test_runtime must be node or bun"; exit 1 ;;
+          esac
+
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -603,6 +666,9 @@ jobs:
         id: workflow
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
+          TEST_RUNTIME: ${{ inputs.test_runtime }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -619,6 +685,13 @@ jobs:
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
           }
+          if (
+            process.env.TEST_RUNTIME === "bun" &&
+            (job.workflow_repository.toLowerCase() !== process.env.CALLER_REPOSITORY?.toLowerCase() ||
+              job.workflow_sha !== process.env.CALLER_SHA)
+          ) {
+            throw new Error("Bun advisory checks require caller and called workflow at the same repository and SHA; use a direct dispatch.");
+          }
           const outputPath = process.env.GITHUB_OUTPUT;
           if (!outputPath) {
             throw new Error("GITHUB_OUTPUT is required");
@@ -630,6 +703,7 @@ jobs:
           NODE
 
       - name: Checkout workflow repository
+        if: inputs.test_runtime != 'bun'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Ref trust needs every branch and tag, but no historical file blobs.
@@ -638,6 +712,39 @@ jobs:
           sparse-checkout: package.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Checkout workflow repository for Bun
+        if: inputs.test_runtime == 'bun'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            package.json
+            .github/actions/setup-test-bun
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # The identity check above binds this default checkout to the called workflow.
+      # Prepare the pinned executable before any other source checkout.
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        uses: ./.github/actions/setup-test-bun
+
+      - name: Pack Bun test runtime
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        run: tar -czf "$RUNNER_TEMP/test-bun.tar.gz" -C "$(dirname "$(command -v bun)")" bun
+
+      - name: Upload Bun test runtime
+        id: test_bun_artifact
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-bun-${{ github.run_id }}-${{ github.run_attempt }}-${{ job.check_run_id }}
+          path: ${{ runner.temp }}/test-bun.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Materialize selected-source contract resolver
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1157,6 +1264,7 @@ jobs:
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
+    name: ${{ inputs.test_runtime == 'bun' && 'validate_release_live_cache (Bun advisory)' || 'validate_release_live_cache' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -1192,17 +1300,42 @@ jobs:
             exit 1
           fi
 
+      - &download_test_bun
+        name: Download Bun test runtime
+        id: test_bun_download
+        if: inputs.test_runtime == 'bun'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+
+      - &activate_test_bun
+        name: Activate Bun test runtime
+        if: steps.test_bun_download.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+          tar -xzf "$RUNNER_TEMP/test-bun-runtime/test-bun.tar.gz" -C "$bun_dir"
+          "$bun_dir/bun" --version
+          "$bun_dir/bun" --revision
+          echo "$bun_dir" >> "$GITHUB_PATH"
+
       - name: Verify live prompt cache floors
+        env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         run: |
           set -euo pipefail
           timeout --foreground --kill-after=30s 8m pnpm test:live:cache
 
   validate_repo_e2e_gateway:
-    name: Gateway E2E
+    name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      test_runtime: ${{ inputs.test_runtime }}
+      test_bun_artifact_id: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1218,11 +1351,13 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_repo_e2e_runtime:
-    name: UI and plugin E2E
+    name: UI and plugin E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      test_runtime: ${{ inputs.test_runtime }}
+      test_bun_artifact_id: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1239,6 +1374,7 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
+    name: ${{ inputs.test_runtime == 'bun' && 'validate_special_e2e (Bun advisory)' || 'validate_special_e2e' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
@@ -1283,6 +1419,9 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
 
+      - *download_test_bun
+      - *activate_test_bun
+
       - name: Install OpenShell CLI
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
@@ -1307,6 +1446,8 @@ jobs:
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
           matrix.suite_id == 'openshell-e2e'
+        env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1866,8 +2007,6 @@ jobs:
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
 
-          source .release-harness/scripts/lib/frozen-target-compat.sh
-          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Docker E2E chunk
@@ -2217,8 +2356,6 @@ jobs:
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
-          source .release-harness/scripts/lib/frozen-target-compat.sh
-          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize targeted Docker E2E lanes
@@ -4210,6 +4347,7 @@ jobs:
         run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_provider_suites:
+    name: Native live suites (${{ matrix.label }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -4302,14 +4440,16 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # The release workspace does not enable Global regions, so the other DeepSeek V4
+            # routes reject every request. These refs were proven reachable in the Docker lane.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go Kimi
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4329,14 +4469,16 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
-            # Dynamic selection retains bounded fallbacks when a listed Go model drifts unavailable.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4-flash and
+            # deepseek-v4.1-flash now return 400 "requires Global regions". Restore dynamic selection
+            # (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the workspace enables Global.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
           - suite_id: native-live-src-gateway-profiles-openrouter
             label: Native live gateway profiles OpenRouter
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4401,6 +4543,8 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.ELEVENLABS_API_KEY || '' }}
+      MODEL_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.MODEL_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -4547,9 +4691,20 @@ jobs:
               ;;
           esac
 
+      - name: Download Bun test runtime
+        id: test_bun_download
+        if: inputs.test_runtime == 'bun' && steps.selection.outputs.run == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+
+      - *activate_test_bun
+
       - name: Run ${{ matrix.label }}
         if: steps.selection.outputs.run == 'true'
         env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
@@ -4745,7 +4900,7 @@ jobs:
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_media_provider_suites:
-    name: Live media suites (${{ matrix.label }})
+    name: Live media suites (${{ matrix.label }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
@@ -4761,7 +4916,7 @@ jobs:
         include:
           - suite_id: native-live-extensions-a-k
             label: Native live plugins A-K
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
+            command: OPENCLAW_LIVE_ANTHROPIC_COMPACTION=1 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4812,6 +4967,24 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
+      AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
+      BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}
+      OPENCLAW_LIVE_R2_ACCOUNT_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_ACCOUNT_ID || '' }}
+      OPENCLAW_LIVE_R2_BUCKET: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_BUCKET || '' }}
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_ACCESS_KEY_ID || '' }}
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY || '' }}
+      ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ELEVENLABS_API_KEY || '' }}
+      FEATHERLESS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.FEATHERLESS_API_KEY || '' }}
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN || '' }}
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_LIVE_MEETING || '' }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_CLIENT_ID || '' }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_CLIENT_SECRET || '' }}
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN || '' }}
+      GRADIUM_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.GRADIUM_API_KEY || '' }}
+      INWORLD_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.INWORLD_API_KEY || '' }}
+      DISCORD_BOT_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN || '' }}
+      VOLCENGINE_TTS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-media-audio' && secrets.VOLCENGINE_TTS_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -4904,6 +5077,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install Chromium for A-K live browser tests
+        if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4917,9 +5094,20 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
 
+      - name: Download Bun test runtime
+        id: test_bun_download
+        if: inputs.test_runtime == 'bun' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+
+      - *activate_test_bun
+
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
         run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"

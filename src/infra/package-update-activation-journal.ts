@@ -29,12 +29,11 @@ import {
   type PackageActivationIntent,
   type PackageActivationRecord,
 } from "./package-update-activation-schema.js";
-import { withPackageRecoverySnapshot } from "./package-update-activation-snapshot.js";
 import {
   withExistingSqliteRollbackDatabase,
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 export {
   assertPackageActivationLayout,
   isPackageActivationComplete,
@@ -265,90 +264,16 @@ export function openPackageActivationJournal(anchor: string) {
   };
   return {
     read,
-    async readForRecovery() {
-      const fileFingerprint = (file: string) => {
-        const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-        if (!stat) {
-          return null;
-        }
-        if (!stat.isFile() || stat.nlink !== 1n || (stat.mode & 0o077n) !== 0n) {
-          throw new Error("Package publication journal sidecar is unsafe");
-        }
-        return `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.mtimeNs}:${stat.size}`;
-      };
-      assertFiles();
-      const files = [
-        journalPath,
-        `${journalPath}-journal`,
-        `${journalPath}-wal`,
-        `${journalPath}-shm`,
-      ];
-      const identities = files.map(fileFingerprint);
-      const assertUnchanged = () => {
-        assertFiles();
-        if (files.some((file, index) => fileFingerprint(file) !== identities[index])) {
-          throw new Error("Package publication recovery journal changed");
-        }
-      };
-      let record: PackageActivationRecord;
-      let hot = false;
-      try {
-        record = read();
-      } catch (error) {
-        if (!(error instanceof Error && "errcode" in error && error.errcode === 776)) {
-          throw error;
-        }
-        hot = true;
-        assertUnchanged();
-        record = await withPackageRecoverySnapshot(
-          control,
-          assertFiles,
-          async (targetPath, assertSnapshot) => {
-            await createVerifiedSqliteSnapshot({
-              sourcePath: journalPath,
-              targetPath,
-              preserveRowIds: true,
-              validate: (database) => {
-                decode(readRow(database));
-              },
-            });
-            assertSnapshot();
-            const snapshot = openNodeSqliteDatabase(targetPath, { readOnly: true });
-            try {
-              return decode(readRow(snapshot));
-            } finally {
-              snapshot.close();
-            }
-          },
-        );
-      }
-      assertUnchanged();
-      return {
-        record,
-        assertUnchanged,
-        admit(assertFence: () => void) {
-          assertUnchanged();
-          assertFence();
-          if (!hot) {
-            assertRecord(record, read());
-            return;
-          }
-          const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
-          try {
-            assertFiles();
-            assertFence();
-            const mode = database // sqlite-allow-raw -- Read-only hot-journal recovery must verify the native rollback mode.
-              .prepare("PRAGMA journal_mode")
-              .get()?.journal_mode;
-            if (!["delete", "truncate", "persist"].includes(String(mode))) {
-              throw new Error("Package publication recovery requires rollback journal mode");
-            }
-            assertRecord(record, decode(readRow(database)));
-          } finally {
-            database.close();
-          }
+    readForRecovery() {
+      return prepareSqliteRollbackRecovery({
+        path: journalPath,
+        scratchRoot: control,
+        assertIdentity: assertFiles,
+        assertFileSafe(file) {
+          assertPrivate(file, false);
         },
-      };
+        read: (db) => decode(readRow(db)),
+      });
     },
     replaceCompleted(
       expected: PackageActivationRecord,

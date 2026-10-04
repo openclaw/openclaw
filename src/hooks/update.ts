@@ -1,4 +1,3 @@
-// Hook update helpers refresh installed hook records and config references.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -204,38 +203,32 @@ export async function updateNpmInstalledHookPacks(params: {
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
     const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
-    if (!persistence) {
-      outcomes.push({
-        hookId,
-        status,
-        currentVersion: currentVersion ?? undefined,
-        nextVersion: nextVersion ?? undefined,
-        message:
-          status === "unchanged"
-            ? `Hook pack "${hookId}" is up to date (${currentLabel}).`
-            : `${downgraded ? "Would downgrade" : "Would update"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
-      });
-      continue;
+    if (persistence) {
+      persistence.transactions.push(
+        await stageHookInstall({
+          update: {
+            hookId,
+            source: "npm",
+            spec: effectiveSpec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            ...buildNpmResolutionFields(result.npmResolution),
+            hooks: result.hooks,
+          },
+          payloadTransaction: resolvePackageDirInstallTransaction(result),
+          lease: persistence.lease,
+          beforePersistentApply,
+        }),
+      );
+      changed = true;
     }
-
-    persistence.transactions.push(
-      await stageHookInstall({
-        update: {
-          hookId,
-          source: "npm",
-          spec: effectiveSpec,
-          installPath: result.targetDir,
-          version: nextVersion,
-          ...buildNpmResolutionFields(result.npmResolution),
-          hooks: result.hooks,
-        },
-        payloadTransaction: resolvePackageDirInstallTransaction(result),
-        lease: persistence.lease,
-        beforePersistentApply,
-      }),
-    );
-    changed = true;
-
+    const action = persistence
+      ? downgraded
+        ? "Downgraded"
+        : "Updated"
+      : downgraded
+        ? "Would downgrade"
+        : "Would update";
     outcomes.push({
       hookId,
       status,
@@ -243,8 +236,10 @@ export async function updateNpmInstalledHookPacks(params: {
       nextVersion: nextVersion ?? undefined,
       message:
         status === "unchanged"
-          ? `Hook pack "${hookId}" already at ${currentLabel}.`
-          : `${downgraded ? "Downgraded" : "Updated"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+          ? persistence
+            ? `Hook pack "${hookId}" already at ${currentLabel}.`
+            : `Hook pack "${hookId}" is up to date (${currentLabel}).`
+          : `${action} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
     });
   }
 

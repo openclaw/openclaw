@@ -23,11 +23,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { updateAcpSessionStoreEntry } from "./session-meta-entry.js";
-import {
-  buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
-} from "./session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 import { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
@@ -75,7 +71,7 @@ async function mutateAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  if (isIncognitoSessionKey(sessionKey)) {
+  const mutateNative = (assertCommitAllowed = captured.assertCurrent) => {
     if (control) {
       throw new Error("ACP controlled metadata mutation requires its durable worker source");
     }
@@ -83,8 +79,11 @@ async function mutateAcpSessionMeta(
       ...params,
       ...captured,
       expectedControlBinding,
-      assertCommitAllowed: captured.assertCurrent,
+      assertCommitAllowed,
     });
+  };
+  if (isIncognitoSessionKey(sessionKey)) {
+    return mutateNative();
   }
   return withSessionEntryReadOnlyInWorker(
     {
@@ -101,15 +100,7 @@ async function mutateAcpSessionMeta(
       const entry = read.value;
       const readerScope = readOwner.scope;
       if (readOwner.kind === "native") {
-        if (control) {
-          throw new Error("ACP controlled metadata mutation requires its durable worker source");
-        }
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: captured.assertCurrent,
-        });
+        return mutateNative();
       }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
@@ -120,15 +111,7 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
-        if (control) {
-          throw new Error("ACP controlled metadata mutation requires its durable worker source");
-        }
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: readOwner.assertCurrent,
-        });
+        return mutateNative(readOwner.assertCurrent);
       }
       const identity = readDatabasePathIdentitySync(options.path);
       const context = captureOpenClawStateWorkerContext({
@@ -138,11 +121,7 @@ async function mutateAcpSessionMeta(
       const prepareMaintenance = captureMaintenanceConfigAsyncReader(captured.assertCurrent);
       const key = normalizeStoreSessionKey(store.storeSessionKey);
       const metadataRead = {
-        keys: [
-          buildAcpDatabaseSessionKey(key, store.agentId),
-          ...legacyAcpDatabaseSessionKeys(key, store.agentId, captured.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(key),
+        keys: [buildAcpDatabaseSessionKey(key, store.agentId)],
       };
       if (
         control &&
@@ -151,8 +130,7 @@ async function mutateAcpSessionMeta(
           control.source.agentId !== options.agentId ||
           !isDeepStrictEqual(control.source.identity, identity) ||
           !isDeepStrictEqual(control.sharedSource.identity, context.admission.identity) ||
-          !isDeepStrictEqual(control.read.keys, metadataRead.keys) ||
-          control.read.legacyKey !== metadataRead.legacyKey)
+          !isDeepStrictEqual(control.read.keys, metadataRead.keys))
       ) {
         throw new Error("ACP controlled metadata mutation does not match its prepared target");
       }
@@ -278,11 +256,7 @@ async function mutateAcpSessionMeta(
           env: captured.env,
           sessionKey: resolveSqliteSessionKey(key, store.agentId),
         };
-        const update = (
-          mutation: Parameters<typeof updateAcpSessionStoreEntry>[0]["mutation"],
-          expectedEntry = preparation.entry ?? null,
-          skipMaintenance = params.skipMaintenance,
-        ) =>
+        const update = (mutation: Parameters<typeof updateAcpSessionStoreEntry>[0]["mutation"]) =>
           updateAcpSessionStoreEntry({
             options,
             scope,
@@ -291,10 +265,10 @@ async function mutateAcpSessionMeta(
             assertCurrent,
             readOwner,
             mutation,
-            expectedEntry,
+            expectedEntry: preparation.entry ?? null,
             expectedControlBinding,
             prepareMaintenance,
-            skipMaintenance,
+            skipMaintenance: params.skipMaintenance,
           });
         const changed =
           selected.kind === "clear"
@@ -307,13 +281,6 @@ async function mutateAcpSessionMeta(
           return null;
         }
         const commitEntry = changed.entry ?? preparation.entry;
-        const cleanup = async () => {
-          await update({ kind: "clear-legacy" }, commitEntry ?? null, true);
-          assertCurrent();
-        };
-        if (selected.kind === "set") {
-          await cleanup();
-        }
         await commitAcpSessionMutation(
           context,
           {
@@ -333,7 +300,6 @@ async function mutateAcpSessionMeta(
         );
         assertCurrent();
         if (selected.kind === "clear") {
-          await cleanup();
           return changed.entry;
         }
         return mergeSessionEntry(changed.entry ?? undefined, { acp: selected.meta });

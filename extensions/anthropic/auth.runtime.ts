@@ -34,7 +34,7 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
 ] as const;
 
 function normalizeAnthropicSetupTokenInput(value: string): string {
-  return value.replaceAll(/\s+/g, "").trim();
+  return value.replaceAll(/\s+/g, "");
 }
 
 function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {

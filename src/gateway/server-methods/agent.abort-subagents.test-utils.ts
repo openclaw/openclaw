@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
+  resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -56,8 +57,6 @@ export function registerAgentAbortSubagentTests() {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
-      mocks.registryPersist.mockImplementation(() => {});
-      mocks.registryPersistOrThrow.mockImplementation(() => {});
       mocks.registryCallGateway.mockImplementation(async () => await new Promise(() => {}));
       const pending = new Promise(() => {});
       let capturedSignal: AbortSignal | undefined;
@@ -228,6 +227,7 @@ export function registerAgentAbortSubagentTests() {
       } finally {
         childOperation?.complete();
         swarmSchedulerTesting.reset();
+        await resetSubagentRegistryForTests();
       }
     },
   );

@@ -14,7 +14,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
@@ -169,8 +169,8 @@ describe("writeConfigFile canonical reread", () => {
         withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
           const { configPath, env, options } = await prepareWrite(home, existed);
           const auditSnapshot = () =>
-            readLatestConfigSnapshotAuditRecord({ env, homedir: () => home });
-          const beforeAuditSnapshot = auditSnapshot();
+            readLatestConfigSnapshotAuditRecordAsync({ env, homedir: () => home });
+          const beforeAuditSnapshot = await auditSnapshot();
           let compensating = false;
           let committedRaw: string | Buffer | undefined;
           const readFile = fsNode.promises.readFile.bind(fsNode.promises);
@@ -218,7 +218,7 @@ describe("writeConfigFile canonical reread", () => {
               "message",
               expect.stringContaining("Rollback failed"),
             );
-            expect(auditSnapshot()).toEqual(beforeAuditSnapshot);
+            expect(await auditSnapshot()).toEqual(beforeAuditSnapshot);
             if (existed) {
               await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
             } else {
@@ -323,13 +323,33 @@ describe("writeConfigFile canonical reread", () => {
           ).map((name) => vi.spyOn(fsNode, name));
           const opens = vi.spyOn(fsNode, "openSync");
           let observed: { raw: string; ino: bigint; counts: number[] } | undefined;
+          const targetsConfig = (target: fsNode.PathLike | number, callOrder: number) => {
+            if (typeof target !== "number") {
+              return String(target) === configPath;
+            }
+            const openedAt = opens.mock.results.findLastIndex(
+              (result, index) =>
+                result.type === "return" &&
+                result.value === target &&
+                opens.mock.invocationCallOrder[index]! < callOrder,
+            );
+            return openedAt >= 0 && String(opens.mock.calls[openedAt]?.[0]) === configPath;
+          };
+          // Worker lock custody can advance independently of the fenced config target.
           const effects = () => [
             rootRenames.length,
-            ...mutations.map(({ mock }) => mock.calls.length),
-            opens.mock.calls.filter(([, flags]) =>
-              typeof flags === "number"
-                ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
-                : /[wa+]/.test(flags),
+            ...mutations.map(
+              ({ mock }) =>
+                mock.calls.filter((args, index) =>
+                  targetsConfig(args[0], mock.invocationCallOrder[index]!),
+                ).length,
+            ),
+            opens.mock.calls.filter(
+              ([target, flags]) =>
+                String(target) === configPath &&
+                (typeof flags === "number"
+                  ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
+                  : /[wa+]/.test(flags)),
             ).length,
           ];
           vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {

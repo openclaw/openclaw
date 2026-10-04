@@ -118,6 +118,8 @@ runs the published `openclaw@2026.9.4` updater against the candidate.
 A legacy-plugin case returns from its command while a child keeps running,
 then proves that a missing idle-work callback blocks activation both during
 that work and after the child finishes.
+A default-plugin node, with no plugin restriction or node command allowlist,
+must activate the prepared update while idle.
 
 Use a new artifact directory outside the source checkout for every run, or omit
 it to create a fresh temporary directory. The scenario retains `observations.json`
@@ -213,6 +215,9 @@ commit before the update and compare the installed application payload with the
 frozen tarball afterward, before candidate probes. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
+These generic scenarios do not require a worker-cell baseline identity artifact.
+After the update, missing or unreadable tarballs and installed payloads fail with
+the corresponding candidate identity diagnostic before any candidate probes run.
 
 Useful published-upgrade survivor variants:
 
@@ -229,7 +234,7 @@ OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.7.1-2 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=sqlite-volume \
 pnpm test:docker:published-upgrade-survivor
 
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.34 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.8.33 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=legacy-operator-state \
 pnpm test:docker:published-upgrade-survivor
 
@@ -246,6 +251,22 @@ Available scenarios: `base`, `acpx-openclaw-tools-bridge`, `feishu-channel`,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands the release-soak
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
+
+The opt-in `backup-schedule` scenario uses the published `openclaw@2026.9.7`
+CLI to initialize a Git backup repository, enable its Gateway-owned 24-hour
+schedule, and record one Git backup and one archive backup. The published updater
+installs the source-pinned candidate tarball. After non-interactive Doctor and
+Gateway startup, the scenario checks the original schedule declaration and argv,
+both old ledger rows through `backup.status`, the status backup line, Doctor
+errors, and HTTP readiness. It also requires that `storage.locations` stays
+absent and the Cloudflare plugin stays inactive. This manual/release scenario
+is excluded from aggregate aliases and per-PR CI.
+
+```bash
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS=openclaw@2026.9.7 \
+OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=backup-schedule \
+pnpm test:docker:published-upgrade-survivor
+```
 
 The `custom-plugin-siblings` scenario starts from published 2026.9.4 or later
 with an enabled custom memory plugin importing `../shared/value.mjs` from both
@@ -419,7 +440,7 @@ idempotent Doctor pass is 60 seconds; override it with
 The `Update Migration` workflow runs weekly and supports manual dispatch. Its
 default `supported-lines` baseline set resolves npm dist-tags and published
 versions at run time: `latest`, the previous stable release, `extended-stable`
-when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
+when that tag exists, and the supported floor `2026.8.33`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay

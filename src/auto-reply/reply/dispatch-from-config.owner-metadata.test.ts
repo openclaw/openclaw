@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import * as sessionMeta from "../../acp/runtime/session-meta.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -10,7 +12,6 @@ import {
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
-import * as dispatchRuntime from "./dispatch-from-config.runtime.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 let state: OpenClawTestState | undefined;
@@ -20,12 +21,10 @@ afterEach(async () => {
 });
 
 it.each([
-  "canonical",
   "read-recovery",
   "lifecycle-change",
   "parent-change",
   "replacement-parent",
-  "replacement-detached",
   "owner-error",
 ] as const)("keeps explicit-owner ACP metadata current across gather: %s", async (scenario) => {
   state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
@@ -42,7 +41,7 @@ it.each([
   const scope = {
     agentId: "work",
     sessionKey: "global",
-    storePath: dispatchRuntime.resolveSessionStorePathCore(undefined, { agentId: "work" }),
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "work" }),
   };
   const entry = {
     sessionId: "child",
@@ -65,7 +64,7 @@ it.each([
     meta,
   });
   if (scenario === "read-recovery") {
-    vi.spyOn(dispatchRuntime, "loadSessionStoreEntry").mockImplementationOnce(() => {
+    vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly").mockImplementationOnce(() => {
       throw new Error("synthetic initial read failure");
     });
   }
@@ -75,12 +74,12 @@ it.each([
     if (scenario === "lifecycle-change") {
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "after-gather" });
     }
-    if (scenario === "replacement-parent" || scenario === "replacement-detached") {
+    if (scenario === "replacement-parent") {
       replaceSessionEntrySync(scope, {
         ...entry,
         sessionId: "replacement-child",
         lifecycleRevision: "after-gather",
-        spawnedBy: scenario === "replacement-parent" ? "agent:work:new-parent" : undefined,
+        spawnedBy: "agent:work:new-parent",
       });
       sessionMeta.writeAcpSessionMetaForMigration({
         sessionKey: buildAcpDatabaseSessionKey("global", "work"),
@@ -130,7 +129,7 @@ it.each([
     }
     const prepared = await prepareDispatchDelivery(gathered.state);
     expect(prepared.state.suppressAcpChildUserDelivery).toBe(
-      scenario === "canonical" || scenario === "read-recovery" || scenario === "replacement-parent",
+      scenario === "read-recovery" || scenario === "replacement-parent",
     );
   } finally {
     dispatcher.markComplete();

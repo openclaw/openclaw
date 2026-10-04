@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { createReadWorkerFixture } from "./openclaw-state-db-readonly.test-support.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadLocation,
@@ -59,13 +60,9 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   withOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
 }));
 
-vi.mock("./openclaw-state-read-worker.js", () => ({
-  createOpenClawStateReadTransport: () => ({
-    read: mocks.read,
-    validateFresh: async () => {},
-    close: async () => {},
-  }),
-}));
+vi.mock("./openclaw-state-read-worker.js", () =>
+  createReadWorkerFixture(mocks.read, async () => {}),
+);
 
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -182,50 +179,29 @@ const rejectedAdmissions = {
   worker: true,
 };
 
-it.each(["closing", "cleanup-failed", "closed"] as const)(
-  "rejects escaped snapshot reads while %s instead of reopening a live source",
-  async (phase) => {
-    await withTempDir("openclaw-retired-snapshot-", async (root) => {
-      const source = path.join(root, "source");
-      fs.writeFileSync(source, "mock source; never opened as SQLite");
-      const enteredCleanup = createDeferredCore();
-      const finishCleanup = createDeferredCore<boolean>();
-      let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
-      mocks.cleanup.mockImplementationOnce(async () => {
-        enteredCleanup.resolve();
-        return phase === "closing" ? await finishCleanup.promise : phase === "closed";
-      });
-      const closing = withOpenClawStateDatabaseReadSnapshot(
+it("rejects escaped snapshot reads after failed cleanup instead of reopening a live source", async () => {
+  await withTempDir("openclaw-retired-snapshot-", async (root) => {
+    const source = path.join(root, "source");
+    fs.writeFileSync(source, "mock source; never opened as SQLite");
+    let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
+    mocks.cleanup.mockResolvedValueOnce(false);
+    await expect(
+      withOpenClawStateDatabaseReadSnapshot(
         async () => {
           escape = AsyncLocalStorage.snapshot();
           expect(getActiveOpenClawStateDatabaseReadSnapshot({ path: source })).toBeDefined();
         },
         { path: source },
-      ).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      await enteredCleanup.promise;
-      if (phase !== "closing") {
-        await closing;
-      }
-      try {
-        const observed = await escape(() => probeRetiredAdmission(source));
-        expect(observed).toEqual(rejectedAdmissions);
-        expect(
-          escape(() =>
-            getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") }),
-          ),
-        ).toBeUndefined();
-        expect(mocks.forbiddenNative).not.toHaveBeenCalled();
-        expect(mocks.read).not.toHaveBeenCalled();
-      } finally {
-        finishCleanup.resolve(true);
-        await closing;
-      }
-    });
-  },
-);
+      ),
+    ).rejects.toThrow("snapshot cleanup failed");
+    expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
+    expect(
+      escape(() => getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") })),
+    ).toBeUndefined();
+    expect(mocks.forbiddenNative).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+  });
+});
 
 it.each(["snapshot", "disposable"] as const)(
   "drains an admitted %s reader while rejecting escaped new reads, then rejects the closed scope",

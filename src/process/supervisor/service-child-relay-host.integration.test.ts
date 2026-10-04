@@ -55,7 +55,10 @@ async function startSupervisedRelay(
   options: { timeoutMs?: number; noOutputTimeoutMs?: number } = {},
 ) {
   platformMock = mockProcessPlatform("linux");
-  vi.spyOn(process, "kill").mockImplementation(() => {
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === 0 && signal === 0) {
+      return true;
+    }
     throw Object.assign(new Error("fixture group absent"), { code: "ESRCH" });
   });
   const stub = createWritableRelayChild();
@@ -79,7 +82,19 @@ async function startSupervisedRelay(
   let sequence = 0;
   const emit = (payload: ServiceChildAnchorPayload) =>
     stub.control.push(
-      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+      Buffer.from(
+        encodeServiceChildMessage({
+          ...(payload.type === "ready" && start.treeOwnership === "linux-subreaper"
+            ? { treeOwnership: "linux-subreaper" as const }
+            : {}),
+          ...(payload.type === "closing" && start.treeOwnership === "linux-subreaper"
+            ? { descendantsReaped: true as const }
+            : {}),
+          ...payload,
+          generation,
+          sequence: ++sequence,
+        }),
+      ),
     );
   const finish = () => {
     emit({ type: "closing", reason: "lineage-closed" });
@@ -94,7 +109,15 @@ async function startSupervisedRelay(
     stub.disconnectMock();
     stub.emitExit(0);
   });
-  return { ...stub, supervisor, closeScope, starting, emit, finish };
+  return {
+    ...stub,
+    supervisor,
+    closeScope,
+    starting,
+    emit,
+    finish,
+    treeOwnership: start.treeOwnership,
+  };
 }
 
 it.each(["stdout", "stderr"] as const)(
@@ -181,7 +204,14 @@ it.each(["cancel", "overall-timeout"] as const)(
     const run = await f.starting;
     expect((await run.wait()).reason).toBe(mode === "cancel" ? "manual-cancel" : mode);
     expect((await run.wait()).stdout).toBe("before cancellation");
-    expect(f.killMock).toHaveBeenCalledWith("SIGKILL");
+    if (f.treeOwnership === "linux-subreaper") {
+      // Disconnect preserves the native owner's descendant wait custody.
+      expect(f.killMock).not.toHaveBeenCalled();
+    } else {
+      // Both construction abort and its failed-ready cleanup stop the ordinary relay.
+      expect(f.killMock.mock.calls).toEqual([["SIGKILL"], ["SIGKILL"]]);
+    }
+    expect(f.disconnectMock).toHaveBeenCalled();
     expect(f.sendMock.mock.calls.length).toBe(sending);
     await expect(f.closeScope()).rejects.toThrow("construction aborted");
   },

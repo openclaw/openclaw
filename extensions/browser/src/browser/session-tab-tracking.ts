@@ -1,7 +1,10 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assertBrowserSessionTabAuthority,
+  captureBrowserSessionTabAuthority,
   getOptionalBrowserStateRuntime,
   type BrowserDashboardRegistration,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import {
@@ -31,7 +34,6 @@ import {
 } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
-  assertBrowserSessionTabAuthority,
   browserSessionTabNativeIdentity,
   browserSessionTabStorageKey,
   compareBrowserSessionTabProfileAliases,
@@ -47,7 +49,6 @@ import {
   withBrowserSessionTabOperation,
   withBrowserSessionTabNativeActivity,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
   type BrowserSessionTabSelection,
 } from "./session-tab-store.js";
 import { selectSessionTabToUntrack } from "./session-tab-untrack-selection.js";
@@ -133,10 +134,7 @@ export async function readDurableTabs(
   onWarn?: (message: string) => void,
   suppliedAuthority: BrowserSessionTabAuthority = {},
 ): Promise<DurableTab[]> {
-  const authority = {
-    ...suppliedAuthority,
-    runtime: suppliedAuthority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-  };
+  const authority = captureBrowserSessionTabAuthority(suppliedAuthority);
   const store = getOptionalBrowserSessionTabStore(authority);
   if (!store) {
     return [];
@@ -199,10 +197,7 @@ export function resolveVolatile(
 async function readDurableTabsReadOnly(
   suppliedAuthority: BrowserSessionTabAuthority = {},
 ): Promise<DurableTab[]> {
-  const authority = {
-    ...suppliedAuthority,
-    runtime: suppliedAuthority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-  };
+  const authority = captureBrowserSessionTabAuthority(suppliedAuthority);
   const store = getOptionalBrowserSessionTabStore(authority);
   if (!store) {
     authority.assertCurrent?.();
@@ -359,16 +354,12 @@ export function withBrowserDashboardRegistration<T, Authority extends BrowserSes
   return withBrowserSessionTabOperation(registration, current, () => register(current));
 }
 
-/** Starts tracking a browser tab for later session cleanup. */
 export async function trackSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<DurableTab | undefined> {
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
@@ -472,16 +463,12 @@ function canonicalStorageKey(
     : resolveDurableTabAlias(identity);
 }
 
-/** Updates last-used time for an existing tracked browser tab. */
 export async function touchSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<void> {
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
@@ -497,11 +484,11 @@ export async function touchSessionBrowserTab(
   if (isVolatileRoute(identity.route) || !getOptionalBrowserSessionTabStore()) {
     return;
   }
-  await ensureBrowserSessionTabStoreReady(params.authority?.runtime);
+  await ensureBrowserSessionTabStoreReady(params.authority.runtime);
   const key = canonicalStorageKey(params, identity);
   if (
     key &&
-    (await withBrowserSessionTabSelection(key, params.authority ?? {}, async (tab) => {
+    (await withBrowserSessionTabSelection(key, params.authority, async (tab) => {
       const candidate = parseBrowserSessionTabRecord(await tab.lookup());
       if (!candidate) {
         return false;
@@ -531,38 +518,30 @@ export async function touchSessionBrowserTab(
       profile: identity.profile,
       nativeTargetId,
     });
-    await withBrowserSessionTabNativeActivity(
-      coldIdentity,
-      params.authority ?? {},
-      async (store) => {
-        if (
-          readColdNativeActivity(coldIdentity) !== undefined ||
-          (await store.entries()).some(({ key: entryKey, value }) => {
-            const tab = parseBrowserSessionTabRecord(value);
-            return (
-              tab?.interactionTargetKind === "native" &&
-              browserSessionTabNativeIdentity(tab) === coldIdentity &&
-              browserSessionTabStorageKey(tab) === entryKey
-            );
-          })
-        ) {
-          if (getOptionalBrowserStateRuntime() === params.authority?.runtime) {
-            rememberColdNativeActivity(coldIdentity, now);
-          }
+    await withBrowserSessionTabNativeActivity(coldIdentity, params.authority, async (store) => {
+      if (
+        readColdNativeActivity(coldIdentity) !== undefined ||
+        (await store.entries()).some(({ key: entryKey, value }) => {
+          const tab = parseBrowserSessionTabRecord(value);
+          return (
+            tab?.interactionTargetKind === "native" &&
+            browserSessionTabNativeIdentity(tab) === coldIdentity &&
+            browserSessionTabStorageKey(tab) === entryKey
+          );
+        })
+      ) {
+        if (getOptionalBrowserStateRuntime() === params.authority.runtime) {
+          rememberColdNativeActivity(coldIdentity, now);
         }
-      },
-    );
+      }
+    });
   }
 }
 
-/** Removes a browser tab from session cleanup tracking. */
 export async function untrackSessionBrowserTab(input: SessionTabParams): Promise<void> {
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
@@ -575,11 +554,11 @@ export async function untrackSessionBrowserTab(input: SessionTabParams): Promise
     }
     return;
   }
-  await ensureBrowserSessionTabStoreReady(params.authority?.runtime);
+  await ensureBrowserSessionTabStoreReady(params.authority.runtime);
   const key = canonicalStorageKey(params, identity);
   const untrack = async (tab?: BrowserSessionTabSelection) => {
     const record = tab ? parseBrowserSessionTabRecord(await tab.lookup()) : undefined;
-    assertBrowserSessionTabAuthority(params.authority ?? {});
+    assertBrowserSessionTabAuthority(params.authority);
     const volatile = resolveVolatile(identity);
     const deleteSelected = async () => {
       if (tab && record) {
@@ -613,13 +592,13 @@ export async function untrackSessionBrowserTab(input: SessionTabParams): Promise
         profile: identity.profile,
         nativeTargetId: params.nativeTargetId?.trim() || identity.targetId,
       });
-      await withBrowserSessionTabNativeActivity(identityKey, params.authority ?? {}, async () => {
+      await withBrowserSessionTabNativeActivity(identityKey, params.authority, async () => {
         forgetColdNativeActivity(identityKey);
       });
     }
   };
   if (key) {
-    await withBrowserSessionTabSelection(key, params.authority ?? {}, untrack);
+    await withBrowserSessionTabSelection(key, params.authority, untrack);
   } else {
     await untrack();
   }

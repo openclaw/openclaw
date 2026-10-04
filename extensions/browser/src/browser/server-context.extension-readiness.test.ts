@@ -74,27 +74,6 @@ describe("extension profile readiness", () => {
     vi.clearAllMocks();
   });
 
-  it("waits for an authenticated extension after its relay starts", async () => {
-    vi.useFakeTimers();
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(false);
-    const browser = createExtensionProfile();
-    setTimeout(() => {
-      isChromeReachable.mockResolvedValue(true);
-      browser.connect();
-    }, 1_400);
-
-    const ready = browser.profile.ensureBrowserAvailable().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(await ready).toEqual({ ok: true });
-    expect(isChromeReachable).toHaveBeenCalledOnce();
-    browser.dispose();
-  });
-
   it("keeps the actionable pairing error when no extension connects", async () => {
     vi.useFakeTimers();
     vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);

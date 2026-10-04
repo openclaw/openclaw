@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -23,12 +24,10 @@ type CurrentConversationBindingDatabase = Pick<
 >;
 
 export type CurrentConversationBindingScope = { channel: string; accountId: string };
-type CurrentConversationBindingRow = {
-  binding_key: string;
-  binding_id: string;
-  target_session_key: string;
-  record_json: string;
-};
+type CurrentConversationBindingRow = Pick<
+  CurrentConversationBindingDatabase["current_conversation_bindings"],
+  "binding_key" | "binding_id" | "target_session_key" | "record_json"
+>;
 
 function createCurrentConversationBindingQueries(db: DatabaseSync) {
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
@@ -142,19 +141,9 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
 }
 
 // Cache SQL templates per handle; native statements and their invalidation remain executor-owned.
-const currentConversationBindingQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createCurrentConversationBindingQueries>
->();
-
-function getCurrentConversationBindingQueries(db: DatabaseSync) {
-  let queries = currentConversationBindingQueries.get(db);
-  if (!queries) {
-    queries = createCurrentConversationBindingQueries(db);
-    currentConversationBindingQueries.set(db, queries);
-  }
-  return queries;
-}
+const getCurrentConversationBindingQueries = createSqliteQueryCache(
+  createCurrentConversationBindingQueries,
+);
 
 function buildConversationKey(ref: ConversationRef): string {
   return [ref.channel, ref.accountId, ref.parentConversationId ?? "", ref.conversationId].join(

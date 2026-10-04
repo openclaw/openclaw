@@ -1,4 +1,5 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";

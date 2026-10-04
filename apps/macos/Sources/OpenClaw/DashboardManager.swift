@@ -25,14 +25,14 @@ final class DashboardManager {
     @ObservationIgnored private var updater: UpdaterProviding?
     @ObservationIgnored private var displayedPrimaryRoutes:
         [ObjectIdentifier: (revision: UInt64?, authority: UInt64?)] = [:]
-    @ObservationIgnored private var endpointGeneration: UInt64 = 0
+    @ObservationIgnored private(set) var endpointGeneration: UInt64 = 0
     @ObservationIgnored private var presentationGeneration: UInt64 = 0
     @ObservationIgnored private var windowLifetime: UInt64 = 0
     @ObservationIgnored private weak var lastFrontmostWindow: NSWindow?
     @ObservationIgnored private var gatewaySnapshotGeneration: UInt64 = 0
     @ObservationIgnored private var profileCredentialsNeedRefresh = false
     @ObservationIgnored private var profileObservations: [DashboardGatewayTarget: ProfileObservation] = [:]
-    @ObservationIgnored private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
+    @ObservationIgnored let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
     @ObservationIgnored let connectionProvider: @Sendable (DashboardGatewayTarget) async -> GatewayConnection
     @ObservationIgnored let browserIdentityURLProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> URL?
@@ -44,8 +44,8 @@ final class DashboardManager {
     @ObservationIgnored let mainWindowAutosaveName: String
     @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
     @ObservationIgnored private var profileBrowserStores: [String: DashboardBrowserSessionStore] = [:]
-    @ObservationIgnored private var profileCredentialRevisions: [String: UInt64] = [:]
-    @ObservationIgnored private var unavailableProfileIDs: Set<String> = []
+    @ObservationIgnored private(set) var profileCredentialRevisions: [String: UInt64] = [:]
+    @ObservationIgnored private(set) var unavailableProfileIDs: Set<String> = []
     @ObservationIgnored private var profileRemovalTasks: [String: (id: UUID, task: Task<Void, Error>)] = [:]
     @ObservationIgnored private let observesGatewayChanges: Bool
     @ObservationIgnored private let automaticGatewayProfileRefreshEnabled: Bool
@@ -315,7 +315,7 @@ final class DashboardManager {
         let configuration: WindowConfiguration
         do {
             configuration = try await dashboardConfiguration(
-                endpoint: endpoint, mode: mode, target: .primary, token: authToken)
+                endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
@@ -334,7 +334,7 @@ final class DashboardManager {
             let key = ObjectIdentifier(controller)
             let previousRoute = self.displayedPrimaryRoutes[key]
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
-            let routeChanged = revisionChanged || !controller.hasTLSParams(configuration.tlsParams) ||
+            let routeChanged = revisionChanged || controller.documentHost.tlsParams != configuration.tlsParams ||
                 controller.auth.gatewayUrl != auth.gatewayUrl
             let credentialChanged = controller.auth != auth
             if routeChanged || credentialChanged {
@@ -458,7 +458,7 @@ final class DashboardManager {
             windowAutosaveName: self.mainWindowAutosaveName,
             auxiliary: false)
         self.installMainController(controller)
-        controller.loadInBackground(url: configuration.url, auth: configuration.auth)
+        controller.update(url: configuration.url, auth: configuration.auth)
     }
 
     private func showResolvedPrimaryDashboard() async throws {
@@ -545,7 +545,7 @@ final class DashboardManager {
                   let fallbackURL = DashboardRouteMap.dashboardURL(
                       byAppendingSameAppPath: path,
                       search: search,
-                      to: destination.dashboardBaseURL)
+                      to: destination.currentURL)
             else { return }
             destination.dispatchNativeNavigation(DashboardNativeNavigation(
                 path: path,
@@ -629,7 +629,7 @@ final class DashboardManager {
             // This also invalidates a handoff still suspended in show(atPath:).
             self.retireNavigation(for: target)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         if let source {
             // Admit once to the native window; replacements transfer its ordered queue before loading.
             let needsRecovery = !source.isWindowOpen || !source.canDeliverNativeCommands
@@ -756,9 +756,11 @@ final class DashboardManager {
                         configuration: configuration,
                         target: target,
                         present: false)
-                } else if needsRefresh {
+                } else if needsRefresh, controller.documentHost.legacyNativeCredentials?.isCurrent() != true {
                     // Same-principal reconnects retain the page but replace its
                     // socket-owned projections before an old observer can retire them.
+                    // A catalog refresh on the current socket keeps them, so it cannot
+                    // refuse that document's native challenges in flight.
                     controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                     controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 }
@@ -1030,10 +1032,12 @@ extension DashboardManager {
     {
         self.profileCredentialRevisions[profileID, default: 0] &+= 1
         for instance in dashboardControllers() where instance.target == .profile(profileID) &&
-            (instance.controller.browserSession != nil || instance.controller.signedOut != nil || retireManualDocuments)
+            (instance.controller.documentHost.browserSession != nil || instance.controller
+                .signedOut != nil || retireManualDocuments)
         {
             if error == .expired {
-                guard let session = instance.controller.browserSession, session.expiresAt <= Date() else { continue }
+                guard let session = instance.controller.documentHost.browserSession,
+                      session.expiresAt <= Date() else { continue }
                 self.profileBrowserStores[profileID]?.expire(session)
             }
             instance.controller.invalidateBrowserSession(error: error)
@@ -1077,7 +1081,8 @@ extension DashboardManager {
             observation.needsRefresh = false
             if case let .profile(profileID) = target,
                dashboardControllers().contains(where: {
-                   $0.target == target && $0.controller.browserSession.map { $0.expiresAt <= Date() } == true
+                   $0.target == target && $0.controller.documentHost.browserSession
+                       .map { $0.expiresAt <= Date() } == true
                })
             {
                 self.invalidateProfileDocument(profileID: profileID, error: .expired)
@@ -1237,61 +1242,6 @@ extension DashboardManager {
             $0.controller !== source && $0.target == target
         }
         return mainOwnsTarget || auxiliaryOwnsTarget ? "\(base)-\(UUID().uuidString)" : base
-    }
-
-    private func windowConfiguration(
-        for target: DashboardGatewayTarget, userGesture: Bool = false) async throws
-        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
-    {
-        switch target {
-        case .primary:
-            while true {
-                try Task.checkCancellation()
-                let generation = self.endpointGeneration
-                let mode = AppStateStore.shared.connectionMode
-                do {
-                    let endpoint = try await primaryEndpoint(mode: mode)
-                    let config = endpoint.config
-                    let token = await authTokenProvider(config)
-                    guard self.endpointGeneration == generation else { continue }
-                    let configuration = try await dashboardConfiguration(
-                        endpoint: endpoint, mode: mode, target: target, token: token)
-                    guard self.endpointGeneration == generation else { continue }
-                    return (configuration, endpoint)
-                } catch {
-                    guard self.endpointGeneration == generation else { continue }
-                    throw error
-                }
-            }
-        case .local:
-            return try await self.localWindowConfiguration()
-        case let .profile(profileID):
-            while true {
-                try Task.checkCancellation()
-                guard !self.unavailableProfileIDs.contains(profileID) else { throw CancellationError() }
-                let revision = self.profileCredentialRevisions[profileID, default: 0]
-                var resolvedEndpoint: GatewayConnection.EndpointSnapshot?
-                do {
-                    let endpoint = try await profileEndpoint(profileID: profileID)
-                    resolvedEndpoint = endpoint
-                    let configuration = try await dashboardConfiguration(
-                        endpoint: endpoint, mode: .remote, target: target, token: endpoint.config.token)
-                    guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
-                    return (configuration, endpoint)
-                } catch {
-                    guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
-                    guard let configuration = try WindowConfiguration(
-                        signedOut: error,
-                        profileID: profileID,
-                        name: self.gatewayEntries.first { $0.id == target.bridgeID }?.name,
-                        endpoint: resolvedEndpoint,
-                        userGesture: userGesture)
-                    else { throw error }
-                    return (configuration, GatewayConnection.EndpointSnapshot(
-                        config: (configuration.url, nil, nil), routeAuthority: nil))
-                }
-            }
-        }
     }
 }
 
@@ -1490,7 +1440,7 @@ extension DashboardManager {
         if available.count == 1 {
             return .profile(available[0].id)
         }
-        switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
+        switch await WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
         case .local: return .local
         case .manage:
@@ -1634,10 +1584,6 @@ extension DashboardManager {
         await self.openWindow(for: target).value
     }
 
-    func _testSwitchTarget(_ target: DashboardGatewayTarget, in source: DashboardWindowController) async {
-        await self.switchTarget(target, in: source)?.value
-    }
-
     func _testHandleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
         await self.handleControlChannelStateChange(state)
     }
@@ -1648,10 +1594,6 @@ extension DashboardManager {
 
     func _testAuxiliaryWindows() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
         self.auxiliaryWindows.values.map { ($0.target, $0.controller) }
-    }
-
-    func _testPendingGatewayAlerts() -> [NSAlert] {
-        self.alertPresenter._testPendingAlerts
     }
 
     func _testSetMainTarget(_ target: DashboardGatewayTarget) {

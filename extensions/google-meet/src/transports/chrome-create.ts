@@ -74,39 +74,6 @@ function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
   );
 }
 
-async function findGoogleMeetCreateTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  timeoutMs: number;
-}): Promise<MeetingBrowserCandidateTab | undefined> {
-  const tabs = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId: params.nodeId,
-      method: "GET",
-      path: "/tabs",
-      timeoutMs: params.timeoutMs,
-    }),
-  );
-  return tabs.find(isGoogleMeetCreateTab);
-}
-
-async function focusBrowserTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  targetId: string;
-  timeoutMs: number;
-}): Promise<void> {
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId: params.nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId: params.targetId },
-    timeoutMs: params.timeoutMs,
-  });
-}
-
 function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
   const action = asRecord(value);
   return typeof action.reason === "string" && typeof action.message === "string"
@@ -134,8 +101,13 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const current = () => location.href;
-  const manualActionFor = (reason, message) => ({ reason, message });
   const notes = [];
+  const manualActionFor = (reason, message, browserUrl = current()) => ({
+    manualAction: { reason, message },
+    browserUrl,
+    browserTitle: document.title,
+    notes,
+  });
   const findButton = (pattern) =>
     [...document.querySelectorAll("button")].find((button) => {
       const label = [
@@ -157,12 +129,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
     return true;
   };
   if (!current().startsWith("https://meet.google.com/")) {
-    return {
-      manualAction: manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation."),
-      browserUrl: current(),
-      browserTitle: document.title,
-      notes,
-    };
+    return manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.");
   }
   const href = current();
   if (meetUrlPattern.test(href)) {
@@ -171,10 +138,8 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
     return { meetingUri: href.split(/[?#]/)[0], browserUrl: href, browserTitle: document.title, notes };
   }
   const pageText = text(document.body);
-  if (clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.")) {
-    return { browserUrl: href, browserTitle: document.title, notes, retryAfterMs: 1000 };
-  }
   if (
+    clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.") ||
     clickButton(
       /continue without microphone/i,
       "Continued through Meet microphone prompt with browser automation.",
@@ -183,36 +148,16 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
     return { browserUrl: href, browserTitle: document.title, notes, retryAfterMs: 1000 };
   }
   if (/do you want people to hear you in the meeting/i.test(pageText)) {
-    return {
-      manualAction: manualActionFor("meet-audio-choice-required", "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation."),
-      browserUrl: href,
-      browserTitle: document.title,
-      notes,
-    };
+    return manualActionFor("meet-audio-choice-required", "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation.", href);
   }
   if (/allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
-    return {
-      manualAction: manualActionFor("meet-permission-required", "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation."),
-      browserUrl: href,
-      browserTitle: document.title,
-      notes,
-    };
+    return manualActionFor("meet-permission-required", "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.", href);
   }
   if (/couldn't create|unable to create/i.test(pageText)) {
-    return {
-      manualAction: manualActionFor("browser-control-unavailable", "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation."),
-      browserUrl: href,
-      browserTitle: document.title,
-      notes,
-    };
+    return manualActionFor("browser-control-unavailable", "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation.", href);
   }
   if (location.hostname.toLowerCase() === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText)) {
-    return {
-      manualAction: manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation."),
-      browserUrl: href,
-      browserTitle: document.title,
-      notes,
-    };
+    return manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.", href);
   }
   return {
     retryAfterMs: 500,
@@ -236,16 +181,22 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
   let openedByPlugin = false;
-  let tab = await findGoogleMeetCreateTab({
-    runtime: params.runtime,
-    nodeId,
-    timeoutMs: stepTimeoutMs,
-  });
-  if (tab?.targetId) {
-    await focusBrowserTab({
+  let tab = asMeetingBrowserTabs(
+    await callBrowserProxyOnNode({
       runtime: params.runtime,
       nodeId,
-      targetId: tab.targetId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: stepTimeoutMs,
+    }),
+  ).find(isGoogleMeetCreateTab);
+  if (tab?.targetId) {
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "POST",
+      path: "/tabs/focus",
+      body: { targetId: tab.targetId },
       timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have

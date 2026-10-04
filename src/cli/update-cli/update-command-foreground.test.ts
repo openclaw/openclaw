@@ -41,7 +41,7 @@ vi.mock("../../infra/update-managed-service-handoff.js", async (original) => ({
   parkForegroundUpdateHandoff: handoff.park,
 }));
 
-const { executionParams, mocks, schemaContext, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const foregroundRunId = "b834d63c-0310-4a9b-9b04-48b6b5da6cfe";
@@ -231,37 +231,6 @@ it.each(["preparation", "environment", "state preflight"] as const)(
   },
 );
 
-it.each(["absent", "blank", "native"] as const)(
-  "keeps %s metadata on native admission",
-  async (marker) => {
-    if (marker === "native") {
-      await fs.writeFile(
-        claimPath,
-        JSON.stringify({ version: 1, meta: { runId: foregroundRunId } }),
-      );
-    } else {
-      vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, marker === "blank" ? " \t " : undefined);
-      vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
-    }
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", marker === "native" ? "1" : undefined);
-    handoff.inspect.mockResolvedValue(false);
-    const admitted = await inspectUpdateDatabaseContexts({
-      roots: ["/opt/openclaw"],
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
-      timeoutMs: 1000,
-      managedServiceRootRedirect: null,
-    });
-    expect(admitted.foreground).toBeUndefined();
-    expect(admitted.managedEnv).toEqual(schemaContext("default").env);
-    expect(mocks.maybeStopService).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ phase: "inspect" }),
-    );
-    expect(handoff.inspect).not.toHaveBeenCalled();
-  },
-);
-
 it.each(["schema", "execution", "already current"] as const)(
   "preserves admitted foreground intent at initial %s inspection",
   async (boundary) => {
@@ -280,7 +249,7 @@ it.each(["schema", "execution", "already current"] as const)(
     );
     await fs.rm(claimPath);
     if (boundary === "execution") {
-      const result = await executeMutableUpdate(params);
+      const result = await executeMutableUpdate(await bindExecutionGuards(params));
       expect(result?.result).toMatchObject({
         status: "error",
         reason: "managed-service-preflight",
@@ -308,77 +277,91 @@ it.each(["schema", "execution", "already current"] as const)(
   },
 );
 
-it.each(["active", "unknown", "offline", "absent", "foreign"] as const)(
-  "keeps foreground admission separate from native ownership: %s",
-  async (native) => {
+it.each([
+  { marker: "absent", native: "default" },
+  { marker: "blank", native: "default" },
+  { marker: "native", native: "default" },
+  { marker: "foreground", native: "active" },
+  { marker: "foreground", native: "unknown" },
+  { marker: "foreground", native: "offline" },
+  { marker: "foreground", native: "absent" },
+  { marker: "foreground", native: "foreign" },
+] as const)(
+  "separates $marker admission from $native service ownership",
+  async ({ marker, native }) => {
     const root = "/opt/openclaw";
-    const state: PreManagedServiceStop = {
-      stopped: false,
-      inspected: true,
-      runtimeInspected: native !== "unknown",
-      running: native === "active" || native === "foreign",
-      offline: native === "offline",
-      serviceEnv: { OPENCLAW_PROFILE: "native" },
-      serviceUpdateVerdict:
-        native === "absent" || native === "foreign"
-          ? { kind: native }
-          : { kind: "owned", root, fingerprint: "native", refreshDefinition: false },
-    };
-    mocks.maybeStopService.mockResolvedValue(state);
-    mocks.captureManagedPreflight.mockResolvedValue(
-      state.serviceUpdateVerdict?.kind === "owned" ? schemaContext("native") : undefined,
-    );
-    const admission = inspectUpdateDatabaseContexts({
+    const foreground = marker === "foreground";
+    let state: PreManagedServiceStop | undefined;
+    if (!foreground) {
+      if (marker === "native") {
+        await fs.writeFile(
+          claimPath,
+          JSON.stringify({ version: 1, meta: { runId: foregroundRunId } }),
+        );
+      } else {
+        vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, marker === "blank" ? " \t " : undefined);
+        vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
+      }
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", marker === "native" ? "1" : undefined);
+      handoff.inspect.mockResolvedValue(false);
+    } else {
+      state = {
+        stopped: false,
+        inspected: true,
+        runtimeInspected: native !== "unknown",
+        running: native === "active" || native === "foreign",
+        offline: native === "offline",
+        serviceEnv: { OPENCLAW_PROFILE: "native" },
+        serviceUpdateVerdict:
+          native === "absent" || native === "foreign"
+            ? { kind: native }
+            : { kind: "owned", root, fingerprint: "native", refreshDefinition: false },
+      };
+      mocks.maybeStopService.mockResolvedValue(state);
+      mocks.captureManagedPreflight.mockResolvedValue(
+        state.serviceUpdateVerdict?.kind === "owned" ? schemaContext("native") : undefined,
+      );
+    }
+    const params = {
       roots: [root],
-      updateInstallKind: "package",
+      updateInstallKind: "package" as const,
       shouldRestart: true,
       jsonMode: true,
       timeoutMs: 1000,
       managedServiceRootRedirect: null,
-    });
+    };
+    const admission = inspectUpdateDatabaseContexts(params);
     if (native === "active" || native === "unknown") {
       await expect(admission).rejects.toMatchObject({ reason: "managed-service-preflight" });
       expect(mocks.captureManagedPreflight).not.toHaveBeenCalled();
     } else {
       const value = await admission;
-      expect(value.foreground).toBe(true);
-      expect(value.managedEnv).toBeUndefined();
-      expect(value.services.get(root)).toBe(state);
-      expect(value.contexts[0]?.configSnapshot.path).toBe("/fixture/invoker/openclaw.json");
+      if (foreground) {
+        expect(value.foreground).toBe(true);
+        expect(value.managedEnv).toBeUndefined();
+        expect(value.services.get(root)).toBe(state);
+        expect(value.contexts[0]?.configSnapshot.path).toBe("/fixture/invoker/openclaw.json");
+        if (native === "absent") {
+          handoff.inspect.mockResolvedValue(false);
+          await expect(
+            inspectUpdateDatabaseContexts({
+              ...params,
+              expectedServices: value.services,
+              expectedForeground: value.foreground,
+            }),
+          ).rejects.toMatchObject({ reason: "managed-service-preflight" });
+        }
+      } else {
+        expect(value.foreground).toBeUndefined();
+        expect(value.managedEnv).toEqual(schemaContext("default").env);
+        expect(handoff.inspect).not.toHaveBeenCalled();
+      }
     }
     expect(mocks.maybeStopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ phase: "inspect" }),
     );
   },
 );
-
-it("refuses a foreground helper that loses its admitted ownership", async () => {
-  mocks.maybeStopService.mockResolvedValue({
-    stopped: false,
-    inspected: true,
-    runtimeInspected: true,
-    running: false,
-    serviceUpdateVerdict: { kind: "absent" },
-  });
-  const params = {
-    roots: ["/opt/openclaw"],
-    updateInstallKind: "package" as const,
-    shouldRestart: true,
-    jsonMode: true,
-    timeoutMs: 1000,
-    managedServiceRootRedirect: null,
-  };
-  const admitted = await inspectUpdateDatabaseContexts(params);
-  handoff.inspect.mockResolvedValue(false);
-  await expect(
-    inspectUpdateDatabaseContexts({
-      ...params,
-      expectedServices: admitted.services,
-      expectedForeground: admitted.foreground,
-    }),
-  ).rejects.toMatchObject({ reason: "managed-service-preflight" });
-  expect(mocks.maybeStopService).toHaveBeenCalledOnce();
-});
 
 it.each([
   { capable: true, migrating: true, omittedTimeout: false },
@@ -417,6 +400,15 @@ it.each([
     vi.spyOn(managedContext, "readUpdateCandidateSource").mockResolvedValue({
       config: {},
       hash: "unchanged",
+      source: {
+        path: path.join(root, "openclaw.json"),
+        exists: true,
+        raw: "{}",
+        hash: "unchanged",
+        includedPaths: [],
+        includeProvenance: [],
+        sourceConfig: schemaContext("caller").configSnapshot.sourceConfig,
+      },
     });
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },
@@ -449,7 +441,7 @@ it.each([
         events.push("prepare");
         admitExecutor(await executor.enter(root));
       });
-      return executeMutableUpdate(params);
+      return executeMutableUpdate(await bindExecutionGuards(params));
     });
     if (!capable && migrating) {
       expect(result?.result).toMatchObject({

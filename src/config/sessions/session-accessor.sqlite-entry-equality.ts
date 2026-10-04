@@ -1,4 +1,5 @@
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteLifecycleTargetSnapshot = Array<{
@@ -11,13 +12,6 @@ export type SqliteLifecycleTargetSnapshot = Array<{
   };
 }>;
 
-class SqliteSessionMutationConflictError extends Error {
-  constructor(operationLabel: string) {
-    super(`SQLite session state changed while preparing ${operationLabel}`);
-    this.name = "SqliteSessionMutationConflictError";
-  }
-}
-
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,
   right: SessionEntry | undefined,
@@ -28,16 +22,28 @@ export function sqliteSessionEntriesEqual(
   const {
     participants: _leftParticipants,
     participantCount: _leftParticipantCount,
+    sessionDiffBaseline: leftBaseline,
+    skillsSnapshot: leftSkills,
+    systemPromptReport: leftReport,
     ...leftEntry
   } = left;
   const {
     participants: _rightParticipants,
     participantCount: _rightParticipantCount,
+    sessionDiffBaseline: rightBaseline,
+    skillsSnapshot: rightSkills,
+    systemPromptReport: rightReport,
     ...rightEntry
   } = right;
   // Participant history is a separately mutable SQLite projection. It must not
   // invalidate logical-session compare-and-swap or leak into entry_json writes.
-  return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
+  // Hydration appends cold fields to hot facts; their original top-level order is not identity.
+  return (
+    JSON.stringify(leftEntry) === JSON.stringify(rightEntry) &&
+    JSON.stringify(leftBaseline) === JSON.stringify(rightBaseline) &&
+    JSON.stringify(leftSkills) === JSON.stringify(rightSkills) &&
+    JSON.stringify(leftReport) === JSON.stringify(rightReport)
+  );
 }
 
 export function sqliteLifecycleTargetSnapshotsEqual(

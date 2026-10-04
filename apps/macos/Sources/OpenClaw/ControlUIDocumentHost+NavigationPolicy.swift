@@ -32,7 +32,7 @@ extension ControlUIDocumentHost {
         isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
     }
 
-    static func isHTTPURL(_ url: URL) -> Bool {
+    nonisolated static func isHTTPURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
               url.host?.isEmpty == false
@@ -81,10 +81,7 @@ extension ControlUIDocumentHost {
         else {
             return false
         }
-        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
-            components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread"))
+        return true
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -224,6 +221,17 @@ extension ControlUIDocumentHost {
                 decisionHandler: decisionHandler)
             return
         }
+        let trustedMainFrame = navigationAction.sourceFrame.isMainFrame &&
+            Self.isTrustedLinkSource(navigationAction.sourceFrame.request.url, dashboardURL: self.currentURL)
+        if navigationAction.targetFrame?.isMainFrame == false, trustedMainFrame,
+           self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+           let session = self.browserSession,
+           let applicationURL = CloudflareAccessEmbedLogin.applicationURL(loginURL: url, gateway: session)
+        {
+            decisionHandler(.cancel)
+            self.signInEmbed(applicationURL)
+            return
+        }
         if ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url,
             auth: self.auth,
@@ -241,10 +249,7 @@ extension ControlUIDocumentHost {
             to: url,
             dashboardURL: self.currentURL,
             isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
-            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
-                ControlUIDocumentHost.isTrustedLinkSource(
-                    navigationAction.sourceFrame.request.url,
-                    dashboardURL: self.currentURL))
+            isTrustedDashboardSource: trustedMainFrame)
         {
             decisionHandler(.allow)
             return
@@ -261,9 +266,67 @@ extension ControlUIDocumentHost {
             navigationType: navigationAction.navigationType,
             buttonNumber: navigationAction.buttonNumber)
         {
-            self.openExternal(url)
+            Self.openExternal(url)
         }
         decisionHandler(.cancel)
+    }
+
+    private func signInEmbed(_ applicationURL: URL) {
+        guard let lease = self.browserSessionLease else { return }
+        let generation = self.generation
+        Task { @MainActor [weak self] in
+            guard let self, self.generation == generation, self.isAvailable(),
+                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            let observedHosts = try? await self.webView.callAsyncJavaScript(
+                """
+                return Array.from(document.querySelectorAll('iframe[src]'), frame => {
+                    try {
+                        const url = new URL(frame.src, document.baseURI);
+                        return new URL(url.origin).hostname;
+                    } catch { return null; }
+                }).filter(host => host !== null);
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: .defaultClient)
+            guard self.generation == generation, self.isAvailable(),
+                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            guard let observedHosts = observedHosts as? [String] else {
+                lease.recordEmbedFailure(appURL: applicationURL, reason: .documentUnavailable)
+                return
+            }
+            guard await (try? lease.signInEmbed(
+                appURL: applicationURL,
+                observedIframeHosts: observedHosts,
+                documentIsCurrent: { [weak self] in
+                    guard let self else { return false }
+                    return self.generation == generation && self.isAvailable() &&
+                        self.auth.usesBrowserIdentity && self.hasCurrentBrowserSession
+                })) == true,
+                self.generation == generation, self.isAvailable(),
+                self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            // The iframe's src retains its original path through server redirects.
+            // Reset it from the trusted parent so the reload obeys the same policy
+            // as initial creation; a child-initiated location.replace is untrusted.
+            _ = try? await self.webView.callAsyncJavaScript(
+                """
+                for (const frame of document.querySelectorAll('iframe[src]')) {
+                    const url = new URL(frame.src, document.baseURI);
+                    if (url.origin === new URL(origin).origin && !url.username && !url.password) {
+                        frame.src = url.href;
+                    }
+                }
+                """,
+                arguments: ["origin": applicationURL.absoluteString],
+                in: nil,
+                contentWorld: .defaultClient)
+        }
     }
 
     func decideTargetlessNavigation(
@@ -282,15 +345,15 @@ extension ControlUIDocumentHost {
         case .allow:
             decisionHandler(.allow)
         case .openExternal:
-            self.openExternal(url)
+            Self.openExternal(url)
             decisionHandler(.cancel)
         case .cancel:
             decisionHandler(.cancel)
         }
     }
 
-    private func openExternal(_ url: URL) {
-        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+    static func openExternal(_ url: URL) {
+        guard self.isExternalURL(url) || self.isEditorURL(url) else { return }
+        AppActivation.shared.open(url)
     }
 }

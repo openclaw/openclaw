@@ -25,6 +25,7 @@ async function mountTab(
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -82,26 +83,24 @@ describe("AppSidebar catalog event refresh", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it.each([{ events: [] }, { events: ["sessions.changed"] }])(
-    "keeps a stable 30-second fallback when catalog changes are not advertised (%j)",
-    async ({ events }) => {
-      const request = createGatewayRequestMock()
-        .mockResolvedValueOnce(catalogPage([]))
-        .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
-      const { gateway, sidebar } = await mountTab(request, events);
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect.soft(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(sidebar.textContent).toContain("New catalog row");
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(3);
-    },
-  );
+  it("keeps a stable 30-second fallback when catalog changes are not advertised", async () => {
+    const events = ["sessions.changed"];
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(catalogPage([]))
+      .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
+    const { gateway, sidebar } = await mountTab(request, events);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect.soft(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sidebar.textContent).toContain("New catalog row");
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 
   it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -206,6 +205,42 @@ describe("AppSidebar catalog event refresh", () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it("keeps agent startup quiet past three minutes and surfaces a later inspection failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const request = createGatewayRequestMock().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent has not completed startup inspection. Run openclaw doctor --fix.",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      }),
+    );
+    const { sidebar } = await mountTab(request);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await sidebar.updateComplete;
+    expect(request.mock.calls.length).toBeGreaterThan(30);
+    expect(sidebar.querySelector('[role="status"]')?.textContent).toContain("Starting up");
+    expect(sidebar.querySelector(".callout.danger")).toBeNull();
+    expect(sidebar.textContent).not.toContain("doctor --fix");
+    expect(warning).not.toHaveBeenCalled();
+
+    request.mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Inspection failed. Run openclaw doctor --fix.",
+        retryable: false,
+        details: { code: "agent-database-inspection-failed", agentId: "main" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sidebar.updateComplete;
+    expect(sidebar.textContent).not.toContain("Starting up");
+    expect(sidebar.querySelector(".sidebar-session-catalog-error")?.textContent).toContain(
+      "Inspection failed. Run openclaw doctor --fix.",
+    );
   });
 
   it.each(["hide", "remove"])(

@@ -31,8 +31,11 @@ export TELEGRAM_E2E_SKILL_DIR
 Verify `node`, `uv`, and a dependency-ready runtime for the exact ref before
 leasing a credential. The runner uses built `dist/entry.js`; `--source-gateway`
 uses the repository's development launcher when a dependency-ready source run
-is appropriate. The live run must not implicitly install or build. Only the
-`mock` backend needs `scripts/e2e/mock-openai-server.mjs`.
+is appropriate. It runs core and the Telegram plugin from TypeScript source;
+other plugins, including the model provider, use built output when it exists,
+so rebuild before claiming their changes. The live run must not implicitly
+install or build. Only the `mock` backend needs
+`scripts/e2e/mock-openai-server.mjs`.
 
 Convex access can come from either:
 
@@ -55,8 +58,14 @@ network failure is not evidence that credentials are missing.
 Bun's `--no-install` missing-binary error means that launcher is unavailable;
 discovery continues to the next installed launcher.
 
-On shared hosts, select two unused ports and pass them explicitly; the runner
-does not read port environment variables:
+The standalone doctor needs no local HTTP listener, Gateway build, or model
+backend: it checks the leased TDLib user and calls Telegram’s official Test Bot
+API directly over HTTPS. The full scenario still needs local networking for its
+Gateway and Test Bot API adapter (including hold/reject controls), plus the mock
+provider when selected. A passing doctor does not qualify those local services.
+
+For a full scenario on shared hosts, select two unused ports and pass them
+explicitly; the runner does not read port environment variables:
 
 ```bash
 : "${TELEGRAM_GATEWAY_PORT:?set an unused Gateway port}"
@@ -90,8 +99,10 @@ For a standalone diagnostic, use:
 node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-doctor.mjs"
 ```
 
-Require `ok: true`. The doctor defaults to DM readiness; `--chat <target>` checks
-a selected group. It releases its diagnostic lease and does not start product
+Require `ok: true`, `botApiTransport: "direct-https"`, and `botApiProxy: false`.
+The doctor defaults to DM readiness; `--chat <target>` checks a selected group
+through the same direct Test Bot API route. It releases its diagnostic lease
+and does not start product
 proof. Preserve setup failures and repair their cause before trying again;
 rotating unchanged credentials to hunt for a pass is not a repair.
 

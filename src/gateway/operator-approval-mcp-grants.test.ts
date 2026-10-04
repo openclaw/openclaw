@@ -32,7 +32,7 @@ import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
 let fixture: OpenClawTestState | undefined;
 const cfg: OpenClawConfig = {
-  agents: { list: [{ id: "main" }, { id: "other" }] },
+  agents: { entries: { main: {}, other: {} } },
   mcp: { servers: { "project.docs": { command: "docs-mcp" } } },
 };
 

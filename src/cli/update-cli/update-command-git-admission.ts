@@ -1,21 +1,11 @@
 import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
-import type { UpdateRunnerOptions, UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 
 type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
-
-export function assertGitCandidateSteps(steps: UpdateRunResult["steps"]): void {
-  const failed = steps.find(isFailedUpdateStep);
-  if (failed) {
-    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
-      failureFacts: failed.failureFacts,
-    });
-  }
-}
 
 export async function admitSourceUpdateArtifacts(
   root: string,
@@ -38,22 +28,16 @@ export async function admitSourceUpdateArtifacts(
   }
 }
 
-export function recordInspectedGitTarget(
-  run: UpdateCommandOptions["run"],
+export async function recordInspectedGitTarget(
   target: Parameters<BeforeGitMutation>[0],
+  recordPhase: ReturnType<typeof createUpdateCommandExecutionGuards>["recordPhase"],
   assertCurrent: () => void,
-): void {
+): Promise<void> {
   assertCurrent();
-  if (run) {
-    recordUpdateRunPhase(
-      run.runId,
-      "staging",
-      {
-        target: { kind: "git", sha: target.sha, version: target.version },
-      },
-      { env: run.env },
-    );
-  }
+  await recordPhase("staging", {
+    target: { kind: "git", sha: target.sha, version: target.version },
+  });
+  assertCurrent();
   assertReadableGitTarget(target);
 }
 

@@ -58,7 +58,7 @@ export function readDaemonRuntimePin(
     return snapshot;
   }
   const record = recordSchema.parse(value);
-  if (record.definition !== definition(command)) {
+  if (record.definition !== snapshot.definition) {
     throw new Error(
       "Managed service changed since its runtime pin was saved. Reinstall with an explicit --runtime or --runtime-path to select runtime intent.",
     );

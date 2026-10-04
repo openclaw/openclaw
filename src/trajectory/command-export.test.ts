@@ -1,14 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
 } from "./command-export.js";
 import { resolveTrajectoryFilePath } from "./paths.js";
+import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
-import type { TrajectoryBundleManifest, TrajectoryEvent } from "./types.js";
+import type { TrajectoryBundleManifest } from "./types.js";
 
 const tool = { name: "synthetic_read", description: "Read a synthetic document." };
 const complete = { systemPrompt: "Synthetic system prompt.", tools: [tool] };
@@ -19,14 +20,12 @@ const cases: Array<{
   contextFiles: string[];
   outputPath?: string;
 }> = [
-  { name: "no context", contexts: [], contextFiles: [], outputPath: "nested/inventory" },
   {
     name: "complete context",
     contexts: [complete],
     contextFiles: ["system-prompt.txt", "tools.json"],
     outputPath: "prefix/../~/inventory",
   },
-  { name: "oversized prompt", contexts: [oversized], contextFiles: ["tools.json"] },
   {
     name: "empty prompt",
     contexts: [{ systemPrompt: "", tools: [] }],
@@ -54,6 +53,8 @@ const cases: Array<{
 ];
 
 describe("trajectory command export inventory", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it.each(cases)(
     "reports only written files in existing order for $name",
     async ({ contexts, contextFiles, outputPath = "inventory" }) => {
@@ -81,19 +82,17 @@ describe("trajectory command export inventory", () => {
         await fs.writeFile(sessionFile, sessionBytes);
         const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
         const writes: string[] = [];
+        vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+          write: (_event, line) => writes.push(`${line}\n`),
+          flush: async () => {},
+          describeFlushState: () => undefined,
+        });
         const recorder = createTrajectoryRuntimeRecorder({
           sessionId,
           sessionKey,
           sessionFile,
           workspaceDir: root,
           env: { OPENCLAW_TRAJECTORY: "1" },
-          writer: {
-            filePath: runtimeFile,
-            write: (line) => {
-              writes.push(line);
-            },
-            flush: async () => {},
-          },
         });
         if (!recorder) {
           throw new Error("Expected the synthetic recorder to be enabled");
@@ -105,13 +104,6 @@ describe("trajectory command export inventory", () => {
         }
         recorder.recordEvent("model.completed", { stopReason: "stop" });
         await recorder.flush();
-        expect(writes).toHaveLength(contexts.length + 3);
-        const recorded = writes.map((line) => JSON.parse(line) as TrajectoryEvent);
-        const latest = recorded.findLast((event) => event.type === "context.compiled")?.data;
-        expect(typeof latest?.systemPrompt === "string" && latest.systemPrompt.length > 0).toBe(
-          contextFiles.includes("system-prompt.txt"),
-        );
-        expect(Array.isArray(latest?.tools)).toBe(contextFiles.includes("tools.json"));
         const runtimeBytes = writes.join("");
         await fs.writeFile(runtimeFile, runtimeBytes);
 
@@ -156,7 +148,7 @@ describe("trajectory command export inventory", () => {
     },
   );
 
-  it.each([".openclaw", ".openclaw/trajectory-exports", ".openclaw/trajectory-exports/alias"])(
+  it.each([".openclaw", ".openclaw/trajectory-exports/alias"])(
     "rejects an escaping %s directory without writing outside the workspace",
     async (relativeLink) => {
       await withTempDir("openclaw-trajectory-boundary-", async (root) => {

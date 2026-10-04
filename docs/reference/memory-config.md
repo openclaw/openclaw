@@ -118,6 +118,13 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
+If an outage activates a fallback that cannot read the existing index, later
+searches retry the configured primary, with a 30-second cooldown between recovery
+attempts. Once the primary responds and matches the stored provider, model, and
+provider settings, search resumes without restarting the Gateway or rebuilding
+the index. An index already built with the fallback stays on that compatible
+provider; recovery never silently replaces its embeddings.
+
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
@@ -157,7 +164,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
+Remote embedding authentication depends on the provider. Bedrock uses the AWS SDK default credential chain (instance roles, SSO, access keys, or a Bedrock API key).
 
 | Provider       | Env var                                             | Config key                          |
 | -------------- | --------------------------------------------------- | ----------------------------------- |
@@ -176,7 +183,9 @@ such as `my-embeddings:default`. Literal keys keep their configured value even
 when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
-Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+OpenAI embeddings can use a stored Codex OAuth profile when the account grants
+embedding access. The separate Sign in with ChatGPT token-sharing grant does not
+authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
 ---
@@ -288,6 +297,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
       },
     }
     ```
+
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
 
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |

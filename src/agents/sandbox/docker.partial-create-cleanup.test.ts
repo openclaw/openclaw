@@ -1,6 +1,7 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
 
 const containerMocks = vi.hoisted(() => ({ execContainer: vi.fn() }));
@@ -18,11 +19,6 @@ vi.mock("./container-engine.js", async (importOriginal) => ({
 vi.mock("./registry.js", () => registryMocks);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
-
-beforeAll(async () => {
-  ({ ensureSandboxContainer } = await import("./docker.js"));
-});
 
 beforeEach(() => {
   registryMocks.readRegistryEntry.mockReset().mockResolvedValue(null);
@@ -129,29 +125,39 @@ describe("fresh sandbox container cleanup", () => {
     },
   );
 
-  it("persists a managed mount before allocation and retains ambiguous failures", async () => {
-    const workspaceDir = tempDirs.make("openclaw-managed-runtime-custody-");
-    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-      if (args[0] === "inspect") {
-        return { code: 1, stdout: "", stderr: "No such object" };
-      }
-      if (args[0] === "create") {
-        expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
-          expect.objectContaining({ workspaceDir }),
-        );
-        throw new Error("allocation response lost");
-      }
-      return { code: 0, stdout: "a".repeat(64), stderr: "" };
-    });
-    await expect(
-      ensureSandboxContainer({
-        ...containerParams(workspaceDir),
-        scopeKey: "managed-custody",
-        workspaceSource: "managed-worktree",
-      }),
-    ).rejects.toThrow("allocation response lost");
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "preserves unallocated custody after create failure (managed=%s)",
+    async (managed) => {
+      const workspaceDir = tempDirs.make("openclaw-create-failure-");
+      const error = managed ? "allocation response lost" : "container name already in use";
+      containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+        if (args[0] === "inspect") {
+          return { code: 1, stdout: "", stderr: managed ? "No such object" : "inspection failed" };
+        }
+        if (args[0] === "create") {
+          if (managed) {
+            expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
+              expect.objectContaining({ workspaceDir }),
+            );
+          }
+          throw new Error(error);
+        }
+        return { code: 0, stdout: "a".repeat(64), stderr: "" };
+      });
+      await expect(
+        ensureSandboxContainer({
+          ...containerParams(workspaceDir),
+          ...(managed
+            ? { scopeKey: "managed-custody", workspaceSource: "managed-worktree" as const }
+            : {}),
+        }),
+      ).rejects.toThrow(error);
+      expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "rm")).toBe(
+        false,
+      );
+      expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+    },
+  );
 
   it("never allocates a managed writer if its durable binding cannot be saved", async () => {
     const workspaceDir = tempDirs.make("openclaw-managed-binding-failure-");
@@ -168,49 +174,24 @@ describe("fresh sandbox container cleanup", () => {
     );
   });
 
-  it("removes a newly allocated runtime when setup fails before publication", async () => {
+  it.each(["setup", "publication"])("cleans an allocated runtime after %s fails", async (stage) => {
     const workspaceDir = tempDirs.make("openclaw-docker-partial-start-");
+    const setup = stage === "setup";
+    const expectedError = setup ? "setup failed" : "registry publication failed";
+    if (!setup) {
+      registryMocks.updateRegistry.mockRejectedValueOnce(new Error(expectedError));
+    }
     await expectPartialRuntimeCleanup({
       workspaceDir,
-      cfg: config(workspaceDir, "exit 1"),
-      expectedError: "setup failed",
+      cfg: config(workspaceDir, setup ? "exit 1" : undefined),
+      expectedError,
     });
-    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeState: "pending", workspaceDir }),
-    );
-    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
-  });
-
-  it("removes the runtime when registry publication fails", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-registry-failure-");
-    registryMocks.updateRegistry.mockRejectedValueOnce(new Error("registry publication failed"));
-    await expectPartialRuntimeCleanup({
-      workspaceDir,
-      cfg: config(workspaceDir),
-      expectedError: "registry publication failed",
-    });
-  });
-
-  it("does not remove an existing runtime when allocation fails", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-name-conflict-");
-    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-      if (args[0] === "inspect") {
-        return { code: 1, stdout: "", stderr: "inspection failed" };
-      }
-      if (args[0] === "create") {
-        throw new Error("container name already in use");
-      }
-      return { code: 0, stdout: "a".repeat(64), stderr: "" };
-    });
-
-    await expect(ensureSandboxContainer(containerParams(workspaceDir))).rejects.toThrow(
-      "container name already in use",
-    );
-
-    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "rm")).toBe(
-      false,
-    );
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+    if (setup) {
+      expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeState: "pending", workspaceDir }),
+      );
+      expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
+    }
   });
 
   it("does not overwrite readiness when the existing runtime cannot be inspected", async () => {

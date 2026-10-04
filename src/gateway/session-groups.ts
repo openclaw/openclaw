@@ -68,20 +68,6 @@ function normalizeSidebarSectionOrder(
   return [...normalized];
 }
 
-export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): SessionGroupRecord[] {
-  return readSessionGroupCatalog(env).groups;
-}
-
-export function listSessionGroupDefaults(
-  env: NodeJS.ProcessEnv = process.env,
-): SessionGroupDefaultsRecord[] {
-  return readSessionGroupCatalog(env).defaults;
-}
-
-export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): string[] {
-  return readSessionGroupCatalog(env).sectionOrder;
-}
-
 /**
  * Replaces the ordered catalog. Dropping a name whose group still has member
  * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
@@ -257,11 +243,8 @@ async function mutateSessionGroup(
       throw new Error(message, { cause: error });
     }
   }
-  return {
-    groups: listSessionGroups(env),
-    sectionOrder: listSidebarSectionOrder(env),
-    updatedSessions,
-  };
+  const { groups, sectionOrder } = readSessionGroupCatalog(env);
+  return { groups, sectionOrder, updatedSessions };
 }
 
 export async function renameSessionGroup(params: SessionGroupMutationParams & { to: string }) {

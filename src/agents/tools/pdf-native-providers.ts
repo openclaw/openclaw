@@ -14,7 +14,7 @@ import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-run
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
-import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
@@ -30,6 +30,16 @@ const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
 type NativePdfProviderRequestConfig = {
   headers?: Record<string, string>;
   request?: ModelProviderRequestTransportOverrides;
+};
+
+type NativePdfAnalysisParams = {
+  apiKey: string;
+  modelId: string;
+  prompt: string;
+  pdfs: PdfInput[];
+  baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 };
 
 type NativePdfJsonRequest = {
@@ -113,16 +123,9 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
 
 type AnthropicResponseContent = Array<{ type: string; text?: string }>;
 
-export async function anthropicAnalyzePdf(params: {
-  apiKey: string;
-  modelId: string;
-  prompt: string;
-  pdfs: PdfInput[];
-  maxTokens?: number;
-  baseUrl?: string;
-  requestConfig?: NativePdfProviderRequestConfig;
-  signal?: AbortSignal;
-}): Promise<string> {
+export async function anthropicAnalyzePdf(
+  params: NativePdfAnalysisParams & { maxTokens?: number },
+): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
     throw new Error("Anthropic PDF: apiKey required");
@@ -168,8 +171,9 @@ export async function anthropicAnalyzePdf(params: {
   }
 
   const text = responseContent
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text!)
+    .flatMap((block) =>
+      block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+    )
     .join("");
 
   if (!text.trim()) {
@@ -183,15 +187,7 @@ type GeminiCandidate = {
   content?: { parts?: Array<{ text?: string }> };
 };
 
-export async function geminiAnalyzePdf(params: {
-  apiKey: string;
-  modelId: string;
-  prompt: string;
-  pdfs: PdfInput[];
-  baseUrl?: string;
-  requestConfig?: NativePdfProviderRequestConfig;
-  signal?: AbortSignal;
-}): Promise<string> {
+export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
     throw new Error("Gemini PDF: apiKey required");
@@ -233,16 +229,13 @@ export async function geminiAnalyzePdf(params: {
   });
 
   const candidates = json.candidates as GeminiCandidate[] | undefined;
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    throw new Error("Gemini PDF returned no candidates.");
-  }
-
-  const candidate = candidates.at(0);
+  const candidate = Array.isArray(candidates) ? candidates[0] : undefined;
   if (!candidate) {
     throw new Error("Gemini PDF returned no candidates.");
   }
-  const textParts = candidate.content?.parts?.filter((part) => typeof part.text === "string") ?? [];
-  const text = textParts.map((part) => part.text).join("");
+  const text = (candidate.content?.parts ?? [])
+    .flatMap((part) => (typeof part.text === "string" ? [part.text] : []))
+    .join("");
 
   if (!text.trim()) {
     throw new Error("Gemini PDF returned no text.");

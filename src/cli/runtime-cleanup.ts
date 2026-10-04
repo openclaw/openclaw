@@ -1,3 +1,8 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import {
+  hasProviderTransportDispatcherPool,
+  stopActiveManagedProviderLocalServices,
+} from "../agents/provider-runtime-lifecycle.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
@@ -24,25 +29,16 @@ export async function runCliDisposer(
   timeoutMs = DISPOSER_TIMEOUT_MS,
 ): Promise<void> {
   const token = Symbol(name);
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .finally(() => pendingDisposers.delete(token));
   pendingDisposers.set(token, { name, operation });
   try {
-    await Promise.race([
-      operation,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
-          resolve();
-        }, timeoutMs);
-      }),
-    ]);
+    await raceWithTimeout(operation, timeoutMs, () => {
+      console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
+    });
   } catch {
     // Teardown cannot mask the command outcome or skip later resources.
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -81,18 +77,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         cleanup.registries.clear();
       }
     },
-    "provider-local-services": async () => {
-      const { hasManagedProviderLocalServices } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasManagedProviderLocalServices()) {
-        const { stopManagedProviderLocalServices } =
-          await import("../agents/provider-local-service.js");
-        await stopManagedProviderLocalServices();
-      }
-    },
+    "provider-local-services": stopActiveManagedProviderLocalServices,
     "provider-transport-dispatchers": async () => {
-      const { hasProviderTransportDispatcherPool } =
-        await import("../agents/provider-runtime-lifecycle.js");
       if (hasProviderTransportDispatcherPool()) {
         const { closeProviderTransportDispatcherPool } =
           await import("../agents/provider-transport-dispatcher-pool.js");

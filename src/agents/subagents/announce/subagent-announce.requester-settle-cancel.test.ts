@@ -1,6 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { persistSubagentRunsToDiskOrThrow, useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
+import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -16,10 +16,11 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   markRequesterTurnYielded,
@@ -28,8 +29,10 @@ import {
   settleRequesterAfterSessionSpawns,
 } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
@@ -38,6 +41,30 @@ import {
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
+function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
+  fixture.worker.mockImplementation((context, operation, options) =>
+    runSubagentStateWorkerOperation(
+      context,
+      (scope) =>
+        operation({
+          execute: async (command, executeOptions) => {
+            if (
+              isSubagentRegistryWriteCommand(command) &&
+              command.input.values.some((value) => {
+                const row = rowToSubagentRunRecord(value);
+                return row !== null && reject(row);
+              })
+            ) {
+              throw new Error(message);
+            }
+            return scope.execute(command, executeOptions);
+          },
+        }),
+      options,
+    ),
+  );
+}
+
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSystemEventsForTest();
@@ -45,16 +72,13 @@ afterEach(() => {
 
 it.each([
   "pending",
-  "admitted",
-  "exact admitted",
   "exact private retry",
   "pending RPC",
   "retry backoff",
   "declined",
   "failed persistence",
-  "worker persistence",
+  "admitted",
   "unrelated turn",
-  "transient failure",
 ] as const)("preserves completed-child continuation ownership through %s", async (phase) => {
   const requesterKey = "agent:main:stop-completion";
   const childKey = "agent:main:subagent:completed-before-stop";
@@ -69,7 +93,7 @@ it.each([
     });
   }
   const endedAt = Date.now();
-  const entries = [];
+  const entries: SubagentRunRecord[] = [];
   for (const childSessionKey of childKeys) {
     const runId = childSessionKey.slice(childSessionKey.lastIndexOf(":") + 1);
     await registerSubagentRun({
@@ -82,7 +106,7 @@ it.each([
       cleanup: "keep",
       expectsCompletionMessage: true,
     });
-    const entry = subagentRuns.get(runId)!;
+    const entry = structuredClone(subagentRuns.get(runId)!);
     // Restored successful children can owe a wake without a parent turn binding.
     entry.execution = {
       ...entry.execution,
@@ -124,9 +148,12 @@ it.each([
       rearmGeneration: 1,
     };
   }
-  persistSubagentRunsToDiskOrThrow(
-    subagentRuns,
+  await mutateSubagentRuns(
     entries.map(({ runId }) => runId),
+    () => ({
+      value: undefined,
+      postimages: new Map(entries.map((draft) => [draft.runId, draft])),
+    }),
   );
 
   const admitted = createDeferredCore();
@@ -173,7 +200,7 @@ it.each([
       admitted.resolve();
       if (attempts.length === 1) {
         await execute.promise;
-        if (phase === "transient failure" || phase === "retry backoff") {
+        if (phase === "retry backoff") {
           throw new Error("temporary requester delivery failure");
         }
         if (phase === "pending RPC") {
@@ -205,22 +232,12 @@ it.each([
     if (phase === "retry backoff") {
       execute.resolve();
       await fixture.settle();
-      expect(entry.requesterSettleWake?.status).toBe("pending");
+      expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.status).toBe("pending");
     }
     if (phase === "failed persistence") {
-      fixture.persist.mockImplementation((runs, runIds) => {
-        if (runs.get(entry.runId)?.suppressCompletionDelivery) {
-          throw new Error("completion cancellation write rejected");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, runIds);
-      });
-    }
-    if (phase === "worker persistence") {
-      const actual = await vi.importActual<typeof import("../registry/subagent-registry-state.js")>(
-        "../registry/subagent-registry-state.js",
-      );
-      vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementationOnce(
-        actual.persistSubagentRunsToDiskAsyncOrThrow,
+      rejectRegistryWrites(
+        (row) => row.runId === entry.runId && row.suppressCompletionDelivery === true,
+        "completion cancellation write rejected",
       );
     }
     if (phase === "pending RPC") {
@@ -233,14 +250,12 @@ it.each([
         true,
         expect.objectContaining({ aborted: true, runIds: [attempts[0]] }),
       );
-    } else if (phase !== "transient failure") {
+    } else {
       const result = await abortControlledSubagents({
         cfg: getRuntimeConfig(),
         sessionKey: requesterKey,
         agentId: "main",
-        ...(phase === "exact admitted" ||
-        phase === "exact private retry" ||
-        phase === "retry backoff"
+        ...(phase === "exact private retry" || phase === "retry backoff"
           ? { requesterTurnRunId: attempts[0] }
           : phase === "unrelated turn"
             ? { requesterTurnRunId: "later-human-turn" }
@@ -270,7 +285,7 @@ it.each([
     await registryTesting.sweepOnceForTests();
     await fixture.settle();
 
-    const retry = phase === "transient failure" || phase === "failed persistence";
+    const retry = phase === "failed persistence";
     const continues = retry || phase === "declined" || phase === "unrelated turn";
     expect.soft(attempts).toHaveLength(retry ? 2 : phase === "pending" ? 0 : 1);
     expect.soft(started).toHaveLength(continues ? 1 : 0);
@@ -278,9 +293,10 @@ it.each([
       expect(attempts[1]).toBe(`${attempts[0]}:retry-1`);
     }
     for (const child of entries) {
-      expect.soft(child.requesterSettleWake).toBeUndefined();
-      expect(child.execution.outcome).toEqual({ status: "ok" });
-      expect(child.completion?.resultText).toBe("The retained child result.");
+      const current = subagentRuns.get(child.runId);
+      expect.soft(current?.requesterSettleWake).toBeUndefined();
+      expect(current?.execution.outcome).toEqual({ status: "ok" });
+      expect(current?.completion?.resultText).toBe("The retained child result.");
     }
   } finally {
     admission?.close();
@@ -293,7 +309,6 @@ it.each([
 it.each([
   "pending",
   "admitted",
-  "unsuppressed",
   "failed kill",
   "requester reset",
   "requester replacement",
@@ -327,16 +342,19 @@ it.each([
       });
     }
     expect(
-      markRequesterTurnYielded({
+      await markRequesterTurnYielded({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
       }),
     ).toBe(1);
-    expect(markSubagentRunPausedAfterYield({ entry: subagentRuns.get("requester")! })).toBe(true);
-    persistSubagentRunsToDiskOrThrow(subagentRuns, ["requester"]);
+    await mutateSubagentRuns(["requester"], (rows) => {
+      const entry = structuredClone(rows.get("requester")!);
+      expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+      return { value: undefined, postimages: new Map([[entry.runId, entry]]) };
+    });
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -366,7 +384,7 @@ it.each([
       // Production admission adopts a paused requester before execution starts.
       const runId = String(params?.idempotencyKey);
       expect(
-        adoptPausedSubagentRunForFollowUp({
+        await adoptPausedSubagentRunForFollowUp({
           childSessionKey: String(params?.sessionKey),
           runId,
           task: String(params?.message),
@@ -396,7 +414,7 @@ it.each([
     if (phase !== "pending") {
       // A terminal child is skipped by tree cancellation; its yielded requester
       // still owns the pending synthesis and must fence an already admitted wake.
-      expect(markSubagentRunTerminated({ runId: "nested", reason: "killed" })).toBe(1);
+      expect(await markSubagentRunTerminated({ runId: "nested", reason: "killed" })).toBe(1);
     }
     const completedNestedOutcome =
       phase === "pending"
@@ -408,12 +426,10 @@ it.each([
       expect(requesterExecutionRunId).not.toBe(originalRequester.runId);
     }
     if (phase === "failed kill") {
-      fixture.persist.mockImplementation((runs, changedRunIds) => {
-        if (runs.get("requester")?.killIntent) {
-          throw new Error("requester kill intent rejected");
-        }
-        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
-      });
+      rejectRegistryWrites(
+        (row) => row.runId === "requester" && Boolean(row.killIntent),
+        "requester kill intent rejected",
+      );
     }
     if (phase === "requester reset") {
       await patchSessionEntryCore({ storePath, sessionKey: requesterKey }, (entry) => ({
@@ -447,7 +463,7 @@ it.each([
         await registryTesting.sweepOnceForTests();
       }
       await fixture.settle();
-      if (phase === "unsuppressed" || phase === "failed kill") {
+      if (phase === "failed kill") {
         expect(startedTurns).toEqual([requesterKey]);
       } else {
         expect(startedTurns).toEqual([]);

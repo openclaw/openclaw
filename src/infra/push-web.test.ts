@@ -6,7 +6,11 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   insertOperatorApproval,
@@ -19,7 +23,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
-  createWebPushVapidKeyPair,
   deleteWebPushApprovalDeliveryTargets,
   withBoundWebPushSubscriptionByEndpoint,
   hashWebPushEndpoint,
@@ -136,7 +139,10 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function startExpiredWebPushBroadcast(payload: Parameters<typeof broadcastWebPush>[0]) {
+function startExpiredWebPushBroadcast(
+  payload: Parameters<typeof broadcastWebPush>[0],
+  signal: AbortSignal,
+) {
   const started = createDeferred();
   const release = createDeferred();
   vi.mocked(webPush.sendNotification).mockImplementationOnce(async () => {
@@ -150,15 +156,14 @@ function startExpiredWebPushBroadcast(payload: Parameters<typeof broadcastWebPus
     return broadcast;
   };
   return {
-    started: withTestTimeout(
-      Promise.race([
+    // Bind the gate to the test signal so a stall still reaches the async disposer.
+    started: withinTest(
+      awaitGateBeforeSettlement(
         started.promise,
-        broadcast.then(() => {
-          throw new Error("Web Push broadcast completed before send started");
-        }),
-      ]),
-      1_000,
-      "Web Push send did not start",
+        broadcast,
+        "Web Push broadcast completed before send started",
+      ),
+      signal,
     ),
     finish,
     // Join the send before afterEach removes the real SQLite fixture, even when a case fails.
@@ -171,13 +176,11 @@ function startExpiredWebPushBroadcast(payload: Parameters<typeof broadcastWebPus
 describe("resolveVapidKeys", () => {
   it("generates one durable SQLite VAPID identity", async () => {
     const keys = await resolveVapidKeys(tmpDir);
-    expect(keys).toEqual(
-      createWebPushVapidKeyPair(
-        "test-public-key-base64url",
-        "test-private-key-base64url",
-        "https://openclaw.ai",
-      ),
-    );
+    expect(keys).toEqual({
+      publicKey: "test-public-key-base64url",
+      privateKey: "test-private-key-base64url",
+      subject: "https://openclaw.ai",
+    });
     expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
 
     await closeOpenClawStateDatabaseAsync();
@@ -210,8 +213,8 @@ describe("resolveVapidKeys", () => {
 
   it("converges concurrent first-use generation on the first committed identity", async () => {
     vi.mocked(webPush.generateVAPIDKeys)
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-a", "private-a", "ignored"))
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-b", "private-b", "ignored"));
+      .mockReturnValueOnce({ publicKey: "public-a", privateKey: "private-a" })
+      .mockReturnValueOnce({ publicKey: "public-b", privateKey: "private-b" });
 
     const [first, second] = await Promise.all([resolveVapidKeys(tmpDir), resolveVapidKeys(tmpDir)]);
 
@@ -221,11 +224,11 @@ describe("resolveVapidKeys", () => {
   });
 
   it("prefers a complete environment override without persisting it", async () => {
-    const environmentKeys = createWebPushVapidKeyPair(
-      "env-public",
-      "env-private",
-      "mailto:env@test.com",
-    );
+    const environmentKeys = {
+      publicKey: "env-public",
+      privateKey: "env-private",
+      subject: "mailto:env@test.com",
+    };
     const envSnapshot = captureEnv([
       "OPENCLAW_VAPID_PUBLIC_KEY",
       "OPENCLAW_VAPID_PRIVATE_KEY",
@@ -254,13 +257,11 @@ describe("resolveVapidKeys", () => {
     setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "   ");
     try {
       const keys = await resolveVapidKeys(tmpDir);
-      expect(keys).toEqual(
-        createWebPushVapidKeyPair(
-          "test-public-key-base64url",
-          "test-private-key-base64url",
-          "https://openclaw.ai",
-        ),
-      );
+      expect(keys).toEqual({
+        publicKey: "test-public-key-base64url",
+        privateKey: "test-private-key-base64url",
+        subject: "https://openclaw.ai",
+      });
       expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
       expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
@@ -864,10 +865,10 @@ describe("sending", () => {
     );
   });
 
-  it("does not delete a subscription re-registered during an expired send", async () => {
+  it("does not delete a subscription re-registered during an expired send", async ({ signal }) => {
     const endpoint = "https://push.example.com/reregistered";
     await registerSubscription(endpoint);
-    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" });
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" }, signal);
     await broadcast.started;
     const replacement = await registerSubscription(endpoint, {
       keys: { p256dh: "replacement-p256dh", auth: "replacement-auth" },
@@ -877,10 +878,10 @@ describe("sending", () => {
     expect(await listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
   });
 
-  it("does not delete an expired subscription after a legacy claim appears", async () => {
+  it("does not delete an expired subscription after a legacy claim appears", async ({ signal }) => {
     const endpoint = "https://push.example.com/pending-claim";
     const subscription = await registerSubscription(endpoint);
-    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" });
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" }, signal);
     await broadcast.started;
     const pushDir = path.join(tmpDir, "push");
     await fs.mkdir(pushDir, { recursive: true });
@@ -896,11 +897,13 @@ describe("sending", () => {
     expect(await listWebPushSubscriptions(tmpDir)).toEqual([subscription]);
   });
 
-  it("keeps completed delivery results when expired-subscription cleanup fails", async () => {
+  it("keeps completed delivery results when expired-subscription cleanup fails", async ({
+    signal,
+  }) => {
     const endpoint = "https://push.example.com/expired";
     await registerSubscription(endpoint);
     await resolveVapidKeys(tmpDir);
-    await using broadcast = startExpiredWebPushBroadcast({ title: "Expired" });
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Expired" }, signal);
     await broadcast.started;
     await closeOpenClawStateDatabaseAsync();
     const databasePath = path.join(tmpDir, "state", "openclaw.sqlite");

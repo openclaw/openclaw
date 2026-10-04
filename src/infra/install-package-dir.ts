@@ -128,12 +128,6 @@ async function restoreProjectNpmConfigAfterInstall(
   await fs.rm(hiddenConfig.hiddenDir, { recursive: true, force: true });
 }
 
-function isRelativePathInsideBase(relativePath: string): boolean {
-  return (
-    Boolean(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`)
-  );
-}
-
 function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
@@ -152,13 +146,6 @@ async function assertInstallBaseStable(params: {
   }
 }
 
-async function cleanupInstallTempDir(dirPath: string | null): Promise<void> {
-  if (!dirPath) {
-    return;
-  }
-  await fs.rm(dirPath, { recursive: true, force: true }).catch(() => undefined);
-}
-
 async function resolveInstallPublishTarget(params: {
   installBaseDir: string;
   targetDir: string;
@@ -166,7 +153,11 @@ async function resolveInstallPublishTarget(params: {
   const installBaseResolved = path.resolve(params.installBaseDir);
   const targetResolved = path.resolve(params.targetDir);
   const targetRelativePath = path.relative(installBaseResolved, targetResolved);
-  if (!isRelativePathInsideBase(targetRelativePath)) {
+  if (
+    !targetRelativePath ||
+    targetRelativePath === ".." ||
+    targetRelativePath.startsWith(`..${path.sep}`)
+  ) {
     throw new Error("invalid install target path");
   }
   const installBaseRealPath = await fs.realpath(params.installBaseDir);
@@ -266,6 +257,8 @@ export async function installPackageDir<
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   beforePersistentApply?: () => void;
+  /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
+  authorizeMutation?: () => Promise<void>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const transactionRequest = resolvePackageDirInstallTransactionRequest(params);
   const deferCommit = transactionRequest !== undefined;
@@ -423,7 +416,7 @@ export async function installPackageDir<
         restoreError = String(restoreFailure);
       }
       if (stageDir) {
-        await cleanupInstallTempDir(stageDir);
+        await fs.rm(stageDir, { recursive: true, force: true }).catch(() => undefined);
         stageDir = null;
       }
     }
@@ -534,13 +527,13 @@ export async function installPackageDir<
                 // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
                 // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
                 // stays quiet on success while preserving the actionable npm failure text.
-                resolveNpmCommand([
-                  ...createSafeNpmInstallArgs({
+                resolveNpmCommand(
+                  createSafeNpmInstallArgs({
                     omitDev: true,
                     loglevel: "error",
                     ignoreWorkspaces: true,
                   }),
-                ]),
+                ),
                 {
                   timeoutMs: resolveInstallWorkTimeoutMs(
                     params.workTimeoutMs,
@@ -603,6 +596,9 @@ export async function installPackageDir<
         expectedRealPath: installBaseRealPath,
       });
       // Displacing the current install uses the same final ownership check as publication.
+      if (params.authorizeMutation) {
+        await params.authorizeMutation();
+      }
       await movePathWithCopyFallback({
         assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
@@ -636,6 +632,9 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    if (params.authorizeMutation) {
+      await params.authorizeMutation();
+    }
     await movePathWithCopyFallback({
       assertBeforeMutation: assertPersistentApply,
       onDestinationPublished: (receipt) => {

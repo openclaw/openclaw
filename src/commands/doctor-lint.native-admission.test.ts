@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -148,7 +149,7 @@ export default {
           loadPluginMetadataSnapshot({ config, env: state.env }),
         );
         const prepared = createDoctorPluginMetadataSnapshotScope({
-          baseSnapshot,
+          getBaseSnapshot: () => baseSnapshot,
           env: state.env,
         });
         const check = createRuntimeToolSchemaCheck({
@@ -188,11 +189,9 @@ export default {
             .split("\t");
           expect(bytes).toBe("native fixture bytes");
           expect(privateStateDir).not.toBe(state.stateDir);
-          expect(
-            binary.startsWith(
-              `${path.join(fs.realpathSync(state.stateDir), "tmp", "plugin-captures")}${path.sep}`,
-            ),
-          ).toBe(true);
+          const captureRoot = path.relative(fs.realpathSync(tmpdir()), binary).split(path.sep)[0];
+          expect(captureRoot).toMatch(/^openclaw-plugin-captures-[a-f0-9]{32}-/);
+          expect(binary.startsWith(`${fs.realpathSync(state.stateDir)}${path.sep}`)).toBe(false);
           expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(false);
           expect(fs.existsSync(privateStateDir)).toBe(false);
           expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");

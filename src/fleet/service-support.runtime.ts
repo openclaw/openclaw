@@ -80,15 +80,10 @@ export async function prepareCellDirectories(
   authSecretDir: string,
   owner?: { uid: number; gid: number },
 ): Promise<void> {
-  await Promise.all([
-    ensurePrivateDirectory(record.dataDir),
-    ensurePrivateDirectory(authSecretDir),
-  ]);
+  const directories = [record.dataDir, authSecretDir];
+  await Promise.all(directories.map(ensurePrivateDirectory));
   if (owner) {
-    await Promise.all([
-      fs.chown(record.dataDir, owner.uid, owner.gid),
-      fs.chown(authSecretDir, owner.uid, owner.gid),
-    ]);
+    await Promise.all(directories.map((directory) => fs.chown(directory, owner.uid, owner.gid)));
   }
 }
 
@@ -101,7 +96,6 @@ export async function prepareCellConfig(
   const cellRoot = await fsSafeRoot(record.dataDir, {
     hardlinks: "reject",
     maxBytes: CELL_CONFIG_MAX_BYTES,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   try {

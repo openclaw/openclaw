@@ -33,21 +33,17 @@ export function getActiveSkillEnvKeysCore(): ReadonlySet<string> {
 }
 
 function acquireActiveSkillEnvKey(key: string, value: string): boolean {
-  const active = activeSkillEnvEntries.get(key);
+  let active = activeSkillEnvEntries.get(key);
   if (active) {
     active.count += 1;
-    if (process.env[key] === undefined) {
-      process.env[key] = active.value;
+  } else {
+    if (process.env[key] !== undefined) {
+      return false;
     }
-    return true;
+    active = { value, count: 1 };
+    activeSkillEnvEntries.set(key, active);
   }
-  if (process.env[key] !== undefined) {
-    return false;
-  }
-  activeSkillEnvEntries.set(key, {
-    value,
-    count: 1,
-  });
+  process.env[key] = active.value;
   return true;
 }
 
@@ -191,7 +187,6 @@ function applySkillConfigEnvOverrides(params: {
       continue;
     }
     updates.push(envKey);
-    process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
 

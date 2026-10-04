@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Devices page renders the pending device pairing-request rows.
 import { html, nothing } from "lit";
 import {
   resolvePendingDeviceApprovalState,
@@ -34,11 +33,7 @@ function lookupPairedDevice(
   pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
   request: Pick<PendingDevice, "deviceId" | "publicKey">,
 ): PairedDevice | undefined {
-  const deviceId = normalizeOptionalString(request.deviceId);
-  if (!deviceId) {
-    return undefined;
-  }
-  const paired = pairedByDeviceId.get(deviceId);
+  const paired = pairedByDeviceId.get(normalizeOptionalString(request.deviceId) ?? "");
   if (!paired) {
     return undefined;
   }
@@ -61,19 +56,14 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
 }
 
 function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
-  switch (kind) {
-    case "scope-upgrade":
-      return t("devices.inventory.scopeUpgrade");
-    case "role-upgrade":
-      return t("devices.inventory.roleUpgrade");
-    case "re-approval":
-      return t("devices.inventory.reapproval");
-    case "new-pairing":
-      return t("devices.inventory.newPairing");
-  }
-  const exhaustiveKind: never = kind;
-  void exhaustiveKind;
-  throw new Error("unsupported pending approval kind");
+  return t(
+    {
+      "scope-upgrade": "devices.inventory.scopeUpgrade",
+      "role-upgrade": "devices.inventory.roleUpgrade",
+      "re-approval": "devices.inventory.reapproval",
+      "new-pairing": "devices.inventory.newPairing",
+    }[kind],
+  );
 }
 
 function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: PairedDevice) {

@@ -22,7 +22,6 @@ import type {
   ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -39,11 +38,7 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
-  mergeExecApprovalsSocketDefaults,
-  normalizeExecApprovals,
-  readExecApprovalsSnapshot,
   redactExecApprovals,
-  updateExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
@@ -51,8 +46,10 @@ import {
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -165,16 +162,6 @@ async function loadSnapshot(
   return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
 }
 
-function loadSnapshotLocal(): ExecApprovalsSnapshot {
-  const snapshot = readExecApprovalsSnapshot();
-  return {
-    path: snapshot.path,
-    exists: snapshot.exists,
-    hash: snapshot.hash,
-    file: snapshot.file,
-  };
-}
-
 function isFileApprovalsSnapshot(
   snapshot: ExecApprovalsSnapshot,
 ): snapshot is FileExecApprovalsSnapshot {
@@ -271,31 +258,13 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
   };
 }
 
-async function saveSnapshotLocal(
-  file: ExecApprovalsFile,
-  baseHash: string,
-): Promise<ExecApprovalsSnapshot> {
-  const snapshot = await updateExecApprovals({
-    baseHash,
-    update: (current) =>
-      mergeExecApprovalsSocketDefaults({
-        normalized: normalizeExecApprovals(file),
-        current,
-      }),
-  });
-  if (!snapshot) {
-    throw new Error("Exec approvals changed; reload and retry.");
-  }
-  return snapshot;
-}
-
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
   source: ApprovalsTargetSource;
 }> {
   if (!opts.gateway && !opts.node) {
-    return { snapshot: loadSnapshotLocal(), nodeId: null, source: "local" };
+    return { snapshot: await loadSnapshotLocal(), nodeId: null, source: "local" };
   }
   const nodeId = await resolveTargetNodeId(opts);
   const snapshot = await loadSnapshot(opts, nodeId);
@@ -361,7 +330,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     // rejected `set` input never reach here and must not claim a write happened.
     // JSON mode owns stdout: the written snapshot below is the record of the write.
     if (!params.opts.json) {
-      defaultRuntime.log(theme.muted("Writing local approvals."));
+      defaultRuntime.log(theme.muted("Writing approvals for this state root."));
     }
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
@@ -920,6 +889,20 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
   defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
 }
 
+function renderApprovalsSummary(rows: Array<{ Field: string; Value: string }>, width: number) {
+  defaultRuntime.log(isRich() ? theme.heading("Approvals") : "Approvals");
+  defaultRuntime.log(
+    renderTerminalSafeTable({
+      width,
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+}
+
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
   if (isNativeApprovalsSnapshot(snapshot)) {
     renderNativeApprovalsSnapshot(snapshot, targetLabel);
@@ -991,17 +974,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "MCP tool grants", Value: String(mcpToolRows.length) },
   ];
 
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: tableWidth,
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, tableWidth);
 
   defaultRuntime.log("");
   if (allowlistRows.length > 0) {
@@ -1057,17 +1030,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
     },
     { Field: "Rules", Value: String(rules.length) },
   ];
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: getTerminalTableWidth(),
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, getTerminalTableWidth());
   if (rules.length === 0) {
     defaultRuntime.log("");
     defaultRuntime.log(muted("No host-native rules."));
@@ -1194,11 +1157,7 @@ export function registerExecApprovalsCli(program: Command) {
     .command("approvals")
     .alias("exec-approvals")
     .description("Manage approval policy and pending requests")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
   const pendingCmd = approvals
     .command("pending")
@@ -1382,7 +1341,7 @@ export function registerExecApprovalsCli(program: Command) {
         )}\n${formatExample(
           'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
           "Remove an allowlist pattern.",
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
+        )}\n${formatDocsHelp("/cli/approvals")}`,
     );
 
   registerAllowlistMutationCommand({

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { isPackageDependencyName } from "../infra/package-json.js";
 import {
   runInstallPolicy,
   type InstallPolicyFinding,
@@ -307,29 +308,17 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function isInstallScannableDependencyName(name: string): boolean {
-  if (name.startsWith("@")) {
-    const parts = name.split("/");
-    return (
-      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
-    );
-  }
-  return (
-    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
-  );
-}
-
 function collectManifestRuntimeDependencyNames(manifest: PackageManifest): string[] {
   const dependencyNames = new Set<string>();
   for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {
     for (const dependencyName of Object.keys(dependencies ?? {})) {
-      if (isInstallScannableDependencyName(dependencyName)) {
+      if (isPackageDependencyName(dependencyName)) {
         dependencyNames.add(dependencyName);
       }
     }
   }
   for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
-    if (dependencyName !== "openclaw" && isInstallScannableDependencyName(dependencyName)) {
+    if (dependencyName !== "openclaw" && isPackageDependencyName(dependencyName)) {
       dependencyNames.add(dependencyName);
     }
   }
@@ -999,41 +988,6 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     });
   }
   return await runPolicy();
-}
-
-export async function scanFileInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    filePath: string;
-    logger: InstallScanLogger;
-    mode?: "install" | "update";
-    pluginId: string;
-    requestedSpecifier?: string;
-    source?: InstallPolicySource;
-  },
-): Promise<InstallSecurityScanResult | undefined> {
-  const plugin = {
-    contentType: "file" as const,
-    pluginId: params.pluginId,
-    extensions: [path.basename(params.filePath)],
-  };
-  return await runInstallPolicyAndHook({
-    config: params.config,
-    logger: params.logger,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
-    policyOrigin: { type: "plugin-file" },
-    hookOrigin: "plugin-file",
-    installLabel: `Plugin file "${params.pluginId}" installation`,
-    source: params.source ?? resolvePolicySource({ requestKind: "plugin-file" }),
-    sourcePath: params.filePath,
-    sourcePathKind: "file",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: "plugin-file",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin,
-  });
 }
 
 export async function preflightPluginNpmInstallPolicyRuntime(params: {

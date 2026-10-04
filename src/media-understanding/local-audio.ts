@@ -1,11 +1,11 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { optionalPathExists } from "./fs.js";
 
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
@@ -33,7 +33,6 @@ type InspectionOptions = {
   platform?: NodeJS.Platform;
   arch?: string;
   resolveBinary?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
-  checkExecutable?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   resolveRealpath?: (filePath: string) => Promise<string>;
   inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
   listDirectory?: (dirPath: string) => Promise<string[]>;
@@ -76,7 +75,6 @@ async function discoverWhisperCppModel(
   return null;
 }
 
-const binaryCache = new Map<string, Promise<string | null>>();
 const libraryCache = new Map<string, Promise<string | null>>();
 const observedBackendCache = new Map<string, "cpu" | "cuda" | "metal">();
 
@@ -144,86 +142,15 @@ export function recordLocalAudioBackendObservation(params: {
   return backend;
 }
 
-async function isExecutable(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (platform !== "win32") {
-      await fs.access(filePath, fsConstants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function binaryNames(name: string, platform: NodeJS.Platform, pathExtensions?: string): string[] {
-  if (platform !== "win32" || path.extname(name)) {
-    return [name];
-  }
-  const extensions = (pathExtensions ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((extension) => extension.trim())
-    .filter(Boolean);
-  return [name, ...extensions.map((extension) => `${name}${extension}`)];
-}
-
 function expandHomeDir(value: string, env: NodeJS.ProcessEnv): string {
   const trimmed = value.trim().replace(/^"(.*)"$/, "$1");
   if (trimmed === "~") {
     return env.HOME ?? trimmed;
   }
   if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
-    return env.HOME ? path.join(env.HOME, trimmed.slice(2)) : trimmed;
+    return env.HOME ? `${env.HOME}${path.sep}${trimmed.slice(2)}` : trimmed;
   }
   return trimmed;
-}
-
-async function findBinary(
-  name: string,
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-  checkExecutable: (filePath: string, platform: NodeJS.Platform) => Promise<boolean> = isExecutable,
-): Promise<string | null> {
-  const pathValue = resolveEnvironmentValue(env, "PATH", platform) ?? "";
-  const pathExtensions = resolveEnvironmentValue(env, "PATHEXT", platform);
-  const key = `${platform}\0${pathValue}\0${pathExtensions ?? ""}\0${name}`;
-  return await getOrCreatePromise(
-    binaryCache,
-    key,
-    async () => {
-      const direct = name.trim();
-      const candidates = binaryNames(direct, platform, pathExtensions);
-      if (direct.includes("/") || direct.includes("\\")) {
-        for (const candidate of candidates) {
-          const expanded =
-            candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
-              ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
-              : candidate;
-          if (await checkExecutable(expanded, platform)) {
-            return expanded;
-          }
-        }
-        return null;
-      }
-      for (const directory of pathValue.split(path.delimiter)) {
-        const expandedDirectory = expandHomeDir(directory, env);
-        if (!expandedDirectory) {
-          continue;
-        }
-        for (const candidate of candidates) {
-          const fullPath = path.join(expandedDirectory, candidate);
-          if (await checkExecutable(fullPath, platform)) {
-            return fullPath;
-          }
-        }
-      }
-      return null;
-    },
-    { cacheRejections: false },
-  );
 }
 
 async function inspectLinkedLibraries(
@@ -304,10 +231,14 @@ export async function inspectLocalAudioSelection(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
+  const delimiter = process.platform === "win32" ? ";" : path.delimiter;
+  const pathEntries = (resolveEnvironmentValue(env, "PATH") ?? "")
+    .split(delimiter)
+    .map((entry) => expandHomeDir(entry, env));
   const resolveBinary = async (name: string) =>
     options.resolveBinary
       ? await options.resolveBinary(name, env)
-      : await findBinary(name, env, platform, options.checkExecutable);
+      : (resolveExecutableFromPathEnv(name, pathEntries, env) ?? null);
   const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = await Promise.all(
     ["parakeet-mlx", "whisper-cli", "sherpa-onnx-offline", "whisper"].map(resolveBinary),
   );
@@ -315,7 +246,7 @@ export async function inspectLocalAudioSelection(
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const whisperModel =
     whisperCommand !== null
-      ? envModel && (await optionalPathExists(envModel))
+      ? envModel && (await pathExists(envModel))
         ? envModel
         : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries)
       : null;
@@ -341,7 +272,7 @@ export async function inspectLocalAudioSelection(
   const sherpaReady =
     sherpaCommand !== null &&
     sherpaFiles.length === 4 &&
-    (await Promise.all(sherpaFiles.map(optionalPathExists))).every(Boolean);
+    (await Promise.all(sherpaFiles.map((file) => pathExists(file)))).every(Boolean);
   const parakeetReady = parakeetCommand !== null && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
     "{{AttachmentPath}}",

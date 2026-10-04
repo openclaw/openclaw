@@ -10,11 +10,17 @@ import {
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
 import { WorkerAdmissionDeadlineResultSchema } from "./worker-connection-contract.js";
 import { WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES } from "./worker-connection-endpoint.js";
+import {
+  WorkerProcessObservationRequestSchema,
+  WorkerProcessObservationResultSchema,
+  type WorkerProcessObservationRequest,
+} from "./worker-process-observation.js";
 
 /** Private JSONL protocol between one node supervisor and its environment-owned worker. */
 export type WorkerProcessInput =
   | { type: "turn"; turnId: string; descriptor: WorkerLaunchDescriptor; idleRetention?: true }
-  | { type: "cancel"; turnId: string };
+  | { type: "cancel"; turnId: string }
+  | WorkerProcessObservationRequest;
 
 export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
   descriptor: T,
@@ -85,6 +91,7 @@ const ProcessResultSchema = workerProtocolObject({
     (!retainWorker || result.status === "completed" || result.status === "failed"),
 );
 const ProcessMessageSchema = z.union([
+  WorkerProcessObservationResultSchema,
   ProcessResultSchema,
   workerProtocolObject({
     type: z.literal("idle-ready"),
@@ -97,6 +104,10 @@ export type WorkerProcessResult = z.infer<typeof ProcessResultSchema>;
 export type WorkerProcessMessage = z.infer<typeof ProcessMessageSchema>;
 
 export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
+  const observation = WorkerProcessObservationRequestSchema.safeParse(value);
+  if (observation.success) {
+    return observation.data;
+  }
   if (
     !isRecord(value) ||
     typeof value.turnId !== "string" ||
@@ -123,11 +134,9 @@ export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
 }
 
 export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | null {
-  const parsed = RuntimeResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return RuntimeResultSchema.safeParse(value).data ?? null;
 }
 
 export function parseWorkerProcessMessage(value: unknown): WorkerProcessMessage | null {
-  const parsed = ProcessMessageSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return ProcessMessageSchema.safeParse(value).data ?? null;
 }

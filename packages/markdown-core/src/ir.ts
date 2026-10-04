@@ -30,14 +30,12 @@ import {
 import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
-  clampAnnotationSpans,
-  clampLinkSpans,
-  clampStyleSpans,
   copyMarkdownLinkSpan,
   createMarkdownLinkSpan,
   createStyleSpan,
-  mergeAnnotationSpans,
-  mergeStyleSpans,
+  sliceAnnotationSpans,
+  sliceLinkSpans,
+  sliceStyleSpans,
   type MarkdownAnnotationSpan,
   type MarkdownLinkSpan,
   type MarkdownStyle,
@@ -511,7 +509,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
   const usableDelims = totalDelims - (totalDelims % 2);
 
   const result: MarkdownToken[] = [];
-  const state = { spoilerOpen: false };
+  let spoilerOpen = false;
   let consumedDelims = 0;
 
   for (const token of tokens) {
@@ -530,9 +528,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
     while (index < content.length) {
       const next = content.indexOf("||", index);
       if (next === -1) {
-        if (index < content.length) {
-          result.push(createTextToken(token, content.slice(index)));
-        }
+        result.push(createTextToken(token, content.slice(index)));
         break;
       }
       if (consumedDelims >= usableDelims) {
@@ -543,9 +539,9 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         result.push(createTextToken(token, content.slice(index, next)));
       }
       consumedDelims += 1;
-      state.spoilerOpen = !state.spoilerOpen;
+      spoilerOpen = !spoilerOpen;
       result.push({
-        type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",
+        type: spoilerOpen ? "spoiler_open" : "spoiler_close",
       });
       index = next + 2;
     }
@@ -741,11 +737,6 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function resolveFenceLanguage(info: string | undefined): string | undefined {
-  const language = info?.trim().split(/\s+/, 1)[0]?.trim();
-  return language || undefined;
-}
-
 function renderCodeBlock(
   state: RenderState,
   content: string,
@@ -755,13 +746,13 @@ function renderCodeBlock(
   sourceMap?: [number, number] | null,
   codeClosed?: boolean,
 ) {
-  let code = content ?? "";
+  let code = content;
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
   }
   const target = resolveRenderTarget(state);
   const start = target.text.length;
-  const language = resolveFenceLanguage(info);
+  const language = info?.trim().split(/\s+/, 1)[0] || undefined;
   target.text += code;
   target.styles.push(
     createStyleSpan({
@@ -863,31 +854,15 @@ function appendCell(state: RenderState, cell: MarkdownTableCell) {
   if (!cell.text) {
     return;
   }
-  const start = state.text.length;
-  appendHtmlTags(state, cell, start);
-  state.text += cell.text;
-  for (const span of cell.styles) {
-    state.styles.push({
-      start: start + span.start,
-      end: start + span.end,
-      style: span.style,
-    });
-  }
-  for (const link of cell.links) {
-    state.links.push(
-      copyMarkdownLinkSpan(link, {
-        start: start + link.start,
-        end: start + link.end,
-      }),
-    );
-  }
-  for (const annotation of cell.annotations ?? []) {
-    state.annotations.push({
-      ...annotation,
-      start: start + annotation.start,
-      end: start + annotation.end,
-    });
-  }
+  appendMarkdownIR(
+    state,
+    copyHtmlTags(cell, {
+      text: cell.text,
+      styles: cell.styles.map(({ start, end, style }) => ({ start, end, style })),
+      links: cell.links.map((link) => copyMarkdownLinkSpan(link)),
+      annotations: cell.annotations?.map((annotation) => ({ ...annotation })),
+    }),
+  );
 }
 
 function collectTableBlock(
@@ -1412,7 +1387,7 @@ export function markdownToIRWithMeta(
   const finalLength = Math.max(trimmedLength, codeEnd);
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
-  const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const annotations = sliceAnnotationSpans(state.annotations, 0, finalLength);
   const listItems = state.listItems.flatMap((item) => {
     const listMarker = item.listMarker
       ? sliceListMarker(item.listMarker, 0, finalLength)
@@ -1454,8 +1429,8 @@ export function markdownToIRWithMeta(
 
   const ir: MarkdownIR = {
     text: finalText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-    links: clampLinkSpans(state.links, finalLength),
+    styles: sliceStyleSpans(state.styles, 0, finalLength),
+    links: sliceLinkSpans(state.links, 0, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };

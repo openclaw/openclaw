@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { readSqliteDataVersion, resolveSqliteFilesystemPath } from "./node-sqlite.js";
+import { resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 
 function readCacheToken(database: DatabaseSync, databasePath: string): string | undefined {
   if (database.isTransaction) {

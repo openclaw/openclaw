@@ -1,3 +1,5 @@
+// Keep cold handler imports outside the in-process request deadline.
+import "../gateway/server-methods/sessions-mutations.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import * as configRuntime from "../config/config.js";
@@ -25,7 +27,8 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -84,7 +87,7 @@ function modelConfig(
 ): OpenClawConfig {
   return {
     agents: {
-      entries: { main: { default: true }, support: {} },
+      entries: { main: {}, support: {} },
       defaults: {
         ...selection,
         modelSelectionScope: "global",
@@ -235,56 +238,72 @@ async function fixture(
   };
 }
 
-it("keeps scoped selections session-only and reports unchanged choices without patch effects", async () => {
-  const other = await fixture({ sessionKey: "agent:main:main" });
-  const otherBefore = other.read();
-  const target = await fixture({ agentId: "support", sessionKey: "agent:support:main" });
-  const configWrite = vi.spyOn(configRuntime, "mutateConfigFileWithRetry");
-  const configBefore = structuredClone(cfg);
+it.each([false, true])(
+  "keeps scoped selections session-only without duplicate patch effects (placeholder=%s)",
+  async (placeholder) => {
+    const other = await fixture({ sessionKey: "agent:main:main" });
+    const otherBefore = other.read();
+    const target = await fixture({
+      agentId: "support",
+      sessionKey: "agent:support:main",
+      entry: placeholder ? { sessionId: "" } : {},
+    });
+    if (placeholder) {
+      expect(target.read().sessionId).toBe("");
+    }
+    const configWrite = vi.spyOn(configRuntime, "mutateConfigFileWithRetry");
+    const configBefore = structuredClone(cfg);
 
-  expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-    agentId: "support",
-    changedModel: true,
-  });
-  const selected = target.read();
-  expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "chosen" });
-  expect(selected.modelFallback).toBeUndefined();
-  expect(other.read()).toEqual(otherBefore);
-  expect(onPatch).toHaveBeenCalledOnce();
-  await flushPendingSessionsChangedEvents(target.context);
-  target.broadcast.mockClear();
+    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
+      agentId: "support",
+      changedModel: true,
+    });
+    const selected = target.read();
+    expect(selected.sessionId).not.toBe("");
+    expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "chosen" });
+    expect(selected.modelFallback).toBeUndefined();
+    expect(other.read()).toEqual(otherBefore);
+    expect(onPatch).toHaveBeenCalledOnce();
+    await flushPendingSessionsChangedEvents(target.context);
+    target.broadcast.mockClear();
 
-  expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-    changedModel: false,
-  });
-  expect(target.read()).toEqual(selected);
-  await flushPendingSessionsChangedEvents(target.context);
-  expect(onPatch).toHaveBeenCalledOnce();
-  expect(target.broadcast).not.toHaveBeenCalled();
+    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
+      changedModel: false,
+    });
+    expect(target.read()).toEqual(selected);
+    await flushPendingSessionsChangedEvents(target.context);
+    expect(onPatch).toHaveBeenCalledOnce();
+    expect(target.broadcast).not.toHaveBeenCalled();
 
-  expect((await target.execute({ model: "default" })).details).toMatchObject({
-    changedModel: true,
-  });
-  const reset = target.read();
-  expect(reset).toMatchObject({ modelOverrideSource: "default", liveModelSwitchPending: true });
-  expect(reset.providerOverride).toBeUndefined();
-  expect(reset.modelOverride).toBeUndefined();
-  expect(reset.modelFallback).toBeUndefined();
-  expect((await target.execute({ model: "fixture/default" })).details).toMatchObject({
-    changedModel: false,
-  });
-  expect(target.read()).toEqual(reset);
-  expect(onPatch).toHaveBeenCalledTimes(2);
-  expect(configWrite).not.toHaveBeenCalled();
-  expect(cfg).toEqual(configBefore);
-});
+    expect((await target.execute({ model: "default" })).details).toMatchObject({
+      changedModel: true,
+    });
+    const reset = target.read();
+    expect(reset).toMatchObject({ modelOverrideSource: "default", liveModelSwitchPending: true });
+    expect(reset.providerOverride).toBeUndefined();
+    expect(reset.modelOverride).toBeUndefined();
+    expect(reset.modelFallback).toBeUndefined();
+    expect((await target.execute({ model: "fixture/default" })).details).toMatchObject({
+      changedModel: false,
+    });
+    expect(target.read()).toEqual(reset);
+    expect(onPatch).toHaveBeenCalledTimes(2);
+    expect(configWrite).not.toHaveBeenCalled();
+    expect(cfg).toEqual(configBefore);
+  },
+);
 
-it.each(["unavailable", "retired before commit"] as const)(
-  "rejects a runtime that is %s through the status tool without changing the session",
-  async (availability) => {
-    const target = await fixture();
-    const before = target.read();
-    const message = "The selected runtime is no longer available.";
+it.each([
+  ["unavailable", "The selected runtime is no longer available."],
+  ["retired before commit", "The selected runtime is no longer available."],
+  ["sandbox", "requires a sandbox"],
+  ["worker", "cannot select a runtime without cloud placement support"],
+])("rejects an incompatible runtime (%s) without patch effects", async (availability, message) => {
+  const target = await fixture({
+    entry: availability === "sandbox" ? { sandbox: "required" } : {},
+  });
+  const before = target.read();
+  if (availability === "unavailable" || availability === "retired before commit") {
     runtime.prepare.mockResolvedValue(
       availability === "unavailable"
         ? { kind: "unavailable", message }
@@ -298,91 +317,63 @@ it.each(["unavailable", "retired before commit"] as const)(
               .mockReturnValue(message),
           },
     );
-    await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(message);
-    expect(target.read()).toEqual(before);
-    expect(onPatch).not.toHaveBeenCalled();
-  },
-);
-
-it("rejects a host-only selection when the status session requires a sandbox", async () => {
-  const target = await fixture({ entry: { sandbox: "required" } });
-  const before = target.read();
-  await expect(target.execute({ model: "fixture/native" })).rejects.toThrow("requires a sandbox");
+  } else if (availability === "worker") {
+    const placement: WorkerSessionPlacementRecord = {
+      sessionId: before.sessionId,
+      sessionKey: target.scope.sessionKey,
+      agentId: target.scope.agentId,
+      state: "active",
+      executionMode: "worker-turn",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "status-worker",
+      activeOwnerEpoch: 1,
+      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+      remoteWorkspaceDir: "/workspace",
+      workerBundleHash: "a".repeat(64),
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+      turnClaim: null,
+    };
+    target.context.workerSessionPlacementService = {
+      getMany: () => new Map([[before.sessionId, placement]]),
+    };
+  }
+  await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(message);
   expect(target.read()).toEqual(before);
   expect(onPatch).not.toHaveBeenCalled();
 });
 
-it("rejects a status selection that cannot serve the session's active worker placement", async () => {
-  const target = await fixture();
-  const before = target.read();
-  const placement: WorkerSessionPlacementRecord = {
-    sessionId: before.sessionId,
-    sessionKey: target.scope.sessionKey,
-    agentId: target.scope.agentId,
-    state: "active",
-    executionMode: "worker-turn",
-    generation: 1,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    environmentId: "status-worker",
-    activeOwnerEpoch: 1,
-    workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-    remoteWorkspaceDir: "/workspace",
-    workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
-  };
-  target.context.workerSessionPlacementService = {
-    getMany: () => new Map([[before.sessionId, placement]]),
-  };
-  await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(
-    "cannot select a runtime without cloud placement support",
-  );
-  expect(target.read()).toEqual(before);
-  expect(onPatch).not.toHaveBeenCalled();
-});
-
-it.each(["sessionId", "lifecycleRevision"] as const)(
-  "does not overwrite a status target whose %s changes during model preparation",
+it.each(["sessionId", "lifecycleRevision", "Gateway"] as const)(
+  "rejects a status target whose %s retires without overwriting it",
   async (identity) => {
     const target = await fixture();
-    const replacement = { ...target.read(), [identity]: "replacement-identity" };
-    let persistedReplacement: SessionEntry | undefined;
-    const loadCatalog = target.context.loadGatewayModelCatalogSnapshot;
-    vi.spyOn(target.context, "loadGatewayModelCatalogSnapshot").mockImplementationOnce(
-      async (params) => {
-        await upsertSessionEntryCore(target.scope, replacement);
-        persistedReplacement = target.read();
-        return await loadCatalog(params);
-      },
+    let expected: SessionEntry | undefined = identity === "Gateway" ? target.read() : undefined;
+    if (identity === "Gateway") {
+      target.retireGateway();
+    } else {
+      const replacement = { ...target.read(), [identity]: "replacement-identity" };
+      const loadCatalog = target.context.loadGatewayModelCatalogSnapshot;
+      vi.spyOn(target.context, "loadGatewayModelCatalogSnapshot").mockImplementationOnce(
+        async (params) => {
+          await upsertSessionEntryCore(target.scope, replacement);
+          expected = target.read();
+          return await loadCatalog(params);
+        },
+      );
+    }
+    await expect(target.execute({ model: "chosen" })).rejects.toThrow(
+      identity === "Gateway" ? "Gateway instance unavailable" : "changed before patch",
     );
-    await expect(target.execute({ model: "chosen" })).rejects.toThrow("changed before patch");
-    expect(target.read()).toEqual(expectDefined(persistedReplacement, "persisted replacement"));
+    expect(target.read()).toEqual(expectDefined(expected, "persisted replacement"));
     expect(onPatch).not.toHaveBeenCalled();
   },
 );
-
-it("does not fall back to a local model write after its Gateway binding retires", async () => {
-  const target = await fixture();
-  const before = target.read();
-  target.retireGateway();
-  await expect(target.execute({ model: "chosen" })).rejects.toThrow("Gateway instance unavailable");
-  expect(target.read()).toEqual(before);
-  expect(onPatch).not.toHaveBeenCalled();
-});
-
-it("initializes a persisted status placeholder without sending an empty expected session ID", async () => {
-  const target = await fixture({ entry: { sessionId: "" } });
-  expect(target.read().sessionId).toBe("");
-  expect((await target.execute({ model: "chosen" })).details).toMatchObject({ changedModel: true });
-  expect(target.read()).toMatchObject({ providerOverride: "fixture", modelOverride: "chosen" });
-  expect(target.read().sessionId).not.toBe("");
-});
 
 it("routes status model changes through the original operator policy and preserves unrestricted callers", async () => {
   const limited = ensureProfileForEmail("limited-model@example.test");
@@ -399,7 +390,7 @@ it("routes status model changes through the original operator policy and preserv
     models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },
     modelPolicy: { allow: ["fixture/*"] },
   });
-  cfg.agents = { ...cfg.agents, entries: { main: { default: true } } };
+  cfg.agents = { ...cfg.agents, entries: { main: {} } };
   cfg.gateway = {
     roles: {
       default: "limited",

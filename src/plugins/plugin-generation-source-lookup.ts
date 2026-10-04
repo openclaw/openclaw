@@ -5,10 +5,14 @@ import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
-  assertPluginNativeReferenceNamespace,
+  createPluginNativeReferenceValidator,
   linkPluginNativeReference,
 } from "./plugin-native-reference.js";
-import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
+import {
+  createPluginSourceCapture,
+  findPluginCapturedPackage,
+  type PluginPackageCapture,
+} from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
 
 function canonicalSource(rootDir: string, sourceRoot: string, source: string): string {
@@ -98,13 +102,9 @@ function captureRecoverySource({
         return false;
       },
     });
+    const assertReference = createPluginNativeReferenceValidator(recovery.directory);
     for (const [target, fact] of hardlinkedTargets) {
-      assertPluginNativeReferenceNamespace(
-        target,
-        fact,
-        native!.namespaces.get(fact.namespace)!,
-        recovery.directory,
-      );
+      assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
     const relocate = (filename: string) =>
       path.join(recovery.directory, path.relative(boundaryRoot, filename));
@@ -177,14 +177,56 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     },
-    captureRecoverySource: () =>
-      captureRecoverySource({
+    captureRecoverySource: () => {
+      for (const captured of new Set(capturedPaths.values())) {
+        assertModuleAvailable(captured);
+      }
+      return captureRecoverySource({
         rootDir,
         sourceRoot,
         capturedRoot,
         boundaryRoot,
         capturedPaths,
         captureNativeRecovery,
-      }),
+      });
+    },
+  };
+}
+
+/** Resolve first-demand executable files through the same captured-source availability owner. */
+export function createPluginResolvedModuleCapture({
+  capturedPaths,
+  assertModuleAvailable,
+  captureAdmitted,
+  captureExecutableFile,
+  packages,
+  directory,
+}: {
+  capturedPaths: Map<string, string>;
+  assertModuleAvailable: (filename: string) => void;
+  captureAdmitted: ReturnType<typeof createPluginSourceCapture>["capture"];
+  captureExecutableFile: (filename: string) => string | undefined;
+  packages: ReadonlyMap<string, PluginPackageCapture>;
+  directory: string;
+}) {
+  return (filename: string) => {
+    const known = capturedPaths.get(path.resolve(filename));
+    if (known) {
+      assertModuleAvailable(known);
+      return known;
+    }
+    return captureAdmitted(() => {
+      const captured = findPluginCapturedPackage(packages, filename, directory);
+      // import.meta.url can name a deferred peer through a private dependency link.
+      const original = captured
+        ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
+        : filename;
+      const source = captureExecutableFile(original);
+      const target = source ? capturedPaths.get(source) : undefined;
+      if (target) {
+        capturedPaths.set(path.resolve(filename), target);
+      }
+      return target;
+    }).value;
   };
 }

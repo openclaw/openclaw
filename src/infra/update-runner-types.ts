@@ -34,8 +34,8 @@ type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
 type GitUpdateTarget = {
@@ -62,8 +62,8 @@ export type UpdateRunnerOptions = {
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
-  /** The finalizer owns retained source/runtime rollback after successful activation. */
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  /** Retain source/runtime before Doctor; the finalizer owns state-safe rollback. */
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
 } & (
   | {
       /** CLI-owned activation Doctor retains its config writer and requester authority. */
@@ -84,6 +84,7 @@ export type UpdateRunnerOptions = {
 );
 
 export type UpdateInstallSurface =
+  | { kind: "immutable"; mode: "unknown"; root: string; packageRoot: string }
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }
   | { kind: "global"; mode: GlobalInstallManager; root: string; packageRoot: string }
   | { kind: "package-root"; mode: "unknown"; root: string; packageRoot: string }
@@ -96,6 +97,7 @@ export type RunStepOptions = {
   cwd: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;

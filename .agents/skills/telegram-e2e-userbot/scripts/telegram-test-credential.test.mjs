@@ -34,8 +34,12 @@ function makeCredential() {
   });
   assert.equal(packed.status, 0);
   const archive = fs.readFileSync(archivePath);
+  const emptyPath = path.join(fixture, "empty-path");
+  fs.mkdirSync(emptyPath);
   return {
     fixture,
+    // Layout and lease lifecycle cases skip discovery; the real-UV launcher case keeps it.
+    hostEnv: { PATH: emptyPath },
     payload: {
       schemaVersion: 1,
       environment: "test",
@@ -52,10 +56,10 @@ function makeCredential() {
 }
 
 test("validates and restores one isolated Test Server credential", (context) => {
-  const { fixture, payload } = makeCredential();
+  const { fixture, payload, hostEnv } = makeCredential();
   context.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const stateRoot = path.join(fixture, "restored");
-  const restored = restoreTelegramTestCredential(payload, stateRoot);
+  const restored = restoreTelegramTestCredential(payload, stateRoot, hostEnv);
   assert.equal(restored.groupId, "-1001");
   assert.equal(
     restored.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
@@ -176,7 +180,6 @@ print(json.dumps({"ok": True, "authorized": True, "testDc": True, "tdlibVersion"
               ],
               options,
             ),
-          startProxy: async () => ({ apiRoot: "http://127.0.0.1:1", async close() {} }),
           fetchImpl: async () =>
             Response.json({ ok: true, result: { id: 100, username: "sut_bot" } }),
         }),
@@ -239,7 +242,7 @@ test(
 );
 
 test("removes restored Convex state before releasing the lease", async () => {
-  const { fixture, payload } = makeCredential();
+  const { fixture, payload, hostEnv } = makeCredential();
   const originalFetch = globalThis.fetch;
   let stateRoot;
   let releaseObservedStateRemoved = false;
@@ -259,6 +262,7 @@ test("removes restored Convex state before releasing the lease", async () => {
   };
   try {
     const credential = await acquireTelegramTestCredential({
+      hostEnv,
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
         OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
@@ -281,7 +285,7 @@ test("removes restored Convex state before releasing the lease", async () => {
 });
 
 test("failed broker release retains only the private handle for same-owner recovery", async () => {
-  const { fixture, payload } = makeCredential();
+  const { fixture, payload, hostEnv } = makeCredential();
   const originalFetch = globalThis.fetch;
   const env = {
     OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
@@ -308,7 +312,7 @@ test("failed broker release retains only the private handle for same-owner recov
     return Response.json({ status: "ok" });
   };
   try {
-    const credential = await acquireTelegramTestCredential({ env });
+    const credential = await acquireTelegramTestCredential({ env, hostEnv });
     leaseDir = path.dirname(credential.stateRoot);
     const first = credential.release();
     const second = credential.release();

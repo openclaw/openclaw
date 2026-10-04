@@ -1,4 +1,3 @@
-/** Migration provider lookup, option shaping, and plan creation helpers. */
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMigrationProviders } from "../../plugins/migration-provider-runtime.js";
@@ -30,7 +29,6 @@ export async function withMigrationProvider<T>(
   );
 }
 
-/** Builds provider-specific options from shared migrate CLI flags. */
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
   providerId = opts.provider,
@@ -45,15 +43,11 @@ export function buildMigrationProviderOptions(
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
-/** Creates a migration plan after validating provider-specific flag support. */
 export async function createMigrationPlan(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },
   provider: MigrationProviderPlugin,
 ): Promise<MigrationPlan> {
-  if (opts.verifyPluginApps && opts.provider !== "codex") {
-    throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
-  }
   const ctx = buildMigrationContext({
     ...opts,
     providerOptions: buildMigrationProviderOptions(opts),

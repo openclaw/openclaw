@@ -16,17 +16,23 @@ const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
-function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+function readSessionArchiveTimestamp(
+  fileName: string,
+  reason: SessionArchiveReason,
+): string | undefined {
   // Compressed archives carry a trailing .zst; strip it so every classifier
   // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
   const marker = `.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
   if (index < 0) {
-    return false;
+    return undefined;
   }
-  const raw = normalized.slice(index + marker.length);
-  return ARCHIVE_SUFFIX_RE.test(raw);
+  return ARCHIVE_SUFFIX_RE.exec(normalized.slice(index + marker.length))?.[1];
+}
+
+function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+  return readSessionArchiveTimestamp(fileName, reason) !== undefined;
 }
 
 /** Returns true for archived session artifacts and legacy store backup names. */
@@ -145,32 +151,16 @@ export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return timestampMsToIsoFileStamp(nowMs);
 }
 
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
-}
-
 export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,
 ): number | null {
-  const marker = `.${reason}.`;
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
-  const index = normalized.lastIndexOf(marker);
-  if (index < 0) {
-    return null;
-  }
-  const raw = normalized.slice(index + marker.length);
-  if (!raw) {
-    return null;
-  }
-  const timestampRaw = ARCHIVE_SUFFIX_RE.exec(raw)?.[1];
+  const timestampRaw = readSessionArchiveTimestamp(fileName, reason);
   if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
+  const timestamp = Date.parse(
+    timestampRaw.slice(0, 11) + timestampRaw.slice(11).replace(/-/g, ":"),
+  );
   return Number.isNaN(timestamp) ? null : timestamp;
 }

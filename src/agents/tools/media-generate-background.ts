@@ -1,4 +1,3 @@
-/** Owns image, music, and video preflight, task admission, and detached completion. */
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
@@ -6,19 +5,12 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
-import {
-  IMAGE_GENERATION_TASK_KIND,
-  MUSIC_GENERATION_TASK_KIND,
-  VIDEO_GENERATION_TASK_KIND,
-} from "../media-generation-task-status.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
-  buildMediaGenerationStartedToolResult,
   captureMediaGenerationAdmission,
   createMediaGenerationTaskLifecycle,
-  notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
@@ -45,6 +37,8 @@ export type MediaGenerateToolOptions = {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  /** Durable requester transcript key; task ownership stays on agentSessionKey. */
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -96,7 +90,7 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
 }
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
-export type MediaGenerationTaskResources = {
+type MediaGenerationTaskResources = {
   run: <T>(run: () => T | Promise<T>) => Promise<T>;
   release: () => Promise<void>;
 };
@@ -218,6 +212,7 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
     assertAdmissionCurrent: () => {
@@ -227,11 +222,11 @@ export async function prepareMediaGenerationTask<
   });
 }
 
-/** Owns task admission and the shared foreground or detached generation lifecycle. */
 export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -275,6 +270,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     const title = `${generationLabel.charAt(0).toUpperCase()}${generationLabel.slice(1)}`;
     const handle = await lifecycle.createTaskRun({
       sessionKey: params.sessionKey,
+      requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
       prompt: params.prompt,
@@ -311,21 +307,39 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         run: () => run(handle),
       });
       resourcesTransferred = true;
-      await notifyMediaGenerationAsyncTaskStarted({
-        callback: params.onAsyncTaskStarted,
-        message: `${title} generation started; wait for the generated ${generationLabel} completion event.`,
-        toolName,
-        handle,
-        onFailure: params.onFailure,
-      });
-      return buildMediaGenerationStartedToolResult({
-        toolName,
-        generationLabel,
-        completionLabel: generationLabel,
-        taskHandle: handle,
-        detailExtras: params.detailExtras,
-        messages: params.messages,
-      });
+      try {
+        await params.onAsyncTaskStarted?.(
+          `${title} generation started; wait for the generated ${generationLabel} completion event.`,
+        );
+      } catch (error) {
+        params.onFailure("Media generation async-start callback failed", {
+          toolName,
+          taskId: handle.taskId,
+          runId: handle.runId,
+          error,
+        });
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: [
+              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${generationLabel} here.`,
+              ...(params.messages ?? []),
+            ]
+              .filter((entry): entry is string => Boolean(entry))
+              .join("\n"),
+          },
+        ],
+        details: {
+          async: true,
+          status: "started",
+          taskId: handle.taskId,
+          runId: handle.runId,
+          task: { taskId: handle.taskId, runId: handle.runId },
+          ...params.detailExtras,
+        },
+      };
     }
 
     try {
@@ -357,33 +371,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   }
 }
 
-function createGenerationTaskLifecycle(
-  kind: "image" | "music" | "video",
-  taskKind: Parameters<typeof createMediaGenerationTaskLifecycle>[0]["taskKind"],
-) {
-  const title = `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
-  return createMediaGenerationTaskLifecycle({
-    toolName: `${kind}_generate`,
-    taskKind,
-    label: `${title} generation`,
-    queuedProgressSummary: `Queued ${kind} generation`,
-    generatedLabel: kind === "music" ? "track" : kind,
-    failureProgressSummary: `${title} generation failed`,
-    eventSource: `${kind}_generation`,
-    announceType: `${kind} generation task`,
-    completionLabel: kind,
-  });
-}
-
-export const imageGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "image",
-  IMAGE_GENERATION_TASK_KIND,
-);
-export const musicGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "music",
-  MUSIC_GENERATION_TASK_KIND,
-);
-export const videoGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "video",
-  VIDEO_GENERATION_TASK_KIND,
-);
+export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("image");
+export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("music");
+export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("video");

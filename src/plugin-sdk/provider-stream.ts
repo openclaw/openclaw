@@ -1,4 +1,3 @@
-// Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
@@ -75,11 +74,8 @@ function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
-  if (typeof raw === "function") {
-    const resolved = (raw as () => unknown)();
-    return typeof resolved === "boolean" ? resolved : undefined;
-  }
-  return typeof raw === "boolean" ? raw : undefined;
+  const resolved = typeof raw === "function" ? (raw as () => unknown)() : raw;
+  return resolved === "ultrafast" ? true : typeof resolved === "boolean" ? resolved : undefined;
 }
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
@@ -179,24 +175,8 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
-/** @deprecated Google provider-owned stream hook shortcut; use local provider hooks instead. */
-export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
-/** @deprecated Kilocode provider-owned stream hook shortcut; use local provider hooks instead. */
-export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
 /** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
-/** @deprecated MiniMax provider-owned stream hook shortcut; use local provider hooks instead. */
-export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
-/** @deprecated OpenAI provider-owned stream hook shortcut; use local provider hooks instead. */
-export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
-  "openai-responses-defaults",
-);
-/** @deprecated OpenRouter provider-owned stream hook shortcut; use local provider hooks instead. */
-export const OPENROUTER_THINKING_STREAM_HOOKS =
-  buildProviderStreamFamilyHooks("openrouter-thinking");
-/** @deprecated Provider-owned stream hook shortcut; use local provider hooks instead. */
-export const TOOL_STREAM_DEFAULT_ON_HOOKS =
-  buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 // Public stream-wrapper helpers for provider plugins.
 

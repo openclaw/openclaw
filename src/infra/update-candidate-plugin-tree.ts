@@ -7,6 +7,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -27,9 +28,6 @@ import {
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
-
-export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
-export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
 async function dependencyOwner(
   target: string,
@@ -114,6 +112,17 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const stores = new Set<string>();
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
+  const isRecoveryArtifact = (file: string) => {
+    for (let current = file; path.dirname(current) !== current; current = path.dirname(current)) {
+      if (
+        moduleOwners.has(path.dirname(current)) &&
+        isPackageUpdateRecoveryArtifactName(path.basename(current))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const retainedHostRoot = params.retainedHostRoot;
   const retainedHost = retainedHostRoot
     ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
@@ -153,7 +162,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       invalidateRoots();
     }
   }
-  async function measureEntry(file: string): Promise<UpdateCandidatePluginEntry> {
+  async function readEntry(file: string): Promise<UpdateCandidatePluginEntry> {
     const stat = await fs.lstat(file, { bigint: true });
     const common = {
       path: file,
@@ -192,8 +201,15 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     } else {
       throw new Error(`Unsupported plugin snapshot entry: ${file}`);
     }
-    footprints.set(file, entry);
+    return entry;
+  }
+  async function recordEntry(entry: UpdateCandidatePluginEntry): Promise<void> {
+    footprints.set(entry.path, entry);
     await params.onProgress?.();
+  }
+  async function measureEntry(file: string): Promise<UpdateCandidatePluginEntry> {
+    const entry = await readEntry(file);
+    await recordEntry(entry);
     return entry;
   }
   async function discoverHoistedDependencies(directory: string): Promise<void> {
@@ -314,9 +330,41 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         }
       }
     }
+    const leaves = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: entries
+        .filter((entry) => {
+          const file = path.join(directory, entry.name);
+          return !entry.isDirectory() && !isRecoveryArtifact(file) && !isOwnedHostEdge(file);
+        })
+        .map((entry) => async () => {
+          const file = path.join(directory, entry.name);
+          const measured = await readEntry(file);
+          if (measured.kind !== "symlink") {
+            return { measured };
+          }
+          const target = path.resolve(directory, measured.link);
+          const real = await fs.realpath(file).catch((error: unknown) => {
+            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+              return target;
+            }
+            throw error;
+          });
+          return { measured, edge: { target, real } };
+        }),
+    });
+    if (leaves.hasError) {
+      throw leaves.firstError;
+    }
+    const observations = new Map(leaves.results.map((leaf) => [leaf.measured.path, leaf]));
+    // Reads can overlap; graph discovery and progress callbacks retain listing order.
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (isOwnedHostEdge(file)) {
+      if (isRecoveryArtifact(file)) {
+        // Recovery controls and retained backups are not runtime dependencies.
+        continue;
+      } else if (isOwnedHostEdge(file)) {
         // The complete-wave owner pass records the authoritative host identity.
         continue;
       } else if (entry.isDirectory()) {
@@ -328,18 +376,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
           await scan(file);
         }
       } else {
-        const measured = await measureEntry(file);
-        if (measured.kind !== "symlink") {
-          continue;
+        const leaf = observations.get(file)!;
+        await recordEntry(leaf.measured);
+        if (leaf.edge) {
+          edges.set(file, leaf.edge);
         }
-        const target = path.resolve(directory, measured.link);
-        const real = await fs.realpath(file).catch((error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-            return target;
-          }
-          throw error;
-        });
-        edges.set(file, { target, real });
       }
     }
   }
@@ -422,7 +463,14 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     const storeLookup = lookupRoots(stores);
     const stagingLookup = lookupRoots(staging);
     let added = false;
-    for (const [file, { real }] of edges) {
+    for (const [file, { real, target }] of edges) {
+      if (isRecoveryArtifact(file)) {
+        edges.delete(file);
+        continue;
+      }
+      if (isRecoveryArtifact(real) || isRecoveryArtifact(target)) {
+        throw new Error("Package recovery state cannot be a runtime dependency.");
+      }
       const directory = stagingLookup(real);
       if (directory && staging.delete(directory)) {
         // Explicit links still demand their source bytes and normal validation.
@@ -505,7 +553,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
   const entries = [...footprints.values()].filter((entry) => {
-    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+    if (
+      isRecoveryArtifact(entry.path) ||
+      insideHost(entry.path) ||
+      copyOwner(entry.path) === undefined
+    ) {
       return false;
     }
     // Owner selection precedes scanning; bind its exception to the actual inventory.
@@ -564,10 +616,18 @@ export async function copyUpdateCandidatePluginTrees(
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
+  const assertEntries = async () => {
+    const checked = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: plan.entries.map((entry) => () => assertEntry(entry)),
+    });
+    if (checked.hasError) {
+      throw checked.firstError;
+    }
+  };
   await targets.assertBindings();
-  for (const entry of plan.entries) {
-    await assertEntry(entry);
-  }
+  await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const destinationRoot = await openRoot(privateRoot);
   const preparedDirectories = new Set([privateRoot]);
@@ -631,9 +691,7 @@ export async function copyUpdateCandidatePluginTrees(
     }
   }
   await targets.assertBindings();
-  for (const entry of plan.entries) {
-    await assertEntry(entry);
-  }
+  await assertEntries();
   for (const entry of plan.entries) {
     if (entry.kind !== "directory") {
       const target = destinationFor(entry.path);

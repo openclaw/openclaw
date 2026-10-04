@@ -21,7 +21,6 @@ internal enum class ChatComposerSendStartResult {
 internal data class ChatComposerSendRequest(
   val commandId: String,
   val owner: ChatComposerOwner,
-  val inputSnapshot: String,
   val message: String,
   val attachments: List<PendingAttachment>,
 )
@@ -132,7 +131,7 @@ internal class ChatComposerStateStore(
         sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
-        request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
+        request = ChatComposerSendRequest(commandId, owner, inputSnapshot.trim(), attachments),
       )
     }
 

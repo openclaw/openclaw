@@ -1,5 +1,8 @@
 /* @vitest-environment jsdom */
-import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
+import type {
+  CanvasDocumentViewResult,
+  SessionsFilesAssetsResult,
+} from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { ChatHtmlPreview } from "./chat-html-preview-element.ts";
@@ -93,11 +96,6 @@ describe("ordinary HTML preview transport", () => {
         '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
     },
     {
-      name: "authored base URL",
-      head: '<base href="https://example.com/report">',
-      body: '<a href="#section">Jump</a>',
-    },
-    {
       name: "independent base URL and target declarations",
       head: '<base target="_self"><base href="/report">',
       body: '<a href="#section">Jump</a>',
@@ -119,20 +117,9 @@ describe("ordinary HTML preview transport", () => {
       expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
     },
     {
-      name: "unrelated duplicate attributes",
-      body: '<p title="first" title="ignored">Report</p><a href="#section">Jump</a>',
-      expected:
-        '<p title="first" title="ignored">Report</p><a href="about:srcdoc#section">Jump</a>',
-    },
-    {
       name: "a complete link before an unfinished unrelated tail",
       body: '<a href="#section">Jump</a><p title="unfinished',
       expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
-    },
-    {
-      name: "anchors reconstructed across paragraphs",
-      body: '<p><a href="#x">one<p>two',
-      expected: '<p><a href="about:srcdoc#x">one<p>two',
     },
     {
       name: "anchors reconstructed across formatting elements",
@@ -187,7 +174,7 @@ describe("ordinary HTML preview transport", () => {
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "canvas.document.preview",
         { html },
-        { timeoutMs: 10_000 },
+        { timeoutMs: 30_000 },
       );
     },
   );
@@ -220,7 +207,7 @@ describe("ordinary HTML preview transport", () => {
     expect(request).toHaveBeenCalledWith(
       "canvas.document.preview",
       { html: source },
-      { timeoutMs: 10_000 },
+      { timeoutMs: 30_000 },
     );
     expect(frame.src).toBe("http://gateway.example:8444/mcp-app-sandbox?frames=none");
     expect(frame.hasAttribute("srcdoc")).toBe(false);
@@ -250,6 +237,93 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("loads assets from the owning session and announces omissions beside the sandbox", async () => {
+    const html = '<img src="a.png"><img src="missing.png"><a href="#section">Jump</a>';
+    const canvas = Promise.resolve({ ...metadata, html });
+    const assets: SessionsFilesAssetsResult = {
+      assets: [
+        { ref: "a.png", mimeType: "image/png", content: "YQ==" },
+        { ref: "missing.png", error: "outside_session_boundary" },
+      ],
+    };
+    const request = vi.fn((method: string) =>
+      method === "canvas.document.preview" ? canvas : Promise.resolve(assets),
+    );
+    const { view } = mount(request, html);
+    view.sessionFileSource = {
+      sessionKey: "agent:sender:main",
+      agentId: "sender",
+      path: "/sender/report/index.html",
+    };
+    await view.updateComplete;
+    await canvas;
+    await view.updateComplete;
+    const frame = view.querySelector("iframe")!;
+    expect(frame).not.toBeNull();
+    const transfer = Promise.withResolvers<unknown>();
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
+      transfer.resolve(value),
+    );
+    message(frame, ready(frame));
+    expect(await transfer.promise).toMatchObject({
+      params: {
+        html: '<img src="data:image/png;base64,YQ=="><img src="missing.png"><a href="about:srcdoc#section">Jump</a>',
+      },
+    });
+    await view.updateComplete;
+    expect(request).toHaveBeenCalledWith("sessions.files.assets", {
+      sessionKey: "agent:sender:main",
+      agentId: "sender",
+      path: "/sender/report/index.html",
+      refs: ["a.png", "missing.png"],
+    });
+    expect(view.querySelector('.file-view__save-notice[role="status"]')?.textContent).toContain(
+      "Some assets couldn't be loaded (1)",
+    );
+    expect(view.html).toBe(html);
+  });
+
+  it("retires an asset response when the same document moves to another owner", async () => {
+    const html = '<img src="a.png">';
+    const oldAssets = Promise.withResolvers<SessionsFilesAssetsResult>();
+    const oldRequested = Promise.withResolvers<void>();
+    const newRequested = Promise.withResolvers<void>();
+    const request = vi.fn((method: string, params: { sessionKey?: string }) => {
+      if (method === "canvas.document.preview") {
+        return Promise.resolve({ ...metadata, html });
+      }
+      if (params.sessionKey === "agent:old:main") {
+        oldRequested.resolve();
+        return oldAssets.promise;
+      }
+      newRequested.resolve();
+      return Promise.resolve({
+        assets: [{ ref: "a.png", mimeType: "image/png", content: "Yg==" }],
+      });
+    });
+    const { view } = mount(request, html);
+    view.sessionFileSource = { sessionKey: "agent:old:main", path: "/report/index.html" };
+    await oldRequested.promise;
+    const oldFrame = view.querySelector("iframe")!;
+    const oldPost = vi.spyOn(oldFrame.contentWindow!, "postMessage");
+    message(oldFrame, ready(oldFrame));
+    view.sessionFileSource = { sessionKey: "agent:new:main", path: "/report/index.html" };
+    await newRequested.promise;
+    const newFrame = view.querySelector("iframe")!;
+    const transfer = Promise.withResolvers<unknown>();
+    vi.spyOn(newFrame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
+      transfer.resolve(value),
+    );
+    message(newFrame, ready(newFrame));
+    oldAssets.resolve({ assets: [{ ref: "a.png", error: "not_found" }] });
+    expect(await transfer.promise).toMatchObject({
+      params: { html: '<img src="data:image/png;base64,Yg==">' },
+    });
+    await view.updateComplete;
+    expect(oldPost).not.toHaveBeenCalled();
+    expect(view.querySelector('.file-view__save-notice[role="status"]')).toBeNull();
   });
 
   it("closes unsupported ports without lending prompt, wake, tools, board or theme APIs", async () => {

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -36,12 +35,11 @@ import {
 
 export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
+    candidateAgentRuntime: string;
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
     directBlockDeliveries: DirectBlockDelivery[];
-    sessionRuntimeOverride?: string;
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
-    allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     onCompactionFacts: (facts: {
@@ -53,7 +51,6 @@ export async function runEmbeddedFallbackCandidate(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
-  bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
@@ -74,12 +71,13 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: params.candidateAgentRuntime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.sessionRuntimeOverride
-    ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.provider,
         modelId: params.model,
@@ -96,7 +94,7 @@ export async function runEmbeddedFallbackCandidate(
     workspaceDir: turn.followupRun.run.workspaceDir,
   });
   const embeddedRunHarnessOverride =
-    params.sessionRuntimeOverride ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);
@@ -289,7 +287,6 @@ export async function runEmbeddedFallbackCandidate(
             messageToolDeliveryState: params.messageToolDeliveryState,
             provider: params.provider,
             model: params.model,
-            runId: params.runId,
             effectiveSessionId: params.effectiveRun.sessionId,
             notifyUserAboutCompaction: params.notifyUserAboutCompaction,
             onCompactionCompleted: () => {
@@ -317,10 +314,7 @@ export async function runEmbeddedFallbackCandidate(
         shouldEmitToolResult: turn.shouldEmitToolResult,
         shouldEmitToolOutput: turn.shouldEmitToolOutput,
         bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature:
-          params.bootstrapPromptWarningSignaturesSeen[
-            params.bootstrapPromptWarningSignaturesSeen.length - 1
-          ],
+        bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
         onToolResult: turn.opts?.onToolResult
           ? (() => {
               // Serialized delivery preserves tool result order across detached callbacks.
@@ -368,9 +362,6 @@ export async function runEmbeddedFallbackCandidate(
       result,
       maintenanceAuthProfile,
       compactionRequestBudget,
-      bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
-        result.meta?.systemPromptReport,
-      ),
     };
   } finally {
     // Runtime event/result counts are observable, but cannot prove a durable write target.

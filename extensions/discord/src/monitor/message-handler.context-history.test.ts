@@ -2,8 +2,9 @@ import path from "node:path";
 import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
 import { setDiscordRuntime } from "../runtime.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -18,7 +19,13 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 const startedAt = Date.parse("2026-01-01T00:00:00.000Z");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    cleanup();
+  });
+});
+const sessionRoot = tempDirs.make("discord-native-history-");
 
 function nativeMessage(
   id: number,
@@ -72,7 +79,7 @@ async function recentContext(overrides: Record<string, unknown> = {}) {
       client: { rest: { get: vi.fn().mockResolvedValue([]) } },
       ...overrides,
     },
-    { storePath: path.join(tempDirs.make("discord-native-history-"), "sessions.json") },
+    { storePath: path.join(tempDirs.make("case-", sessionRoot), "sessions.json") },
   );
 }
 

@@ -1,4 +1,10 @@
-export function stringifyCodexPolicy(value: unknown): string {
+import { createHash } from "node:crypto";
+
+export function fingerprintCodexPolicy(value: unknown): string {
+  return createHash("sha256").update(stringifyCodexPolicy(value)).digest("hex");
+}
+
+function stringifyCodexPolicy(value: unknown): string {
   // Fingerprints must be process-stable across object insertion order so prompt
   // cache and thread-binding comparisons do not churn between runs.
   if (Array.isArray(value)) {

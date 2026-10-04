@@ -5,6 +5,7 @@ import path from "node:path";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
   buildGatewayInstallEntrypointCandidates,
@@ -159,7 +160,7 @@ async function resolveCliProgramArguments(params: {
     return {
       programArguments:
         params.runtime === "bun"
-          ? [runtimePath, devCliPath, ...params.args]
+          ? [runtimePath, ...resolveRuntimeArgs(params.runtime), devCliPath, ...params.args]
           : [runtimePath, "--import", "tsx", devCliPath, ...params.args],
       workingDirectory: repoRoot,
     };
@@ -169,6 +170,7 @@ async function resolveCliProgramArguments(params: {
   return {
     programArguments: [
       runtimePath,
+      ...resolveRuntimeArgs(params.runtime),
       (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
       ...params.args,
     ],

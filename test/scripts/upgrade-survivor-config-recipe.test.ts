@@ -94,6 +94,8 @@ process.exit(failed ? 17 : 0);
         RECIPE_PATH,
         "scripts/e2e/lib/upgrade-survivor/config-recipe",
         "scripts/lib/release-version.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
         "scripts/windows-cmd-helpers.mjs",
       ]) {
         mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -560,10 +562,6 @@ esac
     { version: "2026.7.2-beta.4", legacy: false, explicit: false },
     { version: "2026.7.2-beta.5", legacy: false, explicit: false },
     { version: "2026.7.2", legacy: false, explicit: false },
-    { version: "2026.7.33", legacy: true, explicit: false },
-    { version: "2026.7.34", legacy: true, explicit: false },
-    { version: "2026.7.35", legacy: true, explicit: false },
-    { version: "2026.7.36", legacy: true, explicit: false },
     { version: "2026.8.1-beta.1", legacy: false, explicit: false },
     { version: "2026.8.1-beta.2", legacy: false, explicit: true },
     { version: "2026.8.1", legacy: false, explicit: true },
@@ -636,7 +634,7 @@ esac
     expect(agents.entries.ops.fastModeDefault).toBe(true);
   });
 
-  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
+  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3"])(
     "preserves the legacy agent contract for baseline %s",
     (version) => {
       const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
@@ -710,6 +708,25 @@ esac
     const batch = steps.find((step) => step.id === "channels");
     expect(batch?.argv.slice(0, 3)).toEqual(["config", "set", "--batch-json"]);
     expect(JSON.parse(batch?.argv[3] ?? "[]")).toEqual(expected);
+  });
+
+  it.each([
+    { version: "2026.9.6", value: { mode: "code", codeTimeoutMs: 5000 } },
+    { version: "2026.9.7", value: { mode: "tools" } },
+    { version: "2026.9.7-1", value: { mode: "tools" } },
+  ])("authors Tool Search through the baseline CLI for $version", ({ version, value }) => {
+    const { result, summary, loggedArgs } = runRecipeFixture({ scenario: "base", version });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(summary.baselineVersion).toBe(version);
+    expect(summary.acceptedIntents).toContain("tool-search");
+    expect(loggedArgs).toContainEqual([
+      "config",
+      "set",
+      "tools.toolSearch",
+      JSON.stringify(value),
+      "--strict-json",
+    ]);
+    expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {

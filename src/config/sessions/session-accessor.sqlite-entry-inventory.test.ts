@@ -1,26 +1,19 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it } from "vitest";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionEntryCount } from "./session-accessor.sqlite-entry-inventory.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-count-");
 
 it("counts mixed validated and raw entries with the same archive filter", async () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-entry-count-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
   };
   const database = openOpenClawAgentDatabase(scope);
   expect(readSessionEntryCount(database)).toBe(0);

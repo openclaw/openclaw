@@ -1,15 +1,41 @@
-import { expect, it } from "vitest";
-import { formatHealthChannelLines } from "./health-format.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
+  buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusSecurityAuditLines,
 } from "./status.command-sections.js";
 
-const identity = (value: string) => value;
-const colors = { ok: identity, warn: identity, muted: identity };
+const identity = String;
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation(identity);
+  vi.spyOn(theme, "warn").mockImplementation(identity);
+  vi.spyOn(theme, "muted").mockImplementation(identity);
+  vi.spyOn(theme, "error").mockImplementation(identity);
+  vi.stubEnv("OPENCLAW_PROFILE", undefined);
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+it("renders native provider health without legacy index counters", () => {
+  const value = buildStatusMemoryValue({
+    memory: {
+      agentId: "main",
+      provider: "records",
+      health: { status: "degraded", message: "warming" },
+    },
+    memoryPlugin: { enabled: true, slot: "records" },
+  });
+
+  expect(value).toBe("plugin records · degraded · warming");
+});
+
 const baseHealth: HealthSummary = {
   ok: true,
   ts: 0,
@@ -37,8 +63,6 @@ const session = {
 const healthRows = (health: Partial<HealthSummary>) =>
   buildStatusHealthRows({
     health: { ...baseHealth, ...health },
-    formatHealthChannelLines,
-    ...colors,
   });
 
 it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
@@ -76,9 +100,6 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
         },
       ],
     },
-    theme: { error: identity, warn: identity, muted: identity },
-    shortenText: identity,
-    formatCliCommand: identity,
   });
   expect(lines.slice(0, 4)).toEqual([
     "Summary: 1 critical · 6 warn · 2 info",
@@ -112,8 +133,6 @@ it("distinguishes pinned sessions from automatic fallbacks in a session report",
         modelSelectionReason: "fallback selected",
       },
     ],
-    shortenText: identity,
-    ...colors,
   });
   expect(lines).toContain(
     "Session pinned is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
@@ -242,15 +261,14 @@ it("adds degraded event-loop health to status rows", () => {
 
 it("warns when deep health says the retained Node executable is gone", () => {
   const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
   const rows = buildStatusHealthRows({
     health: {
+      ...baseHealth,
       durationMs: 42,
       childRuntime: { execPath, available: false },
-    } as HealthSummary,
-    formatHealthChannelLines: () => ["Discord: OK"],
-    ok: (value) => `ok(${value})`,
-    warn: (value) => `warn(${value})`,
-    muted: (value) => `muted(${value})`,
+    },
   });
 
   expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });

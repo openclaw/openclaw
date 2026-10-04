@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -9,6 +13,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import {
@@ -16,14 +21,9 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => Promise<void>) | undefined,
@@ -35,25 +35,42 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-read-worker.js")>();
   return {
     ...actual,
-    createOpenClawStateReadTransport: (
-      ...args: Parameters<typeof actual.createOpenClawStateReadTransport>
-    ) => {
-      const owned = actual.createOpenClawStateReadTransport(...args);
+    captureOpenClawStateReadSource: () => {
+      const source = actual.captureOpenClawStateReadSource();
       return {
-        ...owned,
-        read: async (...readArgs: Parameters<typeof owned.read>) => {
-          if (delivery.readFailure) {
-            throw delivery.readFailure;
-          }
-          const result = await owned.read(...readArgs);
-          await delivery.afterRead?.();
-          return result;
-        },
-        close: async () => {
-          if (delivery.closeFailure) {
-            throw delivery.closeFailure;
-          }
-          await owned.close();
+        ...source,
+        createTransport: (...args: Parameters<typeof source.createTransport>) => {
+          const owned = source.createTransport(...args);
+          return {
+            ...owned,
+            startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
+              let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
+              const completion = createRetainedOperation<OpenClawStateReadOutcome>(() =>
+                read?.service(),
+              );
+              if (delivery.readFailure) {
+                completion.reject(delivery.readFailure);
+              } else {
+                read = owned.startRead(...readArgs);
+                // The existing race control holds delivery after the real worker read.
+                void read.result
+                  .then(async (outcome) => {
+                    await delivery.afterRead?.();
+                    return outcome;
+                  })
+                  .then(completion.resolve, completion.reject);
+              }
+              return completion.operation;
+            },
+            startClose: () => {
+              if (delivery.closeFailure) {
+                const completion = createRetainedOperation<void>(() => {});
+                completion.reject(delivery.closeFailure);
+                return completion.operation;
+              }
+              return owned.startClose();
+            },
+          };
         },
       };
     },
@@ -348,7 +365,12 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
     expect(seen).toEqual([
       {
         display: expect.objectContaining({ id: profile.id, hasAvatar: true }),
-        identity: { profileId: profile.id, role: null, aliases: new Set([profile.id, alias.id]) },
+        identity: {
+          profileId: profile.id,
+          role: null,
+          githubLogin: null,
+          aliases: new Set([profile.id, alias.id]),
+        },
       },
     ]);
     sql.expectIdle();

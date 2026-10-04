@@ -268,6 +268,8 @@ suite.define(() => {
           expect(geometry.firstTop).toBeGreaterThanOrEqual(geometry.composerBottom);
           const choices = picker.locator("button");
           expect(await picker.locator(".side-panel-type-option__label").allTextContents()).toEqual([
+            "Subagents",
+            "Processes",
             "Review",
             "Terminal",
             "Browser",

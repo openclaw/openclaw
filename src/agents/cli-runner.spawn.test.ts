@@ -177,7 +177,7 @@ describe("runCliAgent spawn path", () => {
       agentId: "arthur",
       workspaceDir,
       config: {
-        agents: { entries: { arthur: { default: true, workspace: workspaceDir } } },
+        agents: { entries: { arthur: { workspace: workspaceDir } } },
       },
       backend: { imageArg: "--image" },
     });
@@ -1376,9 +1376,7 @@ describe("runCliAgent spawn path", () => {
       });
     });
     supervisorSpawnMock.mockResolvedValueOnce({
-      pid: 1234,
-      startedAtMs: Date.now(),
-      stdin: undefined,
+      ...createManagedRun(createSuccessfulProcessExit()),
       wait: vi.fn(() => exit.promise),
       cancel,
     });

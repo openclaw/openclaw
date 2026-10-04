@@ -1,32 +1,47 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { resolveStateDir } from "../../../config/paths.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  rotateAgentEventLifecycleGeneration,
+  type AgentEventPayload,
+} from "../../../infra/agent-events.js";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
+import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
-import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
-import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import * as registryPublication from "./subagent-registry-publication.js";
 import { registerQueuedRegistrationAdmissionCases } from "./subagent-registry-queued-admission.test-support.js";
 import { registerQueuedCancelledLaunchCases } from "./subagent-registry-queued-cancelled-launch.test-support.js";
 import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
-import { createQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
+import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
+import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as registryState from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import * as runManager from "./subagent-registry-run-manager.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
+
+afterEach(() => {
+  resetGatewayWorkAdmission();
+});
 
 const mocks = vi.hoisted(() => ({
   register: vi.fn<SubagentLaunchManager["registerSubagentRun"]>(),
-  persisted: new Set<() => void>(),
-  databaseListeners: new Set<
-    Parameters<typeof databaseLifecycle.registerOpenClawStateDatabaseLifecycleListener>[0]
-  >(),
-  lifecycle: "original",
-  database: "original-db",
-  context: undefined as OpenClawStateWorkerContext | undefined,
 }));
 vi.mock("./subagent-registry.js", () => ({
   registerSubagentRun: mocks.register,
@@ -34,555 +49,655 @@ vi.mock("./subagent-registry.js", () => ({
   settleFailedQueuedSubagentLaunch: vi.fn(),
   startQueuedSubagentRun: vi.fn(),
 }));
-vi.mock("../../../infra/agent-events.js", () => ({
-  registerAgentEventLifecycleRotationHandler: vi.fn(),
-  onAgentEvent: () => () => {},
-  getAgentEventLifecycleGeneration: () => mocks.lifecycle,
-  isAgentEventLifecycleGenerationCurrent: (value: string) => value === mocks.lifecycle,
-}));
-vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: () => ({
-    ...mocks.context,
-    admission: {
-      ...mocks.context?.admission,
-      identity: { key: mocks.database, canonicalPath: "/synthetic/state.sqlite" },
-    },
-  }),
-}));
-vi.mock("./subagent-session-reconciliation.js", () => ({
-  loadSubagentSessionEntry: () => undefined,
-}));
 
-beforeEach(() => {
-  resetGatewayWorkAdmission();
-  mocks.persisted.clear();
-  mocks.databaseListeners.clear();
-  vi.spyOn(databaseLifecycle, "registerOpenClawStateDatabaseLifecycleListener").mockImplementation(
-    (listener) => {
-      mocks.databaseListeners.add(listener);
-      return () => {
-        mocks.databaseListeners.delete(listener);
-      };
-    },
-  );
-  vi.spyOn(registryState, "onSubagentRegistryPersisted").mockImplementation((listener) => {
-    mocks.persisted.add(listener);
-    return () => {
-      mocks.persisted.delete(listener);
-    };
+it("awaits intent and descriptor acknowledgements through the spawn pipeline", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    mocks.register.mockImplementation(f.manager.registerSubagentRun);
+    const intent = f.holdNextWrite();
+    const descriptor = f.holdNextWrite();
+    const cleanup = vi.fn(async () => {});
+    const release = vi.fn();
+    let completed = false;
+    const pipeline = f.track(
+      runSpawnPipeline({
+        adapter: {
+          initialize: async () => ({}),
+          dispatchTurn: async () => ({ runId: f.registration.runId }),
+          cleanupOnFailure: cleanup,
+        },
+        buildRegistration: () => f.registration,
+        progressSessionKey: "agent:main:main",
+        admissionReservation: { release },
+      }).then((value) => {
+        completed = true;
+        return value;
+      }),
+    );
+    await intent.entered;
+    expect(f.runs.has(f.registration.runId)).toBe(false);
+    expect(f.stored()?.queuedLaunch).toBeUndefined();
+    expect(completed).toBe(false);
+    intent.release();
+    await descriptor.entered;
+    expect(f.current().queuedLaunch).toBeUndefined();
+    expect(f.stored()?.queuedLaunch).toEqual(f.registration.queuedLaunch);
+    expect(release).not.toHaveBeenCalled();
+    descriptor.release();
+    expect(await pipeline).toMatchObject({ ok: true });
+    expect(f.current().queuedLaunch).toEqual(f.registration.queuedLaunch);
+    expect(cleanup).not.toHaveBeenCalled();
   });
-  vi.clearAllMocks();
-  mocks.lifecycle = "original";
-  mocks.database = "original-db";
-  mocks.context = {
-    admission: {
-      coordinationKey: "original-db",
-      databasePath: "/synthetic/state.sqlite",
-      identity: { key: "original-db", canonicalPath: "/synthetic/state.sqlite" },
-      assertCurrent: () => {},
-    },
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-  };
-  schedulerTesting.reset();
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetGatewayWorkAdmission();
-});
-
-const fixture = () => createQueuedRegistrationFixture(mocks);
-
-it("awaits both registry acknowledgements through the spawn pipeline before publishing success", async () => {
-  const f = fixture();
-  const cleanup = vi.fn(async () => {});
-  const release = vi.fn();
-  let completed = false;
-  const result = runSpawnPipeline({
-    adapter: {
-      initialize: async () => ({}),
-      dispatchTurn: async () => ({ runId: f.registration.runId }),
-      cleanupOnFailure: cleanup,
-    },
-    buildRegistration: () => f.registration,
-    progressSessionKey: "agent:main:main",
-    admissionReservation: { release },
-  }).then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.waitFor(() => expect(f.writes).toHaveLength(1));
-  expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-  expect(completed).toBe(false);
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  expect(f.writes[1]!.snapshot.get(f.registration.runId)?.queuedLaunch).toEqual(
-    f.registration.queuedLaunch,
-  );
-  expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-  expect(release).not.toHaveBeenCalled();
-  f.writes[1]!.gate.resolve();
-  expect(await result).toMatchObject({ ok: true });
-  expect(f.runs.get(f.registration.runId)?.queuedLaunch).toEqual(f.registration.queuedLaunch);
-  expect(cleanup).not.toHaveBeenCalled();
-  expect(f.options.persistOrThrow).not.toHaveBeenCalled();
-});
-
-it.each(["same-id", "different-id", "lifecycle", "database"] as const)(
-  "rejects %s replacement without successor cleanup",
-  async (replacement) => {
-    const f = fixture();
-    reserveSwarmRun({
-      groupId: "group",
-      runId: f.registration.runId,
-      maxConcurrent: 1,
-      activeRunIds: [],
+it.each(["intent", "descriptor"] as const)(
+  "fences an uncertain %s acknowledgement without speculative publication",
+  async (phase) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      const intent = f.holdNextWrite();
+      const descriptor = phase === "descriptor" ? f.holdNextWrite() : undefined;
+      const registration = f.register();
+      await intent.entered;
+      if (descriptor) {
+        intent.release();
+        await descriptor.entered;
+      }
+      (descriptor ?? intent).loseReceipt(
+        new SqliteWorkerError("acknowledgement lost", "outcome-unknown"),
+      );
+      await expect(registration).rejects.toMatchObject({ outcome: "unknown" });
+      expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
+      expect(f.scope.canLaunch()).toBe(false);
+      expect(f.scope.canCleanupSession()).toBe(false);
+      expect(f.scope.canRetireReservation()).toBe(false);
+      await expect(f.scope.settleFailedLaunch("retained failure")).rejects.toMatchObject({
+        outcome: "unknown",
+      });
+      const writes = f.writes;
+      await expect(
+        mutateSubagentRuns([f.registration.runId], () => ({ value: true }), { runs: f.runs }),
+      ).rejects.toMatchObject({ outcome: "unknown" });
+      expect(f.writes).toBe(writes);
     });
-    const reservation = holdQueuedSwarmRun(f.registration.runId)!;
-    const completion = f.register();
-    const rejected = expect(completion).rejects.toThrow("original run owner");
-    const original = f.runs.get(f.registration.runId)!;
-    let successor: SubagentRunRecord | undefined;
-    if (replacement === "same-id" || replacement === "different-id") {
-      successor = {
+  },
+);
+
+it("leaves no speculative intent when registration is refused before native admission", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    const gate = f.holdNextWrite("before");
+    let current = true;
+    const registration = f.register(() => {
+      if (!current) {
+        throw new Error("registration retired");
+      }
+    });
+    await gate.entered;
+    current = false;
+    gate.release();
+    await expect(registration).rejects.toThrow("registration retired");
+    expect(f.runs.size).toBe(0);
+    expect(f.stored()).toBeUndefined();
+  });
+});
+
+it("rejects and terminalizes an intent superseded while descriptor admission waits", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    const intent = f.holdNextWrite();
+    const earlierMutation = f.holdNextWrite("before");
+    const descriptorPrechecked = createDeferred();
+    const registration = f.register(() => {
+      if (f.runs.has(f.registration.runId)) {
+        descriptorPrechecked.resolve();
+      }
+    });
+    await intent.entered;
+    const changing = f.change((draft) => {
+      draft.label = "metadata before descriptor";
+    });
+    intent.release();
+    await earlierMutation.entered;
+    await descriptorPrechecked.promise;
+    const original = f.current();
+    const successor = {
+      ...structuredClone(original),
+      runId: "queued-successor",
+      generation: (original.generation ?? 0) + 1,
+      queuedLaunch: f.registration.queuedLaunch,
+    };
+    await mutateSubagentRuns(
+      [successor.runId],
+      () => ({ value: undefined, postimages: new Map([[successor.runId, successor]]) }),
+      { runs: f.runs },
+    );
+    earlierMutation.release();
+    await changing;
+    await expect(registration).rejects.toThrow("Queued registration lost its original run owner");
+    expect(f.current()).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      collectorLaunchCleanupPending: true,
+      queuedLaunch: undefined,
+    });
+    const stored = f.stored();
+    expect(stored).toMatchObject({
+      execution: {
+        status: "terminal",
+        outcome: { status: "error", error: "Queued registration lost its original run owner" },
+        suppressSessionEffects: true,
+      },
+      collectorLaunchCleanupPending: true,
+    });
+    expect(stored?.queuedLaunch).toBeUndefined();
+    expect(f.runs.get(successor.runId)).toEqual(successor);
+    expect(f.scope.canLaunch()).toBe(false);
+    expect(f.scope.canCleanupSession()).toBe(false);
+  });
+});
+
+it.each(["recorded child", "persisted store owner"] as const)(
+  "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
+  async (owner) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      const recordedChild = owner === "recorded child";
+      const configuredStoreOwner = recordedChild ? "main" : "research";
+      const cfg = {
+        session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, research: {} },
+          defaults: { sessionStore: { agentId: configuredStoreOwner } },
+        },
+      } satisfies OpenClawConfig;
+      f.options.getRuntimeConfig = () => cfg;
+      f.registration.childSessionKey = "global";
+      f.registration.childAgentId = recordedChild ? "research" : undefined;
+      f.registration.queuedLaunch!.request.sessionKey = "global";
+      for (const [agentId, inputTokens, outputTokens] of [
+        ["main", 11, 13],
+        ["research", 101, 103],
+      ] as const) {
+        await replaceSessionEntry(
+          {
+            agentId,
+            sessionKey: "global",
+            storePath: cfg.session.store,
+            defaultAgentId: configuredStoreOwner,
+          },
+          {
+            sessionId: `${agentId}-collector-session`,
+            lifecycleRevision: `${agentId}-collector-lifecycle`,
+            updatedAt: 1,
+            inputTokens,
+            outputTokens,
+          },
+        );
+      }
+      const intent = f.holdNextWrite();
+      const descriptor = f.holdNextWrite("before");
+      const registration = f.register();
+      await intent.entered;
+      intent.release();
+      await descriptor.entered;
+      descriptor.reject(new Error("descriptor refused"));
+      await expect(registration).rejects.toThrow("descriptor refused");
+      expect(f.current()).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error" } },
+        queuedLaunch: undefined,
+        collectorLaunchCleanupPending: true,
+      });
+      expect(f.stored()?.execution.status).toBe("terminal");
+      expect(f.stored()?.collectorCompletion).toEqual({
+        status: "failed",
+        usage: { inputTokens: 101, outputTokens: 103 },
+      });
+      expect(f.scope.canLaunch()).toBe(false);
+    });
+  },
+);
+
+it("serializes Stop after a pending descriptor without losing either commit", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    const intent = f.holdNextWrite();
+    const descriptor = f.holdNextWrite();
+    const registration = f.register();
+    await intent.entered;
+    intent.release();
+    await descriptor.entered;
+    const captured = f.current();
+    const killing = f.track(f.manager.markSubagentRunTerminated({ runId: captured.runId }));
+    descriptor.release();
+    await registration;
+    expect(await killing).toBe(1);
+    expect(captured.execution.status).toBe("queued");
+    expect(f.current()).toMatchObject({
+      execution: { status: "terminal" },
+      killReconciliation: { taskCancellationAccepted: undefined },
+    });
+    expect(f.stored()?.execution.status).toBe("terminal");
+    expect(f.scope.canLaunch()).toBe(false);
+  });
+});
+
+it.each(["open", "restart", "suspend"] as const)(
+  "owns lifecycle preservation before its first await with admission %s",
+  async (fence) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const release = createDeferred();
+      const preserve = runManager.preserveSubagentRunForRestart;
+      const preservation = vi
+        .spyOn(runManager, "preserveSubagentRunForRestart")
+        .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      const complete = vi.fn(async () => {});
+      const warn = vi.fn();
+      const listener = createSubagentRegistryListener({
+        runs: f.runs,
+        pendingLifecycle: createPendingLifecycleScheduler({
+          runs: f.runs,
+          completeInBackground: vi.fn(),
+        }),
+        onAgentEvent: (handler) => {
+          emit = handler;
+          return () => {};
+        },
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: complete,
+        warn,
+      });
+      const dispatch = async () => {
+        const settleRootWork = observeRootWork();
+        if (fence === "restart") {
+          markGatewayRestartDraining();
+        } else if (fence === "suspend") {
+          expect(tryBeginGatewaySuspendAdmission(() => {})?.drain()).toBe(true);
+        }
+        try {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: Date.now(),
+            data: {
+              phase: "end",
+              endedAt: Date.now(),
+              ...(fence === "restart" ? { aborted: true, stopReason: "restart" } : {}),
+            },
+          });
+          expect(preservation).toHaveBeenCalledOnce();
+          expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(1);
+        } finally {
+          release.resolve();
+          await settleRootWork();
+        }
+        expect(warn).not.toHaveBeenCalled();
+        expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
+        if (fence === "restart") {
+          expect(f.current().execution.status).toBe("interrupted");
+          expect(complete).not.toHaveBeenCalled();
+        } else {
+          expect(complete).toHaveBeenCalledOnce();
+        }
+      };
+      listener.ensure();
+      try {
+        if (fence === "open") {
+          await dispatch();
+        } else {
+          await runWithGatewayIndependentRootWorkAdmission(dispatch, "test:lifecycle-parent");
+        }
+      } finally {
+        release.resolve();
+        listener.reset();
+        preservation.mockRestore();
+        resetGatewayWorkAdmission();
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "refuses delayed launch acceptance during a kill claim after start=%s",
+  async (started) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      const listener = createSubagentRegistryListener({
+        runs: f.runs,
+        pendingLifecycle: createPendingLifecycleScheduler({
+          runs: f.runs,
+          completeInBackground: vi.fn(),
+        }),
+        onAgentEvent: (handler) => {
+          emit = handler;
+          return () => {};
+        },
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: async () => {},
+        warn: vi.fn(),
+      });
+      listener.ensure();
+      try {
+        if (started) {
+          const published = createDeferred();
+          const stop = subscribeSubagentRunChanges("persistence", () => {
+            if (f.current().execution.status === "running") {
+              published.resolve();
+            }
+          });
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: 10,
+            data: { phase: "start", startedAt: 10 },
+          });
+          await published.promise;
+          stop();
+        }
+        const captured = f.current();
+        expect(captured.execution.status).toBe(started ? "running" : "queued");
+        const gate = f.holdNextWrite();
+        const killing = f.track(
+          f.manager.claimSubagentRunKill({ runId: captured.runId, expected: captured }),
+        );
+        await gate.entered;
+        const accepting = f.track(
+          f.manager.startQueuedSubagentRun(captured.runId, "late-gateway-run"),
+        );
+        expect(captured.killIntent).toBeUndefined();
+        gate.release();
+        expect(await killing).toBeDefined();
+        expect(await accepting).toBe(false);
+        expect(f.runs.has("late-gateway-run")).toBe(false);
+        expect(f.current().killIntent).toBeDefined();
+      } finally {
+        listener.reset();
+      }
+    });
+  },
+);
+
+it.each(["pending", "already dispatched", "next attempt"] as const)(
+  "keeps lifecycle error grace on its admitted attempt (%s)",
+  async (timing) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      await f.change((draft) => {
+        draft.execution = { ...draft.execution, status: "running", startedAt: 10 };
+        draft.sessionStartedAt = 10;
+      });
+      vi.useFakeTimers();
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      const completeInBackground = vi.fn<(completion: SubagentCompletionRequest) => void>();
+      const pendingLifecycle = createPendingLifecycleScheduler({
+        runs: f.runs,
+        completeInBackground,
+      });
+      const warn = vi.fn();
+      const listener = createSubagentRegistryListener({
+        runs: f.runs,
+        pendingLifecycle,
+        onAgentEvent: (handler) => {
+          emit = handler;
+          return () => {};
+        },
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: async () => {},
+        warn,
+      });
+      const restarted = createDeferred();
+      const stop = subscribeSubagentRunChanges("persistence", () => {
+        if (f.current().execution.startedAt === 20) {
+          restarted.resolve();
+        }
+      });
+      const startAck = f.holdNextWrite();
+      listener.ensure();
+      try {
+        if (timing !== "next attempt") {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: 15,
+            data: { phase: "error", error: "rate limit", startedAt: 10, endedAt: 15 },
+          });
+        }
+        emit?.({
+          runId: f.registration.runId,
+          seq: 2,
+          stream: "lifecycle",
+          ts: 20,
+          data: { phase: "start", startedAt: 20 },
+        });
+        await startAck.entered;
+        expect(f.current().execution.startedAt).toBe(10);
+        if (timing === "already dispatched") {
+          await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+          expect(completeInBackground).toHaveBeenCalledOnce();
+          expect(completeInBackground.mock.calls[0]![0].recoveryCurrent?.isHostCurrent()).toBe(
+            true,
+          );
+        } else if (timing === "next attempt") {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 3,
+            stream: "lifecycle",
+            ts: 25,
+            data: { phase: "error", error: "new attempt failed", endedAt: 25 },
+          });
+        }
+        startAck.release();
+        await restarted.promise;
+        await mutateSubagentRuns([f.registration.runId], () => ({ value: undefined }), {
+          runs: f.runs,
+        });
+        await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+        expect(warn).not.toHaveBeenCalled();
+        expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
+        if (timing === "pending") {
+          expect(completeInBackground).not.toHaveBeenCalled();
+        } else {
+          expect(completeInBackground).toHaveBeenCalledOnce();
+          const completion = completeInBackground.mock.calls[0]![0];
+          expect(completion.recoveryCurrent?.isHostCurrent()).toBe(timing === "next attempt");
+          expect(await completion.recoveryCurrent?.prepare()).toBe(timing === "next attempt");
+          expect(completion.expectedEntry?.execution.startedAt).toBe(
+            timing === "next attempt" ? 20 : 10,
+          );
+        }
+      } finally {
+        startAck.release();
+        stop();
+        listener.reset();
+        pendingLifecycle.clearAll();
+        vi.useRealTimers();
+      }
+    });
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "rejects queued launch lifecycle retirement at native %s admission",
+  async (stage) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const original = f.current();
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      let rotated = false;
+      const admission = vi
+        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage && !rotated) {
+              rotated = true;
+              rotateAgentEventLifecycleGeneration();
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(
+          f.manager.startQueuedSubagentRun(original.runId, "accepted-run"),
+        ).rejects.toMatchObject({ outcome: "not-committed" });
+        expect(rotated).toBe(true);
+        expect(f.current()).toEqual(original);
+        expect(f.runs.has("accepted-run")).toBe(false);
+        expect(f.stored()).toMatchObject({
+          execution: { status: "queued" },
+          queuedLaunch: f.registration.queuedLaunch,
+        });
+      } finally {
+        admission.mockRestore();
+      }
+    });
+  },
+);
+
+it.each(["running", "terminal"] as const)(
+  "retains acceptance authority after a %s lifecycle publication",
+  async (status) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      await f.change((draft) => {
+        draft.execution = {
+          ...draft.execution,
+          status,
+          startedAt: 10,
+          ...(status === "terminal" ? { endedAt: 20 } : {}),
+        };
+      });
+      expect(f.scope.canLaunch()).toBe(false);
+      expect(f.scope.canAcceptLaunch()).toBe(true);
+    });
+  },
+);
+
+it.each(["same-id", "different-id"] as const)(
+  "settles only its original intent after %s ownership replacement",
+  async (replacement) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const original = f.current();
+      const successor = {
         ...structuredClone(original),
         runId: replacement === "same-id" ? original.runId : "successor",
         generation: (original.generation ?? 0) + 1,
       };
-      f.runs.set(successor.runId, successor);
-    } else if (replacement === "lifecycle") {
-      mocks.lifecycle = "successor";
-    } else {
-      mocks.database = "successor-db";
-    }
-    f.writes[0]!.gate.resolve();
-    // A different-ID successor needs recovery intent before the original terminal outcome.
-    if (replacement === "different-id") {
-      await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-      expect(f.writes[1]!.snapshot.get(original.runId)).toMatchObject({
-        execution: { status: "queued", suppressSessionEffects: true },
-        queuedLaunch: undefined,
-      });
-      expect(original.execution.suppressSessionEffects).toBeUndefined();
-      f.writes[1]!.assertCurrent();
-      const terminalWrite = f.nextWrite;
-      f.writes[1]!.gate.resolve();
-      const terminal = await terminalWrite;
-      expect(f.writes).toHaveLength(3);
-      expect(terminal.snapshot.get(original.runId)).toMatchObject({
-        execution: { status: "terminal", suppressSessionEffects: true },
-        queuedLaunch: undefined,
-        collectorLaunchCleanupPending: true,
-      });
-      expect(original.execution.status).toBe("queued");
-      terminal.assertCurrent();
-      terminal.gate.resolve();
-    }
-    await rejected;
-    expect(f.scope.canCleanupSession()).toBe(false);
-    expect(f.scope.canRetireReservation()).toBe(true);
-    expect(reservation.withdraw()).toBe(true);
-    await reservation.release();
-    if (successor) {
-      expect(f.runs.get(successor.runId)).toBe(successor);
-    }
-  },
-);
-
-it.each(["intent", "publication"] as const)(
-  "keeps an uncertain %s write nonlaunchable without retrying persistence",
-  async (phase) => {
-    const f = fixture();
-    const completion = f.register();
-    if (phase !== "intent") {
-      f.writes[0]!.gate.resolve();
-      await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-    }
-    const index = phase === "intent" ? 0 : 1;
-    const failure = new SubagentRegistryWriteError("unknown", new Error("lost acknowledgement"));
-    const rejected = Promise.resolve(completion).catch((error: unknown) => error);
-    f.writes[index]!.gate.reject(failure);
-    const reported = await rejected;
-    expect(reported).toBe(failure);
-    await expect(f.scope.settleFailedLaunch("retained failure callback")).rejects.toBe(reported);
-    await expect(f.scope.settleFailedLaunch("repeated failure callback")).rejects.toBe(reported);
-    mocks.lifecycle = "retired";
-    await expect(f.scope.settleFailedLaunch("retired failure callback")).resolves.toBeUndefined();
-    expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-    expect(f.scope.canLaunch()).toBe(false);
-    expect(f.scope.canCleanupSession()).toBe(false);
-    expect(f.writes).toHaveLength(index + 1);
-  },
-);
-
-it("preserves Stop while the descriptor acknowledgement is pending", async () => {
-  const f = fixture();
-  const completion = f.register();
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  const entry = f.runs.get(f.registration.runId)!;
-  entry.execution = { ...entry.execution, status: "terminal", endedAt: 123 };
-  entry.killReconciliation = { killedAt: 123 };
-  f.writes[1]!.gate.resolve();
-  await completion;
-  expect(entry.execution).toMatchObject({ status: "terminal", endedAt: 123 });
-  expect(entry.queuedLaunch).toBeUndefined();
-  expect(f.scope.canLaunch()).toBe(false);
-  expect(f.options.ensureListener).toHaveBeenCalledOnce();
-});
-
-it.each(["running", "terminal"] as const)(
-  "retains acceptance authority when a %s event precedes the Gateway response",
-  async (status) => {
-    const f = fixture();
-    const completion = f.register();
-    f.writes[0]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-    f.writes[1]!.gate.resolve();
-    await completion;
-    const entry = f.runs.get(f.registration.runId)!;
-    entry.execution = {
-      ...entry.execution,
-      status,
-      startedAt: 10,
-      ...(status === "terminal" ? { endedAt: 20 } : {}),
-    };
-    expect(f.scope.canLaunch()).toBe(false);
-    expect(f.scope.canAcceptLaunch()).toBe(true);
-  },
-);
-
-it("terminalizes only the original intent when a successor prevents its first commit", async () => {
-  const f = fixture();
-  const completion = f.register();
-  const original = f.runs.get(f.registration.runId)!;
-  const successor = {
-    ...structuredClone(original),
-    runId: "successor",
-    generation: (original.generation ?? 0) + 1,
-  };
-  f.runs.set(successor.runId, successor);
-  const rejection = new SubagentRegistryWriteError("not-committed", new Error("successor won"));
-  const failed = expect(completion).rejects.toBe(rejection);
-  f.writes[0]!.gate.reject(rejection);
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  expect(f.writes[1]!.snapshot.get(original.runId)).toMatchObject({
-    execution: { status: "queued", suppressSessionEffects: true },
-    queuedLaunch: undefined,
-  });
-  expect(original.execution.suppressSessionEffects).toBeUndefined();
-  f.writes[1]!.assertCurrent();
-  const terminalWrite = f.nextWrite;
-  f.writes[1]!.gate.resolve();
-  const terminal = await terminalWrite;
-  expect(f.writes).toHaveLength(3);
-  expect(terminal.snapshot.get(original.runId)?.execution).toMatchObject({
-    status: "terminal",
-    suppressSessionEffects: true,
-  });
-  expect(original.execution.status).toBe("queued");
-  expect(successor.execution.status).toBe("queued");
-  terminal.assertCurrent();
-  terminal.gate.resolve();
-  await failed;
-  expect(original.execution.status).toBe("terminal");
-  expect(f.runs.get(successor.runId)).toBe(successor);
-  expect(f.scope.canCleanupSession()).toBe(false);
-});
-
-it("settles a retained failed launch against its original row after a different-ID replacement", async () => {
-  const f = fixture();
-  const completion = f.register();
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  f.writes[1]!.gate.resolve();
-  await completion;
-  const original = f.runs.get(f.registration.runId)!;
-  const successor = {
-    ...structuredClone(original),
-    runId: "successor",
-    generation: (original.generation ?? 0) + 1,
-  };
-  f.runs.set(successor.runId, successor);
-  const settlement = f.scope.settleFailedLaunch("superseded during Gateway admission");
-  expect(f.writes).toHaveLength(3);
-  expect(f.writes[2]!.snapshot.get(original.runId)?.execution.status).toBe("queued");
-  expect(f.writes[2]!.snapshot.get(original.runId)?.queuedLaunch).toBeUndefined();
-  f.writes[2]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(4));
-  expect(f.writes[3]!.snapshot.get(original.runId)?.execution).toMatchObject({
-    status: "terminal",
-    suppressSessionEffects: true,
-  });
-  expect(original.execution.status).toBe("queued");
-  f.writes[3]!.gate.resolve();
-  await settlement;
-  expect(original.execution.status).toBe("terminal");
-  expect(original.queuedLaunch).toBeUndefined();
-  expect(f.runs.get(successor.runId)).toBe(successor);
-  expect(successor.execution.status).toBe("queued");
-  expect(f.options.persistOrThrow).not.toHaveBeenCalled();
-});
-
-it("retains descriptorless recovery after failed descriptor publication", async () => {
-  const f = fixture();
-  const completion = f.register();
-  const failure = new SubagentRegistryWriteError("not-committed", new Error("descriptor rejected"));
-  const rejected = expect(completion).rejects.toBe(failure);
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  f.writes[1]!.gate.reject(failure);
-  await rejected;
-  expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-  expect(f.scope.canLaunch()).toBe(false);
-  expect(f.scope.canCleanupSession()).toBe(false);
-  await expect(f.scope.settleFailedLaunch("late failure callback")).rejects.toBe(failure);
-  expect(f.writes).toHaveLength(2);
-  expect(f.options.persistOrThrow).not.toHaveBeenCalled();
-});
-
-it.each(["not-committed", "unknown"] as const)(
-  "does not lose a %s terminal settlement on the next failure callback",
-  async (outcome) => {
-    const f = fixture();
-    const completion = f.register();
-    f.writes[0]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-    f.writes[1]!.gate.resolve();
-    await completion;
-    const original = f.runs.get(f.registration.runId)!;
-    const successor = {
-      ...structuredClone(original),
-      runId: "successor",
-      generation: (original.generation ?? 0) + 1,
-    };
-    f.runs.set(successor.runId, successor);
-    const failure = new SubagentRegistryWriteError(outcome, new Error("terminal write failed"));
-    const first = f.scope.settleFailedLaunch("original failure");
-    f.writes[2]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(4));
-    const rejected = expect(first).rejects.toMatchObject({
-      errors: ["original failure", failure],
-      cause: "original failure",
-    });
-    f.writes[3]!.gate.reject(failure);
-    await rejected;
-    const second = f.scope.settleFailedLaunch("retry failure callback");
-    if (outcome === "not-committed") {
-      expect(f.writes).toHaveLength(5);
-      expect(f.writes[4]!.snapshot.get(original.runId)).toMatchObject({
-        execution: { status: "queued", suppressSessionEffects: true },
-        queuedLaunch: undefined,
-      });
-      f.writes[4]!.assertCurrent();
-      const terminalWrite = f.nextWrite;
-      f.writes[4]!.gate.resolve();
-      const terminal = await terminalWrite;
-      expect(f.writes).toHaveLength(6);
-      expect(terminal.snapshot.get(original.runId)?.execution).toEqual(
-        f.writes[3]!.snapshot.get(original.runId)?.execution,
+      await mutateSubagentRuns(
+        [successor.runId],
+        () => ({ value: undefined, postimages: new Map([[successor.runId, successor]]) }),
+        { runs: f.runs },
       );
-      expect(original.execution.status).toBe("queued");
-      terminal.assertCurrent();
-      terminal.gate.resolve();
-      await second;
-    } else {
-      await expect(second).rejects.toMatchObject({
-        errors: ["original failure", failure],
-        cause: "original failure",
-      });
-      expect(f.writes).toHaveLength(4);
-    }
-    expect(f.runs.get(successor.runId)).toBe(successor);
-    expect(successor.execution.status).toBe("queued");
-  },
-);
-
-it.each(["unchanged", "Stop", "same-ID successor"] as const)(
-  "withholds terminal cleanup from live readers until acknowledgement with %s",
-  async (change) => {
-    const f = fixture();
-    const taskError = new Error("task creation failed");
-    let active = true;
-    const completion = f.register(() => {
-      if (!active) {
-        throw taskError;
-      }
-    });
-    const rejected = expect(completion).rejects.toBe(taskError);
-    const original = f.runs.get(f.registration.runId)!;
-    const originalExecution = original.execution;
-    f.writes[0]!.assertCurrent();
-    active = false;
-    f.writes[0]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-    try {
-      expect(f.writes[1]!.snapshot.get(original.runId)?.execution.status).toBe("terminal");
-      expect(original.execution).toBe(originalExecution);
-      expect(original.execution.status).toBe("queued");
-      expect(original.execution.endedAt).toBeUndefined();
-      expect(original.collectorLaunchCleanupPending).toBeUndefined();
-      expect(original.collectorCompletion).toBeUndefined();
-      if (change === "Stop") {
-        original.execution = { ...original.execution, status: "terminal", endedAt: 123 };
-        original.killReconciliation = { killedAt: 123 };
-      } else if (change === "same-ID successor") {
-        f.runs.set(original.runId, {
-          ...structuredClone(original),
-          generation: (original.generation ?? 0) + 1,
+      await f.scope.settleFailedLaunch("old launch failed");
+      expect(f.runs.get(successor.runId)?.execution.status).toBe("queued");
+      expect(f.scope.canCleanupSession()).toBe(false);
+      if (replacement === "different-id") {
+        expect(f.current()).toMatchObject({
+          execution: { status: "terminal", suppressSessionEffects: true },
+          collectorLaunchCleanupPending: true,
+          queuedLaunch: undefined,
         });
       }
-    } finally {
-      f.writes[1]!.gate.resolve();
-      await rejected;
-    }
-    if (change === "unchanged") {
-      expect(original.execution.status).toBe("terminal");
-      expect(original.collectorLaunchCleanupPending).toBe(true);
-    } else if (change === "Stop") {
-      expect(original.execution.endedAt).toBe(123);
-      expect(original.killReconciliation).toEqual({ killedAt: 123 });
-    } else {
-      expect(f.runs.get(original.runId)).not.toBe(original);
-      expect(f.runs.get(original.runId)?.execution.status).toBe("queued");
-    }
+    });
   },
 );
 
-it("settles the original descriptor after a different-ID successor wins its acknowledgement", async () => {
-  const f = fixture();
-  const completion = f.register();
-  const rejected = expect(completion).rejects.toThrow("original run owner");
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  const original = f.runs.get(f.registration.runId)!;
-  const successor = {
-    ...structuredClone(original),
-    runId: "successor",
-    generation: (original.generation ?? 0) + 1,
-  };
-  f.runs.set(successor.runId, successor);
-  f.writes[1]!.gate.resolve();
-  try {
-    await vi.waitFor(() => expect(f.writes).toHaveLength(3));
-    expect(f.writes[2]!.snapshot.get(original.runId)?.execution.status).toBe("queued");
-    expect(f.writes[2]!.snapshot.get(original.runId)?.queuedLaunch).toBeUndefined();
-    f.writes[2]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(4));
-    expect(f.writes[3]!.snapshot.get(original.runId)).toMatchObject({
-      execution: { status: "terminal", suppressSessionEffects: true },
-      collectorLaunchCleanupPending: true,
+it.each(["before", "ack"] as const)(
+  "withholds failed-launch terminal state until %s settlement and preserves known refusal retry",
+  async (phase) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const recovery = f.holdNextWrite();
+      const terminal = f.holdNextWrite(phase);
+      const captured = f.current();
+      const settling = f.track(f.scope.settleFailedLaunch("launch failed"));
+      await recovery.entered;
+      recovery.release();
+      await terminal.entered;
+      expect(f.current().execution.status).toBe("queued");
+      expect(captured.execution.status).toBe("queued");
+      if (phase === "before") {
+        terminal.reject(new Error("terminal refused"));
+        await expect(settling).rejects.toThrow("could not be persisted");
+        await f.scope.settleFailedLaunch("retry callback");
+      } else {
+        terminal.release();
+        await settling;
+      }
+      expect(f.current()).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error", error: "launch failed" } },
+        collectorLaunchCleanupPending: true,
+      });
+      expect(f.stored()?.execution.status).toBe("terminal");
     });
-    expect(f.writes[3]!.snapshot.get(original.runId)?.queuedLaunch).toBeUndefined();
-  } finally {
-    f.writes[3]?.gate.resolve();
-    await rejected;
-  }
-  expect(f.runs.get(successor.runId)).toBe(successor);
-  expect(successor.execution.status).toBe("queued");
-  expect(f.scope.canCleanupSession()).toBe(false);
-});
-
-const queuedRegistrationFixtureParams = {
-  fixture,
-};
-registerQueuedRegistrationAdmissionCases(queuedRegistrationFixtureParams);
-registerQueuedRegistrationClaimCases(queuedRegistrationFixtureParams);
-registerQueuedCancelledLaunchCases(queuedRegistrationFixtureParams);
-
-it("retires an uncertain settlement callback after confirmed same-entry Stop", async () => {
-  const f = fixture();
-  const completion = f.register();
-  const failure = new SubagentRegistryWriteError("unknown", new Error("acknowledgement lost"));
-  const rejected = expect(completion).rejects.toBe(failure);
-  f.writes[0]!.gate.reject(failure);
-  await rejected;
-  const entry = f.runs.get(f.registration.runId)!;
-  entry.execution = { ...entry.execution, status: "terminal", endedAt: 123 };
-  entry.killReconciliation = { killedAt: 123 };
-  await expect(f.scope.settleFailedLaunch("confirmed Stop took over")).resolves.toBeUndefined();
-  expect(entry.execution.endedAt).toBe(123);
-  expect(f.writes).toHaveLength(1);
-  expect(f.options.persistOrThrow).not.toHaveBeenCalled();
-});
+  },
+);
 
 it.each(["abort", "drain", "replacement", "database retirement"] as const)(
   "disposes claim-wait subscriptions on %s",
   async (retirement) => {
-    const f = fixture();
-    const work = new AsyncWorkScope();
-    const completion = work.track(() => f.register());
-    const rejection = expect(completion).rejects.toThrow();
-    const claimed = f.runs.get(f.registration.runId)!;
-    expect(
-      f.manager.claimSubagentRunKill({ runId: claimed.runId, expected: claimed }),
-    ).toBeDefined();
-    f.writes[0]!.gate.resolve();
-    await vi.waitFor(() => expect(mocks.databaseListeners.size).toBe(1));
-    try {
-      if (retirement === "abort") {
-        work.beginClose(new Error("work aborted"));
-      } else if (retirement === "drain") {
-        markGatewayRestartDraining();
-      } else if (retirement === "replacement") {
-        const original = f.runs.get(f.registration.runId)!;
-        f.runs.set(original.runId, {
-          ...structuredClone(original),
-          generation: (original.generation ?? 0) + 1,
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const entry = f.current();
+      const claim = await f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+      expect(claim).toBeDefined();
+      const subscribed = createDeferred();
+      const stops: Array<ReturnType<typeof vi.fn>> = [];
+      const subscribe = registryPublication.subscribeSubagentRunChanges;
+      const observer = vi
+        .spyOn(registryPublication, "subscribeSubagentRunChanges")
+        .mockImplementation((phase, listener) => {
+          if (phase === "projection") {
+            return subscribe(phase, listener);
+          }
+          const stop = vi.fn(subscribe(phase, listener));
+          stops.push(stop);
+          subscribed.resolve();
+          return stop;
         });
-        f.options.persistOrThrow();
-      } else {
-        mocks.database = "replacement-db";
-        for (const listener of mocks.databaseListeners) {
-          listener({
-            kind: "closed",
-            path: "/synthetic/state.sqlite",
-            identity: { key: "original-db", canonicalPath: "/synthetic/state.sqlite" },
+      const work = new AsyncWorkScope();
+      const settlement = f.track(work.track(() => f.scope.settleFailedLaunch("dispatch failed")));
+      try {
+        await subscribed.promise;
+        if (retirement === "abort") {
+          work.beginClose(new Error("work aborted"));
+        } else if (retirement === "drain") {
+          markGatewayRestartDraining();
+        } else if (retirement === "replacement") {
+          await f.change((row) => {
+            row.generation = (row.generation ?? 0) + 1;
+            row.killIntent = undefined;
           });
+        } else {
+          await databaseLifecycle.closeOpenClawStateDatabaseAsync();
         }
+        if (retirement === "replacement") {
+          await settlement;
+        } else {
+          await expect(settlement).rejects.toThrow();
+        }
+        expect(stops.length).toBeGreaterThan(0);
+        for (const stop of stops) {
+          expect(stop).toHaveBeenCalledOnce();
+        }
+        expect(f.scope.canCleanupSession()).toBe(false);
+      } finally {
+        work.beginClose();
+        await work.drain();
+        observer.mockRestore();
+        resetGatewayWorkAdmission();
       }
-      await rejection;
-      expect(mocks.persisted.size).toBe(0);
-      expect(mocks.databaseListeners.size).toBe(0);
-      expect(f.writes).toHaveLength(1);
-      expect(f.scope.canCleanupSession()).toBe(false);
-    } finally {
-      work.beginClose();
-      f.acknowledgeAllWrites();
-      await work.drain();
-    }
+    });
   },
 );
 
-it("retains its own acknowledged terminal error until a different confirmed Stop takes over", async () => {
-  const f = fixture();
-  const registration = f.register();
-  f.writes[0]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-  f.writes[1]!.gate.resolve();
-  await registration;
-  const entry = f.runs.get(f.registration.runId)!;
-  f.runs.set("successor", {
-    ...structuredClone(entry),
-    runId: "successor",
-    generation: (entry.generation ?? 0) + 1,
-  });
-  const settlement = f.scope.settleFailedLaunch("launch failed");
-  const reported = settlement.catch((error: unknown) => error);
-  f.writes[2]!.gate.resolve();
-  await vi.waitFor(() => expect(f.writes).toHaveLength(4));
-  const failure = new SubagentRegistryWriteError(
-    "committed",
-    new Error("publication failed after ACK"),
-  );
-  f.writes[3]!.afterPublicationFailure = { error: failure };
-  f.writes[3]!.gate.resolve();
-  const retained = await reported;
-  expect(retained).toMatchObject({ errors: ["launch failed", failure], cause: "launch failed" });
-  expect(entry.execution.status).toBe("terminal");
-  await expect(f.scope.settleFailedLaunch("repeat callback")).rejects.toBe(retained);
-  entry.execution = { ...entry.execution, endedAt: 123 };
-  entry.killReconciliation = { killedAt: 123 };
-  await expect(f.scope.settleFailedLaunch("confirmed Stop")).resolves.toBeUndefined();
-  expect(f.writes).toHaveLength(4);
-});
+registerQueuedRegistrationClaimCases();
+registerQueuedCancelledLaunchCases();
+registerQueuedUnknownKillAuthorityTest();
+registerQueuedRegistrationAdmissionCases();

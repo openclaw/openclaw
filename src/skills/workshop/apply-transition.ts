@@ -22,6 +22,12 @@ import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { scanProposalBundle } from "./proposal-scan.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import {
+  assertExpectedRevisionHash,
+  evaluateSkillProposal,
+  SkillProposalCreateTargetConflictError,
+} from "./service-evaluation.js";
+import { readRequiredProposal, transitionPendingSkillProposalToStale } from "./service-query.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions, readStoredProposal } from "./store-client.js";
 import { clearSkillProposalRollback, writeSkillProposalRollback } from "./store-rollback.js";
@@ -44,13 +50,6 @@ import {
   type SkillProposalSupportFile,
 } from "./types.js";
 
-export type SkillProposalApplyTransitionDependencies = {
-  assertExpectedRevisionHash: typeof import("./service-evaluation.js").assertExpectedRevisionHash;
-  evaluateSkillProposal: typeof import("./service-evaluation.js").evaluateSkillProposal;
-  isCreateTargetConflict: (error: unknown) => boolean;
-  readRequiredProposal: typeof import("./service-query.js").readRequiredProposal;
-};
-
 export type SkillProposalTransitionInput = Pick<
   SkillProposalActionInput,
   "agentId" | "config" | "correlationId" | "env" | "eventActor" | "workspaceDir"
@@ -68,33 +67,26 @@ class SkillProposalLifecycleError extends Error {
 
 export async function applySkillProposalTransition(
   request: SkillProposalActionInput,
-  dependencies: SkillProposalApplyTransitionDependencies,
 ): Promise<SkillProposalApplyResult> {
   const store = captureSkillWorkshopStoreOptions(
     storeOptions(request.env, request.agentId, request.config),
   );
   const input = { ...request, env: store.env, eventActor: structuredClone(request.eventActor) };
-  const recoveryReadOptions = { config: input.config, store };
-  const lockedReadOptions = {
+  const initial = await readRequiredProposal(input.proposalId, {
+    ...store,
     config: input.config,
-    reconcile: false,
-  };
-  const initial = await dependencies.readRequiredProposal(
-    input.proposalId,
-    input.env,
-    input.agentId,
-    recoveryReadOptions,
-  );
+    agentId: input.agentId,
+  });
   if (initial.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be applied. Current status: ${initial.record.status}.`,
     );
   }
-  dependencies.assertExpectedRevisionHash(initial.revisionHash, input.expectedRevisionHash);
+  assertExpectedRevisionHash(initial.revisionHash, input.expectedRevisionHash);
 
   let evaluated: SkillProposalEvaluateResult;
   try {
-    evaluated = await dependencies.evaluateSkillProposal(
+    evaluated = await evaluateSkillProposal(
       {
         workspaceDir: input.workspaceDir,
         ...(input.agentId ? { agentId: input.agentId } : {}),
@@ -109,15 +101,14 @@ export async function applySkillProposalTransition(
       store,
     );
   } catch (error) {
-    if (dependencies.isCreateTargetConflict(error)) {
+    if (error instanceof SkillProposalCreateTargetConflictError) {
       const staleTransition = withSkillProposalTargetLock(
         initial.record,
         async (lockedStore) => {
-          const current = await dependencies.readRequiredProposal(
+          const current = await readRequiredProposal(
             input.proposalId,
-            input.env,
-            input.agentId,
-            { ...lockedReadOptions, store: lockedStore },
+            { ...lockedStore, config: input.config },
+            { reconcile: false },
           );
           if (
             current.record.status === "pending" &&
@@ -154,17 +145,16 @@ export async function applySkillProposalTransition(
   const application = withSkillProposalCommitLock(
     evaluated.record,
     async (lockedStore) => {
-      const read = await dependencies.readRequiredProposal(
+      const read = await readRequiredProposal(
         input.proposalId,
-        input.env,
-        input.agentId,
-        { ...lockedReadOptions, store: lockedStore },
+        { ...lockedStore, config: input.config },
+        { reconcile: false },
       );
       const { record, content } = read;
       if (record.status !== "pending") {
         throw new Error(`Only pending proposals can be applied. Current status: ${record.status}.`);
       }
-      dependencies.assertExpectedRevisionHash(read.revisionHash, evaluated.evaluation.revisionHash);
+      assertExpectedRevisionHash(read.revisionHash, evaluated.evaluation.revisionHash);
       if (hashSkillProposalContent(content) !== record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
@@ -374,40 +364,6 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
       input: params.input,
     });
   }
-}
-
-export async function transitionPendingSkillProposalToStale(params: {
-  store?: SkillWorkshopStoreOptions;
-  record: SkillProposalRecord;
-  reason: string;
-  input: Omit<SkillProposalTransitionInput, "workspaceDir">;
-}): Promise<{ record: SkillProposalRecord; event: SkillProposalEvent }> {
-  const now = new Date().toISOString();
-  const stale: SkillProposalRecord = {
-    ...params.record,
-    status: "stale",
-    updatedAt: now,
-    staleAt: now,
-    statusReason: params.reason,
-  };
-  const commit = await commitPendingSkillProposalTransition({
-    expected: params.record,
-    record: stale,
-    event: createSkillProposalEvent({
-      record: stale,
-      type: "stale",
-      actor: params.input.eventActor,
-      ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
-      occurredAt: now,
-    }),
-    store:
-      params.store ?? storeOptions(params.input.env, params.input.agentId, params.input.config),
-    operationLabel: "skill-workshop.stale.commit",
-  });
-  if (commit.state !== "committed") {
-    throw new Error("Failed to record stale Skill Workshop proposal.");
-  }
-  return { record: stale, event: commit.event };
 }
 
 export async function markSkillProposalStale(params: {

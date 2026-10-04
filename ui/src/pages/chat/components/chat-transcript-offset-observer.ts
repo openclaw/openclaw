@@ -116,6 +116,13 @@ export function scrollTranscriptToEnd(
     source: source === "auto" && current?.target === "end" ? current.source : source,
   };
   instance.scrollToEnd({ behavior });
+  // Instant commands and smooth no-ops can reach their target before any
+  // native offset event. Do not let delayed idle reclaim a departed reader.
+  const element = instance.scrollElement;
+  const max = maxTranscriptScrollOffset(element);
+  if (element && max !== null && Math.abs(max - element.scrollTop) <= 1) {
+    cancelScroll();
+  }
 }
 
 export function scrollTranscriptOffset(
@@ -356,14 +363,16 @@ export function observeTranscriptOffset(
   // Commit editor-induced geometry before Lit's bubble listener classifies
   // the native offset. Only the actual correction carries maintenance provenance.
   const commitComposerResize = () => owner.onComposerLayout(true);
-  element?.addEventListener("scroll", commitComposerResize, { capture: true, passive: true });
-  element?.addEventListener("touchmove", moveTouch, { passive: true });
+  const listeners = new AbortController();
+  const passive = { passive: true, signal: listeners.signal };
+  element?.addEventListener("scroll", commitComposerResize, { ...passive, capture: true });
+  element?.addEventListener("touchmove", moveTouch, passive);
   for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-    element?.addEventListener(type, interrupt, { passive: true });
+    element?.addEventListener(type, interrupt, passive);
   }
-  element?.addEventListener("scrollend", finishScroll, { passive: true });
-  element?.addEventListener("touchend", finishTouch, { passive: true });
-  element?.addEventListener("touchcancel", finishTouch, { passive: true });
+  element?.addEventListener("scrollend", finishScroll, passive);
+  element?.addEventListener("touchend", finishTouch, passive);
+  element?.addEventListener("touchcancel", finishTouch, passive);
   const cleanup = observeElementOffset(instance, (offset, scrolling) => {
     if (element !== owner.getScrollElement()) {
       return;
@@ -391,21 +400,22 @@ export function observeTranscriptOffset(
     if (!scrolling && owner.prependAnchor.hasPrepend) {
       owner.requestUpdate();
     }
-    // Idle can arrive between smooth retargets. Completion needs the
-    // restore path's 1px precision, not the 8px UI-follow boundary.
-    // The input listeners above own reader takeover.
-    const settledAtEnd =
-      !scrolling &&
-      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <= 1;
-    // End-idle cannot retire a message reveal still waiting for its DOM commit.
-    if (settledAtEnd && element && owner.state.scrollCommand?.target === "end") {
+    // Retire a completed journey before delayed native idle can recapture a
+    // reader who has since been resize-clamped to a different end. Completion
+    // must not stop a smooth animation on its penultimate 1px frame; retain
+    // the restore path's rounding tolerance only after native scrolling settles.
+    const reachedEnd =
+      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <=
+      (scrolling ? 0 : 1);
+    // Reaching the end cannot retire a message reveal awaiting its DOM commit.
+    if (reachedEnd && element && owner.state.scrollCommand?.target === "end") {
       if (owner.state.scrollCommand.behavior === "smooth") {
         owner.cancelScroll();
       } else {
         owner.state.scrollCommand = null;
-        // Native idle can precede the queued reconciliation frame. Retire its
+        // Arrival can precede the queued reconciliation frame. Retire its
         // index target too, without cancelling the reader’s end-follow intent.
-        // The idle notification can lag a newer native write; hold the current viewport.
+        // The notification can lag a newer native write; hold the current viewport.
         instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
       }
       owner.endAnchor.capture(element);
@@ -427,13 +437,6 @@ export function observeTranscriptOffset(
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;
-    element?.removeEventListener("scroll", commitComposerResize, true);
-    element?.removeEventListener("scrollend", finishScroll);
-    element?.removeEventListener("touchend", finishTouch);
-    element?.removeEventListener("touchmove", moveTouch);
-    element?.removeEventListener("touchcancel", finishTouch);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-      element?.removeEventListener(type, interrupt);
-    }
+    listeners.abort();
   };
 }

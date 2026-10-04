@@ -23,16 +23,30 @@ Crabbox instead.
 Do not pre-warm for anticipated work. Acquire the backend lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+before handoff. Let the previous command and its cleanup finish before
+another synchronization or reuse of that lease.
+
+Testbox `run` and `warmup` use the workflow from `main` so new allocations
+inherit the maintained spending limits. The wrapper overrides configured workflow
+refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
+source revision in your local checkout; its source capsule and frozen dependency
+install preserve that selection independently of the workflow ref. Explicit
+workflow and job selection still support the high-memory profile.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
-`.crabbox/testbox-leases/`. Reuse requires those inputs to match, including
-immediately before delegation. Source-only edits can reuse the box while HEAD
-and preparation inputs remain unchanged; every run syncs the checkout.
+`.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,
+dependencies, preparation, and workflow inputs, including immediately before
+delegation. Source-only edits and commits can reuse that prepared box. The
+allocation receipt remains unchanged, while each command records its current
+source revision and syncs the checkout. A HEAD change during that command's
+preparation still stops delegation; rerun from the current candidate.
+This source-refresh contract belongs to the OpenClaw wrapper's trusted task
+path; it does not permit raw native callers or untrusted proof to reuse a
+lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.67.0 or newer.
+these checks. All providers require Crabbox 0.69.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -105,6 +119,35 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Testbox runner sizing
+
+Use the default 16-class workflow for routine remote proof, with a 60-minute
+total-job deadline including hydration. Keep the 32-class
+rare: record the command and its measured memory need, a smaller-runner OOM,
+or a controlled comparison showing lower total billed cost before selecting it.
+Existing memory-heavy full-suite Testbox PR gates use this exception. A generic
+failure, queue delay, or timeout is not a sizing signal. Keep resource-based
+worker limits; do not force higher parallelism on the smaller machine.
+
+Select the exception explicitly with a fresh lease:
+
+```bash
+node scripts/crabbox-wrapper.mjs run \
+  --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
+  --blacksmith-job check --idle-timeout 15m \
+  --label <task-and-memory-reason> --timing-json -- <command>
+```
+
+The high-memory profile uses at most four of the shared 32 Testbox concurrency
+slots. Both profiles cap idle time at 15 minutes. Routine proof defaults to
+60 minutes; the explicit high-memory workflow retains its four-hour deadline
+for known heavy gates. The standard workflow accepts an explicit
+`timeout_minutes` input up to 240 minutes, but Crabbox does not forward arbitrary
+workflow inputs and `--ttl` does not extend a Testbox job. Do not select a larger
+runner merely for more time. Direct-provider `--class` and `--type` flags do not size Testboxes;
+workflow selection owns the runner. A profile change needs a fresh lease.
+See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
+
 ## Crabbox repository setup
 
 The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
@@ -156,7 +199,7 @@ For a selected trusted Testbox lane:
 ```bash
 node scripts/crabbox-wrapper.mjs run --timing-json -- \
   CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
-  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_VITEST_MAX_WORKERS=1 \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
   pnpm test <path-or-filter>
 ```
@@ -176,8 +219,9 @@ use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
@@ -202,14 +246,16 @@ files. Unchanged source stays in place with warm Git index stat data. Git's stag
 tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
+Commits on the same retained source ref keep the mirror reusable; each command
+still records its full current witness and rechecks the source revision before sealing.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
 or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness, or Git-version mismatches rebuild cold before
-upload. Source enumeration and metadata checks still scale with the repository;
+run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
 fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold

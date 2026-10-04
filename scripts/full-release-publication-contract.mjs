@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
+import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
@@ -159,9 +160,6 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
   if (selected.windowsNodeTag !== undefined || selected.windowsNodeInstallerDigests !== undefined) {
     if (selected.route === "extended-stable") {
       throw new Error("extended-stable does not select Windows assets");
-    }
-    if (!["beta", "latest"].includes(selected.npmDistTag)) {
-      throw new Error("Windows assets require a stable publication");
     }
     windows.windowsNodeTag = text(selected.windowsNodeTag, "Windows source tag", 256);
     if (
@@ -682,14 +680,30 @@ function observationNames(rows, label, maximum = 1024) {
 }
 
 function validateObservationPlan(plan, registry, required, observations) {
+  // Retained v1 artifacts keep their original boolean-only, digest-bound shape.
+  const publicationGroups =
+    registry === "clawhub" &&
+    (Object.hasOwn(plan, "pendingPublication") || Object.hasOwn(plan, "failedPublication"))
+      ? ["pendingPublication", "failedPublication"]
+      : [];
   const groups =
     registry === "npm"
       ? ["candidates", "skippedPublished"]
-      : ["candidates", "skippedPublished", "bootstrapCandidates", "missingTrustedPublisher"];
+      : [
+          "candidates",
+          "skippedPublished",
+          "bootstrapCandidates",
+          "missingTrustedPublisher",
+          ...publicationGroups,
+        ];
   closedObject(plan, ["all", ...groups, "warnings"], "publication planning summary");
   observationNames(plan.all, "planning", 512);
   for (const entry of plan.all) {
-    closedObject(entry, ["name", "version", "alreadyPublished"], "publication planning entry");
+    closedObject(
+      entry,
+      ["name", "version", "alreadyPublished", ...(publicationGroups.length ? ["publication"] : [])],
+      "publication planning entry",
+    );
     if (
       !required.some((row) => row.name === entry.name && row.version === entry.version) ||
       typeof entry.alreadyPublished !== "boolean"
@@ -715,15 +729,31 @@ function validateObservationPlan(plan, registry, required, observations) {
       registry === "npm" ? observed?.selectedVersionExists : observed?.alreadyPublished;
     const candidate =
       !published &&
-      (registry === "npm" || (observed?.packageExists && observed?.hasTrustedPublisher));
+      (registry === "npm" ||
+        (observed?.packageExists &&
+          observed?.hasTrustedPublisher &&
+          (!observed.publication || observed.publication.state === "absent")));
     if (
       entry.alreadyPublished !== published ||
       plan.skippedPublished.includes(entry.name) !== entry.alreadyPublished ||
       plan.candidates.includes(entry.name) !== candidate ||
       (registry === "clawhub" &&
-        (plan.bootstrapCandidates.includes(entry.name) !== !observed.packageExists ||
+        (Boolean(publicationGroups.length) !== Object.hasOwn(observed, "publication") ||
+          (publicationGroups.length > 0 &&
+            publicationObservationJson(entry.publication) !==
+              publicationObservationJson(observed.publication)) ||
+          publicationGroups.some(
+            (group) =>
+              plan[group].includes(entry.name) !==
+              (observed.publication.state ===
+                (group === "pendingPublication" ? "pending" : "failed")),
+          ) ||
+          plan.bootstrapCandidates.includes(entry.name) !== !observed.packageExists ||
           plan.missingTrustedPublisher.includes(entry.name) !==
-            (observed.packageExists && !observed.hasTrustedPublisher)))
+            (observed.packageExists &&
+              !observed.hasTrustedPublisher &&
+              (!observed.publication ||
+                ["absent", "published"].includes(observed.publication.state)))))
     ) {
       throw new Error("publication planning outcome mismatch");
     }
@@ -776,6 +806,9 @@ export function publicationPendingAuthority(source, registry, row) {
     }
     action = "owner-preparation-and-access";
   } else if (registry === "clawhub") {
+    if (["pending", "failed"].includes(row.state.publication?.state)) {
+      return null;
+    }
     if (
       selection.route === "prepared" &&
       (!row.state.packageExists ||
@@ -912,13 +945,31 @@ function validatePublicationObservations(source, value) {
         );
         closedObject(
           row.state,
-          ["packageExists", "alreadyPublished", "hasTrustedPublisher", "trustedPublisher"],
+          [
+            "packageExists",
+            "alreadyPublished",
+            "hasTrustedPublisher",
+            "trustedPublisher",
+            ...(Object.hasOwn(row.state, "publication") ? ["publication"] : []),
+          ],
           "publication ClawHub state",
         );
+        const publication = Object.hasOwn(row.state, "publication")
+          ? classifyClawHubPublication(
+              { name: row.name, version: row.version, ...row.state.publication },
+              row,
+            )
+          : undefined;
         if (
           ["packageExists", "alreadyPublished", "hasTrustedPublisher"].some(
             (key) => typeof row.state[key] !== "boolean",
           ) ||
+          (publication !== undefined &&
+            (!publication ||
+              publicationObservationJson(publication) !==
+                publicationObservationJson(row.state.publication) ||
+              row.state.alreadyPublished !== (publication.state === "published") ||
+              (!row.state.packageExists && publication.state !== "absent"))) ||
           (!row.state.packageExists &&
             (row.state.alreadyPublished ||
               row.state.hasTrustedPublisher ||

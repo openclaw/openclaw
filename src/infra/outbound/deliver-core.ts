@@ -134,21 +134,20 @@ export async function deliverOutboundPayloadsCore(
     const key = JSON.stringify(mediaSources);
     return getOrCreatePromise(handlerByMediaSources, key, () => createHandler(mediaSources));
   };
-  const handler = baseHandler;
-  const configuredTextLimit = handler.chunker
+  const configuredTextLimit = baseHandler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
-        fallbackLimit: handler.textChunkLimit,
+        fallbackLimit: baseHandler.textChunkLimit,
       })
     : undefined;
   const textLimit =
     params.formatting?.textLimit ??
-    (handler.resolveEffectiveTextChunkLimit
-      ? handler.resolveEffectiveTextChunkLimit({
+    (baseHandler.resolveEffectiveTextChunkLimit
+      ? baseHandler.resolveEffectiveTextChunkLimit({
           fallbackLimit: configuredTextLimit,
           formatting: params.formatting,
         })
       : configuredTextLimit);
-  const chunkMode = handler.chunker
+  const chunkMode = baseHandler.chunker
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
@@ -175,9 +174,6 @@ export async function deliverOutboundPayloadsCore(
         }),
     });
     for (const unit of units) {
-      if (unit.kind !== "text") {
-        continue;
-      }
       throwIfAborted(abortSignal);
       const resultIndex = results.length;
       await recordIdentifiedDeliveryResult(
@@ -190,14 +186,6 @@ export async function deliverOutboundPayloadsCore(
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [
     ...preparedOutboundSuppressionOutcomes(preparedBatch),
   ];
-  const effectiveDeliveryKinds = new Map<number, OutboundPayloadDeliveryKind>();
-  const recordPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
-    const deliveryKind = effectiveDeliveryKinds.get(outcome.index);
-    const recordedOutcome =
-      deliveryKind && outcome.status !== "suppressed" ? { ...outcome, deliveryKind } : outcome;
-    payloadOutcomes.push(recordedOutcome);
-    params.onPayloadDeliveryOutcome?.(recordedOutcome);
-  };
   for (const outcome of payloadOutcomes) {
     params.onPayloadDeliveryOutcome?.(outcome);
   }
@@ -233,10 +221,18 @@ export async function deliverOutboundPayloadsCore(
     let effectivePayload: typeof payload | null | undefined;
     let payloadSummary = buildPayloadSummary(payload);
     const originalMediaCount = preparedEntry.preparedMediaCount;
+    let effectiveDeliveryKind: OutboundPayloadDeliveryKind | undefined;
+    const recordPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
+      const recordedOutcome =
+        effectiveDeliveryKind && outcome.status !== "suppressed"
+          ? { ...outcome, deliveryKind: effectiveDeliveryKind }
+          : outcome;
+      payloadOutcomes.push(recordedOutcome);
+      params.onPayloadDeliveryOutcome?.(recordedOutcome);
+    };
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
-    let deliveryStarted = false;
-    let deliveryFinished = false;
+    let deliveryPending = false;
     let messageSentEventRecorded = false;
     const recordMessageSentEvent = (
       event: Parameters<NonNullable<typeof params.onMessageSentEvent>>[0],
@@ -250,8 +246,7 @@ export async function deliverOutboundPayloadsCore(
     const startDeliveryDiagnostics = (kind: DiagnosticMessageDeliveryKind) => {
       deliveryKind = kind;
       deliveryStartedAt = Date.now();
-      deliveryStarted = true;
-      deliveryFinished = false;
+      deliveryPending = true;
       emitDiagnosticEvent({
         type: "message.delivery.started",
         channel,
@@ -260,10 +255,10 @@ export async function deliverOutboundPayloadsCore(
       });
     };
     const completeDeliveryDiagnostics = (resultCount: number) => {
-      if (!deliveryStarted) {
+      if (!deliveryPending) {
         return;
       }
-      deliveryFinished = true;
+      deliveryPending = false;
       emitDiagnosticEvent({
         type: "message.delivery.completed",
         channel,
@@ -274,10 +269,10 @@ export async function deliverOutboundPayloadsCore(
       });
     };
     const errorDeliveryDiagnostics = (err: unknown) => {
-      if (!deliveryStarted || deliveryFinished) {
+      if (!deliveryPending) {
         return;
       }
-      deliveryFinished = true;
+      deliveryPending = false;
       emitDiagnosticEvent({
         type: "message.delivery.error",
         channel,
@@ -290,12 +285,9 @@ export async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
-      const deliveryPayload = payload;
-      const presentationHandler = await getDeliveryHandler(
-        buildPayloadSummary(deliveryPayload).mediaUrls,
-      );
+      const presentationHandler = await getDeliveryHandler(buildPayloadSummary(payload).mediaUrls);
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
-        await renderPresentationForDelivery(presentationHandler, deliveryPayload),
+        await renderPresentationForDelivery(presentationHandler, payload),
       );
       const renderedHandler = await getDeliveryHandler(
         buildPayloadSummary(renderedPayload).mediaUrls,
@@ -303,7 +295,7 @@ export async function deliverOutboundPayloadsCore(
       // Preparation already normalized the post-policy payload. Normalize again
       // only when presentation rendering creates a new transport representation.
       const normalizedEffectivePayload =
-        (preparedBatch.channelNormalized !== true || renderedPayload !== deliveryPayload) &&
+        (preparedBatch.channelNormalized !== true || renderedPayload !== payload) &&
         renderedHandler.normalizePayload
           ? renderedHandler.normalizePayload(renderedPayload)
           : renderedPayload;
@@ -334,8 +326,7 @@ export async function deliverOutboundPayloadsCore(
       );
       payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
-      const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
-      effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
+      effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
       startDeliveryDiagnostics(effectiveDeliveryKind);
 
       params.onPayload?.(payloadSummary);
@@ -423,9 +414,6 @@ export async function deliverOutboundPayloadsCore(
         });
         const sendMedia = deliveryHandler.sendFormattedMedia ?? deliveryHandler.sendMedia;
         for (const unit of mediaUnits) {
-          if (unit.kind !== "media") {
-            continue;
-          }
           throwIfAborted(abortSignal);
           const resultIndex = results.length;
           const delivery = await sendMedia(

@@ -8,10 +8,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
-import {
-  acquireSessionMcpRuntime,
-  releaseSessionMcpRuntime,
-} from "../agent-bundle-mcp-manager-api.js";
+import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import type { PreparedNativeMcpPolicy } from "../agent-bundle-mcp-types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
@@ -21,7 +19,6 @@ import {
   normalizeCodexMcpServerConfig,
 } from "../codex-mcp-config.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { applyPreparedNativeMcpPolicy, prepareNativeMcpPolicy } from "../native-mcp-policy.js";
@@ -185,7 +182,9 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
 
 /** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
-  run: Omit<EmbeddedRunAttemptParams, "admittedRunContext">;
+  run:
+    | import("../harness/types.js").AgentHarnessAttemptParams
+    | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
   cwd: string;
   agentId?: string;
   allowLiteralOAuthProjection?: boolean;
@@ -218,21 +217,12 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     sessionId: run.sessionId,
     runId: run.runId,
     agentId: policyAgentId,
-    agentDir: run.agentDir,
     agentAccountId: run.agentAccountId,
     messageProvider: run.messageProvider ?? run.messageChannel,
     messageChannel: run.messageChannel,
-    chatType: run.chatType,
-    messageTo: run.messageTo,
-    messageThreadId: run.messageThreadId,
-    currentChannelId: run.currentChannelId,
-    currentMessagingTarget: run.currentMessagingTarget,
-    currentThreadTs: run.currentThreadTs,
-    currentMessageId: run.currentMessageId,
     groupId: run.groupId,
     groupChannel: run.groupChannel,
     groupSpace: run.groupSpace,
-    memberRoleIds: run.memberRoleIds,
     spawnedBy: run.spawnedBy,
     senderId: run.senderId,
     senderName: run.senderName,
@@ -241,12 +231,8 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     senderIsOwner: run.senderIsOwner,
     modelProvider: run.provider,
     modelId: run.modelId,
-    modelApi: run.model?.api,
-    modelContextWindowTokens: run.model?.contextWindow,
-    modelHasVision: run.model?.input?.includes("image") ?? false,
     workspaceDir: run.workspaceDir,
     cwd: params.cwd,
-    skillsSnapshot: run.skillsSnapshot,
     sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
     runtimeToolAllowlist: run.toolsAllow,
     inheritRuntimeToolAllowlist: true,

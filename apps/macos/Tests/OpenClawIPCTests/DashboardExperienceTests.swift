@@ -5,7 +5,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {
@@ -21,7 +21,9 @@ struct DashboardExperienceTests {
         let primary = try #require(manager._testAuxiliaryWindows().first?.controller)
         await manager.openNewDashboardWindow(for: .profile("saved")).value
         let saved = try #require(manager._testAuxiliaryWindows().first { $0.target == .profile("saved") }?.controller)
-        try await self.waitForDocument(saved)
+        try await DashboardTestWait.document(saved, "saved Gateway document") {
+            try await saved.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         try await saved.webView.evaluateJavaScript("window.fixtureDraft = 'Keep this draft'")
         let savedWindow = try #require(saved.window)
         let primaryWindow = try #require(primary.window)
@@ -122,7 +124,7 @@ struct DashboardExperienceTests {
         #expect(manager._testController() === saved)
         #expect(manager.openWindowCount(for: .primary) == 0)
         #expect(saved._testPendingNativeNavigation == nil)
-        #expect(manager._testPendingGatewayAlerts().isEmpty)
+        #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
     }
 
     @Test func `a retired source socket cannot deliver a draft after Dashboard endpoint lookup`() async throws {
@@ -159,7 +161,7 @@ struct DashboardExperienceTests {
             #expect(manager._testController() === saved)
             #expect(manager._testMainTarget() == .profile("saved"))
             #expect(saved._testPendingNativeNavigation == nil)
-            #expect(manager._testPendingGatewayAlerts().isEmpty)
+            #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
         } catch {
             await fixture.gateway.shutdown()
             throw error
@@ -186,12 +188,16 @@ struct DashboardExperienceTests {
         manager._testSetController(saved)
         manager._testSetMainTarget(.profile("saved"))
         saved.show(url: server.url("/"), auth: saved.auth)
-        try await self.waitForDocument(saved)
+        try await DashboardTestWait.document(saved, "saved Gateway document") {
+            try await saved.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         try await saved.webView.evaluateJavaScript("window.fixtureDraft = 'Saved Gateway draft'")
 
         await manager.show(atPath: "/settings/devices", target: .primary)
         let primary = try #require(manager._testAuxiliaryWindows().first { $0.target == .primary }?.controller)
-        try await self.waitForDocument(primary)
+        try await DashboardTestWait.document(primary, "primary handoff document") {
+            try await primary.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        }
         #expect(try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"])
         #expect(manager._testMainTarget() == .profile("saved"))
         #expect(manager._testController() === saved)
@@ -235,16 +241,5 @@ struct DashboardExperienceTests {
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-    }
-
-    private func waitForDocument(_ controller: DashboardWindowController) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if !controller.webView.isLoading, controller.canDeliverNativeCommands,
-               try await controller.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
-            { return }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        Issue.record("The dashboard fixture did not finish loading")
     }
 }

@@ -38,14 +38,17 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     sessionRuntime: Prepared<typeof prepareEmbeddedAttemptSessionRuntime>;
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
     toolBase: Prepared<typeof prepareEmbeddedAttemptToolBase>;
-    toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
+    toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
     promptToolPolicy: ReturnType<
       typeof createPromptBuildToolPolicy<AgentTool, AgentTool, AgentTool>
     >;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
-    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
+    | "compactionTimeoutMs"
+    | "assertCronRootCurrent"
+    | "ownedTranscriptWriteContext"
+    | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     EmbeddedAttemptSetup,
@@ -66,12 +69,13 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     applyPermissionMode?: (
       mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
       revokeApprovals: () => void,
-    ) => void;
+    ) => Promise<void>;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;
       yieldMessage: string | null;
       yieldAcknowledgment?: string;
+      yieldMessageWaitRegistered?: boolean;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

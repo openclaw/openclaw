@@ -28,12 +28,14 @@ import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
 import * as bundledAgentSessions from "../extension-sdk.js";
+import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import { createSyntheticSourceInfo } from "../source-info.js";
 import type {
   Extension,
   ExtensionAPI,
   ExtensionFactory,
   ExtensionRuntime,
+  ExtensionRuntimeV2,
   ExtensionShortcut,
   LoadExtensionsResult,
   MessageRenderer,
@@ -77,7 +79,6 @@ const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
   /(?:import\s*(?:[^'"]*?\s*from\s*)?["']\.{1,2}\/|export\s*(?:[^'"]*?\s*from\s*)["']\.{1,2}\/|import\s*\(\s*["']\.{1,2}\/|require\s*\(\s*["']\.{1,2}\/)/u;
-const COMMONJS_EXTENSION_EXPORT_PATTERN = /\b(?:module\.exports|exports\.)/u;
 
 async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   if (createJitiLoaderFactory) {
@@ -93,12 +94,8 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-function normalizeUnicodeSpaces(str: string): string {
-  return str.replace(UNICODE_SPACES, " ");
-}
-
 function expandPath(p: string): string {
-  const normalized = normalizeUnicodeSpaces(p);
+  const normalized = p.replace(UNICODE_SPACES, " ");
   if (normalized.startsWith("~/")) {
     return path.join(os.homedir(), normalized.slice(2));
   }
@@ -161,20 +158,23 @@ export function createExtensionRuntime(): ExtensionRuntime {
       "Extension runtime not initialized. Action methods cannot be called during extension loading.",
     );
   };
-  const state: { staleMessage?: string } = {};
+  let staleMessage: string | undefined;
   const assertActive = () => {
-    if (state.staleMessage) {
-      throw new Error(state.staleMessage);
+    if (staleMessage) {
+      throw new Error(staleMessage);
     }
   };
 
-  const runtime: ExtensionRuntime = {
+  const runtime: ExtensionRuntimeV2 = {
     sendMessage: notInitialized,
     sendUserMessage: notInitialized,
     appendEntry: notInitialized,
+    appendEntryAsync: notInitialized,
     setSessionName: notInitialized,
+    setSessionNameAsync: notInitialized,
     getSessionName: notInitialized,
     setLabel: notInitialized,
+    setLabelAsync: notInitialized,
     getActiveTools: notInitialized,
     getAllTools: notInitialized,
     setActiveTools: notInitialized,
@@ -188,7 +188,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
     pendingProviderRegistrations: [],
     assertActive,
     invalidate: (message) => {
-      state.staleMessage ??=
+      staleMessage ??=
         message ??
         "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
     },
@@ -222,7 +222,7 @@ function createExtensionAPI(
     runtime.assertActive();
     return runtime;
   };
-  const api = {
+  return {
     // Registration methods - write to extension
     on(event: string, handler: HandlerFn): void {
       runtime.assertActive();
@@ -291,15 +291,44 @@ function createExtensionAPI(
     sendUserMessage: (content, options) => {
       activeRuntime().sendUserMessage(content, options);
     },
+    // Retained synchronous adapters for third-party extensions until the next SDK major.
     appendEntry: (customType, data) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.appendEntry", "appendEntryAsync");
       activeRuntime().appendEntry(customType, data);
     },
+    appendEntryAsync: async (customType, data) => {
+      const owner = activeRuntime();
+      if (!owner.appendEntryAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      const id = await owner.appendEntryAsync(customType, data);
+      owner.assertActive();
+      return id;
+    },
     setSessionName: (name) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.setSessionName", "setSessionNameAsync");
       activeRuntime().setSessionName(name);
+    },
+    setSessionNameAsync: async (name) => {
+      const owner = activeRuntime();
+      if (!owner.setSessionNameAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      await owner.setSessionNameAsync(name);
+      owner.assertActive();
     },
     getSessionName: () => activeRuntime().getSessionName(),
     setLabel: (entryId, label) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.setLabel", "setLabelAsync");
       activeRuntime().setLabel(entryId, label);
+    },
+    setLabelAsync: async (entryId, label) => {
+      const owner = activeRuntime();
+      if (!owner.setLabelAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      await owner.setLabelAsync(entryId, label);
+      owner.assertActive();
     },
     exec(command: string, args: string[], options?: ExecOptions) {
       runtime.assertActive();
@@ -323,8 +352,6 @@ function createExtensionAPI(
 
     events: eventBus,
   } as ExtensionAPI;
-
-  return api;
 }
 
 function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined {
@@ -352,9 +379,7 @@ function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean
     const source = fs.readFileSync(extensionPath, "utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
-      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
-      (path.extname(extensionPath).toLowerCase() === ".js" &&
-        COMMONJS_EXTENSION_EXPORT_PATTERN.test(source))
+      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source)
     );
   } catch {
     return true;
@@ -450,35 +475,6 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
   };
 }
 
-async function loadExtension(
-  extensionPath: string,
-  cwd: string,
-  eventBus: EventBus,
-  runtime: ExtensionRuntime,
-  context: ExtensionLoadContext,
-): Promise<{ extension: Extension | null; error: string | null }> {
-  const resolvedPath = resolvePath(extensionPath, cwd);
-
-  try {
-    const factory = await loadExtensionModule(resolvedPath, context);
-    if (!factory) {
-      return {
-        extension: null,
-        error: `Extension does not export a valid factory function: ${extensionPath}`,
-      };
-    }
-
-    const extension = createExtension(extensionPath, resolvedPath);
-    const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-    await factory(api);
-
-    return { extension, error: null };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { extension: null, error: `Failed to load extension: ${message}` };
-  }
-}
-
 export async function loadExtensionFromFactory(
   factory: ExtensionFactory,
   cwd: string,
@@ -506,21 +502,23 @@ export async function loadExtensionsCached(
   const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(
-      extPath,
-      resolvedCwd,
-      resolvedEventBus,
-      runtime,
-      context,
-    );
-
-    if (error) {
-      errors.push({ path: extPath, error });
-      continue;
-    }
-
-    if (extension) {
+    const resolvedPath = resolvePath(extPath, resolvedCwd);
+    try {
+      const factory = await loadExtensionModule(resolvedPath, context);
+      if (!factory) {
+        errors.push({
+          path: extPath,
+          error: `Extension does not export a valid factory function: ${extPath}`,
+        });
+        continue;
+      }
+      const extension = createExtension(extPath, resolvedPath);
+      const api = createExtensionAPI(extension, runtime, resolvedCwd, resolvedEventBus);
+      await factory(api);
       extensions.push(extension);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ path: extPath, error: `Failed to load extension: ${message}` });
     }
   }
 

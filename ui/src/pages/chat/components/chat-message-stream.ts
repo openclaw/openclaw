@@ -4,22 +4,25 @@ import { repeat } from "lit/directives/repeat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-  type MessageReplyTarget,
-} from "./chat-message-markdown.ts";
+import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
-import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import {
+  renderReplyLine,
+  renderReplyLineConnector,
+  resolveGroupReplyLine,
+} from "./chat-reply-attribution.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
@@ -32,6 +35,8 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
+  | "onOpenReply"
+  | "replyNavigationId"
   | "sessionKey"
   | "presented"
   | "boardProvider"
@@ -59,9 +64,10 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
+  onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
@@ -147,15 +153,26 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
       : renderChatAvatar("assistant", assistant);
-  const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
+  const sourcePart = parts.find((part) => part.kind === "stream");
+  const replyLine = resolveGroupReplyLine(
+    {
+      role: "assistant",
+      messages: [],
+      replyToSender: sourcePart?.replyToSender,
+      replyToMessage: sourcePart?.replyToMessage,
+    },
+    opts.resolveReplyPreview,
+  );
+  const hasReplyRow = replyLine.state !== "hidden" && avatar !== nothing;
+  const groupClass = `chat-group assistant${hasReplyRow ? " chat-group--reply" : ""}${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
-        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
-        ${renderStreamGroupParts(parts, opts, "standalone")}
+        ${renderReplyLine(replyLine, opts)} ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
+      ${renderReplyLineConnector(replyLine, avatar)}
       ${
         footerStartedAt === null
           ? nothing
@@ -187,7 +204,7 @@ export function renderWorkGroupSummary(
     browserTabPreviews?: unknown;
   },
 ) {
-  const duration = formatDurationCompact(item.durationMs);
+  const duration = formatDurationLong(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -219,13 +236,14 @@ export function renderWorkGroupSummary(
   const activity = prepared.flatMap((entry) => entry.activity);
   for (const [index, card] of fallback.entries()) {
     const outcome = resolveToolCardOutcome(card, false);
+    const display = resolveToolDisplay(card);
     activity.push({
       itemId: `work-summary-raw:${index}`,
       toolCallId: card.callId,
       kind: "tool",
       phase: "end",
-      title: card.name,
-      name: card.name,
+      title: display.name,
+      name: display.name,
       status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
     });
   }
@@ -248,7 +266,7 @@ export function renderWorkGroupSummary(
           <span class="chat-activity-group__label">${label}</span>
         </span>
         ${
-          total > 0
+          opts.expanded && total > 0
             ? html`<span class="chat-work-group__total"
                 >·
                 ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span

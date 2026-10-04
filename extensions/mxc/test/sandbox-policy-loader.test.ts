@@ -42,19 +42,25 @@ function expectPolicyFileFailure(policyPath: string, action: () => unknown, deta
   throw new Error("Expected policy loader failure.");
 }
 
-describeOnWindows("loadSandboxBaselinePolicy", () => {
+describe("loadSandboxBaselinePolicy defaults and timeout", () => {
   test("resolves no configured policy files with the default baseline", () => {
     const policy = loadSandboxBaselinePolicy();
 
-    expect(policy.filesystem.restrictToProjectDir).toBe(true);
-    expect(policy.filesystem.additionalReadonlyPaths).toEqual([]);
-    expect(policy.filesystem.additionalReadwritePaths).toEqual([]);
     expect(policy.process.timeoutSeconds).toBe(300);
-    expect(policy.process.timeoutSecondsConfigured).toBe(false);
     expect(policy.configuredPaths.readonlyPaths).toEqual([]);
     expect(policy.configuredPaths.readwritePaths).toEqual([]);
   });
 
+  test.each([0, -1, null])("rejects invalid timeout %s at policy admission", (timeoutSeconds) => {
+    const policyPath = join(makeTestDir(), "invalid-timeout.json");
+    writePolicy(policyPath, { process: { timeoutSeconds } });
+    expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(
+      /timeoutSeconds/u,
+    );
+  });
+});
+
+describeOnWindows("loadSandboxBaselinePolicy", () => {
   test("fails closed when a configured policy file is missing", () => {
     const missingPolicyPath = join(makeTestDir(), "missing-policy.json");
 
@@ -94,11 +100,11 @@ describeOnWindows("loadSandboxBaselinePolicy", () => {
 
     const policy = loadSandboxBaselinePolicy({ policyPaths: [firstPolicyPath, secondPolicyPath] });
 
-    expect(policy.filesystem.additionalReadonlyPaths).toEqual([
+    expect(policy.configuredPaths.readonlyPaths.map((entry) => entry.path)).toEqual([
       firstReadonlyPath,
       secondReadonlyPath,
     ]);
-    expect(policy.filesystem.additionalReadwritePaths).toEqual([
+    expect(policy.configuredPaths.readwritePaths.map((entry) => entry.path)).toEqual([
       firstReadwritePath,
       sharedReadwritePath,
       secondReadwritePath,
@@ -121,7 +127,6 @@ describeOnWindows("loadSandboxBaselinePolicy", () => {
       },
     ]);
     expect(policy.process.timeoutSeconds).toBe(90);
-    expect(policy.process.timeoutSecondsConfigured).toBe(true);
   });
 
   test("hardening booleans can only remain restrictive", () => {

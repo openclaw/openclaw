@@ -2,6 +2,11 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { notifyListeners } from "../../shared/listeners.js";
+import {
+  getSteeringRuntimeContext,
+  shouldRetainSteeringRuntimeContext,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   Agent,
   AgentEvent,
@@ -27,18 +32,10 @@ import {
   type ExtensionErrorListener,
   ExtensionRunner,
   type ExtensionUIContext,
-  type MessageEndEvent,
-  type MessageStartEvent,
-  type MessageUpdateEvent,
   type SessionStartEvent,
   type ShutdownHandler,
   type ToolDefinition,
-  type ToolExecutionEndEvent,
-  type ToolExecutionStartEvent,
-  type ToolExecutionUpdateEvent,
   type ToolInfo,
-  type TurnEndEvent,
-  type TurnStartEvent,
 } from "./extensions/index.js";
 import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
@@ -49,7 +46,6 @@ import {
   retireQueuedUserMessage,
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -89,6 +85,7 @@ export abstract class AgentSessionBase {
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
+  protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
@@ -120,7 +117,6 @@ export abstract class AgentSessionBase {
 
   protected sessionModelRegistry: ModelRegistry;
 
-  // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
@@ -151,6 +147,7 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
@@ -212,12 +209,8 @@ export abstract class AgentSessionBase {
   }
 
   /**
-   * Install tool hooks once on the Agent instance.
-   *
-   * The callbacks read `this.currentExtensionRunner` at execution time, so extension reload swaps in the
-   * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-   * registered tool execution to the extension context. Tool call and tool result interception now
-   * happens here instead of in wrappers.
+   * Hooks resolve the current extension runner at execution time so reloads
+   * need no reinstall. Wrappers only adapt registered tools to extension context.
    */
   protected installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
@@ -393,13 +386,11 @@ export abstract class AgentSessionBase {
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await withSessionManagerWrite(this.sessionManager, () =>
-          this.sessionManager.appendCustomMessageEntry(
-            message.customType,
-            message.content,
-            message.display,
-            message.details,
-          ),
+        await this.sessionManager.appendCustomMessageEntryAsync(
+          message.customType,
+          message.content,
+          message.display,
+          message.details,
         );
       } else if (
         event.message.role === "user" ||
@@ -410,6 +401,20 @@ export abstract class AgentSessionBase {
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
+          const retainedSteeringContext =
+            event.message.role === "user" && shouldRetainSteeringRuntimeContext(this)
+              ? getSteeringRuntimeContext(event.message)
+              : undefined;
+          if (retainedSteeringContext) {
+            // Prefix-bound thinking replays this carrier before its owning user.
+            // Persist that append-only prefix before the user can acquire a signed reply.
+            await this.sessionManager.appendCustomMessageEntryAsync(
+              retainedSteeringContext.customType,
+              retainedSteeringContext.content,
+              retainedSteeringContext.display,
+              retainedSteeringContext.details,
+            );
+          }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
             sourceAppend: sourceSlots,
@@ -431,7 +436,6 @@ export abstract class AgentSessionBase {
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-      // Track assistant message for auto-compaction (checked on agent_end)
       if (event.message.role === "assistant") {
         this.lastAssistantMessage = event.message;
       }
@@ -471,7 +475,6 @@ export abstract class AgentSessionBase {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
-  /** Emit extension events based on agent events */
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
@@ -479,70 +482,62 @@ export abstract class AgentSessionBase {
     } else if (event.type === "agent_end") {
       await this.currentExtensionRunner.emit({ type: "agent_end", messages: event.messages });
     } else if (event.type === "turn_start") {
-      const extensionEvent: TurnStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "turn_start",
         turnIndex: this.turnIndex,
         timestamp: Date.now(),
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "turn_end") {
-      const extensionEvent: TurnEndEvent = {
+      await this.currentExtensionRunner.emit({
         type: "turn_end",
         turnIndex: this.turnIndex,
         message: event.message,
         toolResults: event.toolResults,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
       this.turnIndex++;
     } else if (event.type === "message_start") {
-      const extensionEvent: MessageStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "message_start",
         message: event.message,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "message_update") {
-      const extensionEvent: MessageUpdateEvent = {
+      await this.currentExtensionRunner.emit({
         type: "message_update",
         message: event.message,
         assistantMessageEvent: event.assistantMessageEvent,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "message_end") {
-      const extensionEvent: MessageEndEvent = {
+      const replacement = await this.currentExtensionRunner.emitMessageEnd({
         type: "message_end",
         message: event.message,
-      };
-      const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
+      });
       if (replacement) {
         replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {
-      const extensionEvent: ToolExecutionStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_start",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.args,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "tool_execution_update") {
-      const extensionEvent: ToolExecutionUpdateEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_update",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.args,
         partialResult: event.partialResult,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "tool_execution_end") {
-      const extensionEvent: ToolExecutionEndEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_end",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         result: event.result,
         isError: event.isError,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     }
     return false;
   }
@@ -582,7 +577,7 @@ export abstract class AgentSessionBase {
   protected reconnectToAgent(): void {
     if (this.unsubscribeAgent) {
       return;
-    } // Already connected
+    }
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
   }
 
@@ -591,23 +586,17 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
-    const abortOperations = [
-      () => this.abortRetry(),
-      () => this.abortCompaction(),
-      () => this.abortBranchSummary(),
-      () => this.agent.abort(),
-    ];
-    for (const abortOperation of abortOperations) {
-      try {
-        abortOperation();
-      } catch {
-        // One broken abort hook must not prevent the remaining work from being cancelled.
-      }
-    }
-
-    this.currentExtensionRunner.invalidate(
-      "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+    notifyListeners(
+      [
+        () => this.abortRetry(),
+        () => this.abortCompaction(),
+        () => this.abortBranchSummary(),
+        () => this.agent.abort(),
+      ],
+      undefined,
     );
+
+    this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
@@ -645,17 +634,12 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /**
-   * Get the names of currently active tools.
-   * Returns the names of tools currently set on the agent.
-   */
+  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
 
-  /**
-   * Get all configured tools with name, description, parameter schema, and source metadata.
-   */
+  /** All configured tools with their schema and source metadata. */
   getAllTools(): ToolInfo[] {
     return Array.from(this.toolDefinitions.values()).map(({ definition, sourceInfo }) => ({
       name: definition.name,
@@ -774,18 +758,7 @@ export abstract class AgentSessionBase {
   }
 
   protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    if (!guidelines || guidelines.length === 0) {
-      return [];
-    }
-
-    const unique = new Set<string>();
-    for (const guideline of guidelines) {
-      const normalized = guideline.trim();
-      if (normalized.length > 0) {
-        unique.add(normalized);
-      }
-    }
-    return Array.from(unique);
+    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
   }
 
   protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {

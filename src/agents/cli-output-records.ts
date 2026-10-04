@@ -3,7 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliTerminalFailure,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -93,14 +98,8 @@ function readNestedErrorMessage(parsed: Record<string, unknown>): string | undef
       return errorMessage;
     }
   }
-  if (typeof parsed.message === "string") {
-    const trimmed = parsed.message.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (typeof parsed.error === "string") {
-    const trimmed = parsed.error.trim();
+  for (const value of [parsed.message, parsed.error]) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
     if (trimmed) {
       return trimmed;
     }
@@ -160,9 +159,6 @@ export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefi
 }
 
 function collectCliText(value: unknown): string {
-  if (!value) {
-    return "";
-  }
   if (typeof value === "string") {
     return value;
   }
@@ -397,7 +393,11 @@ export function isClaudeForegroundAgentToolName(name: string): boolean {
   return CLAUDE_FOREGROUND_AGENT_TOOL_NAMES.has(name);
 }
 
-function isClaudeToolResultBlockType(type: unknown): boolean {
+export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+export function isClaudeToolResultBlockType(type: unknown): boolean {
   return typeof type === "string" && (type === "tool_result" || type.endsWith("_tool_result"));
 }
 
@@ -430,12 +430,7 @@ function isClaudeSemanticSubagentProgressRecord(parsed: Record<string, unknown>)
     return false;
   }
   const blockType = event.content_block.type;
-  return (
-    blockType === "tool_use" ||
-    blockType === "server_tool_use" ||
-    blockType === "mcp_tool_use" ||
-    isClaudeToolResultBlockType(blockType)
-  );
+  return isClaudeToolUseBlockType(blockType) || isClaudeToolResultBlockType(blockType);
 }
 
 /** Parent id of a semantic subagent record. Partial deltas and system chatter stay out. */
@@ -468,16 +463,6 @@ export function pickCliResumeCheckpointId(params: {
   return checkpointId || undefined;
 }
 
-function shouldUnwrapNestedCliResultText(params: {
-  providerId?: string;
-  parsed: Record<string, unknown>;
-}): boolean {
-  if (!params.providerId || !isClaudeCliProvider(params.providerId)) {
-    return false;
-  }
-  return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
-}
-
 function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
   if (typeof parsed.error === "string") {
     return Boolean(parsed.error.trim());
@@ -495,10 +480,8 @@ export function parseCliJson(
   providerId?: string,
 ): CliOutput | null {
   const parsedRecords = decodeCliRecords(raw);
-  if (parsedRecords.length === 0) {
-    return null;
-  }
-
+  const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
+  const unwrapResultText = Boolean(providerId && isClaudeCliProvider(providerId));
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let text = "";
@@ -506,7 +489,6 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
-    const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
     const terminalFailure = claudeDialect ? readClaudeTerminalFailure(parsed) : undefined;
     if (terminalFailure && !(terminalFailure.reason === "turn_stopped" && text.trim())) {
       return {
@@ -536,7 +518,7 @@ export function parseCliJson(
       collectCliText(parsed.response) ||
       collectCliText(parsed);
     const trimmedText = (
-      shouldUnwrapNestedCliResultText({ providerId, parsed })
+      unwrapResultText && (!Object.hasOwn(parsed, "type") || parsed.type === "result")
         ? unwrapNestedCliResultText(nextText)
         : nextText
     ).trim();

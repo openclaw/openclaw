@@ -11,6 +11,7 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
 import {
@@ -22,31 +23,68 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
 
+function validateReleaseAdvisoryJobs(value) {
+  const expected = [];
+  const recorded = value === undefined ? [] : value;
+  if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
+    throw new Error("Release advisory jobs differ from the release policy evidence");
+  }
+  return expected;
+}
+
+export function validateReleaseManifestAdvisoryJobs(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Release advisory manifest is invalid");
+  }
+  if (
+    manifest.childEvidence !== undefined &&
+    (!manifest.childEvidence ||
+      typeof manifest.childEvidence !== "object" ||
+      Array.isArray(manifest.childEvidence))
+  ) {
+    throw new Error("Release advisory child evidence is invalid");
+  }
+  const normalCi = manifest.childEvidence?.normalCi;
+  if (normalCi !== undefined) {
+    if (!normalCi || !Array.isArray(normalCi.jobs)) {
+      throw new Error("Release advisory child evidence is invalid");
+    }
+    if (normalCi.jobs.some(isFailedJob)) {
+      throw new Error("Release manifest contains failed selected job evidence");
+    }
+  }
+  return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
+}
+
+export function releaseManifestChildEvidence(child) {
+  return {
+    runId: child.runId,
+    plannedRunAttempt: child.plannedRunAttempt,
+    effectiveRunAttempt: child.runAttempt,
+    observedRunAttempts: child.observedRunAttempts,
+    compositeJobsSha256: child.compositeJobsSha256,
+    dispatchActor: child.dispatchActor,
+    triggeringActor: child.triggeringActor,
+    repository: child.repository,
+    jobs: child.timing.jobs.map(
+      ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
+        name,
+        status,
+        conclusion,
+        acceptedRunAttempt,
+        startedAt,
+        completedAt,
+        url,
+      }),
+    ),
+  };
+}
+
 export function buildReleaseValidationManifest({ plan, drain, context }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
-      {
-        runId: child.runId,
-        plannedRunAttempt: child.plannedRunAttempt,
-        effectiveRunAttempt: child.runAttempt,
-        observedRunAttempts: child.observedRunAttempts,
-        compositeJobsSha256: child.compositeJobsSha256,
-        dispatchActor: child.dispatchActor,
-        triggeringActor: child.triggeringActor,
-        repository: child.repository,
-        jobs: child.timing.jobs.map(
-          ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
-            name,
-            status,
-            conclusion,
-            acceptedRunAttempt,
-            startedAt,
-            completedAt,
-            url,
-          }),
-        ),
-      },
+      releaseManifestChildEvidence(child),
     ]),
   );
   const current = {
@@ -62,6 +100,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
+    advisoryJobs: [],
     childEvidence,
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
@@ -258,6 +297,17 @@ const REVIEWED_TELEGRAM_WAIVERS = new Map([
   ["2026.8.1-owner-approved", ["telegram"]],
   ["2026.9.1-owner-approved", ["telegram"]],
   ["2026.9.5-owner-approved", ["telegram", "matrix"]],
+  // Peter approved waiving minor live-channel QA for 2026.9.7 (2026-09-29 00:40 PT) when
+  // repair is not possible before release: QA Live Matrix 7/24 deterministic on
+  // 01d71319 (FRV 36534008742, jobs 109299525565 and rerun 109316259401) and Telegram
+  // QA 4/25 on 56fb8872 and e61efb6c (job 109279074202).
+  ["2026.9.7-owner-approved", ["telegram", "matrix"]],
+  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.8
+  // on 2026-10-02. Every other stable-release gate remains blocking.
+  ["2026.9.8-owner-approved", ["telegram", "matrix"]],
+  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.9
+  // on 2026-10-03. Every other stable-release gate remains blocking.
+  ["2026.9.9-owner-approved", ["telegram", "matrix"]],
 ]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
@@ -499,21 +549,6 @@ function positiveInteger(value) {
   return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : undefined;
 }
 
-function canonicalValue(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, entry]) => entry !== undefined)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalValue(entry)]),
-    );
-  }
-  return value;
-}
-
 function booleanValue(value) {
   return value === true || value === "true";
 }
@@ -661,8 +696,12 @@ export function validateReleaseTelegramWaiverBinding(plan, validationInputs = {}
   }
 }
 
+export function releaseChildSpecs() {
+  return [...CHILD_SPECS, ...LEGACY_CHILD_SPECS];
+}
+
 export function releaseChildSpec(key) {
-  const spec = [...CHILD_SPECS, ...LEGACY_CHILD_SPECS].find((entry) => entry.key === key);
+  const spec = releaseChildSpecs().find((entry) => entry.key === key);
   if (!spec) {
     throw new Error(`release child key is invalid: `);
   }
@@ -723,20 +762,13 @@ export function validateReleaseChildRunProvenance(run, expected = {}) {
   };
 }
 
-function compositeJobsDigestPayload(value) {
-  return {
-    effectiveRunAttempt: value.effectiveRunAttempt,
-    jobs: value.jobs,
-    plannedRunAttempt: value.plannedRunAttempt,
-  };
-}
-
 function jsonSha256(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 export function releaseCompositeJobsSha256(value) {
-  return jsonSha256(canonicalValue(compositeJobsDigestPayload(value)));
+  const { effectiveRunAttempt, jobs, plannedRunAttempt } = value;
+  return jsonSha256(sortJsonValueKeys({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
@@ -769,11 +801,19 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       throw new Error("release child attempt evidence is gapped");
     }
     const names = new Set();
+    const completedNames = new Set(
+      expectedAttempt < effectiveRunAttempt
+        ? attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name)
+        : [],
+    );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Completed skipped jobs never executed, so they cannot contribute attempt
-      // evidence. Drop them before identity checks because placeholders may collide.
-      if (job.status === "completed" && job.conclusion === "skipped") {
+      // Skipped jobs and GitHub's runnerless, stepless queued rerun copies (beside a
+      // completed sibling in a superseded attempt) never executed, so they carry no
+      // evidence. Drop them before identity checks because such copies may collide.
+      const ghost = job.status === "queued" && !rawJob.runner_name && rawJob.steps?.length === 0;
+      const skipped = job.status === "completed" && job.conclusion === "skipped";
+      if (skipped || (ghost && completedNames.has(job.name))) {
         continue;
       }
       if (names.has(job.name)) {
@@ -1149,39 +1189,21 @@ function executionPlanDigestPayload(plan) {
   const coverage = Object.hasOwn(plan, "coveragePolicy")
     ? { targetVersion: plan.targetVersion, coveragePolicy: plan.coveragePolicy }
     : {};
-  if (!Object.hasOwn(plan, "attemptEvidenceVersion")) {
-    return {
-      ...source,
-      ...publication,
-      ...waiver,
-      blockers: plan.blockers,
-      children: plan.children,
-      errors: plan.errors,
-      evidenceReuse: plan.evidenceReuse,
-      gates: plan.gates,
-      kind: plan.kind,
-      parentRunAttempt: plan.parentRunAttempt,
-      parentRunId: plan.parentRunId,
-      releaseProfile: plan.releaseProfile,
-      rerunGroup: plan.rerunGroup,
-      targetSha: plan.targetSha,
-      trustedWorkflow: plan.trustedWorkflow,
-      version: plan.version,
-      workflowRef: plan.workflowRef,
-      workflowSha: plan.workflowSha,
-    };
-  }
+  const attemptAware = Object.hasOwn(plan, "attemptEvidenceVersion");
   return {
     ...source,
     ...publication,
     ...waiver,
-    ...coverage,
-    ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
-    ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
-    attemptEvidenceVersion: plan.attemptEvidenceVersion,
+    ...(attemptAware
+      ? {
+          ...coverage,
+          ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
+          ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
+          attemptEvidenceVersion: plan.attemptEvidenceVersion,
+        }
+      : {}),
     blockers: plan.blockers,
-    candidate: plan.candidate,
-    candidateRequest: plan.candidateRequest,
+    ...(attemptAware ? { candidate: plan.candidate, candidateRequest: plan.candidateRequest } : {}),
     children: plan.children,
     errors: plan.errors,
     evidenceReuse: plan.evidenceReuse,
@@ -1190,7 +1212,7 @@ function executionPlanDigestPayload(plan) {
     parentRunAttempt: plan.parentRunAttempt,
     parentRunId: plan.parentRunId,
     releaseProfile: plan.releaseProfile,
-    repository: plan.repository,
+    ...(attemptAware ? { repository: plan.repository } : {}),
     rerunGroup: plan.rerunGroup,
     targetSha: plan.targetSha,
     trustedWorkflow: plan.trustedWorkflow,
@@ -1516,11 +1538,34 @@ function isFailedJob(job) {
 }
 
 export function terminalPolicyPass(child) {
-  return (
-    child.status === "completed" &&
-    child.conclusion === "success" &&
-    child.jobs.filter(isFailedJob).length === 0
-  );
+  const failures = child.jobs.filter(isFailedJob);
+  return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
+}
+
+/** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
+export function planReleaseChildRerun({ childKey, jobs }) {
+  const failed = jobs
+    .filter(isFailedJob)
+    .map((job) => job.name)
+    .toSorted();
+  if (failed.length === 0) {
+    throw new Error(`${childKey} has no blocking failed job to rerun`);
+  }
+  // These consumers bind their producer's artifact to the current run attempt, so a
+  // failed-jobs rerun that leaves the green producer behind stays red (#161317).
+  const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
+  const producerJob = jobs.find((job) => job.name === producer);
+  if (
+    producerJob?.status === "completed" &&
+    producerJob.conclusion === "success" &&
+    [
+      "install_smoke_release_checks / installer_smoke_nonroot_image",
+      "install_smoke_release_checks / installer_smoke_nonroot",
+    ].some((name) => failed.includes(name))
+  ) {
+    return { failed, mode: "producer", producer };
+  }
+  return { failed, mode: "failed-jobs" };
 }
 
 function dispatchBlockers(children) {
@@ -1627,6 +1672,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
+    advisoryJobs: [],
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
     blockers,
@@ -1728,6 +1774,7 @@ export function buildReleaseStateArtifact({
     rerunGroup,
     executionPlanSha256: executionPlan.sha256,
     state: decision.state,
+    advisoryJobs: decision.advisoryJobs ?? [],
     activeRunIds,
     blockerCount: decision.blockerCount ?? completeBlockerIndex.length,
     blockerIndex: completeBlockerIndex,
@@ -2123,6 +2170,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
+    advisoryJobs: validateReleaseAdvisoryJobs(payload.advisoryJobs),
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
     blockers,
@@ -2147,27 +2195,11 @@ export function releasePlanGateFailures(gates) {
     }));
 }
 
-export function releaseStateChildEvidence(child) {
-  return canonicalValue({
-    compositeJobsSha256: child.compositeJobsSha256,
+function releaseStateChildEvidence(child) {
+  return sortJsonValueKeys({
+    ...releaseManifestChildEvidence(child),
     conclusion: child.conclusion,
-    dispatchActor: child.dispatchActor,
-    effectiveRunAttempt: child.runAttempt,
-    jobs: child.timing.jobs.map((job) => ({
-      acceptedRunAttempt: job.acceptedRunAttempt,
-      completedAt: job.completedAt,
-      conclusion: job.conclusion,
-      name: job.name,
-      startedAt: job.startedAt,
-      status: job.status,
-      url: job.url,
-    })),
-    observedRunAttempts: child.observedRunAttempts,
-    plannedRunAttempt: child.plannedRunAttempt,
-    repository: child.repository,
-    runId: child.runId,
     status: child.status,
-    triggeringActor: child.triggeringActor,
     workflow: child.workflow,
     workflowRef: child.workflowRef,
     workflowSha: child.workflowSha,
@@ -2244,6 +2276,7 @@ function verifyStateStructure(state, executionPlan, label) {
     }
     return Object.assign({}, child, snapshot, {
       jobs: snapshot.timing.jobs.map((job) => ({
+        acceptedRunAttempt: job.acceptedRunAttempt,
         conclusion: job.conclusion,
         html_url: job.url,
         name: job.name,
@@ -2269,8 +2302,6 @@ function verifyStateStructure(state, executionPlan, label) {
     extraBlockers: executionPlan.blockers,
     extraErrors: executionPlan.errors,
     localFailures: releasePlanGateFailures(executionPlan.gates),
-    releaseProfile: executionPlan.releaseProfile,
-    workflowRef: executionPlan.workflowRef,
   });
   if (JSON.stringify(state.activeRunIds) !== JSON.stringify(baseline.activeRunIds)) {
     throw new Error(`${label} activeRunIds differs from canonical release policy`);
@@ -2470,6 +2501,9 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   }
   for (const error of payload.errors.slice(0, normalizedMax)) {
     lines.push(issueSummary("Collector error", error));
+  }
+  for (const advisory of payload.advisoryJobs ?? []) {
+    lines.push(issueSummary(`Advisory [${advisory.class}]`, advisory));
   }
   const omitted =
     Math.max(0, payload.blockers.length - normalizedMax) +

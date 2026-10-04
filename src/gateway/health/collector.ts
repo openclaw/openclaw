@@ -12,7 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
@@ -108,12 +108,9 @@ async function createHealthSessionStoreReader(
   projection?: SessionRowProjection,
 ) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { readSessionStoreSummaryReadOnly } =
-    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, {
     projection,
-    readSummary: readSessionStoreSummaryReadOnly,
     recoverReadError(error) {
       if (!isTransientSqliteError(error)) {
         throw error;
@@ -357,11 +354,10 @@ async function buildHealthAccountRecord(params: {
         timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
         cfg: params.cfg,
       });
-      lastProbeAt = Date.now();
     } catch (error) {
       probe = { ok: false, error: formatErrorMessage(error) };
-      lastProbeAt = Date.now();
     }
+    lastProbeAt = Date.now();
   }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
@@ -548,7 +544,6 @@ export async function collectGatewayHealthSnapshot(params: {
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
     const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
       defaultAccountId,
       boundAccounts,
     });
@@ -636,7 +631,7 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = buildContextEngineHealthSummary();
+  const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,

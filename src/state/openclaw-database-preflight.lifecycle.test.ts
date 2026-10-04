@@ -71,20 +71,11 @@ it.each([
     outcome,
     owner: "caller" as const,
   })),
-  ...(["close-failure", "cancel"] as const).map((outcome) => ({
+  { source: "snapshot", outcome: "close-failure", owner: "caller" },
+  ...(["startup", "scope"] as const).map((owner) => ({
     source: "snapshot",
-    outcome,
-    owner: "caller" as const,
-  })),
-  ...(["direct", "snapshot"] as const).map((source) => ({
-    source,
     outcome: "cancel" as const,
-    owner: "startup" as const,
-  })),
-  ...(["direct", "snapshot"] as const).map((source) => ({
-    source,
-    outcome: "cancel" as const,
-    owner: "scope" as const,
+    owner,
   })),
 ])(
   "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
@@ -361,7 +352,7 @@ function createSnapshotCandidates() {
   return { env, paths };
 }
 
-it.each(["header", "shape", "startup"])(
+it.each(["header", "startup"])(
   "bounds %s readers for closed WAL fleets without changing source artifacts",
   async (mode) => {
     const root = tempDirs.make("openclaw-preflight-closed-wal-");

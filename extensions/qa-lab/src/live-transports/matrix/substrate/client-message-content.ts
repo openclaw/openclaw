@@ -22,19 +22,6 @@ function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: s
   };
 }
 
-function buildMatrixReplacementRelation(targetEventId: string) {
-  const normalizedTargetEventId = targetEventId.trim();
-  if (!normalizedTargetEventId) {
-    throw new Error("Matrix replacement requires a target event id");
-  }
-  return {
-    "m.relates_to": {
-      rel_type: "m.replace" as const,
-      event_id: normalizedTargetEventId,
-    },
-  };
-}
-
 export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   const normalizedMessageId = messageId.trim();
   const normalizedEmoji = emoji.trim();
@@ -53,12 +40,6 @@ export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   };
 }
 
-function buildMatrixMentionLink(userId: string) {
-  const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
-  const label = escapeHtml(userId);
-  return `<a href="${href}">${label}</a>`;
-}
-
 export function buildMatrixQaMessageContent(params: {
   body: string;
   mentionUserIds?: string[];
@@ -74,7 +55,9 @@ export function buildMatrixQaMessageContent(params: {
   while (cursor < body.length) {
     const matchedUserId = uniqueMentionUserIds.find((userId) => body.startsWith(userId, cursor));
     if (matchedUserId) {
-      formattedParts.push(buildMatrixMentionLink(matchedUserId));
+      formattedParts.push(
+        `<a href="https://matrix.to/#/${encodeURIComponent(matchedUserId)}">${escapeHtml(matchedUserId)}</a>`,
+      );
       cursor += matchedUserId.length;
       usedFormattedMention = true;
       continue;
@@ -110,11 +93,18 @@ export function buildMatrixQaReplacementMessageContent(params: {
     body: params.body,
     mentionUserIds: params.mentionUserIds,
   });
+  const targetEventId = params.targetEventId.trim();
+  if (!targetEventId) {
+    throw new Error("Matrix replacement requires a target event id");
+  }
   return {
     body: `* ${params.body}`,
     msgtype: "m.text" as const,
     "m.new_content": newContent,
-    ...buildMatrixReplacementRelation(params.targetEventId),
+    "m.relates_to": {
+      rel_type: "m.replace" as const,
+      event_id: targetEventId,
+    },
   };
 }
 

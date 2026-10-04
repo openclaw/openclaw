@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function elide(text?: string, limit = 400) {
@@ -13,7 +16,7 @@ export function elide(text?: string, limit = 400) {
 }
 
 export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
-  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+  if (isRecord(error)) {
     try {
       Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
       return error;

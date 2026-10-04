@@ -9,11 +9,8 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/repl
 import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  deleteCronJobScratch,
-  readCronJobScratchState,
-  readHeartbeatMonitorScratch,
-} from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
+import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
@@ -225,7 +222,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("does not recreate scratch when its monitor is deleted while the heartbeat runs", async () => {
     await withHeartbeat(async ({ replySpy, run }) => {
       const cronStorePath = resolveCronJobsStorePath();
-      const monitor = readHeartbeatMonitorScratch(cronStorePath, "main");
+      const monitor = await readCronScratchSnapshot(cronStorePath, {
+        kind: "heartbeat",
+        agentId: "main",
+      });
       expect(monitor).toBeDefined();
       if (!monitor) {
         throw new Error("Expected seeded heartbeat monitor");
@@ -367,6 +367,52 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it.each([
+    { source: undefined, work: "monitor", heartbeatCopy: true },
+    { source: "interval", work: "monitor", heartbeatCopy: true },
+    { source: "manual", work: "monitor", heartbeatCopy: true },
+    { source: undefined, work: "cron", heartbeatCopy: false },
+    { source: "interval", work: "cron", heartbeatCopy: false },
+    { source: "manual", work: "cron", heartbeatCopy: false },
+    { source: "interval", work: "exec-and-cron", heartbeatCopy: false },
+    { source: "manual", work: "background-task", heartbeatCopy: false },
+    { source: "exec-event", work: "scheduled-task", heartbeatCopy: true },
+  ] as const)(
+    "delivers failure copy for selected $work work after a $source wake",
+    async ({ source, work, heartbeatCopy }) => {
+      await withHeartbeat(async ({ sessionKey, replySpy, run, expectSend }) => {
+        if (work === "cron" || work === "exec-and-cron") {
+          enqueueSystemEvent("Cron: scheduled reminder", { sessionKey, contextKey: "cron:job" });
+        }
+        if (work === "exec-and-cron" || work === "scheduled-task") {
+          enqueueSystemEvent("exec finished: queued task", { sessionKey });
+        }
+        if (work === "background-task") {
+          enqueueSystemEvent("Background task completed", { sessionKey, contextKey: "task:job" });
+        }
+        replySpy.mockImplementationOnce(async (_ctx, options) => {
+          setHeartbeatAgentTurnStatus(options, "failed");
+          return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
+        });
+        expect(
+          await run({
+            source,
+            ...(work === "scheduled-task"
+              ? { tasks: [{ jobId: "scheduled", name: "Periodic check", prompt: "Check status" }] }
+              : {}),
+          }),
+        ).toEqual({ status: "failed", reason: "agent-runner-failure" });
+        expectSend(
+          heartbeatCopy ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        );
+        expect(replySpy.mock.calls[0]?.[1]).toMatchObject({
+          isHeartbeat: true,
+          useHeartbeatFailureCopy: heartbeatCopy,
+        });
+      });
+    },
+  );
+
   it("retains failed work and dedupe state until a later successful notification", async () => {
     await withHeartbeat(
       async ({ sessionKey, storePath, replySpy, sendTelegram, run, expectSend }) => {
@@ -380,8 +426,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           status: "failed",
           reason: "agent-runner-failure",
         });
-        expectSend(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-        expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+        expectSend(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+        expect(replySpy.mock.calls[0]?.[1]?.useHeartbeatFailureCopy).toBe(false);
         expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
         expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
         replySpy.mockImplementationOnce(async (_ctx, options) => {

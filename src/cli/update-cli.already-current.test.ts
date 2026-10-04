@@ -326,6 +326,7 @@ describe("update-cli", () => {
   it.each([true, false])(
     "converges a current Git core using its before-only version receipt (runtime compatible=%s)",
     async (compatible) => {
+      runtimeRecovery.stubNodeRuntime();
       // This case specifies system-runtime guidance, independent of the host Node manager.
       vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
       const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
@@ -423,18 +424,9 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(
-    [true].flatMap((restart) =>
-      (["outside", "unknown", "inside", "descendant", "foreign descendant"] as const).map(
-        (membership) => ({
-          restart,
-          membership,
-        }),
-      ),
-    ),
-  )(
-    "never stages or stops an unchanged managed gateway under auto admission (restart=$restart, membership=$membership)",
-    async ({ restart, membership }) => {
+  it.each(["outside", "unknown", "inside", "descendant", "foreign descendant"] as const)(
+    "never stages or stops an unchanged managed gateway under auto admission (membership=%s)",
+    async (membership) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
@@ -461,7 +453,7 @@ describe("update-cli", () => {
         );
       }
 
-      await updateCommand({ admission: "auto", yes: true, restart, json: true });
+      await updateCommand({ admission: "auto", yes: true, restart: true, json: true });
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(managedUpdateHandoff.start).not.toHaveBeenCalled();
@@ -514,19 +506,35 @@ describe("update-cli", () => {
         membership,
       );
 
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await updateCommand({
-          admission: "auto",
-          channel: "beta",
-          yes: true,
-          restart: true,
-          json: true,
-        });
-      });
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_DEBUG_PROXY_ENABLED: membership === "outside" ? "yes" : "0",
+          OPENCLAW_DEBUG_PROXY_URL: undefined,
+          OPENCLAW_DEBUG_PROXY_REQUIRE: undefined,
+        },
+        async () => {
+          await updateCommand({
+            admission: "auto",
+            channel: "beta",
+            yes: true,
+            restart: true,
+            json: true,
+          });
+        },
+      );
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(doctorCommandCall()).toBeUndefined();
+      const captureNotices = vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.filter(
+          ([message]) =>
+            message ===
+            "Warning: Debug HTTP capture is disabled in this updater process. Doctor may enable capture in its own process after schema readiness is confirmed.",
+        );
+      expect(captureNotices).toHaveLength(membership === "outside" ? 1 : 0);
       if (membership === "unknown") {
         expectNoSideEffects(replaceConfigFile, updateNpmInstalledPlugins);
         expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
@@ -601,35 +609,41 @@ describe("update-cli", () => {
     expect((lastWriteJsonCall() as UpdateRunResult).reason).toBeUndefined();
   });
 
-  it("runs the package update when latest target lookup is unresolved", async () => {
+  it.each(["latest", "next"] as const)("handles an unresolved %s dist-tag lookup", async (tag) => {
     setTty(false);
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValue("2026.4.22");
-    primeNpmChannelTag("latest", null);
+    if (tag === "latest") {
+      primeNpmChannelTag(tag, null);
+      await updateCommand({});
 
-    await updateCommand({});
-
-    expect(getErrorOutput()).not.toContain("Downgrade confirmation required.");
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expectPackageInstallSpec("openclaw@latest");
-    expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
-  });
-
-  it("blocks the package update when a non-latest dist-tag lookup is unresolved", async () => {
-    setTty(false);
-    await mockPackageInstallAtCaseDir();
-    readPackageVersion.mockResolvedValue("2026.4.22");
+      expect(getErrorOutput()).not.toContain("Downgrade confirmation required.");
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expectPackageInstallSpec("openclaw@latest");
+      expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
+      return;
+    }
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
-      tag: "next",
+      tag,
       version: null,
       error: "HTTP 404",
     });
 
-    await updateCommand({ tag: "next" });
+    await expect(updateCommand({ tag })).rejects.toEqual(new ExitError(1));
 
-    expect(getErrorOutput()).toContain("Downgrade confirmation required.");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getLogOutput()).toContain("OpenClaw update skipped: downgrade-confirmation-required.");
+    expect(getLogOutput()).toContain(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expectNoSideEffects(
+      serviceStop,
+      serviceStart,
+      serviceRestart,
+      runDaemonRestart,
+      replaceConfigFile,
+    );
   });
 
   registerUpdatePreflightTests({

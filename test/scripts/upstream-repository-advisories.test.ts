@@ -696,10 +696,8 @@ describe("published upstream repository advisories", () => {
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const realSetTimeout = globalThis.setTimeout;
-      const requestedTimeouts: Array<number | undefined> = [];
       // Exercise the real timeout race without a 15-second wait or shared fake timers.
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
-        requestedTimeouts.push(milliseconds);
         return realSetTimeout(callback, milliseconds === 15_000 ? 1 : milliseconds, ...args);
       });
       const cancel = vi.fn();
@@ -720,7 +718,14 @@ describe("published upstream repository advisories", () => {
         },
       });
       const report = await scan(source.fetchImpl);
-      expect(requestedTimeouts.at(-1)).toBe(deadline === "run" ? 5 : 15_000);
+      const stalledSignal = expectDefined(
+        source.calls.find(({ url }) => url.searchParams.has("after"))?.init?.signal,
+        "stalled advisory request signal",
+      );
+      expect(stalledSignal.aborted).toBe(true);
+      expect(stalledSignal.reason).toMatchObject({
+        message: `Upstream advisory request exceeded timeout of ${deadline === "run" ? 5 : 15_000}ms`,
+      });
       expect(cancel).toHaveBeenCalledTimes(deadline === "run" ? 1 : 0);
       expect(report.advisories).toHaveLength(1);
       expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });

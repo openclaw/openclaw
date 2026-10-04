@@ -12,8 +12,11 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: fixture.forbiddenSqlite,
 }));
-vi.mock("./openclaw-state-lease-storage.js", () => ({
+vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenSqlite,
+}));
+vi.mock("./openclaw-state-lease-storage.js", () => ({
   prepareLeaseDatabase: fixture.forbiddenSqlite,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   verifyOpenClawStateLeaseOwnership: () => {

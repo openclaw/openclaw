@@ -1,6 +1,6 @@
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   assertSessionStoreReadCandidate,
@@ -24,7 +24,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
 import type {
   GatewaySessionStoreReadSources,
   GatewaySessionStoreSourceRequest,
@@ -167,8 +167,6 @@ export function prepareGatewaySessionStoreReadSources(params: {
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-  /** Only synchronous consumers may defer binding filesystem addresses. */
-  deferSources?: boolean;
 }): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
   const registryOptions = {
     env: cloneEnvWithPlatformSemantics(params.env),
@@ -197,43 +195,32 @@ export function prepareGatewaySessionStoreReadSources(params: {
     }
     throw new Error("Session store changed while preparing its metadata. Retry the request.");
   };
-  const bindSources = () =>
-    withAgentRosterFactsBatch(params.cfg, () => {
-      let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-      try {
-        registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-      } catch {
-        return {};
-      }
-      const registryFacts = registered;
-      const resolved = resolveGatewaySessionStoreReadSources({
-        routing: captureSessionStoreRouting(params.cfg),
-        currentSource,
-        env: params.env,
-        registeredDatabases: registered,
-      });
-      discoveryIsCurrent = () => {
-        const current = listOpenClawRegisteredAgentDatabases(registryOptions);
-        return (
-          currentSource.agentId === currentSourceAgentId &&
-          currentSource.path === currentSourcePath &&
-          sameRegistrations(current, registryFacts) &&
-          resolved.isCurrent()
-        );
-      };
-      return resolved.sources;
+  const sources = withAgentRosterFactsBatch(params.cfg, () => {
+    let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
+    try {
+      registered = listOpenClawRegisteredAgentDatabases(registryOptions);
+    } catch {
+      return {};
+    }
+    const registryFacts = registered;
+    const resolved = resolveGatewaySessionStoreReadSources({
+      routing: captureSessionStoreRouting(params.cfg),
+      currentSource,
+      env: params.env,
+      registeredDatabases: registered,
     });
-  let sources = params.deferSources ? undefined : bindSources();
-  return {
-    get sources() {
-      if (!sources) {
-        assertCurrent();
-        sources = bindSources();
-      }
-      return sources;
-    },
-    assertCurrent,
-  };
+    discoveryIsCurrent = () => {
+      const current = listOpenClawRegisteredAgentDatabases(registryOptions);
+      return (
+        currentSource.agentId === currentSourceAgentId &&
+        currentSource.path === currentSourcePath &&
+        sameRegistrations(current, registryFacts) &&
+        resolved.isCurrent()
+      );
+    };
+    return resolved.sources;
+  });
+  return { sources, assertCurrent };
 }
 
 /** Capture source routing for the existing history worker; no native discovery runs here. */

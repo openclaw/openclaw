@@ -510,6 +510,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
       {
         ...params,
         agentId: compactIdentity.agentId,
+        sandboxAgentId: runtimePolicyAgentId,
         provider: params.provider ?? "",
         modelId: params.model ?? "",
       },

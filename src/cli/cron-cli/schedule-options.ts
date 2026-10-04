@@ -1,4 +1,3 @@
-// Shared schedule option resolver for cron create/edit commands.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -29,24 +28,7 @@ type ScheduleOptionInput = {
   tz?: unknown;
 };
 
-type NormalizedScheduleOptions = {
-  at: string;
-  cronExpr: string;
-  every: string;
-  onExitCommand: string;
-  onExitCwd: string | undefined;
-  streamCommand: string[] | undefined;
-  streamCwd: string | undefined;
-  streamCwdSupplied: boolean;
-  streamMode: "line" | "match";
-  streamModeSupplied: boolean;
-  streamMatch: string | undefined;
-  streamMatchSupplied: boolean;
-  streamBatchMs: number | undefined;
-  streamMaxBatchBytes: number | undefined;
-  requestedStaggerMs: number | undefined;
-  tz: string | undefined;
-};
+type NormalizedScheduleOptions = ReturnType<typeof normalizeScheduleOptions>;
 
 /** Normalized schedule edit request, including patch-only updates for cron metadata. */
 type CronEditScheduleRequest =
@@ -188,7 +170,7 @@ export function applyExistingCronSchedulePatch(
   };
 }
 
-function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedScheduleOptions {
+function normalizeScheduleOptions(options: ScheduleOptionInput) {
   for (const value of [options.at, options.every, options.cron, options.onExit]) {
     if (typeof value === "string" && !value.trim()) {
       throw new CronCliError("Schedule values must not be blank");
@@ -208,6 +190,7 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
   if (streamModeRaw !== "line" && streamModeRaw !== "match") {
     throw new CronCliError("--stream-mode must be line or match");
   }
+  const streamMode: "line" | "match" = streamModeRaw;
   const parsePositiveInteger = (value: unknown, flag: string): number | undefined => {
     const parsed =
       (typeof value === "string" || typeof value === "number") &&
@@ -228,7 +211,7 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: normalizeOptionalString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
-    streamMode: streamModeRaw,
+    streamMode,
     streamModeSupplied,
     streamMatch: normalizeOptionalString(options.streamMatch),
     streamMatchSupplied: options.streamMatch !== undefined,
@@ -254,11 +237,11 @@ function hasStreamSchedulePatch(options: NormalizedScheduleOptions): boolean {
 
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
   return [
-    Boolean(options.at),
-    Boolean(options.every),
-    Boolean(options.cronExpr),
-    Boolean(options.onExitCommand),
-    Boolean(options.streamCommand),
+    options.at,
+    options.every,
+    options.cronExpr,
+    options.onExitCommand,
+    options.streamCommand,
   ].filter(Boolean).length;
 }
 

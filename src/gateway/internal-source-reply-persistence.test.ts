@@ -35,7 +35,7 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
-import { executeManagedImageRecordCommand } from "./managed-image-record-store.kernel.js";
+import { managedImageRecordOperations } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -80,9 +80,9 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     }
     updates.push(update);
     // Observe records at publication, before a wrongly late write could make the test pass.
-    const entries = executeManagedImageRecordCommand(
-      { type: "managedImages.entries", input: { sessionKey } },
-      database,
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
     );
     for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
@@ -126,7 +126,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",

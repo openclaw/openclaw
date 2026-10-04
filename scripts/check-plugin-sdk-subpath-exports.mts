@@ -4,8 +4,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
@@ -79,16 +79,10 @@ function isRuntimeModuleReference(node: ts.Node): boolean {
   if (ts.isImportDeclaration(node)) {
     return node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword;
   }
-  if (ts.isExportDeclaration(node)) {
+  if (ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
     return !node.isTypeOnly;
   }
-  if (ts.isImportTypeNode(node)) {
-    return false;
-  }
-  if (ts.isImportEqualsDeclaration(node)) {
-    return !node.isTypeOnly;
-  }
-  return true;
+  return !ts.isImportTypeNode(node);
 }
 
 function compareEntries(left: PluginSdkViolation, right: PluginSdkViolation): number {
@@ -102,7 +96,11 @@ function compareEntries(left: PluginSdkViolation, right: PluginSdkViolation): nu
 }
 
 async function collectViolations(): Promise<PluginSdkViolation[]> {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  using parser: { api?: API; [Symbol.dispose](): void } = {
+    [Symbol.dispose]() {
+      this.api?.close();
+    },
+  };
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
@@ -123,52 +121,51 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
     // Workspace packages resolve private facades through TS paths; core runtime stays relative.
     const isCoreRuntimeFile =
       repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
-    const sourceFile = parser.parseSourceFile(filePath, sourceText);
-
-    function push(kind: string, node: ts.Node, specifierNode: ts.Node, specifier: string): void {
-      const subpath = parsePluginSdkSubpath(specifier);
-      if (!subpath) {
-        return;
-      }
-      if (privateLocalOnlySubpaths.has(subpath)) {
-        if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
-          violations.push({
-            file: repoPath,
-            line: toLine(sourceFile, specifierNode),
-            kind,
-            specifier,
-            subpath,
-            reason: "private runtime helper used by core must use a relative import",
-          });
-        }
-        return;
-      }
-
-      const missingFrom: string[] = [];
-      if (!entrypoints.has(subpath)) {
-        missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
-      }
-      if (!exports.has(subpath)) {
-        missingFrom.push("package.json exports");
-      }
-      if (missingFrom.length === 0) {
-        return;
-      }
-
-      violations.push({
-        file: repoPath,
-        line: toLine(sourceFile, specifierNode),
-        kind,
-        specifier,
-        subpath,
-        reason: `missing from ${missingFrom.join(" and ")}`,
-      });
-    }
+    const sourceFile = (parser.api ??= new API({ cwd: repoRoot })).createSourceFile(
+      filePath,
+      sourceText,
+    );
 
     visitModuleSpecifiers(
       sourceFile,
       ({ kind, node, specifier, specifierNode }) => {
-        push(kind, node, specifierNode, specifier);
+        const subpath = parsePluginSdkSubpath(specifier);
+        if (!subpath) {
+          return;
+        }
+        if (privateLocalOnlySubpaths.has(subpath)) {
+          if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
+            violations.push({
+              file: repoPath,
+              line: toLine(sourceFile, specifierNode),
+              kind,
+              specifier,
+              subpath,
+              reason: "private runtime helper used by core must use a relative import",
+            });
+          }
+          return;
+        }
+
+        const missingFrom: string[] = [];
+        if (!entrypoints.has(subpath)) {
+          missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
+        }
+        if (!exports.has(subpath)) {
+          missingFrom.push("package.json exports");
+        }
+        if (missingFrom.length === 0) {
+          return;
+        }
+
+        violations.push({
+          file: repoPath,
+          line: toLine(sourceFile, specifierNode),
+          kind,
+          specifier,
+          subpath,
+          reason: `missing from ${missingFrom.join(" and ")}`,
+        });
       },
       { includeCommonJs: true, includeImportTypes: true },
     );

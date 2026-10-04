@@ -1,9 +1,3 @@
-/**
- * Interactive skill dependency setup for onboarding.
- *
- * It reports workspace skill readiness, offers safe dependency installs, and
- * leaves per-skill credentials to the agent when a skill actually needs them.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,7 +15,7 @@ import {
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
-import { isNodeManagerChoice, type NodeManagerChoice } from "./onboard-types.js";
+import type { NodeManagerChoice } from "./onboard-types.js";
 
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
 
@@ -100,22 +94,6 @@ function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string
   return skill.bundled && skill.source === "openclaw-bundled";
 }
 
-function resolveDefaultNodeManager(
-  config: OpenClawConfig,
-  requested: NodeManagerChoice | undefined,
-  runtime: RuntimeEnv,
-) {
-  if (requested !== undefined) {
-    if (!isNodeManagerChoice(requested)) {
-      runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
-      runtime.exit(1);
-      return "npm";
-    }
-    return requested;
-  }
-  return config.skills?.install?.nodeManager ?? "npm";
-}
-
 /** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
   cfg: OpenClawConfig,
@@ -153,13 +131,6 @@ export async function setupSkills(
       skill.missing.bins.length > 0 &&
       isTrustedAutoInstallableSkill(skill),
   );
-  let brewAvailable: boolean | undefined;
-  const detectBrewOnce = async () => {
-    // Brew detection can shell out; cache it for the whole skills step because
-    // install filtering and prompts both need the same answer.
-    brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
-    return brewAvailable;
-  };
   const readinessByKind = new Map<string, SkillInstallReadiness>();
   const resolveKindReadinessOnce = async (kind: string) => {
     // The lifecycle preflight can shell out (go version, sudo probe); resolve
@@ -174,7 +145,12 @@ export async function setupSkills(
   };
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
-  if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+  if (
+    inLinuxContainer &&
+    baseInstallable.length > 0 &&
+    !(await detectBinary("brew")) &&
+    resolveBrewExecutable() === undefined
+  ) {
     // Linux containers without brew cannot use brew-only recipes reliably; hide
     // them from install selection and leave manual instructions in the note.
     installable = baseInstallable.filter((skill) =>
@@ -248,7 +224,7 @@ export async function setupSkills(
     if (needsNodeManagerPrompt) {
       // Persist the package manager before invoking installers so node recipes
       // and later skill lifecycle commands agree on the selected tool.
-      const nodeManager = resolveDefaultNodeManager(next, options.nodeManager, runtime);
+      const nodeManager = options.nodeManager ?? next.skills?.install?.nodeManager ?? "npm";
       next = {
         ...next,
         skills: {

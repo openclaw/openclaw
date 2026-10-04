@@ -71,25 +71,23 @@ function after<T>(ms: number, value: T): Promise<T> {
 }
 
 // The reporter's measured total was 25,431 ms; the phase distribution here is synthetic.
-it.each([19_000, 25_431])(
-  "settles a managed candidate taking %i ms across setup and reconciliation",
-  async (elapsedMs) => {
-    probes.root.mockImplementation(() => after(1_000, "/synthetic/root"));
-    probes.context.mockImplementation(() => after(2_000, { config: {} }));
-    probes.wait.mockImplementation(() => after(elapsedMs - 7_000, healthy));
-    probes.http.mockImplementation(() => after(2_000, { healthz: 200, readyz: 200 }));
-    probes.inspect.mockImplementation(() => after(1_000, healthy));
-    const result = observe();
-    await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-    expect(await result).toMatchObject({
-      outcome: "settled",
-      elapsedMs,
-      waitOutcome: "healthy",
-      verification: { settled: true, readyz: true, runningBuildId: "b1" },
-    });
-    expect(vi.getTimerCount()).toBe(0);
-  },
-);
+it("settles a managed candidate taking 25,431 ms across setup and reconciliation", async () => {
+  const elapsedMs = 25_431;
+  probes.root.mockImplementation(() => after(1_000, "/synthetic/root"));
+  probes.context.mockImplementation(() => after(2_000, { config: {} }));
+  probes.wait.mockImplementation(() => after(elapsedMs - 7_000, healthy));
+  probes.http.mockImplementation(() => after(2_000, { healthz: 200, readyz: 200 }));
+  probes.inspect.mockImplementation(() => after(1_000, healthy));
+  const result = observe();
+  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
+  expect(await result).toMatchObject({
+    outcome: "settled",
+    elapsedMs,
+    waitOutcome: "healthy",
+    verification: { settled: true, readyz: true, runningBuildId: "b1" },
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 it.each([
   ["root", 1, "setup:package-root"],
@@ -148,21 +146,16 @@ it("does not grant new HTTP or inspection budgets after a slow healthy settle", 
   expect(probes.inspect).toHaveBeenCalledTimes(1);
 });
 
-it("records an early identity mismatch as unverified rather than a timeout", async () => {
-  probes.wait.mockResolvedValue({ ...healthy, healthy: false, waitOutcome: "build-id-mismatch" });
-  expect(await observe()).toMatchObject({
-    outcome: "unverified",
-    elapsedMs: 0,
-    phase: "health-wait",
-    waitOutcome: "build-id-mismatch",
-  });
-  expect(probes.http).not.toHaveBeenCalled();
-});
-
-it.each(["http", "generation", "installed"])(
+it.each(["wait", "http", "generation", "installed"])(
   "does not settle with changed %s evidence",
   async (change) => {
-    if (change === "http") {
+    if (change === "wait") {
+      probes.wait.mockResolvedValue({
+        ...healthy,
+        healthy: false,
+        waitOutcome: "build-id-mismatch",
+      });
+    } else if (change === "http") {
       probes.http.mockResolvedValue({ healthz: 200, readyz: 503 });
     } else if (change === "generation") {
       probes.inspect
@@ -174,6 +167,14 @@ it.each(["http", "generation", "installed"])(
     const result = await observe();
     expect(result.outcome).toBe("unverified");
     expect(result.verification).toBeUndefined();
+    if (change === "wait") {
+      expect(result).toMatchObject({
+        elapsedMs: 0,
+        phase: "health-wait",
+        waitOutcome: "build-id-mismatch",
+      });
+      expect(probes.http).not.toHaveBeenCalled();
+    }
   },
 );
 

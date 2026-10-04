@@ -15,6 +15,12 @@ const state = vi.hoisted(() => ({
   drain: vi.fn(),
   diagnosticLoads: 0,
   lossless: true,
+  initializeSqlite: vi.fn(),
+}));
+
+vi.mock("./bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: state.initializeSqlite,
 }));
 
 vi.mock("../../node-sqlite.mjs", async (importOriginal) => {
@@ -62,6 +68,13 @@ function createExitingRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
+    state.initializeSqlite.mockClear();
+    state.version = "24.16.0";
+    state.lossless = true;
+    await assertSupportedRuntime(createExitingRuntime());
+    expect(state.initializeSqlite).not.toHaveBeenCalled();
+  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const details = {

@@ -9,7 +9,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -174,13 +174,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
     const workspaceDir = discoveryContext.resolveModelWorkspaceDir(
       input.config,
       input.workspaceDir,
+      input.agentId,
     );
     const key = `${input.agentId ?? ""}\u0000${input.agentDir}\u0000${workspaceDir ?? ""}`;
     const current = preparedSnapshotState.snapshots.get(key);
     if (current) {
       return current;
     }
-    const authStorage = discovery.discoverAuthStorage(input.agentDir);
+    const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
     const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -222,7 +223,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
 });
 
 vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverAuthStorageFacts: vi.fn(() => ({ authStorage: { mocked: true } })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
@@ -276,7 +277,7 @@ beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
-  vi.mocked(discoverAuthStorage).mockClear();
+  vi.mocked(discoverAuthStorageFacts).mockClear();
   resolveBundledStaticCatalogModelMock.mockReset();
   resolveBundledProviderStaticCatalogModelMock.mockReset();
   resolveManifestModelCatalogProviderAliasMetadataMock.mockReset();
@@ -596,7 +597,7 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: JSON.stringify({
@@ -621,17 +622,17 @@ describe("resolveModel", () => {
     fs.mkdirSync(defaultAgentDir, { recursive: true });
     const cfg = makeOpenClawConfigFixture({
       agents: {
-        list: [
-          { id: "main", default: true, agentDir: defaultAgentDir },
-          { id: "worker", agentDir },
-        ],
+        defaults: { authInheritance: { agentId: "main" } },
+        entries: {
+          main: { agentDir: defaultAgentDir },
+          worker: { agentDir },
+        },
       },
     });
     mockMinimalModelDiscovery("openai", "gpt-5.5");
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const options = { agentId: "worker", runtimeHooks: createRuntimeHooks() };
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
     saveAuthProfileStore(
       {
         version: 1,
@@ -640,13 +641,11 @@ describe("resolveModel", () => {
       defaultAgentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -655,7 +654,7 @@ describe("resolveModel", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     const cfg = makeOpenClawConfigFixture({
       agents: {
-        list: [{ id: "workspace-agent", default: true, agentDir, workspace: state.workspaceDir }],
+        entries: { "workspace-agent": { agentDir, workspace: state.workspaceDir } },
       },
     });
     mockMinimalModelDiscovery("openai", "gpt-5.5");
@@ -717,7 +716,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -859,7 +858,7 @@ describe("resolveModel", () => {
       workspaceDir: undefined,
       metadataSnapshot,
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -914,7 +913,7 @@ describe("resolveModel", () => {
     );
     expect(prepareProviderDynamicModel).toHaveBeenCalled();
     expect(runProviderDynamicModel).toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1012,7 +1011,7 @@ describe("resolveModel", () => {
         },
       ],
     ]);
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1060,7 +1059,7 @@ describe("resolveModel", () => {
       args: ["--port", "18080"],
       healthUrl: "http://127.0.0.1:18080/health",
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1607,26 +1606,31 @@ describe("resolveModel", () => {
     });
   });
 
-  it("lets configured vLLM Qwen compat override stale discovered reasoning", async () => {
-    mockMinimalModelDiscovery("vllm", "Qwen/Qwen3-8B", {
-      api: "openai-completions",
-      baseUrl: "http://localhost:9000",
-      reasoning: false,
-      compat: { supportsStrictMode: false },
-    });
-    const cfg = makeVllmQwenConfig();
+  it.each(["stale", "empty"])(
+    "infers reasoning from configured vLLM Qwen compat (%s registry)",
+    async (registry) => {
+      if (registry === "stale") {
+        mockMinimalModelDiscovery("vllm", "Qwen/Qwen3-8B", {
+          api: "openai-completions",
+          baseUrl: "http://localhost:9000",
+          reasoning: false,
+          compat: { supportsStrictMode: false },
+        });
+      }
+      const cfg = makeVllmQwenConfig();
 
-    const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
+      const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
-    expect(result.model?.compat).toEqual(
-      expect.objectContaining({
-        supportsStrictMode: false,
-        thinkingFormat: "qwen-chat-template",
-      }),
-    );
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.model?.reasoning).toBe(true);
+      expect(result.model?.compat).toEqual(
+        expect.objectContaining({
+          supportsStrictMode: false,
+          thinkingFormat: "qwen-chat-template",
+        }),
+      );
+    },
+  );
 
   it("does not derive reasoning from ignored compat on a catalog-owned vLLM route", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
@@ -1645,15 +1649,6 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(false);
     expect(result.model?.compat).toEqual(expect.objectContaining({ supportsStrictMode: false }));
     expect(result.model?.compat).not.toHaveProperty("thinkingFormat");
-  });
-
-  it("infers reasoning for matching vLLM Qwen compat fallback models", async () => {
-    const cfg = makeVllmQwenConfig();
-
-    const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
   });
 
   it("resolves direct moonshotai refs through manifest-owned provider aliases", async () => {

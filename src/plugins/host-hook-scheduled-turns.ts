@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import {
@@ -71,17 +72,9 @@ function formatScheduleLogContext(params: {
   name?: string;
   jobId?: string;
 }): string {
-  const parts = [`pluginId=${params.pluginId}`];
-  if (params.sessionKey) {
-    parts.push(`sessionKey=${params.sessionKey}`);
-  }
-  if (params.name) {
-    parts.push(`name=${params.name}`);
-  }
-  if (params.jobId) {
-    parts.push(`jobId=${params.jobId}`);
-  }
-  return parts.join(" ");
+  return (["pluginId", "sessionKey", "name", "jobId"] as const)
+    .flatMap((key) => (key === "pluginId" || params[key] ? [`${key}=${params[key]}`] : []))
+    .join(" ");
 }
 
 async function removeScheduledSessionTurn(params: {
@@ -142,13 +135,7 @@ function buildPluginSchedulerTagPrefix(params: {
 function isCronRemoveResult(
   value: unknown,
 ): value is Awaited<ReturnType<CronServiceContract["remove"]>> {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof (value as { ok?: unknown }).ok === "boolean" &&
-    typeof (value as { removed?: unknown }).removed === "boolean"
-  );
+  return isRecord(value) && typeof value.ok === "boolean" && typeof value.removed === "boolean";
 }
 
 async function listAllCronJobsForPluginTagCleanup(
@@ -195,9 +182,6 @@ async function listAllCronJobsForPluginTagCleanup(
 
     if (!snapshotChanged) {
       throw new Error("cron.list pagination exceeded maximum pages");
-    }
-    if (restart === PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly during cleanup");
     }
   }
 

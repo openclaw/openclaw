@@ -16,11 +16,8 @@ class BundledNpmCliNotFoundError extends Error {
   }
 }
 
-/** Bun must run the packaged CLI directly; npm's executable requires Node. */
-export function resolveNpmCommand(args: readonly string[]): [string, ...string[]] {
-  if (!process.versions.bun) {
-    return ["npm", ...args];
-  }
+/** Runs the packaged npm CLI with the current JavaScript runtime. */
+function resolveBundledNpmCommand(args: readonly string[]): [string, ...string[]] {
   let cliPath = "npm/bin/npm-cli.js";
   try {
     cliPath = path.join(path.dirname(require.resolve("npm/package.json")), "bin", "npm-cli.js");
@@ -31,4 +28,9 @@ export function resolveNpmCommand(args: readonly string[]): [string, ...string[]
     throw new BundledNpmCliNotFoundError(cliPath, cause);
   }
   return [process.execPath, cliPath, ...args];
+}
+
+/** Bun must run the packaged CLI directly; npm's executable requires Node. */
+export function resolveNpmCommand(args: readonly string[]): [string, ...string[]] {
+  return process.versions.bun ? resolveBundledNpmCommand(args) : ["npm", ...args];
 }

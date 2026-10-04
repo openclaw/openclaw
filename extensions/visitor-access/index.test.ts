@@ -6,8 +6,7 @@ import type {
   AnyAgentTool,
   OpenClawConfig,
   OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -15,12 +14,18 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
 import type { VisitorGrant } from "./src/visitors.js";
+import { visitorProfileFixture } from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
 
@@ -53,11 +58,18 @@ function requestUrl(input: Parameters<typeof fetch>[0]): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-function createPolicyFetch(initialEmails: string[] = []) {
-  let emails = [...initialEmails];
+function createPolicyFetch(initialTargets: Array<string | number> = []) {
+  let targets = [...initialTargets];
   const controls = { failWrites: false, loseWriteResponse: false };
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
+    if (
+      url.origin === "https://api.github.com" &&
+      url.pathname === "/users/invitation-login" &&
+      (init?.method ?? "GET") === "GET"
+    ) {
+      return Response.json({ id: 42, login: "invitation-login", email: null });
+    }
     if (!url.href.startsWith(policiesUrl)) {
       throw new Error(`Unexpected test request: ${url}`);
     }
@@ -65,32 +77,63 @@ function createPolicyFetch(initialEmails: string[] = []) {
       id: "visitor-policy",
       name: "Visitors (openclaw-managed)",
       decision: "allow",
-      include: emails.map((email) => ({ email: { email } })),
+      include: targets.map((target) =>
+        typeof target === "string"
+          ? { email: { email: target } }
+          : {
+              oidc: {
+                identity_provider_id: "test-oidc",
+                claim_name: "github_id",
+                claim_value: String(target),
+              },
+            },
+      ),
     };
     if (init?.method === "GET") {
-      const result = url.search ? (emails.length ? [policy] : []) : policy;
+      const result = url.search ? (targets.length ? [policy] : []) : policy;
       return Response.json({ success: true, result });
     }
     if (controls.failWrites) {
       return new Response("Unavailable", { status: 503 });
     }
     if (init?.method === "DELETE") {
-      emails = [];
+      targets = [];
     } else {
       if (typeof init?.body !== "string") {
         throw new Error("Expected a JSON policy body");
       }
-      const body = JSON.parse(init.body) as {
-        include: Array<{ email: { email: string } }>;
-      };
-      emails = body.include.map((rule) => rule.email.email);
+      const body: unknown = JSON.parse(init.body);
+      const schema = Type.Object({
+        include: Type.Array(
+          Type.Union([
+            Type.Object({ email: Type.Object({ email: Type.String() }) }),
+            Type.Object({
+              oidc: Type.Object({
+                identity_provider_id: Type.Literal("test-oidc"),
+                claim_name: Type.Literal("github_id"),
+                claim_value: Type.Literal("42"),
+              }),
+            }),
+          ]),
+        ),
+      });
+      if (!Value.Check(schema, body)) {
+        throw new Error("Unexpected visitor policy rules");
+      }
+      targets = body.include.map((rule) =>
+        "email" in rule ? rule.email.email : Number(rule.oidc.claim_value),
+      );
     }
     if (controls.loseWriteResponse) {
       throw new Error(`Transport failure with Authorization: Bearer ${TOKEN}`);
     }
     return Response.json({ success: true, result: {} });
   });
-  return { fetcher, emails: () => emails, controls };
+  return {
+    fetcher,
+    emails: () => targets.filter((target) => typeof target === "string"),
+    controls,
+  };
 }
 
 describe("visitor-access plugin lifecycle", () => {
@@ -122,9 +165,10 @@ describe("visitor-access plugin lifecycle", () => {
   function registerPlugin(
     contextOverrides: Partial<OpenClawPluginToolContext<2>> = {},
     config: OpenClawConfig = gatewayConfig,
+    githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
     const tools = new Map<string, AnyAgentTool>();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     const accessPolicies: PluginGatewayAccessPolicy[] = [];
     const on = vi.fn<OpenClawPluginApi["on"]>();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -158,15 +202,9 @@ describe("visitor-access plugin lifecycle", () => {
       openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("visitor-access", { ...options, env }),
     };
-    api.runtime.gateway = {
-      isAvailable: async () => true,
-      async request() {
-        throw new Error("Expected a mocked Gateway request");
-      },
-    };
-    const gatewayRequest = vi
-      .spyOn(api.runtime.gateway, "request")
-      .mockResolvedValue({ profiles: [] });
+    const directory = visitorProfileFixture([], githubProfiles);
+    api.runtime.gateway = directory.gateway;
+    const gatewayRequest = directory.request;
     api.runtime.config = {
       current: () => config,
       async mutateConfigFile() {
@@ -185,8 +223,17 @@ describe("visitor-access plugin lifecycle", () => {
     if (!accessPolicy) {
       throw new Error("Plugin did not register its Gateway access policy");
     }
-    const context: OpenClawPluginServiceContext = { config: {}, stateDir, logger };
-    cleanups.push(() => service.stop?.(context));
+    const scheduler = createTestPluginServiceScheduler();
+    const context: OpenClawPluginServiceContextV2 = { config: {}, stateDir, logger, scheduler };
+    const stop = async () => {
+      scheduler.beginClose();
+      try {
+        await service.stop?.(context);
+      } finally {
+        await scheduler.stop();
+      }
+    };
+    cleanups.push(stop);
     const store = createPluginStateKeyedStoreForTests<VisitorGrant>("visitor-access", {
       namespace: "visitor-grants",
       maxEntries: 500,
@@ -196,6 +243,7 @@ describe("visitor-access plugin lifecycle", () => {
     return {
       tools,
       gatewayRequest,
+      setProfiles: directory.setProfiles,
       logger,
       store,
       authorize: (
@@ -204,7 +252,7 @@ describe("visitor-access plugin lifecycle", () => {
       ) => accessPolicy.authorize({ config, profile, requiredByRole }),
       toolContext,
       start: () => service.start(context),
-      stop: () => service.stop?.(context),
+      stop,
       gatewayStart: () => {
         const hook = on.mock.calls.find(([name]) => name === "gateway_start")?.[1];
         if (!hook) {
@@ -216,12 +264,17 @@ describe("visitor-access plugin lifecycle", () => {
         ) => void | Promise<void>;
         return startHook({ port: 18789 }, {});
       },
-      execute: (name: string, input: Record<string, unknown> = {}) => {
+      execute: async (name: string, input: Record<string, unknown> = {}) => {
         const tool = tools.get(name);
         if (!tool) {
           throw new Error(`Plugin did not register ${name}`);
         }
-        return tool.execute("visitor-test-call", input);
+        const result = await tool.execute("visitor-test-call", input);
+        if (!tool.outputSchema) {
+          throw new Error(`${name} did not declare an output schema`);
+        }
+        expect(Value.Check(tool.outputSchema, result.details)).toBe(true);
+        return result;
       },
     };
   }
@@ -262,80 +315,321 @@ describe("visitor-access plugin lifecycle", () => {
     expect(registered.gatewayRequest).not.toHaveBeenCalled();
   });
 
-  it("returns declared visitor details alongside unchanged text through registered tools", async () => {
-    const policy = createPolicyFetch(["manual@example.test"]);
+  it.each(["email", "github"] as const)(
+    "lists verified profile identity for the %s target and revokes by listed profileId",
+    async (selector) => {
+      const policy = createPolicyFetch();
+      vi.stubGlobal("fetch", policy.fetcher);
+      const config = structuredClone(gatewayConfig);
+      config.gateway = {
+        ...config.gateway,
+        auth: {
+          trustedProxy: {
+            userHeader: "cf-access-authenticated-user-email",
+            cloudflareAccessOidc: {
+              issuer: "https://example.cloudflareaccess.com",
+              providerId: "test-oidc",
+              githubAccountIdClaim: "github_id",
+            },
+          },
+        },
+      };
+      const registered = registerPlugin({}, config, [
+        { accountId: 42, profileId: "linked-person" },
+      ]);
+      await registered.start();
+      const invited = await registered.execute("visitor_invite", {
+        ...(selector === "email"
+          ? { email: "alias@example.test" }
+          : { github: "invitation-login" }),
+        days: 7,
+      });
+      expect(invited).not.toHaveProperty("isError", true);
+      if (selector === "github") {
+        expect(invited.details).toMatchObject({
+          githubAccountId: 42,
+          githubLogin: "invitation-login",
+        });
+      }
+      const key = selector === "email" ? "alias@example.test" : "github:42";
+      const recorded = await registered.store.lookup(key);
+      if (!recorded) {
+        throw new Error("Missing invitation grant");
+      }
+      const grant = { ...recorded, githubLogin: "invitation-login" };
+      if (selector === "email") {
+        await registered.store.register(key, grant);
+      }
+
+      const pending = await registered.execute("visitor_list");
+      expect(pending.details).not.toHaveProperty("grants.0.githubLogin");
+      expect(pending.content).toEqual([
+        { type: "text", text: expect.stringContaining("Verified GitHub: unavailable") },
+      ]);
+      expect(pending.content).toEqual([
+        { type: "text", text: expect.stringContaining("first sign-in pending") },
+      ]);
+
+      await registered.execute("visitor_invite", {
+        email: "unrelated@example.test",
+        days: 7,
+      });
+      const otherRecorded = await registered.store.lookup("unrelated@example.test");
+      if (!otherRecorded) {
+        throw new Error("Missing unrelated invitation grant");
+      }
+      const otherGrant = { ...otherRecorded, githubLogin: "current-person" };
+      await registered.store.register("unrelated@example.test", otherGrant);
+      let listedGrant: VisitorListDetails["grants"][number] | undefined;
+      for (const login of ["verified-person", null, "current-person"]) {
+        registered.setProfiles([
+          {
+            id: "linked-person",
+            emails: ["primary@example.test", "alias@example.test"],
+            githubIdentity: login ? { login } : null,
+          },
+          {
+            id: "unrelated-person",
+            emails: ["unrelated@example.test"],
+            githubIdentity: { login: "other-person" },
+          },
+        ]);
+        const listed = await registered.execute("visitor_list");
+        expect(listed.content).toEqual([
+          {
+            type: "text",
+            text: expect.stringContaining(
+              `Verified GitHub: ${login ? `@${login}` : "unavailable"}`,
+            ),
+          },
+        ]);
+        expect(listed.content).not.toEqual([
+          { type: "text", text: expect.stringContaining("first sign-in pending") },
+        ]);
+        expect(listed.content).not.toEqual([
+          { type: "text", text: expect.stringContaining("invitation-login") },
+        ]);
+        if (!Value.Check(visitorListDetailsSchema, listed.details)) {
+          throw new Error("Invalid visitor_list details");
+        }
+        const target = listed.details.grants.find((entry) => entry.grantId === grant.grantId);
+        expect(target).toMatchObject({
+          ...(selector === "email" ? { email: "alias@example.test" } : { githubAccountId: 42 }),
+          profileId: "linked-person",
+          ...(login ? { githubLogin: login } : {}),
+        });
+        if (!login) {
+          expect(target).not.toHaveProperty("githubLogin");
+        }
+        listedGrant = target;
+      }
+      expect(await registered.store.lookup(key)).toEqual(grant);
+      if (!listedGrant) {
+        throw new Error("Missing listed grant");
+      }
+      policy.fetcher.mockClear();
+      const revoked = await registered.execute("visitor_revoke", {
+        profileId: listedGrant.profileId,
+      });
+      expect(revoked.details).toEqual({
+        outcome: "revoked",
+        emails: selector === "email" ? ["alias@example.test"] : [],
+        ...(selector === "github" ? { githubAccountIds: [42] } : {}),
+      });
+      expect(await registered.store.lookup(key)).toBeUndefined();
+      expect(await registered.store.lookup("unrelated@example.test")).toEqual(otherGrant);
+      expect(policy.emails()).toEqual(["unrelated@example.test"]);
+      expect(
+        policy.fetcher.mock.calls.filter(
+          ([input]) => requestUrl(input).hostname === "api.github.com",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  async function startVisitors() {
+    const emails = [
+      "first@example.test",
+      "alias@example.test",
+      "staff@example.test",
+      "pending@example.test",
+    ] as const;
+    const policy = createPolicyFetch([...emails, "manual@example.test"]);
     vi.stubGlobal("fetch", policy.fetcher);
     const registered = registerPlugin();
+    const profiles = [
+      { id: "visitor-profile", emails: emails.slice(0, 2) },
+      { id: "staff-profile", emails: [emails[2]], role: "staff" },
+    ];
+    registered.setProfiles(profiles);
     await registered.start();
+    for (const email of emails) {
+      await expect(
+        registered.execute("visitor_invite", {
+          email,
+          ...(email === emails[0] ? { forever: true } : {}),
+        }),
+      ).resolves.not.toHaveProperty("isError");
+    }
+    policy.fetcher.mockClear();
+    return { ...registered, policy, profiles, emails };
+  }
 
-    const invited = await registered.execute("visitor_invite", {
-      email: "visitor@example.test",
-      days: 7,
-    });
+  it("distinguishes person-wide revocation from exact pending invitation cancellation", async () => {
+    const registered = await startVisitors();
+    const [first, alias, staff, pending] = registered.emails;
+    const pendingGrant = await registered.store.lookup(pending);
+    expect(pendingGrant?.grantId).toEqual(expect.any(String));
     const listed = await registered.execute("visitor_list");
-    const revoked = await registered.execute("visitor_revoke", { email: "visitor@example.test" });
-    const absent = await registered.execute("visitor_revoke", { email: "visitor@example.test" });
-
-    expect(invited.content).toEqual([
-      {
-        type: "text",
-        text: 'Invited visitor@example.test. Visitor grant expires: 2026-08-08T00:00:00.000Z. Gateway access: restricted guest (default role "external-work"; first sign-in pending). Sign in at https://team.openclaw.ai using Team\'s existing login with this email. The link itself does not grant access.',
-      },
-    ]);
-    expect(listed.content).toEqual([
-      {
-        type: "text",
-        text: [
-          "Visitors: 1 recorded; 2 in policy. Drift: 1 unmanaged, 0 missing from policy.",
-          'visitor@example.test | GitHub unknown | invited 2026-08-01T00:00:00.000Z | grant expires 2026-08-08T00:00:00.000Z | managed | Gateway access: restricted guest (default role "external-work"; first sign-in pending)',
-          'manual@example.test | UNMANAGED: no grant record; retained until explicit revoke. | Gateway access: restricted guest (default role "external-work"; first sign-in pending)',
-        ].join("\n"),
-      },
-    ]);
-    expect(revoked.content).toEqual([
-      { type: "text", text: "Revoked visitor access for visitor@example.test." },
-    ]);
-    expect(absent.content).toEqual([
-      { type: "text", text: "No visitor grant found for visitor@example.test; nothing to revoke." },
-    ]);
-
-    const gatewayAccess =
-      'Gateway access: restricted guest (default role "external-work"; first sign-in pending)';
-    expect(invited.details).toEqual({
-      outcome: "invited",
-      email: "visitor@example.test",
-      expiresAt: "2026-08-08T00:00:00.000Z",
-      gatewayAccess,
-      signInUrl: "https://team.openclaw.ai",
-    });
-    expect(listed.details).toEqual({
-      counts: { recorded: 1, inPolicy: 2, unmanaged: 1, missingFromPolicy: 0 },
+    expect(listed.details).toMatchObject({
       grants: [
+        { email: alias, profileId: "visitor-profile", grantId: expect.any(String) },
+        { email: first, profileId: "visitor-profile", grantId: expect.any(String) },
+        { email: pending, grantId: pendingGrant?.grantId },
+        { email: staff, profileId: "staff-profile", grantId: expect.any(String) },
+      ],
+    });
+    if (!Value.Check(visitorListDetailsSchema, listed.details)) {
+      throw new Error("Invalid visitor_list details");
+    }
+    const listedPending = listed.details.grants.find((grant) => grant.email === pending);
+    const listedPerson = listed.details.grants.find((grant) => grant.email === first);
+    if (!listedPending?.grantId || !listedPerson?.profileId) {
+      throw new Error("Missing listed revocation selectors");
+    }
+    const authorities = [first, alias].map((email) =>
+      registered.authorize({
+        profileId: "visitor-profile",
+        emails: [email],
+        assignedRole: null,
+      }),
+    );
+    expect(authorities.every(Boolean)).toBe(true);
+    await registered.execute("visitor_invite", { email: pending, days: 30 });
+    expect((await registered.store.lookup(pending))?.grantId).toBe(pendingGrant?.grantId);
+    await expect(
+      registered.execute("visitor_revoke", { grantId: listedPending.grantId }),
+    ).resolves.toMatchObject({
+      details: { outcome: "revoked", emails: [pending] },
+    });
+    expect(registered.policy.emails()).toEqual([first, alias, staff, "manual@example.test"]);
+    await expect(
+      registered.execute("visitor_revoke", { profileId: listedPerson.profileId }),
+    ).resolves.toMatchObject({
+      details: { outcome: "revoked", emails: [alias, first] },
+    });
+    expect(registered.policy.emails()).toEqual([staff, "manual@example.test"]);
+    expect((await registered.store.entries()).map(({ key }) => key)).toEqual([staff]);
+    expect(
+      registered.authorize(
+        { profileId: "staff-profile", emails: [staff], assignedRole: "staff" },
+        false,
+      ),
+    ).toBeUndefined();
+    for (const authority of authorities) {
+      expect(authority?.signal.aborted).toBe(true);
+      expect(() => authority?.assertCurrent()).toThrow(/access ended/);
+    }
+    await registered.execute("visitor_invite", { email: pending });
+    const replacement = await registered.store.lookup(pending);
+    expect(replacement?.grantId).not.toBe(pendingGrant?.grantId);
+    await expect(
+      registered.execute("visitor_revoke", { grantId: listedPending.grantId }),
+    ).resolves.toMatchObject({
+      details: { outcome: "not_found", emails: [] },
+    });
+    expect(await registered.store.lookup(pending)).toEqual(replacement);
+    expect(registered.policy.emails()).toContain(pending);
+  });
+
+  it("ends every selected grant before failed provider cleanup without ending another person's grant", async () => {
+    const registered = await startVisitors();
+    const selected = registered.authorize({
+      profileId: "visitor-profile",
+      emails: [registered.emails[0]],
+      assignedRole: null,
+    });
+    const other = registered.authorize({
+      profileId: "pending-profile",
+      emails: [registered.emails[3]],
+      assignedRole: null,
+    });
+    expect(selected && other).toBeTruthy();
+    registered.policy.controls.failWrites = true;
+    await expect(
+      registered.execute("visitor_revoke", { profileId: "visitor-profile" }),
+    ).resolves.toHaveProperty("isError", true);
+    for (const email of registered.emails.slice(0, 2)) {
+      expect(await registered.store.lookup(email)).toMatchObject({ expiresAt: START_MS });
+    }
+    expect(selected?.signal.aborted).toBe(true);
+    expect(() => other?.assertCurrent()).not.toThrow();
+    expect(registered.policy.emails()).toContain(registered.emails[0]);
+    registered.policy.controls.failWrites = false;
+    await expect(
+      registered.execute("visitor_revoke", { profileId: "visitor-profile" }),
+    ).resolves.toMatchObject({ details: { outcome: "revoked" } });
+    expect(registered.policy.emails()).toEqual([
+      registered.emails[2],
+      registered.emails[3],
+      "manual@example.test",
+    ]);
+  });
+
+  it("rejects changed person bindings after provider reads and ambiguous explicit selectors", async () => {
+    const registered = await startVisitors();
+    const pending = await registered.store.lookup(registered.emails[3]);
+    for (const input of [
+      { profileId: "visitor-profile", grantId: pending?.grantId },
+      { grantId: pending?.grantId, email: registered.emails[3] },
+      { profileId: "merged-profile" },
+    ]) {
+      await expect(registered.execute("visitor_revoke", input)).resolves.toHaveProperty(
+        "isError",
+        true,
+      );
+    }
+    expect(registered.policy.fetcher).not.toHaveBeenCalled();
+    const original = registered.policy.fetcher.getMockImplementation();
+    let reassignedAfterRead = false;
+    registered.policy.fetcher.mockImplementation(async (input, init) => {
+      const response = await original!(input, init);
+      if (init?.method === "GET") {
+        reassignedAfterRead = true;
+        registered.setProfiles([
+          { id: "visitor-profile", emails: [registered.emails[1]] },
+          {
+            id: "staff-profile",
+            emails: [registered.emails[0], registered.emails[2]],
+            role: "staff",
+          },
+        ]);
+      }
+      return response;
+    });
+    await expect(
+      registered.execute("visitor_revoke", { profileId: "visitor-profile" }),
+    ).resolves.toMatchObject({
+      isError: true,
+      content: [
         {
-          email: "visitor@example.test",
-          invitedAt: "2026-08-01T00:00:00.000Z",
-          expiresAt: "2026-08-08T00:00:00.000Z",
-          state: "managed",
-          gatewayAccess,
+          type: "text",
+          text: "Visitor access operation failed. Check gateway health and retry; use visitor_list to inspect drift.",
         },
       ],
-      unmanaged: [{ email: "manual@example.test", gatewayAccess }],
-      omitted: 0,
     });
-    expect(revoked.details).toEqual({ outcome: "revoked", emails: ["visitor@example.test"] });
-    expect(absent.details).toEqual({ outcome: "not_found", emails: ["visitor@example.test"] });
-    for (const [name, result] of [
-      ["visitor_invite", invited],
-      ["visitor_list", listed],
-      ["visitor_revoke", revoked],
-      ["visitor_revoke", absent],
-    ] as const) {
-      const schema = registered.tools.get(name)?.outputSchema;
-      if (!schema) {
-        throw new Error(`${name} did not declare an output schema`);
-      }
-      expect(Value.Check(schema, result.details)).toBe(true);
+    expect(reassignedAfterRead).toBe(true);
+    expect(registered.policy.fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(
+      true,
+    );
+    expect(registered.policy.emails()).toEqual([...registered.emails, "manual@example.test"]);
+    for (const email of registered.emails.slice(0, 2)) {
+      expect(await registered.store.lookup(email)).toMatchObject({ expiresAt: START_MS });
     }
+    expect(await registered.store.lookup(registered.emails[2])).toMatchObject({
+      expiresAt: START_MS + 14 * DAY_MS,
+    });
+    expect(await registered.store.lookup(registered.emails[3])).toEqual(pending);
   });
 
   it("denies available visitor tools without trusted owner authority", async () => {
@@ -354,11 +648,6 @@ describe("visitor-access plugin lifecycle", () => {
         isError: true,
         content: [{ type: "text", text: expect.stringContaining("Only administrators") }],
       });
-      const schema = registered.tools.get(name)?.outputSchema;
-      if (!schema) {
-        throw new Error(`${name} did not declare an output schema`);
-      }
-      expect(Value.Check(schema, result.details)).toBe(true);
     }
 
     expect(policy.fetcher).not.toHaveBeenCalled();
@@ -421,11 +710,11 @@ describe("visitor-access plugin lifecycle", () => {
   );
 
   it("gates registered visitor access across restart, expiry, and failed provider revocation", async () => {
-    const grants: VisitorGrant[] = [
+    const grants = [
       { email: "expired@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 1_000 },
       { email: "deadline@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 2_000 },
       { email: "revoked@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + DAY_MS },
-    ];
+    ] satisfies VisitorGrant[];
     const policy = createPolicyFetch(grants.map((grant) => grant.email));
     vi.stubGlobal("fetch", policy.fetcher);
     const first = registerPlugin();

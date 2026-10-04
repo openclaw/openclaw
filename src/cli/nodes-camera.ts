@@ -1,4 +1,3 @@
-// Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
@@ -67,10 +66,7 @@ type CameraSnapPayload = {
   height: number;
 };
 
-type CameraClipPayload = {
-  format: string;
-  base64?: string;
-  url?: string;
+type CameraClipPayload = Pick<CameraSnapPayload, "format" | "base64" | "url"> & {
   durationMs: number;
   hasAudio: boolean;
 };

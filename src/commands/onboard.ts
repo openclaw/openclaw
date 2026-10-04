@@ -211,7 +211,6 @@ async function validateResetAuthChoice(params: {
   }
   const availableChoices = new Set(
     formatAuthChoiceChoicesForCli({
-      includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
@@ -417,43 +416,6 @@ async function validateResetAuthChoice(params: {
   return true;
 }
 
-function validateResetMigrationImport(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-}): boolean {
-  if (
-    !params.opts.importFrom &&
-    !params.opts.importSource &&
-    !params.opts.importSecrets &&
-    params.opts.flow !== "import"
-  ) {
-    return true;
-  }
-  return rejectOption(
-    params.opts,
-    params.runtime,
-    "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
-  );
-}
-
-function validateResetNonInteractiveGateway(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-  baseConfig: OpenClawConfig;
-}): boolean {
-  if (!params.opts.nonInteractive || (params.opts.mode ?? "local") === "remote") {
-    return true;
-  }
-  return Boolean(
-    applyNonInteractiveGatewayConfig({
-      nextConfig: params.baseConfig,
-      opts: params.opts,
-      runtime: params.runtime,
-      defaultPort: resolveGatewayPort(params.baseConfig),
-    }),
-  );
-}
-
 /**
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
@@ -484,16 +446,9 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
-  for (const [key, value] of Object.entries(opts)) {
-    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
-      continue;
-    }
-    if (value === undefined || value === false) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  return Object.entries(opts).some(
+    ([key, value]) => !GUIDED_SAFE_ONBOARD_KEYS.has(key) && value !== undefined && value !== false,
+  );
 }
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */
@@ -698,15 +653,28 @@ export async function setupWizardCommand(
         return;
       }
       if (
-        !validateResetNonInteractiveGateway({
+        normalizedOpts.nonInteractive &&
+        (normalizedOpts.mode ?? "local") !== "remote" &&
+        !(await applyNonInteractiveGatewayConfig({
+          nextConfig: setupBaseConfig,
           opts: normalizedOpts,
           runtime,
-          baseConfig: setupBaseConfig,
-        })
+          defaultPort: resolveGatewayPort(setupBaseConfig),
+        }))
       ) {
         return;
       }
-      if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
+      if (
+        normalizedOpts.importFrom ||
+        normalizedOpts.importSource ||
+        normalizedOpts.importSecrets ||
+        normalizedOpts.flow === "import"
+      ) {
+        rejectOption(
+          normalizedOpts,
+          runtime,
+          "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+        );
         return;
       }
       // Reset is deliberately the final pre-dispatch step: no rejectable option

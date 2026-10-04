@@ -1,8 +1,3 @@
-/**
- * Channel ingress allowlist diagnostics.
- *
- * Merges allowlists, applies identifier authentication policy, and redacts access-graph facts.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   meetsIdentifierAuthentication,
@@ -18,9 +13,6 @@ import type {
   NormalizedIngressAllowlist,
 } from "./types.js";
 
-/**
- * Returns the first access-group related failure reason for an allowlist.
- */
 export function allowlistFailureReason(
   allowlist: NormalizedIngressAllowlist,
 ): IngressReasonCode | null {
@@ -36,9 +28,6 @@ export function allowlistFailureReason(
   return null;
 }
 
-/**
- * Projects an allowlist into redacted diagnostics safe for ingress access graphs.
- */
 export function redactedAllowlistDiagnostics(
   allowlist: NormalizedIngressAllowlist,
   reasonCode: IngressReasonCode,
@@ -106,9 +95,6 @@ function mergeResolvedAllowlists(
   };
 }
 
-/**
- * Applies identifier authentication to exact matched entry/subject pairs.
- */
 export function applyIdentifierAuthenticationPolicy(
   allowlist: NormalizedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
@@ -176,9 +162,6 @@ export function applyIdentifierAuthenticationPolicy(
   };
 }
 
-/**
- * Resolves the sender allowlist used for group/channel ingress after route overrides.
- */
 export function effectiveGroupSenderAllowlist(params: {
   state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;

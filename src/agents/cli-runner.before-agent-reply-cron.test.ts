@@ -1,7 +1,9 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -12,8 +14,16 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { withBeforeAgentReplyObserver } from "../plugins/before-agent-reply.js";
+import {
+  readClaimingHookAdmission,
+  type ClaimingHookAdmission,
+} from "../plugins/hook-claim-admission.js";
+import type { PluginHookAgentContext } from "../plugins/hook-types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -47,9 +57,12 @@ const {
   authSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
-  replyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
-    async () => undefined,
-  ),
+  replyMock: vi.fn<
+    (
+      event: unknown,
+      ctx: PluginHookAgentContext & ClaimingHookAdmission,
+    ) => Promise<BeforeAgentReplyResult>
+  >(async () => undefined),
   beforeRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executeMock: vi.fn<(_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>>(
     async () => ({ text: "" }),
@@ -114,8 +127,7 @@ type TestRunCliAgent = (
   params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunCliAgent>;
 let runCliAgent: TestRunCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let authProfiles: typeof import("./auth-profiles.js");
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -186,27 +198,110 @@ beforeEach(() => {
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
   authSuccessMock.mockReset().mockResolvedValue(undefined);
-  setCliRunnerTestDeps?.({
-    loadAuthProfileStoreForRuntime: authStoreMock,
-    markAuthProfileFailure: authFailureMock,
-    markAuthProfileSuccess: authSuccessMock,
-  });
+  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntime").mockImplementation(authStoreMock);
+  vi.spyOn(authProfiles, "markAuthProfileFailure").mockImplementation(authFailureMock);
+  vi.spyOn(authProfiles, "markAuthProfileSuccess").mockImplementation(authSuccessMock);
 });
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
   runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
-  ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
+  authProfiles = await import("./auth-profiles.js");
 });
 
 afterEach(() => {
-  restoreCliRunnerTestDeps();
+  vi.mocked(authProfiles.loadAuthProfileStoreForRuntime).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileFailure).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileSuccess).mockRestore();
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it.each(["current root", "reassigned root", "ordinary session"] as const)(
+    "holds early hook authority for %s and releases handled turns",
+    async (scenario) => {
+      await withOpenClawTestState({ label: "cli-before-reply-authority" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionKey:
+            scenario === "ordinary session"
+              ? "agent:main:ordinary-hook"
+              : "agent:main:cron:hook-authority",
+          sessionId: "hook-run-1",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        const entry = {
+          sessionId: target.sessionId,
+          lifecycleRevision: "hook-generation-1",
+          updatedAt: 1,
+        };
+        replaceSessionEntrySync(target, entry);
+        let heldRequest: (() => void) | undefined;
+        let heldClaim: (() => void) | undefined;
+        const effect = vi.fn();
+        hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+        replyMock.mockImplementation(async (_event, context) => {
+          heldRequest = captureGuardedFetchRequestAuthority();
+          heldClaim = readClaimingHookAdmission(context)?.assertCurrent;
+          if (scenario === "ordinary session") {
+            expect(heldRequest).toBeUndefined();
+            expect(heldClaim).toBeUndefined();
+          } else if (scenario === "current root") {
+            expect(heldRequest).toBeTypeOf("function");
+            expect(heldClaim).toBeTypeOf("function");
+            heldRequest?.();
+            heldClaim?.();
+          }
+          effect();
+          return { handled: true, reply: { text: "hook result" } };
+        });
+        const operation = withBeforeAgentReplyObserver(
+          {
+            beforeDispatch: async () => {
+              if (scenario === "reassigned root") {
+                replaceSessionEntrySync(target, {
+                  ...entry,
+                  sessionId: "hook-run-2",
+                  lifecycleRevision: "hook-generation-2",
+                });
+              }
+            },
+            afterDispatch: async (result) => result,
+          },
+          () =>
+            runCliAgent({
+              ...runParams,
+              ...target,
+              sessionFile: target.sessionKey,
+              sessionTarget: target,
+              sessionEntry: entry,
+              workspaceDir: state.workspaceDir,
+              provider: "fixture-cli",
+              trigger: "cron",
+              runId: `before-reply-${scenario.replaceAll(" ", "-")}`,
+              config: { agents: { defaults: { workspace: state.workspaceDir } } },
+            }),
+        );
+        if (scenario === "reassigned root") {
+          await expect(operation).rejects.toThrow("original session generation no longer accepts");
+          expect(replyMock).not.toHaveBeenCalled();
+          expect(effect).not.toHaveBeenCalled();
+        } else {
+          expect((await operation).payloads).toEqual([{ text: "hook result" }]);
+          expect(effect).toHaveBeenCalledOnce();
+          if (scenario === "current root") {
+            expect(heldRequest).toThrow("no longer active");
+            expect(heldClaim).toThrow("generation is unavailable");
+          }
+        }
+        expect(prepareMock).not.toHaveBeenCalled();
+        expect(executeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("attributes terminal run and harness spans to the resolved execution owner", async () => {
     const runId = "run-owner-attribution";
     const events: DiagnosticEventPayload[] = [];

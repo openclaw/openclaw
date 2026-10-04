@@ -1,10 +1,18 @@
 // Plugin state store exposes persisted per-plugin state operations.
 import { toUSVString } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
-import { preparePluginStateJournalValue } from "./plugin-state-store.journal.js";
+import {
+  preparePluginStateJournalValue,
+  type PluginStateSequencedJournalParams,
+} from "./plugin-state-store.journal.js";
 import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
+import { bindPluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 import {
   validatePluginStateKeyRange,
   type PluginStateKeyRangeParams,
@@ -108,7 +116,7 @@ function createKeyedStoreForPluginId<T>(
   const store = createSyncKeyedStore<T>(prepared, assertRetainedActive);
   return {
     ...createAsyncKeyedStore<T>(prepared, assertRetainedActive, assertActive),
-    withCurrent: ({ assertCurrent }) => {
+    withCurrent: ({ assertCurrent, sessionEntryCurrent }) => {
       if (typeof assertCurrent !== "function") {
         throw invalidInput("Plugin state action authority requires assertCurrent.");
       }
@@ -117,7 +125,12 @@ function createKeyedStoreForPluginId<T>(
         assertCurrent();
       };
       assertBoundCurrent();
-      return createAsyncKeyedStore<T>(prepared, assertBoundCurrent);
+      return createAsyncKeyedStore<T>(
+        prepared,
+        assertBoundCurrent,
+        assertBoundCurrent,
+        sessionEntryCurrent,
+      );
     },
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
@@ -128,15 +141,17 @@ function createAsyncKeyedStore<T>(
   prepared: PreparedKeyedStoreOptions,
   assertActive?: () => void,
   assertRangeActive = assertActive,
+  sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck,
 ): PluginStateKeyedStore<T, 2> {
   const scope = {
     pluginId: prepared.pluginId,
     namespace: prepared.namespace,
     env: prepared.env,
     assertActive,
+    sessionEntryCurrent,
   };
 
-  return {
+  const store: PluginStateKeyedStore<T, 2> = {
     observe: async (key) => {
       const observation = await observePluginStateInWorker({
         ...scope,
@@ -323,6 +338,7 @@ function createAsyncKeyedStore<T>(
       await clearPluginStateInWorker(scope);
     },
   };
+  return bindPluginStateNativeBindingStore(store, prepared, assertActive);
 }
 
 function createSyncKeyedStoreForPluginId<T>(
@@ -489,11 +505,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   journalOptions: OpenKeyedStoreOptions;
   /** This owner adds a fixed-width sequence suffix so key order matches append order. */
   journalKeyPrefix: string;
-  journalKeyRange: {
-    keyStartInclusive: string;
-    keyEndExclusive: string;
-    valueKind?: string;
-  };
+  journalKeyRange: PluginStateSequencedJournalParams["journalKeyRange"];
   journalValue: Record<string, unknown>;
 }): Promise<number> {
   if (params.pluginId.startsWith("core:")) {

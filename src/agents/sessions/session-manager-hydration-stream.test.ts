@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -204,7 +204,9 @@ it("hydrates one complete UTF-8 snapshot while a writer replaces rows between ch
             ? Object.assign(entry, { id: target.sessionId })
             : entry,
         );
-      await replaceTranscriptEvents(target, replacementEntries);
+      // The hot fixture writer must not queue cold preflight on the history worker
+      // whose snapshot this test deliberately holds until the write completes.
+      expect(replaceTranscriptEventsSync(target, replacementEntries)).toBe(true);
       gate.release();
       const hydrated = await pending;
       expect(hydrated.getPersistedEntries()).toEqual(entries);
@@ -221,32 +223,66 @@ it("hydrates one complete UTF-8 snapshot while a writer replaces rows between ch
   });
 });
 
-it("joins a cancelled stream without adopting its already received prefix", async () => {
-  await withOpenClawTestState({ label: "session-hydration-stream-abort" }, async (state) => {
+it.each([
+  { label: "cancellation", corrupt: undefined },
+  { label: "malformed JSON", corrupt: "{malformed" },
+  { label: "leading BOM", corrupt: "\uFEFF{}" },
+])("preserves the manager after streaming $label", async ({ corrupt }) => {
+  await withOpenClawTestState({ label: "session-hydration-stream-failure" }, async (state) => {
     const { target, entries } = await seedTranscript(state);
+    if (corrupt !== undefined) {
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
+      // Corrupt only the final fixture row after its canonical write has settled.
+      database.db
+        .prepare(
+          `UPDATE transcript_events SET event_json = ?, event_zstd = NULL,
+           event_utf8_bytes = ?, navigation_json = NULL
+           WHERE session_id = ? AND seq = (
+             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
+           )`,
+        )
+        .run(corrupt, Buffer.byteLength(corrupt), target.sessionId, target.sessionId);
+      expect(() => SessionManager.open(target)).toThrow(SyntaxError);
+    }
     const manager = SessionManager.inMemory("/retained");
     manager.appendMessage(makeUserMessage("keep the original view", 10));
     const before = manager.getPersistedEntries();
     const controller = new AbortController();
     const reason = new Error("cancelled streaming hydration");
     const gate = holdFirstChunk();
-    const pending = manager.setSessionTargetAsync(target, controller.signal);
-    const refused = expect(pending).rejects.toBe(reason);
+    const pending = manager.setSessionTargetAsync(
+      target,
+      corrupt === undefined ? controller.signal : undefined,
+    );
+    const refused =
+      corrupt === undefined
+        ? expect(pending).rejects.toBe(reason)
+        : expect(pending).rejects.toThrow();
     try {
       await gate.wait(pending);
-      controller.abort(reason);
+      if (corrupt === undefined) {
+        controller.abort(reason);
+      } else {
+        gate.release();
+      }
       await refused;
-      expect(historyLane.pool.getSnapshot()).toMatchObject({
-        workers: 0,
-        activeTasks: 0,
-        pendingTasks: 0,
-      });
+      if (corrupt === undefined) {
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          workers: 0,
+          activeTasks: 0,
+          pendingTasks: 0,
+        });
+      } else {
+        expect(gate.chunks).toBeGreaterThan(1);
+      }
       expect(manager.getPersistedEntries()).toEqual(before);
       expect(manager.getCwd()).toBe("/retained");
       expect(manager.isPersisted()).toBe(false);
-      gate.release();
-      await manager.setSessionTargetAsync(target);
-      expect(manager.getPersistedEntries()).toEqual(entries);
+      if (corrupt === undefined) {
+        gate.release();
+        await manager.setSessionTargetAsync(target);
+        expect(manager.getPersistedEntries()).toEqual(entries);
+      }
     } finally {
       gate.release();
       gate.restore();
@@ -254,46 +290,3 @@ it("joins a cancelled stream without adopting its already received prefix", asyn
     }
   });
 });
-
-it.each([
-  { label: "malformed JSON", corrupt: "{malformed" },
-  { label: "leading BOM", corrupt: "\uFEFF{}" },
-])(
-  "preserves a manager when a later $label row rejects after chunks were received",
-  async ({ corrupt }) => {
-    await withOpenClawTestState({ label: "session-hydration-stream-malformed" }, async (state) => {
-      const { target } = await seedTranscript(state);
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
-      // Corrupt only the final fixture row after its canonical write has settled.
-      database.db
-        .prepare(
-          `UPDATE transcript_events SET event_json = ?, event_zstd = NULL,
-         event_utf8_bytes = ?, navigation_json = NULL
-         WHERE session_id = ? AND seq = (
-           SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
-         )`,
-        )
-        .run(corrupt, Buffer.byteLength(corrupt), target.sessionId, target.sessionId);
-      expect(() => SessionManager.open(target)).toThrow(SyntaxError);
-      const manager = SessionManager.inMemory("/retained");
-      manager.appendMessage(makeUserMessage("keep the original view", 10));
-      const before = manager.getPersistedEntries();
-      const gate = holdFirstChunk();
-      const pending = manager.setSessionTargetAsync(target);
-      const refused = expect(pending).rejects.toThrow();
-      try {
-        await gate.wait(pending);
-        gate.release();
-        await refused;
-        expect(gate.chunks).toBeGreaterThan(1);
-        expect(manager.getPersistedEntries()).toEqual(before);
-        expect(manager.getCwd()).toBe("/retained");
-        expect(manager.isPersisted()).toBe(false);
-      } finally {
-        gate.release();
-        gate.restore();
-        await Promise.allSettled([pending, refused]);
-      }
-    });
-  },
-);

@@ -18,10 +18,6 @@ import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
-import {
-  isCronSessionDisplayKey,
-  isSystemCreatedSessionRow,
-} from "../shared/session-list-visibility.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
@@ -62,7 +58,6 @@ export type SessionListFilteredEntries = {
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
-  candidatesPrepared?: boolean;
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -80,33 +75,8 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
-/** The predicate and its cache key consume the same membership dependencies. */
-export function projectSessionListCandidateOptions(opts: SessionsListParams) {
-  return {
-    includeGlobal: opts.includeGlobal,
-    includeUnknown: opts.includeUnknown,
-    spawnedBy: opts.spawnedBy,
-    label: opts.label,
-    boardFace: opts.boardFace,
-    agentId: opts.agentId,
-    excludeCron: opts.excludeCron,
-    excludeSystem: opts.excludeSystem,
-    excludeSubagents: opts.excludeSubagents,
-    archived: opts.archived,
-    requireLastInteraction: opts.requireLastInteraction,
-    projectId: opts.projectId,
-    workspaceDir: opts.workspaceDir,
-    group: opts.group,
-    pinned: opts.pinned,
-  };
-}
-
-export function* filterSessionCandidateEntries(
-  params: Omit<SessionListFilterParams, "opts"> & {
-    opts: ReturnType<typeof projectSessionListCandidateOptions>;
-  },
-): SynchronousWork<SessionEntryPair[]> {
-  const { opts, now, shouldYield } = params;
+function createSessionCandidateFilter(params: SessionListFilterParams) {
+  const { opts, now } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const includeGlobal = opts.includeGlobal === true;
@@ -115,24 +85,14 @@ export function* filterSessionCandidateEntries(
   const label = normalizeOptionalString(opts.label) ?? "";
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const keepCandidate = ([key, entry]: SessionEntryPair) => {
+  return ([key, entry]: SessionEntryPair) => {
     const target = expectDefined(params.getTarget(key), "selection row owner");
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
       selection.isCronRun ||
-      (opts.excludeCron === true && isCronSessionDisplayKey(key)) ||
-      (opts.excludeSystem === true &&
-        isSystemCreatedSessionRow({
-          key,
-          createdActor: entry.createdActor,
-          createdVia: entry.createdVia,
-          label: entry.label,
-          displayName: entry.displayName,
-          subject: entry.subject,
-          // Same provenance fact sessionClassificationForRow projects to clients.
-          classification: entry.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
-        })) ||
+      (opts.excludeCron === true && selection.isCron) ||
+      (opts.excludeSystem === true && selection.isSystem) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")
@@ -198,40 +158,19 @@ export function* filterSessionCandidateEntries(
     }
     return true;
   };
-  const candidateEntries: SessionEntryPair[] = [];
-  for (const pair of params.entries) {
-    if (keepCandidate(pair)) {
-      candidateEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
-    }
-  }
-  return candidateEntries;
 }
 
-const ACTIVITY_PULSE_MAX_WINDOW_MS = 25 * 3_600_000;
-
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
-  const since = opts.activityPulseSince;
-  if (since === undefined || !Number.isFinite(since) || since < 0) {
+  const boundaries = opts.activityPulseBoundaries;
+  if (!boundaries) {
     return undefined;
   }
-  // The window sizes the bucket array, so a caller-supplied end is only honored within the
-  // longest civil day (25 hours on a DST fall-back day); anything else falls back to 24 hours.
-  const until =
-    opts.activityPulseUntil !== undefined &&
-    Number.isFinite(opts.activityPulseUntil) &&
-    opts.activityPulseUntil > since &&
-    opts.activityPulseUntil - since <= ACTIVITY_PULSE_MAX_WINDOW_MS
-      ? opts.activityPulseUntil
-      : since + 24 * 3_600_000;
   return {
-    since,
-    until,
-    hours: Array.from({ length: Math.max(1, Math.ceil((until - since) / 3_600_000)) }, () => 0),
+    since: boundaries[0]!,
+    until: boundaries[boundaries.length - 1]!,
+    buckets: Array.from({ length: boundaries.length - 1 }, () => 0),
     sessions: 0,
-    started: 0,
+    ...(opts.activeMinutes === undefined ? {} : { started: 0 }),
     running: 0,
   };
 }
@@ -282,10 +221,9 @@ export function* filterSessionEntries(
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
 
-  // The caller owns these resident entries and their prepared visibility filter.
-  const filterCandidates = params.candidatesPrepared && !opts.involvingProfileId;
+  // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
-  if (!filterCandidates) {
+  if (opts.involvingProfileId) {
     for (const pair of params.entries) {
       if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
         visibleEntries.push(pair);
@@ -322,16 +260,8 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = filterCandidates
-    ? params.entries
-    : params.candidatesPrepared
-      ? visibleEntries
-      : yield* filterSessionCandidateEntries({
-          ...params,
-          opts: projectSessionListCandidateOptions(opts),
-          entries: visibleEntries,
-          getRowContext,
-        });
+  const candidateEntries = opts.involvingProfileId ? visibleEntries : params.entries;
+  const keepCandidate = createSessionCandidateFilter({ ...params, getRowContext });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
@@ -373,7 +303,10 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
-    if (filterCandidates && params.entryFilter?.(key, entry) === false) {
+    if (
+      (!opts.involvingProfileId && params.entryFilter?.(key, entry) === false) ||
+      !keepCandidate(pair)
+    ) {
       continue;
     }
     if (matchesSearch && !matchesSearch(key, entry)) {
@@ -423,11 +356,6 @@ export function* filterSessionEntries(
     if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
-    const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
-    const inPulse =
-      activityPulse !== undefined &&
-      activityTs >= activityPulse.since &&
-      activityTs < activityPulse.until;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -451,7 +379,7 @@ export function* filterSessionEntries(
           continue;
         }
       }
-      if (inPulse && pulsePeople) {
+      if (pulsePeople) {
         for (const person of associated) {
           pulsePeople.add(person.identity.id);
         }
@@ -471,20 +399,23 @@ export function* filterSessionEntries(
       ownerSessionCounts.set(profileId, counts);
     }
     if (activityPulse) {
-      // "Running now" is present tense: a run that started before midnight still counts.
       const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.sessions += 1;
       activityPulse.running += Number(
         params.projectActiveRun?.(key, entry, agentId)?.active === true,
       );
-    }
-    if (inPulse) {
-      const hour = Math.min(
-        activityPulse.hours.length - 1,
-        Math.floor((activityTs - activityPulse.since) / 3_600_000),
-      );
-      activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
-      activityPulse.sessions += 1;
-      activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
+      if (activityPulse.started !== undefined && activeCutoff !== undefined) {
+        activityPulse.started += Number(
+          entry.createdAt !== undefined && entry.createdAt >= activeCutoff,
+        );
+      }
+      const activityTs = sessionActivityTimestamp(entry);
+      if (activityTs >= activityPulse.since && activityTs < activityPulse.until) {
+        const bucket = opts.activityPulseBoundaries!.findLastIndex(
+          (boundary) => boundary <= activityTs,
+        );
+        activityPulse.buckets[bucket] = (activityPulse.buckets[bucket] ?? 0) + 1;
+      }
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
@@ -495,10 +426,7 @@ export function* filterSessionEntries(
     entries.push(pair);
   }
 
-  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
-    people.values(),
-    selectedProfileId,
-  );
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(people, selectedProfileId);
   if (activityPulse && pulsePeople) {
     activityPulse.people = pulsePeople.size;
   }

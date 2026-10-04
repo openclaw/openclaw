@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
@@ -86,7 +87,9 @@ describe("playback input staging", () => {
     runFfmpeg.mockImplementationOnce(async (args: string[]) => {
       inputPath = args[args.indexOf("-i") + 1];
       expect(inputPath).toBeDefined();
-      expect(await fs.readFile(inputPath!)).toEqual(contents);
+      const stagedInput = await fs.readFile(inputPath!);
+      expect(stagedInput).toHaveLength(contents.length);
+      expect(stagedInput.equals(contents), "complete staged ffmpeg input").toBe(true);
       await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
       return "";
     });

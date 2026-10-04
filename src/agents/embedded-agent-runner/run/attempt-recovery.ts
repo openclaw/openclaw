@@ -5,7 +5,6 @@ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
@@ -15,6 +14,7 @@ import { failoverReasonFromClassification } from "../../failover/classification-
 import { classifyFailoverSignal } from "../../failover/classify.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
@@ -236,23 +236,32 @@ export async function recoverEmbeddedRunAttempt(input: {
       currentAttemptAssistant,
     });
 
-  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
-    recordRecoveryDecision("rejected", "hook_block");
-    const errorText = formatErrorMessage(promptError);
+  const completeBlocked = (
+    errorKind: Parameters<typeof buildEmbeddedRunBlockedResult>[0]["errorKind"],
+    errorMessage: string,
+    text = errorMessage,
+    finalPromptText?: string,
+  ) => {
     const replayInvalid = resolveReplayInvalidForAttempt();
     setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
     return {
-      action: "complete",
+      action: "complete" as const,
       result: buildEmbeddedRunBlockedResult({
-        text: errorText,
-        errorKind: "hook_block",
-        errorMessage: errorText,
+        text,
+        errorKind,
+        errorMessage,
         durationMs: Date.now() - runInput.startedAtMs,
         agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
+        finalPromptText,
       }),
     };
+  };
+
+  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
+    recordRecoveryDecision("rejected", "hook_block");
+    return completeBlocked("hook_block", formatErrorMessage(promptError));
   }
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
@@ -277,6 +286,9 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      expectedSelection: requestedSelection,
     });
     log.info(
       `live session model switch requested during active attempt for ${params.sessionId}: ` +
@@ -330,6 +342,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     requested: currentAttemptReplaySafe ? requestedSelection : undefined,
   });
   const commonRecoveryInput = {
+    runInput,
     runParams: params,
     state: input.contextRecoveryState,
     contextEngine: input.contextEngine,
@@ -427,6 +440,24 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
+    if (outputLimitFailure) {
+      sessionPromptState.markOwnedTranscriptRetry();
+      await sessionPromptState.settleOwnedTranscriptProjection(
+        sessionPromptState.sessionTarget,
+        params.abortSignal,
+      );
+      runInput.laneController.throwIfAborted();
+      const terminalDetails = recoveryAssistant?.diagnostics?.find(
+        (diagnostic) => diagnostic.type === "openai_responses_terminal",
+      )?.details;
+      const toolCallId = terminalDetails?.incompleteToolCallId;
+      await sessionPromptState.withSessionWriterContext(() =>
+        sessionPromptState.recordOutputLimitNotice(
+          typeof toolCallId === "string" ? toolCallId : undefined,
+        ),
+      );
+      runInput.laneController.throwIfAborted();
+    }
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
@@ -467,21 +498,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   }
   if (overflowRecovery.action === "surface") {
     recordRecoveryDecision("rejected", "overflow_unrecoverable");
-    const replayInvalid = resolveReplayInvalidForAttempt();
-    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-    return {
-      action: "complete",
-      result: buildEmbeddedRunBlockedResult({
-        text: overflowRecovery.userText,
-        errorKind: overflowRecovery.kind,
-        errorMessage: overflowRecovery.errorText,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildAttemptErrorMeta(),
-        attempt,
-        replayInvalid,
-        finalPromptText: attempt.finalPromptText,
-      }),
-    };
+    return completeBlocked(
+      overflowRecovery.kind,
+      overflowRecovery.errorText,
+      overflowRecovery.userText,
+      attempt.finalPromptText,
+    );
   }
   // Profile rotation and original-prompt replay still require replay-safe evidence.
   if (!currentAttemptReplaySafe) {

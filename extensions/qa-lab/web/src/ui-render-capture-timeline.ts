@@ -74,7 +74,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                               ).length;
                               const collapsed = collapsedLaneIds.has(lane.id);
                               const pinned = pinnedLaneIds.has(lane.id);
-                              const sortedLaneEvents = [...lane.events].toSorted(
+                              const sortedLaneEvents = lane.events.toSorted(
                                 (left, right) => left.ts - right.ts,
                               );
                               const markerGapPx = 16;
@@ -98,15 +98,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                 }
                                 rowRightEdges[rowIndex] = leftPx + markerGapPx;
                                 const topPx = baselineTopPx + rowIndex * rowStridePx;
-                                return { event, key, leftPct, leftPx, rowIndex, topPx };
+                                return { event, key, leftPct, leftPx, topPx };
                               });
-                              const laneRowCount = Math.max(
-                                1,
-                                packedMarkers.reduce(
-                                  (max, marker) => Math.max(max, marker.rowIndex + 1),
-                                  1,
-                                ),
-                              );
+                              const laneRowCount = Math.max(1, rowRightEdges.length);
                               const laneTrackHeightPx = collapsed
                                 ? 18
                                 : Math.max(
@@ -114,10 +108,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                     baselineTopPx + (laneRowCount - 1) * rowStridePx + 18,
                                   );
                               const selectedLaneEvent =
-                                lane.events.find((event) => {
-                                  const key = captureEventKey(event);
-                                  return key === selectedEventKey;
-                                }) ?? null;
+                                lane.events.find(
+                                  (event) => captureEventKey(event) === selectedEventKey,
+                                ) ?? null;
                               const selectedFlowIdLocal =
                                 selectedLaneEvent?.flowId || selectedEvent?.flowId || "";
                               const focusSelectedFlow =
@@ -178,17 +171,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                       new Map(),
                                     ),
                                   )
-                                    .flatMap(([, markers]) => {
-                                      if (markers.length < 2) {
-                                        return [];
-                                      }
-                                      const followingMarkers = markers.slice(1).values();
-                                      return markers.slice(0, -1).flatMap((previous) => {
-                                        const following = followingMarkers.next();
-                                        if (following.done) {
-                                          return [];
-                                        }
-                                        const marker = following.value;
+                                    .flatMap(([, markers]) =>
+                                      markers.slice(1).map((marker, index) => {
+                                        const previous = markers[index]!;
                                         const dx = marker.leftPx - previous.leftPx;
                                         const dy = marker.topPx - previous.topPx;
                                         const length = Math.sqrt(dx * dx + dy * dy);
@@ -202,14 +187,12 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                         const paired =
                                           pairedEventKey != null &&
                                           captureEventKey(marker.event) === pairedEventKey;
-                                        return [
-                                          `<div
+                                        return `<div
                                     class="capture-timeline-flow-link${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                     style="left:${previous.leftPct.toFixed(2)}%;top:${previous.topPx}px;width:${length.toFixed(2)}px;transform:translateY(-50%) rotate(${angle.toFixed(2)}deg)"
-                                  ></div>`,
-                                        ];
-                                      });
-                                    })
+                                  ></div>`;
+                                      }),
+                                    )
                                     .join("");
                               const laneGuides = timelineAxisTicks
                                 .slice(1, -1)

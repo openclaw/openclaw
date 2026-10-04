@@ -9,6 +9,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -107,7 +108,7 @@ describe("registered session PR subscriptions", () => {
         "operator.admin",
         async (f) => {
           const key = "agent:main:dashboard:incognito-pr-retirement";
-          const repository = getSessionRepositoryWorkspaceStore().create({
+          const repository = await getSessionRepositoryWorkspaceStore().create({
             agentId: "main",
             sessionKey: key,
             url: "https://github.com/synthetic/private",
@@ -166,36 +167,55 @@ describe("registered session PR subscriptions", () => {
     },
   );
 
-  it.each([false, true])(
-    "delivers an authorized private session (repository=%s)",
-    async (repository) => {
+  it.each(["private local", "private repository", "archived", "scoped global"] as const)(
+    "delivers an authorized %s session",
+    async (kind) => {
+      const privateRow = kind.startsWith("private");
       await withFixture(
-        "operator.admin",
+        privateRow ? "operator.admin" : "operator.read",
         async (f) => {
-          const key = "agent:main:dashboard:incognito-pr-reader";
-          const workspace = repository
-            ? getSessionRepositoryWorkspaceStore().create({
-                agentId: "main",
-                sessionKey: key,
-                url: "https://github.com/synthetic/private",
-                branch: "private-change",
-                assertCurrent: () => {},
-              })
-            : undefined;
-          await f.seed(key, f.profile.id, {
-            incognito: true,
-            ...(workspace ? { repositoryWorkspaceId: workspace.workspaceId } : {}),
-          });
+          const key = privateRow
+            ? "agent:main:dashboard:incognito-pr-reader"
+            : kind === "scoped global"
+              ? "agent:main:global"
+              : sessionKey;
+          if (privateRow) {
+            const workspace =
+              kind === "private repository"
+                ? await getSessionRepositoryWorkspaceStore().create({
+                    agentId: "main",
+                    sessionKey: key,
+                    url: "https://github.com/synthetic/private",
+                    branch: "private-change",
+                    assertCurrent: () => {},
+                  })
+                : undefined;
+            await f.seed(key, f.profile.id, {
+              incognito: true,
+              ...(workspace ? { repositoryWorkspaceId: workspace.workspaceId } : {}),
+            });
+          } else if (kind === "scoped global") {
+            await f.seed("global");
+            await f.seed(key, f.profile.id, { sessionId: "separate-literal-global-row" });
+          }
           await f.subscribe([key]);
           await f.subscriptions.pollNow();
-          expect(frames(f.socket)).toContainEqual(expectedFrame(key));
-          expect(
-            getSessionRowProjection(f.context)
-              ?.selectEntries()
-              .map((row) => row.key),
-          ).not.toContain(key);
+          expect(f.load).toHaveBeenCalledWith(
+            { sessionKey: kind === "scoped global" ? "global" : key, agentId: "main" },
+            expect.any(AbortSignal),
+            expect.objectContaining({ assertCurrent: expect.any(Function) }),
+          );
+          expect(frames(f.socket)).toEqual([expectedFrame(key)]);
+          if (privateRow) {
+            expect(
+              getSessionRowProjection(f.context)
+                ?.selectEntries()
+                .map((row) => row.key),
+            ).not.toContain(key);
+          }
         },
-        true,
+        privateRow,
+        kind === "archived" ? { archivedAt: 1 } : {},
       );
     },
   );
@@ -211,23 +231,31 @@ describe("registered session PR subscriptions", () => {
         f.load.mockResolvedValue(refreshed);
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const createTransport = stateReadWorker.createOpenClawStateReadTransport;
+        const captureSource = stateReadWorker.captureOpenClawStateReadSource;
         let held = false;
         const transport = vi
-          .spyOn(stateReadWorker, "createOpenClawStateReadTransport")
-          .mockImplementation((command) => {
-            const owned = createTransport(command);
-            if (held || command.type !== "agentDatabaseDeletion.snapshot") {
-              return owned;
-            }
-            held = true;
+          .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+          .mockImplementation(() => {
+            const source = captureSource();
             return {
-              ...owned,
-              async read(...args: Parameters<typeof owned.read>) {
-                const result = await owned.read(...args);
-                entered.resolve();
-                await release.promise;
-                return result;
+              ...source,
+              createTransport(command) {
+                const owned = source.createTransport(command);
+                if (held || command.type !== "agentDatabaseDeletion.snapshot") {
+                  return owned;
+                }
+                held = true;
+                return {
+                  ...owned,
+                  startRead(...args) {
+                    return startAwaitedReadMock(async () => {
+                      const result = await owned.startRead(...args).result;
+                      entered.resolve();
+                      await release.promise;
+                      return result;
+                    });
+                  },
+                };
               },
             };
           });
@@ -311,62 +339,6 @@ describe("registered session PR subscriptions", () => {
       }
     },
   );
-  it("delivers an archived session that was cold at Gateway startup", async () => {
-    await withFixture(
-      "operator.read",
-      async (f) => {
-        const entered = createDeferredCore();
-        f.load.mockImplementationOnce(async () => {
-          entered.resolve();
-          return snapshot;
-        });
-        await f.subscribe();
-        await entered.promise;
-        await f.subscriptions.pollNow();
-        expect(f.load).toHaveBeenCalledWith(
-          { sessionKey, agentId: "main" },
-          expect.any(AbortSignal),
-          expect.objectContaining({ assertCurrent: expect.any(Function) }),
-        );
-        expect(frames(f.socket)).toContainEqual(expectedFrame(sessionKey));
-      },
-      false,
-      { archivedAt: 1 },
-    );
-  });
-
-  it.each(["operator.read", "operator.write", "operator.admin"] as const)(
-    "delivers the owned branch through the real broadcaster with %s",
-    async (scope) => {
-      await withFixture(scope, async (f) => {
-        await f.subscribe();
-        await f.subscriptions.pollNow();
-        expect(f.load).toHaveBeenCalledWith(
-          { sessionKey, agentId: "main" },
-          expect.any(AbortSignal),
-          expect.objectContaining({ assertCurrent: expect.any(Function) }),
-        );
-        expect(frames(f.socket)).toContainEqual(expectedFrame(sessionKey));
-      });
-    },
-  );
-
-  it("resolves a scoped global watch to its persisted global row", async () => {
-    await withFixture("operator.read", async (f) => {
-      const watchKey = "agent:main:global";
-      await f.seed("global");
-      await f.seed(watchKey, f.profile.id, { sessionId: "separate-literal-global-row" });
-      await f.subscribe([watchKey]);
-      await f.subscriptions.pollNow();
-      expect(f.load).toHaveBeenCalledWith(
-        { sessionKey: "global", agentId: "main" },
-        expect.any(AbortSignal),
-        expect.objectContaining({ assertCurrent: expect.any(Function) }),
-      );
-      expect(frames(f.socket)).toEqual([expectedFrame(watchKey)]);
-    });
-  });
-
   it.each(["draft", "incognito", "missing"] as const)(
     "does not load or deliver an inaccessible %s target",
     async (kind) => {
@@ -413,14 +385,9 @@ describe("registered session PR subscriptions", () => {
     },
   );
 
-  it.each([
-    { retired: "connection", delayed: false },
-    { retired: "grant", delayed: false },
-    { retired: "connection", delayed: true },
-    { retired: "grant", delayed: true },
-  ] as const)(
-    "keeps a shared load for an unchanged viewer when the other $retired retires (delayed=$delayed)",
-    async ({ retired, delayed }) => {
+  it.each([false, true])(
+    "keeps a shared load for an unchanged viewer when the other grant retires (delayed=%s)",
+    async (delayed) => {
       try {
         await withFixture("operator.read", async (f) => {
           const entered = createDeferredCore();
@@ -452,11 +419,7 @@ describe("registered session PR subscriptions", () => {
               await entered.promise;
               await f.subscribe([sessionKey], peer.client);
             }
-            if (retired === "connection") {
-              f.client.invalidated = true;
-            } else {
-              f.access.abort(new Error("Original access retired"));
-            }
+            f.access.abort(new Error("Original access retired"));
             if (delayed) {
               await f.clock.advanceBy(10_000);
               await entered.promise;
@@ -524,61 +487,10 @@ describe("registered session PR subscriptions", () => {
 });
 
 describe("registered session PR check details", () => {
-  it("reads archived check details after archive cache invalidation", async () => {
-    await withFixture(
-      "operator.read",
-      async (f) => {
-        const projection = getSessionRowProjection(f.context);
-        if (!projection) {
-          throw new Error("Missing session projection for archived PR checks");
-        }
-        expect(projection.snapshot({ agentId: "main", key: sessionKey }).row).toBeDefined();
-        sessionChanges.emit({ all: true, scope: "catalog" });
-        await projection.ensureMaterialized();
-        expect(
-          projection.capture({ agentId: "main", key: sessionKey })?.materialized,
-        ).toBeUndefined();
-
-        const result: ControlUiSessionPullRequestCheckDetails = {
-          owner: "synthetic",
-          repo: "publication",
-          number: 1,
-          headSha: "a".repeat(40),
-          status: "ready",
-          rateLimited: false,
-          checks: [],
-        };
-        const load = vi.fn(async () => result);
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "archived-checks",
-            method: "controlUi.sessionPullRequests.checks",
-            params: {
-              sessionKey,
-              owner: result.owner,
-              repo: result.repo,
-              number: result.number,
-              headSha: result.headSha,
-            },
-          },
-          client: f.client,
-          context: f.context,
-          extraHandlers: createControlUiHandlers(undefined, undefined, load),
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(load).toHaveBeenCalledOnce();
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
-      },
-      false,
-      { archivedAt: 1 },
-    );
-  });
-
   it.each([
-    ...readerChanges,
+    "archived",
+    "unchanged",
+    "grant",
     "selection",
     "literal-global",
     "literal-global-visibility",
@@ -589,23 +501,36 @@ describe("registered session PR check details", () => {
       async (f) => {
         const key = change.startsWith("literal-global")
           ? "agent:main:global"
-          : "agent:main:shared-checks";
+          : change === "archived"
+            ? sessionKey
+            : "agent:main:shared-checks";
         if (change === "literal-global-visibility") {
           await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
         }
         const replacementKey = `${key}:replacement`;
         const projection = getSessionRowProjection(f.context);
+        if (change === "archived") {
+          if (!projection) {
+            throw new Error("Missing session projection for archived PR checks");
+          }
+          expect(projection.snapshot({ agentId: "main", key }).row).toBeDefined();
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          await projection.ensureMaterialized();
+          expect(projection.capture({ agentId: "main", key })?.materialized).toBeUndefined();
+        }
         if (change === "selection") {
           await f.seed(replacementKey, f.other.id);
           await projection?.ensureMaterialized();
         }
         const mutation =
-          change === "literal-global"
+          change === "literal-global" || change === "archived"
             ? "unchanged"
             : change === "literal-global-visibility"
               ? "visibility"
               : change;
-        await f.seed(key, f.other.id);
+        if (change !== "archived") {
+          await f.seed(key, f.other.id);
+        }
         const params = {
           sessionKey: key,
           owner: "synthetic",
@@ -668,6 +593,7 @@ describe("registered session PR check details", () => {
           }
           held.resolve(result);
           await request;
+          expect(load).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledExactlyOnceWith(
             mutation === "unchanged",
             mutation === "unchanged" ? result : undefined,
@@ -686,6 +612,7 @@ describe("registered session PR check details", () => {
         }
       },
       change === "store closure",
+      change === "archived" ? { archivedAt: 1 } : {},
     );
   });
 });
@@ -697,7 +624,7 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository =
         source === "repository"
-          ? repositories.create({
+          ? await repositories.create({
               agentId: "main",
               sessionKey,
               url: "https://github.com/synthetic/publication",
@@ -771,7 +698,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     vi.stubGlobal("fetch", provider);
     const f = await createFixture("operator.read", true);
     try {
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey,
         url: "https://github.com/synthetic/publication",
@@ -845,7 +772,7 @@ it("drops cached subscription hydration after physical database replacement", as
       vi.stubGlobal("fetch", provider);
       const f = await createFixture("operator.read", true);
       try {
-        const repository = getSessionRepositoryWorkspaceStore().create({
+        const repository = await getSessionRepositoryWorkspaceStore().create({
           agentId: "main",
           sessionKey,
           url: "https://github.com/synthetic/publication",
@@ -931,7 +858,7 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
           for (let index = 0; index < (waitingOn === "concurrency limit" ? 5 : 1); index++) {
             const key = `agent:main:queued-pr-${index}`;
             keys.push(key);
-            const repository = getSessionRepositoryWorkspaceStore().create({
+            const repository = await getSessionRepositoryWorkspaceStore().create({
               agentId: "main",
               sessionKey: key,
               url: `https://github.com/synthetic/queued-${index}`,

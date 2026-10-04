@@ -261,10 +261,13 @@ describe("session creation snapshot", () => {
           "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
         );
         external.exec("BEGIN");
-        update.run(
-          JSON.stringify({ ...entry, skillsSnapshot: { prompt: "new target", skills: [] } }),
-          scope.sessionKey,
-        );
+        expect(
+          external
+            .prepare(
+              "UPDATE session_entry_snapshots SET value_json = ? WHERE session_key = ? AND field = 'skillsSnapshot'",
+            )
+            .run(JSON.stringify({ prompt: "new target", skills: [] }), scope.sessionKey).changes,
+        ).toBe(1);
         update.run(JSON.stringify({ ...sibling, label: "new label" }), "agent:main:z-sibling");
         external.exec("COMMIT");
       }

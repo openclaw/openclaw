@@ -105,8 +105,10 @@ A scenario send can select an existing forum topic:
 ```
 
 A scenario send can also carry a photo (`photo`, absolute path; `text` becomes
-the optional caption) or reply to the newest message this scenario sent
-(`replyToPrevious: true`), for reply-context and caption-command proof:
+the optional caption), a media album (`photos`, 2–10 absolute paths sent in one
+`sendMessageAlbum` call; `text` captions the first item), or reply to the newest
+message this scenario sent (`replyToPrevious: true`, the last album member after
+an album), for reply-context and caption-command proof:
 
 ```json
 {
@@ -175,7 +177,12 @@ Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
 The built lane starts both the provider and Gateway from that checkout's
 `dist/entry.js`; `--source-gateway` selects the development launcher for both.
 A leased run must not rebuild a dirty source checkout while waiting for provider
-readiness.
+readiness. Gateway startup gets 45 s built and 300 s from source; on a heavily
+loaded host, raise it with `--gateway-ready-timeout-ms` instead of retrying the
+lease.
+
+Recorder readiness gets 30 s; on a heavily loaded host, raise it with
+`--recorder-ready-timeout-ms`.
 
 The named tool-progress shell fixture emits command-style `exec` arguments.
 Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
@@ -279,6 +286,8 @@ proof directory outside runner scratch.
 Failed fixture cleanup can leave a private lease directory with `lease.json`
 and credential/runtime state. Process groups and pipes must be joined before
 release; adapters returning a teardown receipt must return `verified: true`.
+After SIGKILL, a group that still answers probes is waiting on a kernel call and
+gets up to 300 seconds; a group that only answers `EPERM` fails cleanup after 2 seconds.
 A false or missing verification in a returned receipt retains the consumer,
 lease, scratch, and recovery state. Preserve that directory and the failure evidence. The
 receipt contains a secret broker handle: exclude it from proof exports and
@@ -370,7 +379,7 @@ not the model.
 - TDLib replays cached updates after connect; judge only events after the run's sent action.
 - The driver pins `@prebuilt-tdlib` `0.1008067.0`, which reports TDLib `1.8.67`.
 - TDLib 1.8.6 and later take the existing base64 database key in `setTdlibParameters`; re-encoding changes the key.
-- OpenClaw does not expose grammY's Test Server option, so the loopback proxy inserts `/test` after the bot token.
+- Credential readiness calls `https://api.telegram.org/bot<TOKEN>/test/<method>` directly; the standalone doctor never starts a local adapter. The full SUT still uses the loopback adapter because OpenClaw does not expose grammY's Test Server option. That adapter also owns scenario hold/reject controls; Gateway health checks and the mock provider still need local HTTP access. Do not bypass host egress policy to run them.
 - Broker calls time out after 15 seconds. A failed heartbeat fences the runner before later actions and stops an active probe.
 - Chunked broker payloads are authenticated per chunk and bounded to 64 MiB and 4096 chunks before JSON parsing.
 - Scope gateway logs with `logging.file`; the default `/tmp/openclaw/<date>.log` mixes concurrent runs.

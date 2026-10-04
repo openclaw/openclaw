@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -233,10 +234,7 @@ function addObjectKeys(target: Set<string>, value: unknown): void {
 }
 
 function addStringValue(target: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized) {
     target.add(normalized);
   }
@@ -253,12 +251,8 @@ function collectRequestedSpeechProviderIds(
   options: { includeVoiceModel: boolean },
 ): Set<string> {
   const requested = new Set<string>();
-  const tts =
-    typeof cfg?.tts === "object" && cfg.tts !== null
-      ? (cfg.tts as Record<string, unknown>)
-      : undefined;
-  addStringValue(requested, tts?.provider);
-  addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, cfg?.tts?.provider);
+  addObjectKeys(requested, cfg?.tts?.providers);
   addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
   if (options.includeVoiceModel) {
     addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);

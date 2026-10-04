@@ -58,28 +58,6 @@ describe.skipIf(process.platform !== "linux" || typeof process.threadCpuUsage !=
       expect(existsSync(root)).toBe(false);
     });
 
-    it("retains preparation failure without starting a child or running work", async () => {
-      const receipt = result();
-      await runResourceGatewayCase({
-        result: receipt,
-        runtime,
-        prepare: async ({ root }) => {
-          roots.push(root);
-          throw new Error("fixture preparation failed");
-        },
-        run: async () => {
-          throw new Error("work must not run");
-        },
-      });
-      expect(receipt).toMatchObject({
-        status: "failed",
-        error: "fixture preparation failed",
-        phases: [],
-      });
-      expect(receipt.shutdown).toBeUndefined();
-      expect(existsSync(roots[0]!)).toBe(true);
-    });
-
     it.each([
       { workloadFails: true, exitCode: "0", stopError: "0" },
       { workloadFails: false, exitCode: "1", stopError: "0" },
@@ -137,11 +115,15 @@ describe.skipIf(process.platform !== "linux" || typeof process.threadCpuUsage !=
           writeFileSync(archive, "mismatched fixture");
           await installArchive(archive, "0".repeat(64));
         },
-        run: async () => {},
+        run: async () => {
+          throw new Error("work must not run");
+        },
       });
       expect(receipt).toMatchObject({ status: "failed", fixtures: [], phases: [] });
       expect(receipt.error).toContain("matching its SHA-256");
       expect(existsSync(invocations)).toBe(false);
+      expect(receipt.shutdown).toBeUndefined();
+      expect(existsSync(roots[0]!)).toBe(true);
     });
   },
 );

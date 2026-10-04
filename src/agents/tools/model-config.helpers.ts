@@ -28,7 +28,7 @@ import {
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
-export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
+export type ToolModelConfig = Exclude<AgentToolModelConfig, string>;
 
 const OPENAI_PROVIDER_ID = "openai";
 const CODEX_MEDIA_PROVIDER_ID = "codex";
@@ -127,21 +127,13 @@ export function hasAuthProfileForProvider(params: {
   let store = params.authStore;
   if (!store) {
     const agentDir = params.agentDir?.trim();
-    if (!agentDir) {
+    if (!agentDir || !hasAnyAuthProfileStoreSource(agentDir)) {
       return false;
     }
-    if (!hasAnyAuthProfileStoreSource(agentDir)) {
+    store = loadAuthStoreForProvider({ ...params, agentDir });
+    if (!store) {
       return false;
     }
-    // Only include external CLI profiles when callers explicitly want live
-    // provider availability, not when checking stored profile shape.
-    store = params.includeExternalCli
-      ? ensureAuthProfileStore(agentDir, {
-          externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
-        })
-      : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
   }
   const profileIds = listProfilesForProvider(store, params.provider);
   return profileIds.some((profileId) => {
@@ -160,15 +152,7 @@ export function hasAuthProfileForProvider(params: {
   });
 }
 
-export function hasProviderAuthForTool(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  runtimeLookup?: RuntimeProviderAuthLookup;
-  capability?: string;
-}): boolean {
+export function hasProviderAuthForTool(params: Parameters<typeof hasAuthForProvider>[0]): boolean {
   const store = loadAuthStoreForProvider(params);
   if (params.capability && store) {
     const binding = resolveProviderEntryApiKeyProfileReference({ ...params, store });
@@ -205,10 +189,6 @@ export function hasProviderAuthForTool(params: {
     return true;
   }
   return hasAuthForProvider(params);
-}
-
-function formatProviderModelRef(provider: string, model: string): string {
-  return `${provider}/${model}`;
 }
 
 function loadAuthStoreForProvider(params: {
@@ -312,12 +292,7 @@ function hasDirectProviderApiKeyAuthForTool(params: {
       allowPluginSyntheticAuth: false,
       // Without the store, inline provider keys in billing cooldown would
       // still be advertised as direct API-key auth for tools.
-      store: loadAuthStoreForProvider({
-        provider: params.provider,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      store: loadAuthStoreForProvider(params),
     })
   ) {
     return true;
@@ -328,21 +303,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     type: "api_key",
-  });
-}
-
-function hasCanonicalOpenAiCodexAuthSignal(params: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-}): boolean {
-  return hasAuthProfileTypeForProvider({
-    provider: OPENAI_PROVIDER_ID,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    includeExternalCli: true,
-    type: ["oauth", "token"],
   });
 }
 
@@ -371,10 +331,7 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
   };
 
   const store = loadAuthStoreForProvider({
-    provider: params.provider,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
+    ...params,
     includeExternalCli: true,
   });
   const storeResult = store ? resolveFromStore(store) : undefined;
@@ -416,13 +373,22 @@ export function resolveOpenAiImageMediaCandidate(params: {
   ) {
     return {
       kind: "keep",
-      ref: formatProviderModelRef(OPENAI_PROVIDER_ID, openAiModel),
+      ref: `${OPENAI_PROVIDER_ID}/${openAiModel}`,
     };
   }
 
   // Check canonical subscription auth before resolving plugin capability so a
   // fresh install cannot route there from bundled-plugin presence alone.
-  if (!hasCanonicalOpenAiCodexAuthSignal(params)) {
+  if (
+    !hasAuthProfileTypeForProvider({
+      provider: OPENAI_PROVIDER_ID,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      includeExternalCli: true,
+      type: ["oauth", "token"],
+    })
+  ) {
     return { kind: "drop" };
   }
   const codexModel = params.resolveCodexMediaRoute?.()?.model.trim();
@@ -430,7 +396,7 @@ export function resolveOpenAiImageMediaCandidate(params: {
     return {
       kind: "substitute",
       provider: CODEX_MEDIA_PROVIDER_ID,
-      ref: formatProviderModelRef(CODEX_MEDIA_PROVIDER_ID, codexModel),
+      ref: `${CODEX_MEDIA_PROVIDER_ID}/${codexModel}`,
     };
   }
 

@@ -13,10 +13,6 @@ import {
   readMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount,
 } from "./scenario-runtime-config.js";
-import type {
-  MatrixQaCliBackupRestoreStatus,
-  MatrixQaCliVerificationStatus,
-} from "./scenario-runtime-e2ee-cli-shared.js";
 import {
   assertMatrixQaCliBackupRestoreFailed,
   assertMatrixQaCliBackupRestoreSucceeded,
@@ -99,25 +95,6 @@ async function registerMatrixQaDestructiveOwner(
   };
 }
 
-async function createMatrixQaDestructiveOwnerClient(params: {
-  account: Awaited<ReturnType<typeof registerMatrixQaDestructiveOwner>>;
-  context: MatrixQaScenarioContext;
-  scenarioId: MatrixQaE2eeScenarioId;
-}) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: params.account.accessToken,
-    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
-    deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    password: params.account.password,
-    scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
-    userId: params.account.userId,
-  });
-}
-
 async function ensureMatrixQaOwnerReady(params: {
   client: MatrixQaE2eeScenarioClient;
   label: string;
@@ -183,7 +160,18 @@ async function prepareMatrixQaDestructiveSetup(
     inviteUserIds: [],
     name: `Matrix QA ${scenarioId}`,
   });
-  const owner = await createMatrixQaDestructiveOwnerClient({ account, context, scenarioId });
+  const owner = await createMatrixQaE2eeScenarioClient({
+    accessToken: account.accessToken,
+    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
+    baseUrl: context.baseUrl,
+    deviceId: account.deviceId,
+    observedEvents: context.observedEvents,
+    outputDir: requireMatrixQaE2eeOutputDir(context),
+    password: account.password,
+    scenarioId,
+    timeoutMs: context.timeoutMs,
+    userId: account.userId,
+  });
   try {
     const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "destructive owner" });
     const seededEventId = await owner.sendTextMessage({
@@ -215,7 +203,7 @@ function restoreMatrixQaCliBackup(params: {
   runtime: MatrixQaCliRuntime;
   timeoutMs: number;
 }) {
-  return runMatrixQaCliJson<MatrixQaCliBackupRestoreStatus>({
+  return runMatrixQaCliJson({
     ...(params.allowNonZero === undefined ? {} : { allowNonZero: params.allowNonZero }),
     args: [
       "matrix",
@@ -302,7 +290,7 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
         timeoutMs: context.timeoutMs,
       });
       assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "external recovery-key");
-      const diagnostics = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+      const diagnostics = await runMatrixQaCliJson({
         args: ["matrix", "verify", "status", "--account", "external-key", "--json"],
         label: "status-after-external-key-restore",
         runtime: cli,
@@ -387,7 +375,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
         timeoutMs: context.timeoutMs,
       });
       assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "stored recovery-key");
-      const status = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+      const status = await runMatrixQaCliJson({
         args: ["matrix", "verify", "status", "--account", "stored-key", "--json"],
         label: "status-after-stored-key-restore",
         runtime: cli,
@@ -756,7 +744,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     deviceToDelete = undefined;
     const ownerDevicesAfterDelete = await setup.owner.listOwnDevices();
     await setup.owner.stop().catch(() => undefined);
-    const defaultStatus = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+    const defaultStatus = await runMatrixQaCliJson({
       allowNonZero: true,
       args: ["matrix", "verify", "status", "--account", "deleted-device", "--json"],
       label: "status-after-device-delete-default",
@@ -766,7 +754,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     if (isMatrixQaVerifyStatusHealthy(defaultStatus)) {
       throw new Error("default deleted device status reported healthy local state");
     }
-    const status = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+    const status = await runMatrixQaCliJson({
       allowNonZero: true,
       args: [
         "matrix",
@@ -846,7 +834,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
       await setup.owner.deleteOwnDevices([deleted.device.deviceId]);
       const ownerDevicesAfterDelete = await setup.owner.listOwnDevices();
       await setup.owner.stop().catch(() => undefined);
-      const defaultStatus = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+      const defaultStatus = await runMatrixQaCliJson({
         allowNonZero: true,
         args: ["matrix", "verify", "status", "--account", "deleted-device-recovery", "--json"],
         label: "status-after-source-device-delete",
@@ -876,7 +864,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
         timeoutMs: context.timeoutMs,
       });
       assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device relogin recovery");
-      const status = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+      const status = await runMatrixQaCliJson({
         args: [
           "matrix",
           "verify",

@@ -207,16 +207,12 @@ describe("System busyness frame layout", () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it("keeps a queued transition and retargets an active one across same-mode content renders", async () => {
+  it("keeps a queued transition across same-mode content renders", async () => {
     await mount();
     await mount("expanded", false);
     await mount("expanded", false);
     expect(frames.size).toBe(1);
     flushFrame();
     expect(animate).toHaveBeenCalledTimes(1);
-    const active = animate.mock.results[0]!.value;
-    await mount("expanded");
-    expect(active.cancel).toHaveBeenCalledOnce();
-    expect(animate).toHaveBeenCalledTimes(2);
   });
 });

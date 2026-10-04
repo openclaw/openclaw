@@ -159,7 +159,7 @@ export function validateCommandLaneGroupSpec(
   group: string,
   spec: CommandLaneGroupSpec,
 ): LaneGroupState {
-  const members = spec.members.map((member) => normalizeLane(member));
+  const members = new Set(spec.members.map((member) => normalizeLane(member)));
   for (const member of members) {
     assertGroupEligibleLane(member);
   }
@@ -167,7 +167,7 @@ export function validateCommandLaneGroupSpec(
   let reservedTotal = 0;
   for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
     const member = normalizeLane(rawLane);
-    if (!members.includes(member)) {
+    if (!members.has(member)) {
       throw new Error(`command lane group "${group}" reserves for non-member lane "${member}"`);
     }
     const reserved = Math.max(0, Math.floor(count));
@@ -182,7 +182,7 @@ export function validateCommandLaneGroupSpec(
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
-  return { group, budget, members: new Set(members), reservations };
+  return { group, budget, members, reservations };
 }
 
 /** Install a validated group, detaching its members from any previous owner. */

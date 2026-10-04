@@ -71,13 +71,6 @@ function readSlackRequestErrorCode(value: unknown): string | undefined {
   return typeof code === "string" ? code.toUpperCase() : undefined;
 }
 
-function readSlackRequestErrorMessage(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  return typeof value === "string" ? value : "";
-}
-
 function hasSlackDnsRequestSignal(err: unknown): boolean {
   let current: unknown = err;
   const seen = new Set<unknown>();
@@ -90,7 +83,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
     if (code && SLACK_DNS_RETRY_CODES.has(code)) {
       return true;
     }
-    const message = readSlackRequestErrorMessage(current);
+    const message = current instanceof Error ? current.message : "";
     if (/\b(EAI_AGAIN|ENOTFOUND|UND_ERR_DNS_RESOLVE_FAILED)\b/i.test(message)) {
       return true;
     }

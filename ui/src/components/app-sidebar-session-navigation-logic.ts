@@ -22,7 +22,6 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -195,7 +194,7 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
@@ -210,6 +209,7 @@ export function buildSidebarSessionNavigationState(input: {
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,
@@ -250,7 +250,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
@@ -310,7 +310,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);
@@ -447,14 +447,6 @@ export function collectCategorizedChildRootRows(input: {
   );
 }
 
-export function resolveSidebarAgentResumeKey(
-  latest: SessionRow | null,
-  agentId: string,
-  mainKey: string,
-): string {
-  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
-}
-
 export function collectKnownSidebarSessionCatalogIds(input: {
   loadedCatalogIds: readonly string[];
   hasLoaded: boolean;
@@ -486,13 +478,6 @@ export function resolveSidebarMainSessionKey(input: {
     agentId: input.agentId,
     mainKey: resolveUiConfiguredMainKey(host),
   });
-}
-
-export function findSidebarMainSessionRow(
-  rows: readonly GatewaySessionRow[],
-  mainKey: string,
-): GatewaySessionRow | null {
-  return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
 }
 
 /** Search the projected tree without flattening folded descendant state. */

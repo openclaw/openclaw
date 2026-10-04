@@ -74,7 +74,11 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("connect")).toHaveLength(0);
 
+      const retryHealthResponse = page.waitForResponse("**/healthz");
       await page.clock.runFor(1_000);
+      // The first probe's busy state can survive while the retry probe is still in flight.
+      // Finish its real response before advancing the virtual one-second abort deadline.
+      expect(await (await retryHealthResponse).finished()).toBeNull();
       const countdown = failure.locator(".login-gate__retry");
       await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
       await page.clock.runFor(1_000);
@@ -374,7 +378,7 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
     {
       name: "GitHub profile rate limit",
@@ -386,13 +390,16 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
     const viewport = { height: 900, width: 1280 };
     const context = await suite.browser.newContext({
       viewport,
-      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+      recordVideo:
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
+          : undefined,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -558,7 +565,7 @@ suite.define(() => {
     const page = await context.newPage();
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl);
+      const gateway = await renderLoginGate(page, suite.server.baseUrl);
       const gatewayInput = page.locator(".login-gate__form .field input").first();
       expect(await gatewayInput.getAttribute("inputmode")).toBe("url");
       expect(await gatewayInput.getAttribute("autocapitalize")).toBe("none");
@@ -566,8 +573,27 @@ suite.define(() => {
       expect(await gatewayInput.getAttribute("spellcheck")).toBe("false");
       expect(await gatewayInput.getAttribute("enterkeyhint")).toBe("go");
 
+      // App renders must retain the real connection action, not a fixture-owned callback.
+      await page.evaluate(async () => {
+        const app = document.querySelector<
+          HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> }
+        >("openclaw-app")!;
+        app.requestUpdate();
+        await app.updateComplete;
+        await document.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+          "openclaw-login-gate",
+        )!.updateComplete;
+      });
+      await gateway.deferNext("connect");
       await gatewayInput.press("Enter");
-      expect(await page.locator("body").getAttribute("data-connect-count")).toBe("1");
+      await gateway.waitForRequest("connect", { after: 1 });
+      expect(await gateway.getRequests("connect")).toHaveLength(2);
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
 
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");

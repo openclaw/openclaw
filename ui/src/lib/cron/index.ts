@@ -1,12 +1,11 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  asNullableObjectRecord,
-  asNullableRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+  normalizeLowercaseStringOrEmpty,
+  readNonEmptyStringPreservingWhitespace,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -38,6 +37,7 @@ import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
+export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -236,6 +236,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       }
     }
   }
+  if (!form.deliveryMode) {
+    errors.deliveryMode = "cron.errors.deliveryModeRequired";
+  }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
     if (error) {
@@ -366,60 +369,6 @@ export async function loadCronStatus(
       request.queued.resolve(trailing);
     }
   }
-}
-
-function addModelId(target: Set<string>, value: unknown) {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = value.trim();
-  if (trimmed) {
-    target.add(trimmed);
-  }
-}
-
-function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (typeof modelConfig === "string") {
-    addModelId(target, modelConfig);
-    return;
-  }
-  const record = asNullableObjectRecord(modelConfig);
-  if (!record) {
-    return;
-  }
-  addModelId(target, record.primary);
-  addModelId(target, record.model);
-  addModelId(target, record.id);
-  addModelId(target, record.value);
-  const fallbacks = Array.isArray(record.fallbacks)
-    ? record.fallbacks
-    : Array.isArray(record.fallback)
-      ? record.fallback
-      : [];
-  for (const fallback of fallbacks) {
-    addModelId(target, fallback);
-  }
-}
-
-export function resolveConfiguredCronModelSuggestions(
-  configForm: Record<string, unknown> | null | undefined,
-): string[] {
-  const agents = asNullableObjectRecord(configForm?.agents);
-  if (!agents) {
-    return [];
-  }
-  const out = new Set<string>();
-  const defaults = asNullableObjectRecord(agents.defaults);
-  if (defaults) {
-    addModelConfigIds(out, defaults.model);
-    for (const modelId of Object.keys(asNullableObjectRecord(defaults.models) ?? {})) {
-      addModelId(out, modelId);
-    }
-  }
-  for (const entry of Object.values(asNullableRecord(agents.entries) ?? {})) {
-    addModelConfigIds(out, asNullableObjectRecord(entry)?.model);
-  }
-  return sortUniqueStrings([...out]);
 }
 
 async function withCronBusy(
@@ -565,7 +514,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
-    deliveryMode: job.delivery?.mode ?? "none",
+    deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
@@ -728,15 +677,9 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-  const container = "job" in response ? (response as { job?: unknown }).job : response;
-  if (!container || typeof container !== "object") {
-    return null;
-  }
-  const id = (container as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
+  const record = asNullableObjectRecord(response);
+  const container = record && "job" in record ? asNullableObjectRecord(record.job) : record;
+  return readNonEmptyStringPreservingWhitespace(container?.id) ?? null;
 }
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
@@ -856,9 +799,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     }
     if (payload) {
       job.payload = payload;
-    }
-    if (!job.name) {
-      throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (editingJob) {
       const editedJobId = editingJob.id;

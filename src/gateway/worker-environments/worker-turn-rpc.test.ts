@@ -11,7 +11,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import { captureWorkerInferenceCancellation } from "./inference-control-internal.js";
+import { getWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
@@ -332,14 +332,14 @@ describe("worker environment service", () => {
         ownerEpoch: environmentIdentity.ownerEpoch,
         sessionId,
       });
-      store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-      store.updateAckCursors({ claim, liveEvent: 1 });
+      await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await store.updateAckCursors({ claim, liveEvent: 1 });
       const preRestartService = support.createService(support.createProvider(), {
         placementStore: createWorkerSessionPlacementGate(store),
       });
       const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
       await preRestartService.stop();
-      store.handoffWorkspaceResultRecovery(claim);
+      await store.handoffWorkspaceResultRecovery(claim);
 
       const restartedStore = createWorkerSessionPlacementStore({
         database: support.testState.stateDb,
@@ -351,12 +351,12 @@ describe("worker environment service", () => {
         gate.fenceWorkerTurnForRecovery(claim);
       }
       const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
-      const executeSessionTool =
-        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
+      const createGatewayTools =
+        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["createGatewayTools"]>>();
       const liveEvents = support.createLiveEvents();
       const workerService = support.createService(support.createProvider(), {
         executeInference,
-        executeSessionTool,
+        createGatewayTools,
         liveEvents,
         placementStore: gate,
       });
@@ -377,7 +377,7 @@ describe("worker environment service", () => {
       };
 
       expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-      expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       await expect(workerService.admitWorker(admission)).resolves.toEqual({
         ok: false,
         reason: "placement-mismatch",
@@ -397,17 +397,29 @@ describe("worker environment service", () => {
         }),
       ).toEqual({ ok: false, closeReason: "placement-mismatch" });
       await expect(
-        workerService.executeSessionTool(identity, "sessions_send", {
+        workerService.invokeGatewayTool(
+          identity,
+          {
+            generation: "stale-surface",
+            toolId: "send",
+            toolCallId: "inherited-tool",
+            arguments: { sessionKey: "agent:main:target", message: "stale" },
+          },
+          { send: vi.fn() },
+        ),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(workerService.getToolSurface(identity)).resolves.toEqual({
+        ok: false,
+        closeReason: "placement-mismatch",
+      });
+      await expect(
+        workerService.cancelGatewayTool(identity, {
+          generation: "stale-surface",
           toolCallId: "inherited-tool",
-          sessionKey: "agent:main:target",
-          message: "stale",
         }),
       ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
       expect(executeInference).not.toHaveBeenCalled();
-      expect(executeSessionTool).not.toHaveBeenCalled();
-      console.info(
-        `[worker-authority-proof] source=${source} admission=denied credential-ack=false connection/transcript/live/inference/tools=placement-mismatch effects=0`,
-      );
+      expect(createGatewayTools).not.toHaveBeenCalled();
     },
   );
 
@@ -571,11 +583,9 @@ describe("worker environment service", () => {
     });
     expect(signals[0]?.aborted).toBe(false);
 
-    const originalCancellation = captureWorkerInferenceCancellation(
+    const originalCancellation = getWorkerInferenceSessionControl(
       workerService,
-      sessionId,
-      first.runId,
-    );
+    )?.captureSessionCancellation(sessionId, first.runId);
     expect(originalCancellation?.runIds).toEqual([first.runId]);
     await store.releaseTurn(first);
     expect(signals[0]?.aborted).toBe(true);
@@ -602,7 +612,10 @@ describe("worker environment service", () => {
     expect(await originalCancellation?.cancel()).toEqual([]);
     expect(signals[1]?.aborted).toBe(false);
     expect(
-      captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
+      getWorkerInferenceSessionControl(workerService)?.captureSessionCancellation(
+        sessionId,
+        first.runId,
+      ).runIds,
     ).toEqual([first.runId]);
     await expect(store.releaseTurn(first)).rejects.toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
@@ -632,187 +645,6 @@ describe("worker environment service", () => {
       identity.credentialHash,
     );
     expect(liveEvents.rotateCredential).not.toHaveBeenCalled();
-  });
-
-  it("keeps preview ACKs in memory and persists only transcript and terminal cursors", async () => {
-    const applyTranscriptCommit = support.successfulTranscriptCommit("entry-placement");
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-ack",
-      "session-placement-ack",
-      {
-        applyTranscriptCommit,
-        liveEvents,
-      },
-    );
-    const claim = identity.turnClaim!;
-
-    await expect(
-      workerService.commitTranscript(
-        identity,
-        support.transcriptRequest(identity, "commit", { seq: 7 }),
-      ),
-    ).resolves.toMatchObject({ ok: true });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      claim,
-      transcriptSeq: 7,
-    });
-
-    await expect(
-      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "preview")),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
-
-    await expect(
-      workerService.pushLiveEvent(
-        identity,
-        support.terminalEvent(identity, { lastAckedSeq: 1, seq: 2 }),
-      ),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-    expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
-      claim,
-      liveSeq: 2,
-    });
-  });
-
-  it("uses worker finishing as the durable workspace-result fence", async () => {
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-finishing",
-      "session-placement-finishing",
-      { liveEvents },
-    );
-    const terminal = support.terminalEvent(identity);
-    const finishing = {
-      ...terminal,
-      event: {
-        kind: "lifecycle" as const,
-        payload: { phase: "finishing" as const, startedAt: 1, endedAt: 2 },
-      },
-    };
-
-    await expect(workerService.pushLiveEvent(identity, finishing)).resolves.toEqual({
-      ok: true,
-      result: { ackedSeq: 1 },
-    });
-    expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
-      claim: identity.turnClaim,
-      liveSeq: 1,
-    });
-  });
-
-  it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {
-    const applyTranscriptCommit = vi
-      .fn<NonNullable<WorkerEnvironmentServiceOptions["applyTranscriptCommit"]>>()
-      .mockResolvedValueOnce({ ok: false, reason: "stale-base-leaf" })
-      .mockResolvedValueOnce({ ok: false, reason: "invalid-batch" });
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-stale",
-      "session-placement-stale",
-      { applyTranscriptCommit },
-    );
-    const request = support.transcriptRequest(identity, "stale commit", {
-      seq: 11,
-      baseLeafId: "stale-leaf",
-    });
-
-    await expect(workerService.commitTranscript(identity, request)).resolves.toEqual({
-      ok: false,
-      reason: "stale-base-leaf",
-    });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      claim: identity.turnClaim,
-      transcriptSeq: 11,
-    });
-
-    await expect(
-      workerService.commitTranscript(identity, { ...request, seq: 12 }),
-    ).resolves.toEqual({ ok: false, reason: "invalid-batch" });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
-  });
-
-  it("fences after a buffered terminal event becomes acknowledged by a gap fill", async () => {
-    const applyTranscriptCommit = support.successfulTranscriptCommit("entry-after-terminal-gap");
-    const { apply: liveApply, liveEvents } = support.sequencedLiveEvents((seq) =>
-      seq === 1 ? 2 : 0,
-    );
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-gap",
-      "session-placement-gap",
-      {
-        applyTranscriptCommit,
-        liveEvents,
-      },
-    );
-
-    await expect(
-      workerService.pushLiveEvent(identity, support.terminalEvent(identity, { seq: 2 })),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 0 } });
-    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
-
-    await expect(
-      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "fills gap")),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
-    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      claim: identity.turnClaim,
-      liveSeq: 2,
-    });
-    await expect(
-      workerService.commitTranscript(
-        identity,
-        support.transcriptRequest(identity, "late transcript"),
-      ),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    await expect(
-      workerService.pushLiveEvent(
-        identity,
-        support.assistantEvent(identity, "late", { lastAckedSeq: 2, seq: 3 }),
-      ),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(applyTranscriptCommit).not.toHaveBeenCalled();
-    expect(liveApply).toHaveBeenCalledTimes(2);
-  });
-
-  it("applies a terminal ACK only after its transcript commit finishes", async () => {
-    const { promise: commitBlocked, resolve: finishCommit } = createDeferredCore();
-    const applyTranscriptCommit = support.successfulTranscriptCommit(
-      "entry-order",
-      () => commitBlocked,
-    );
-    const { liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = await support.placementHarness(
-      "worker-placement-order",
-      "session-placement-order",
-      { applyTranscriptCommit, liveEvents },
-    );
-
-    const commit = workerService.commitTranscript(
-      identity,
-      support.transcriptRequest(identity, "commit before terminal"),
-    );
-    await support.waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
-    const terminal = workerService.pushLiveEvent(identity, support.terminalEvent(identity));
-    await Promise.resolve();
-    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
-
-    finishCommit?.();
-    await expect(commit).resolves.toMatchObject({ ok: true });
-    await expect(terminal).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
-    expect(placementStore.updateAckCursors.mock.calls).toEqual([
-      [
-        {
-          claim: identity.turnClaim,
-          transcriptSeq: 1,
-        },
-      ],
-      [
-        {
-          claim: identity.turnClaim,
-          liveSeq: 1,
-        },
-      ],
-    ]);
   });
 
   it("fences post-terminal mutations while preserving sequenced replays", async () => {
@@ -927,20 +759,19 @@ describe("worker environment service", () => {
       { executeInference },
     );
     const request = support.inferenceRequest(identity);
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, sessionId: "session-other" },
-        { connectionId: "connection-a", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "session-not-attached" });
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, runEpoch: request.runEpoch + 1 },
-        { connectionId: "connection-b", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "epoch-mismatch" });
+    for (const [input, reason] of [
+      [{ ...request, sessionId: "session-other" }, "session-not-attached"],
+      [{ ...request, runId: "run-other" }, "session-not-attached"],
+      [{ ...request, runEpoch: request.runEpoch + 1 }, "epoch-mismatch"],
+    ] as const) {
+      await expect(
+        workerService.startInference(identity, input, { connectionId: "fenced", send: vi.fn() }),
+      ).resolves.toEqual({ ok: false, reason });
+      await expect(workerService.cancelInference(identity, input)).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+    }
 
     const send = vi.fn();
     const started = await workerService.startInference(identity, request, {

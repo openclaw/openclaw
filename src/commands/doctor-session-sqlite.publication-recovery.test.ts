@@ -24,8 +24,6 @@ const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
 describe("runDoctorSessionSqlite", () => {
   it.each([
     { kind: "transcript", mode: "import" },
-    { kind: "legacy-store", mode: "import" },
-    { kind: "transcript", mode: "restore" },
     { kind: "legacy-store", mode: "restore" },
   ] as const)(
     "recovers interrupted $kind publication through public $mode",

@@ -10,13 +10,11 @@ import type {
 } from "./protocol.js";
 
 export {
-  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginMarketplaceName,
   type OpenClawExecApprovalFloorsForCodexAppServer,
   type OpenClawExecMode,
-  type OpenClawExecPolicy,
   type OpenClawExecPolicyForCodexAppServer,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
@@ -101,7 +99,7 @@ export type CodexAppServerRuntimeOptions = {
   /** Prepared boundary for an explicit session permission mode. */
   sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;
-  /** Upgrade active turns only when the selected model advertises Ultrafast. */
+  /** False disables Ultrafast; otherwise only an explicit shared selection can request it. */
   enableUltrafast?: boolean;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };

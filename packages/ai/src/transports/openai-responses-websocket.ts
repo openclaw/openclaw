@@ -7,8 +7,13 @@ import type {
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
 import { ResponsesWS } from "openai/resources/responses/ws.js";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import {
+  getSessionResourceOwnerId,
+  registerSessionResourceCleanup,
+  type SessionResourceOwner,
+} from "../session-resources.js";
 import type { StreamOptions, UserMessage } from "../types.js";
 import {
   recordResponsesContinuationState,
@@ -38,6 +43,7 @@ const WEBSOCKET_OPEN_STATE = 1;
 type CachedWebSocketConnection = {
   socket: ResponsesWS;
   sessionId: string;
+  owner: SessionResourceOwner;
   busy: boolean;
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
@@ -74,25 +80,28 @@ type OpenAIResponsesWebSocketStream = {
 // raw-socket cache, which matches wire bodies and has sticky SSE fallback. Both use
 // session-resource cleanup.
 const websocketSessionCache = new Map<string, CachedWebSocketConnection>();
-const degradedWebSocketConnections = new Map<string, { sessionId?: string; retryAt: number }>();
+type DegradedWebSocketConnection = {
+  sessionId?: string;
+  owner: SessionResourceOwner;
+  retryAt: number;
+  expiryTimer: ReturnType<typeof setTimeout>;
+};
+const degradedWebSocketConnections = new Map<string, DegradedWebSocketConnection>();
 
 function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
     return false;
   }
-  try {
-    const url = new URL(baseUrl);
-    return (
-      url.origin === "https://api.openai.com" &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      url.pathname.replace(/\/+$/, "") === "/v1"
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(baseUrl);
+  return (
+    url !== null &&
+    url.origin === "https://api.openai.com" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.pathname.replace(/\/+$/, "") === "/v1"
+  );
 }
 export function supportsNativeOpenAIResponsesEndpoint(params: {
   provider: string;
@@ -147,6 +156,8 @@ type PreparedWebSocketConnection = {
   client: OpenAI;
   headers: Record<string, string>;
   identity: string;
+  owner: SessionResourceOwner;
+  ownerId: number;
 };
 
 function prepareWebSocketConnection(
@@ -159,7 +170,8 @@ function prepareWebSocketConnection(
   if (typeof client.apiKey !== "string" || client.apiKey.length === 0) {
     throw new Error("OpenAI Responses WebSocket requires an API key");
   }
-  const resolvedApiKey = getAiTransportHost().resolveSecretSentinel(client.apiKey);
+  const owner = getAiTransportHost();
+  const resolvedApiKey = owner.resolveSecretSentinel(client.apiKey);
   const resolvedHeaders = { ...resolveAiTransportHeaderSentinels(headers) };
   for (const key of Object.keys(resolvedHeaders)) {
     const normalizedKey = key.toLowerCase();
@@ -174,6 +186,8 @@ function prepareWebSocketConnection(
   return {
     client: resolvedClient,
     headers: resolvedHeaders,
+    owner,
+    ownerId: getSessionResourceOwnerId(owner),
     identity: sha256Hex(
       JSON.stringify([
         resolvedApiKey,
@@ -260,7 +274,7 @@ function acquireWebSocket(
     return createTransientWebSocketLease(connection);
   }
 
-  const cacheKey = `${params.sessionId}\0${connection.identity}`;
+  const cacheKey = `${connection.ownerId}\0${params.sessionId}\0${connection.identity}`;
   const cached = websocketSessionCache.get(cacheKey);
   if (cached) {
     if (cached.idleTimer) {
@@ -288,6 +302,7 @@ function acquireWebSocket(
   const entry = {
     socket,
     sessionId: params.sessionId,
+    owner: connection.owner,
     busy: true,
     createdAt: Date.now(),
   };
@@ -304,26 +319,10 @@ async function nextWebSocketMessage(
   iterator: AsyncIterator<ResponsesWebSocketStreamMessage>,
   signal: AbortSignal | undefined,
 ): Promise<IteratorResult<ResponsesWebSocketStreamMessage>> {
-  if (!signal) {
-    return iterator.next();
-  }
-  if (signal.aborted) {
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
+  return await racePromiseWithAbortSignal(iterator.next(), signal, transportAbortError);
 }
 
 function readServerEvent(
@@ -360,12 +359,15 @@ export function createOpenAIResponsesWebSocketStream(params: {
   const connection = prepareWebSocketConnection(params.client, params.headers);
   let fullRequest = sanitizeWebSocketRequest(params.request);
   const requestModel = typeof fullRequest.model === "string" ? fullRequest.model : "";
-  const degradationKey = `${params.sessionId ?? ""}\0${connection.identity}\0${requestModel}`;
+  const degradationKey = `${connection.ownerId}\0${params.sessionId ?? ""}\0${connection.identity}\0${requestModel}`;
   const degraded = degradedWebSocketConnections.get(degradationKey);
   if (degraded && degraded.retryAt > Date.now()) {
     throw new OpenAIResponsesWebSocketPreDispatchError(
       new Error("OpenAI Responses WebSocket is cooling down after a transport failure"),
     );
+  }
+  if (degraded) {
+    clearTimeout(degraded.expiryTimer);
   }
   degradedWebSocketConnections.delete(degradationKey);
   const markDegraded = () => {
@@ -373,10 +375,18 @@ export function createOpenAIResponsesWebSocketStream(params: {
     if (cooldownMs === undefined || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
       return;
     }
-    degradedWebSocketConnections.set(degradationKey, {
+    const entry: DegradedWebSocketConnection = {
       sessionId: params.sessionId,
+      owner: connection.owner,
       retryAt: Date.now() + cooldownMs,
-    });
+      expiryTimer: setTimeout(() => {
+        if (degradedWebSocketConnections.get(degradationKey) === entry) {
+          degradedWebSocketConnections.delete(degradationKey);
+        }
+      }, cooldownMs),
+    };
+    entry.expiryTimer.unref?.();
+    degradedWebSocketConnections.set(degradationKey, entry);
   };
   let lease: ReturnType<typeof acquireWebSocket>;
   try {
@@ -677,15 +687,19 @@ export function createOpenAIResponsesWebSocketStream(params: {
   };
 }
 
-function closeOpenAIResponsesWebSocketSessions(sessionId?: string): void {
+function closeOpenAIResponsesWebSocketSessions(
+  sessionId?: string,
+  owner?: SessionResourceOwner,
+): void {
   for (const [cacheKey, entry] of websocketSessionCache) {
-    if (sessionId && entry.sessionId !== sessionId) {
+    if ((owner && entry.owner !== owner) || (sessionId && entry.sessionId !== sessionId)) {
       continue;
     }
     invalidateOwnedWebSocketSession(cacheKey, entry, "session_cleanup");
   }
   for (const [key, entry] of degradedWebSocketConnections) {
-    if (!sessionId || entry.sessionId === sessionId) {
+    if ((!owner || entry.owner === owner) && (!sessionId || entry.sessionId === sessionId)) {
+      clearTimeout(entry.expiryTimer);
       degradedWebSocketConnections.delete(key);
     }
   }

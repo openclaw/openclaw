@@ -708,7 +708,9 @@ context when forwarding approved `system.run` requests:
 An approval owner can attach a typed, display-only scope describing the action's
 blast radius. OpenClaw renders the sanitized summary on channel approval cards
 and includes the bounded scope in the safe approval presentation available to
-Control UI clients. Scope never grants authorization or changes approval policy.
+Control UI clients. Standalone approval links display the supplied scope before
+the decision buttons, including automation grant terms. Scope never grants
+authorization or changes approval policy.
 
 - `message-send`: destination, recipient count, optional recipient preview, and
   whether the audience is internal or external.

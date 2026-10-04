@@ -42,6 +42,7 @@ import {
   resolveGatewayCallDeviceAuth,
   type GatewayCallDeviceAuthOptions,
 } from "./call-device-auth.js";
+import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import {
   ensureExplicitGatewayAuth,
   GatewayExplicitAuthRequiredError,
@@ -123,6 +124,7 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     expectFinal?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    prepareDispatchCurrent?: () => Promise<void>;
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
@@ -595,56 +597,6 @@ function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);
 }
 
-function ensureGatewaySupportsRequiredMethods(params: {
-  requiredMethods: string[] | undefined;
-  methods: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const requiredMethods = Array.isArray(params.requiredMethods)
-    ? params.requiredMethods.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
-    : [];
-  if (requiredMethods.length === 0) {
-    return;
-  }
-  const supportedMethods = new Set(
-    (Array.isArray(params.methods) ? params.methods : [])
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
-  for (const method of requiredMethods) {
-    if (supportedMethods.has(method)) {
-      continue;
-    }
-    throw new Error(
-      [
-        `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
-        "Update or restart the active gateway and try again.",
-      ].join(" "),
-    );
-  }
-}
-
-function ensureGatewaySupportsRequiredCapabilities(params: {
-  requiredCapabilities: string[] | undefined;
-  capabilities: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
-  if (required.length === 0) {
-    return;
-  }
-  const supported = new Set(
-    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
-  );
-  for (const capability of required) {
-    if (!supported.has(capability)) {
-      throw new Error(
-        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
-      );
-    }
-  }
-}
-
 function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
   return err.message.includes(
     "gateway rejected required agent runtime identity auth field; refusing to retry without it",
@@ -702,25 +654,19 @@ async function executeGatewayRequestWithScopes<T>(params: {
       return;
     }
     let settled = false;
-    let ignoreClose = false;
     let timer: NodeJS.Timeout | undefined;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
     let suppressedPreHelloCleanCloses = 0;
+    let connectionGeneration = 0;
     const cleanup = () => {
       startAbort.abort();
-      if (abortHandler) {
-        opts.signal?.removeEventListener("abort", abortHandler);
-      }
+      opts.signal?.removeEventListener("abort", abortHandler);
       if (timer) {
         clearTimeout(timer);
       }
     };
-    const stopClientThenSettle = (
-      activeClient: GatewayClient | undefined,
-      err?: Error,
-      value?: T,
-    ) => {
+    const stopClientThenSettle = (err?: Error, value?: T) => {
       const complete = () => {
         if (err) {
           reject(err);
@@ -728,11 +674,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           resolve(value as T);
         }
       };
-      if (!activeClient) {
-        complete();
-        return;
-      }
-      void stopGatewayClient(activeClient).finally(complete);
+      void stopGatewayClient(client).finally(complete);
     };
     const stop = (err?: Error, value?: T) => {
       if (settled) {
@@ -740,23 +682,21 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
       settled = true;
       cleanup();
-      stopClientThenSettle(client, err, value);
+      stopClientThenSettle(err, value);
     };
-    const abortHandler: (() => void) | undefined = () => {
+    const abortHandler = () => {
       if (settled) {
         return;
       }
-      ignoreClose = true;
       settled = true;
       cleanup();
       const err = createGatewayRequestAbortError(opts.method);
-      const activeClient = client;
-      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, err);
-      if (!activeClient || !opts.onSignalAbort || !primaryRequestStarted) {
+      const stopAfterAbortHook = () => stopClientThenSettle(err);
+      if (!opts.onSignalAbort || !primaryRequestStarted) {
         stopAfterAbortHook();
         return;
       }
-      const request: GatewayRequestFunction = activeClient.request.bind(activeClient);
+      const request: GatewayRequestFunction = client.request.bind(client);
       void Promise.resolve()
         .then(() => opts.onSignalAbort?.(request))
         .catch(() => {})
@@ -764,7 +704,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client: GatewayClient | undefined = new GatewayClient({
+    const client: GatewayClient = new GatewayClient({
       url,
       sshTunnel,
       token,
@@ -776,7 +716,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
-      caps: opts.caps,
+      caps: ["ultrafast", ...(opts.caps ?? [])],
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
@@ -792,6 +732,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        const dispatchGeneration = ++connectionGeneration;
         if (timeoutMs === null && timer) {
           clearTimeout(timer);
           timer = undefined;
@@ -805,44 +746,49 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         void (async () => {
           try {
-            ensureGatewaySupportsRequiredMethods({
-              requiredMethods: opts.requiredMethods,
-              methods: hello.features?.methods,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "method",
+              required: Array.isArray(opts.requiredMethods) ? opts.requiredMethods : [],
+              supported: Array.isArray(hello.features?.methods) ? hello.features.methods : [],
               attemptedMethod: opts.method,
             });
-            ensureGatewaySupportsRequiredCapabilities({
-              requiredCapabilities: opts.requiredCapabilities,
-              capabilities: hello.features?.capabilities,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "capability",
+              required: opts.requiredCapabilities,
+              supported: hello.features?.capabilities,
               attemptedMethod: opts.method,
             });
-            const activeClient = client;
-            if (!activeClient) {
-              throw new Error("gateway client not initialized");
+            if (opts.prepareDispatchCurrent) {
+              await opts.prepareDispatchCurrent();
+            }
+            if (settled || opts.signal?.aborted || dispatchGeneration !== connectionGeneration) {
+              return;
             }
             // This check must stay synchronous with request -> ws.send. Moving
             // an await into that chain requires moving enforcement to the send owner.
             opts.assertDispatchCurrent?.();
             primaryRequestStarted = true;
-            const result = await activeClient.request<T>(opts.method, opts.params, {
+            const result = await client.request<T>(opts.method, opts.params, {
               expectFinal: opts.expectFinal,
               timeoutMs: opts.timeoutMs,
               signal: opts.signal,
               onAccepted: opts.onAccepted,
             });
-            ignoreClose = true;
             stop(undefined, result);
           } catch (err) {
-            ignoreClose = true;
+            if (settled || dispatchGeneration !== connectionGeneration) {
+              return;
+            }
             stop(err as Error);
           }
         })();
       },
       onClose: (code, reason, info?: GatewayClientCloseInfo) => {
-        if (settled || ignoreClose) {
+        connectionGeneration += 1;
+        if (settled) {
           return;
         }
         if (info?.connectError) {
-          ignoreClose = true;
           // Raw socket failures (ECONNREFUSED and friends) otherwise reach the
           // operator as a bare Node error with no next step.
           stop(
@@ -863,7 +809,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
           suppressedPreHelloCleanCloses += 1;
           return;
         }
-        ignoreClose = true;
         stop(
           createGatewayCloseTransportError({
             code,
@@ -886,14 +831,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || !shouldSurface) {
           return;
         }
-        ignoreClose = true;
         stop(err);
       },
     });
 
     const wrapperTimeoutMs = timeoutMs ?? startupTimeoutMs;
     timer = setTimeout(() => {
-      ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
           timeoutMs: wrapperTimeoutMs,
@@ -911,7 +854,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || readiness.ready || readiness.aborted) {
           return;
         }
-        ignoreClose = true;
         stop(
           createGatewayTimeoutTransportError({
             timeoutMs: startupTimeoutMs,
@@ -924,7 +866,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled) {
           return;
         }
-        ignoreClose = true;
         stop(err instanceof Error ? err : new Error(String(err)));
       });
   });

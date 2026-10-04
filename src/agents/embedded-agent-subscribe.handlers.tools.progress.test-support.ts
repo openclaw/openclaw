@@ -350,7 +350,7 @@ export function registerToolChannelProgressTests({
       updateTool(ctx, { toolName: tool.name, toolCallId, partialResult: result });
       await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
 
-      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
+      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment, undefined);
       expect(events).toHaveLength(6);
       expect(
         events

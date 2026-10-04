@@ -6,6 +6,7 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -35,7 +36,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   runCommandWithTimeout: mocks.command,
 }));
 vi.mock("../infra/update-runner-git-node-preflight.js", () => ({
-  checkGitCandidateNodeRuntime: async () => null,
+  prepareGitCandidateNodeRuntime: async () => ({ env: {} }),
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: async () => ({ incompatible: [], indeterminate: [] }),
@@ -131,6 +132,7 @@ describe("Bun private node runtime installation", () => {
     }
     Object.defineProperty(process, "platform", { value: platform });
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -222,8 +224,12 @@ describe("Bun private node runtime installation", () => {
   });
 
   it("keeps npm metadata and packing on Windows under Bun", async () => {
-    Object.defineProperty(process, "platform", { value: "win32" });
     const stateDir = tempDirs.make("openclaw-node-bun-windows-");
+    // Simulating Windows must not change the host filesystem's temp-path semantics.
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("openclaw-node-bun-windows-tmp-"),
+    );
+    Object.defineProperty(process, "platform", { value: "win32" });
     mocks.pack.mockResolvedValue({ ok: false, error: "synthetic npm pack failure" });
     await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
       "synthetic npm pack failure",
@@ -237,6 +243,17 @@ describe("Bun private node runtime installation", () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("private node runtime installation", () => {
+  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+
+  beforeEach(() => {
+    Reflect.deleteProperty(process.versions, "bun");
+  });
+  afterEach(() => {
+    if (bunVersion) {
+      Object.defineProperty(process.versions, "bun", bunVersion);
+    }
+  });
+
   it("installs a verified generation without changing the global runtime or live state", async () => {
     await withTestDir({ prefix: "openclaw-node-install-" }, async (directory) => {
       const globalPrefix = path.join(directory, "global");
@@ -290,42 +307,41 @@ describe("private node runtime installation", () => {
     });
   });
 
-  it("rejects archive integrity drift before installing anything", async () => {
-    await withTestDir({ prefix: "openclaw-node-integrity-" }, async (stateDir) => {
-      mocks.pack.mockResolvedValue({
-        ok: true,
-        archivePath: path.join(stateDir, "candidate.tgz"),
-        metadata: { ...metadata, integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}` },
-      });
-      await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
-        "integrity drift",
-      );
-      expect(mocks.command).not.toHaveBeenCalled();
-      expect(await fs.readdir(stateDir)).toEqual([]);
-    });
-  });
-
-  it.each(["state", "agent"] as const)(
-    "defers a changed %s schema before downloading a release",
-    async (schema) => {
-      await withTestDir({ prefix: "openclaw-node-schema-" }, async (stateDir) => {
-        mocks.resolve.mockResolvedValue({
-          ok: true,
-          metadata: {
-            ...metadata,
-            packageOpenClaw: {
-              schemaVersions: {
-                state: OPENCLAW_STATE_SCHEMA_VERSION,
-                agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-                [schema]: 999,
+  it.each(["integrity", "state", "agent"] as const)(
+    "rejects changed %s before installing anything",
+    async (changed) => {
+      await withTestDir({ prefix: "openclaw-node-rejected-" }, async (stateDir) => {
+        if (changed === "integrity") {
+          mocks.pack.mockResolvedValue({
+            ok: true,
+            archivePath: path.join(stateDir, "candidate.tgz"),
+            metadata: {
+              ...metadata,
+              integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}`,
+            },
+          });
+        } else {
+          mocks.resolve.mockResolvedValue({
+            ok: true,
+            metadata: {
+              ...metadata,
+              packageOpenClaw: {
+                schemaVersions: {
+                  state: OPENCLAW_STATE_SCHEMA_VERSION,
+                  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+                  [changed]: 999,
+                },
               },
             },
-          },
-        });
+          });
+        }
         await expect(
           prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir }),
-        ).rejects.toThrow("openclaw update");
-        expect(mocks.pack).not.toHaveBeenCalled();
+        ).rejects.toThrow(changed === "integrity" ? "integrity drift" : "openclaw update");
+        if (changed !== "integrity") {
+          expect(mocks.pack).not.toHaveBeenCalled();
+        }
+        expect(mocks.command).not.toHaveBeenCalled();
         expect(await fs.readdir(stateDir)).toEqual([]);
       });
     },

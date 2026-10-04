@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -36,14 +35,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("palette warm roster authority", () => {
-  it.each([
-    "untouched",
-    "explicit-folder",
-    "removed-agent",
-    "refresh-failure",
-    "missing-model",
-  ] as const)(
+describe("palette live roster authority", () => {
+  it.each(["removed-agent", "refresh-failure"] as const)(
     "waits for current defaults and preserves %s intent in the create request",
     async (choice) => {
       const fresh = createDeferred<AgentsListResult>();
@@ -59,13 +52,7 @@ describe("palette warm roster authority", () => {
           return result;
         },
       });
-      const cachedList = roster("main", "/workspace-a");
-      if (choice === "missing-model") {
-        cachedList.agents = cachedList.agents.map((agent) => ({ ...agent, model: undefined }));
-      }
-      const agents = createAgentCapability(context.gateway, {
-        cachedList,
-      });
+      const agents = createAgentCapability(context.gateway);
       Object.assign(context, { agents });
       Object.assign(context.sessions, { subscribe: () => () => {} });
       Object.assign(context.config, { subscribe: () => () => {} });
@@ -90,17 +77,6 @@ describe("palette warm roster authority", () => {
       await host.updateComplete;
       try {
         host.draft.setMessage("Keep this draft while defaults refresh");
-        if (choice === "explicit-folder") {
-          expectDefined(
-            host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-            "workspace picker",
-          ).click();
-          await host.updateComplete;
-          expectDefined(
-            host.querySelector<HTMLButtonElement>('[data-machine="local"][data-project=""]'),
-            "current workspace choice",
-          ).click();
-        }
         expect(host.draft.canSubmit).toBe(false);
         expect(host.draft.disabledReason).toBe("Refreshing agent defaults…");
         await host.draft.submit();
@@ -134,11 +110,7 @@ describe("palette warm roster authority", () => {
           agentId: id,
           message: "Keep this draft while defaults refresh",
         });
-        if (choice === "explicit-folder") {
-          expect(params).toHaveProperty("cwd", "/workspace-a");
-        } else {
-          expect(params).not.toHaveProperty("cwd");
-        }
+        expect(params).not.toHaveProperty("cwd");
       } finally {
         host.remove();
         agents.dispose();

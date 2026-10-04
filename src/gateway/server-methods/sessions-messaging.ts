@@ -1,7 +1,10 @@
-// Session message RPC adapters over canonical chat.send dispatch.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -22,7 +25,10 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
-import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -45,7 +51,7 @@ async function createAgentMainSessionForSend(
   }
 
   let createResult:
-    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | { ok: boolean; payload?: Record<string, unknown>; error?: ReturnType<typeof errorShape> }
     | undefined;
   const createOptions = bindGatewayRequestHandlerMutationAuthority(
     options,
@@ -58,8 +64,7 @@ async function createAgentMainSessionForSend(
       respond: (ok, payload, error) => {
         createResult = {
           ok,
-          payload:
-            payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+          payload: asOptionalObjectRecord(payload),
           error,
         };
       },
@@ -140,6 +145,8 @@ async function handleSessionSend(
   const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,
@@ -210,18 +217,9 @@ async function handleSessionSend(
     sendAcked = ok;
     sendPayload = payload;
     sendCached = meta?.cached === true;
-    startedRunId =
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { runId?: unknown }).runId === "string"
-        ? (payload as { runId: string }).runId
-        : undefined;
-    interruptedActiveRun =
-      ok &&
-      payload !== null &&
-      typeof payload === "object" &&
-      "interruptedActiveRun" in payload &&
-      payload.interruptedActiveRun === true;
+    const result = asOptionalObjectRecord(payload);
+    startedRunId = readStringValue(result?.runId);
+    interruptedActiveRun = ok && result?.interruptedActiveRun === true;
     respond(ok, payload, error, meta);
   });
   if (sendAcked) {
@@ -232,6 +230,14 @@ async function handleSessionSend(
           runId: startedRunId,
           task: p.message,
           gatewayContextResolver: options.context.resolveGatewayContext,
+          assertCurrent: () => {
+            if (sessionAuthorization?.assertAdmittedInputCurrent) {
+              sessionAuthorization.assertAdmittedInputCurrent();
+            } else {
+              requestAuthority.assertCurrent();
+              sessionAuthorization?.assertCurrent();
+            }
+          },
         });
       } catch (error) {
         if (startedRunId) {

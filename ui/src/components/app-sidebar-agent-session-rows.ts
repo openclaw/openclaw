@@ -105,6 +105,7 @@ export function projectSidebarAgentSessionRows({
       : host.sessionData,
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
@@ -307,6 +308,7 @@ export function projectSidebarHomeSession({
         : host.sessionData,
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });

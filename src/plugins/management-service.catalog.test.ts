@@ -749,11 +749,11 @@ describe("managed plugin catalog", () => {
     const icon = "https://cdn.example.test/workboard.svg";
     const config = {
       agents: {
-        defaults: { workspace: "~/fallback-workspace" },
-        list: [
-          { id: "main" },
-          { id: "research", default: true, workspace: "~/research-workspace" },
-        ],
+        defaults: {
+          workspace: "~/fallback-workspace",
+          systemAgent: { agentId: "research" },
+        },
+        entries: { main: {}, research: { workspace: "~/research-workspace" } },
       },
     };
     const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
@@ -955,6 +955,7 @@ describe("managed plugin catalog", () => {
     const resolve = (iconUrl: string) =>
       resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
     expect(resolve(providerIcon)).toBe(providerIcon);
+    expect(resolve(`${" ".repeat(2048)}${providerIcon} `)).toBe(providerIcon);
     expect(resolve(recommendedIcon)).toBe(recommendedIcon);
     expect(resolve("https://untrusted.example/icon.png")).toBeUndefined();
     expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();

@@ -2,12 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
-import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("createEmbeddedAgentResourceLoader", () => {
+describe("embedded session resources", () => {
   it.each(["workspace", "agent"])(
     "keeps inline extensions without discovering %s instructions or prompts",
     async (location) => {
@@ -18,7 +18,7 @@ describe("createEmbeddedAgentResourceLoader", () => {
       await writeFile(join(cwd, "AGENTS.md"), "ambient context");
       await writeFile(join(resourceDir, "SYSTEM.md"), "ambient system prompt");
       await writeFile(join(resourceDir, "APPEND_SYSTEM.md"), "ambient appended prompt");
-      const loader = createEmbeddedAgentResourceLoader({
+      const loader = new DefaultResourceLoader({
         cwd,
         agentDir,
         settingsManager: SettingsManager.inMemory(),

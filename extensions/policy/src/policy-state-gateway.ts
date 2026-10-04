@@ -1,4 +1,3 @@
-// Policy plugin gateway exposure evidence.
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyGatewayExposureEvidence } from "./policy-state-types.js";
@@ -146,23 +145,17 @@ function pushGatewayHttpEndpointEvidence(
   endpoint: "chatCompletions" | "responses",
 ): void {
   const config = endpoints[endpoint];
-  if (!isRecord(config)) {
+  if (!isRecord(config) || config.enabled !== true) {
     return;
   }
   const source = `oc://openclaw.config/gateway/http/endpoints/${endpoint}`;
-  const enabled = config.enabled === true;
-  if (enabled) {
-    entries.push({
-      id: `gateway-http-${endpoint}`,
-      kind: "httpEndpoint",
-      source: `${source}/enabled`,
-      value: true,
-      endpoint,
-    });
-  }
-  if (!enabled) {
-    return;
-  }
+  entries.push({
+    id: `gateway-http-${endpoint}`,
+    kind: "httpEndpoint",
+    source: `${source}/enabled`,
+    value: true,
+    endpoint,
+  });
   if (endpoint === "chatCompletions") {
     pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
     return;
@@ -202,52 +195,35 @@ function pushGatewayNodeCommandEvidence(
   nodes: Record<string, unknown>,
 ): void {
   const commands = isRecord(nodes.commands) ? nodes.commands : null;
-  const denyCommands = commands?.deny;
-  const deniedCommands = new Set(
-    Array.isArray(denyCommands)
-      ? denyCommands
-          .filter((command): command is string => typeof command === "string")
-          .map((command) => command.trim())
-      : [],
-  );
-  if (Array.isArray(denyCommands)) {
-    denyCommands.forEach((command, index) => {
+  const deniedCommands = new Set<string>();
+  for (const [list, kind, idPrefix] of [
+    ["deny", "nodeDenyCommand", "gateway-node-deny-command"],
+    ["allow", "nodeCommand", "gateway-node-command"],
+  ] as const) {
+    const values = commands?.[list];
+    if (!Array.isArray(values)) {
+      continue;
+    }
+    values.forEach((command, index) => {
       if (typeof command !== "string") {
         return;
       }
       const normalized = command.trim();
-      if (normalized === "") {
+      if (normalized === "" || (list === "allow" && deniedCommands.has(normalized))) {
         return;
       }
+      if (list === "deny") {
+        deniedCommands.add(normalized);
+      }
       entries.push({
-        id: `gateway-node-deny-command-${normalized}`,
-        kind: "nodeDenyCommand",
-        source: `oc://openclaw.config/gateway/nodes/commands/deny/#${index}`,
+        id: `${idPrefix}-${normalized}`,
+        kind,
+        source: `oc://openclaw.config/gateway/nodes/commands/${list}/#${index}`,
         value: normalized,
         command: normalized,
       });
     });
   }
-  const allowCommands = commands?.allow;
-  if (!Array.isArray(allowCommands)) {
-    return;
-  }
-  allowCommands.forEach((command, index) => {
-    if (typeof command !== "string") {
-      return;
-    }
-    const normalized = command.trim();
-    if (normalized === "" || deniedCommands.has(normalized)) {
-      return;
-    }
-    entries.push({
-      id: `gateway-node-command-${normalized}`,
-      kind: "nodeCommand",
-      source: `oc://openclaw.config/gateway/nodes/commands/allow/#${index}`,
-      value: normalized,
-      command: normalized,
-    });
-  });
 }
 
 function isEffectiveGatewayUrlAllowlistEntry(value: unknown): boolean {

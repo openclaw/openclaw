@@ -199,6 +199,7 @@ it.each(["discard", "ack", "consumed"] as const)(
       const element = document.createElement("div");
       document.body.append(element);
       const host = makeChatHost({
+        requestHandlers: {},
         settings: { gatewayUrl: "ws://question-discard.test" },
         sessionKey,
         currentSessionId: "question-delivery-session",

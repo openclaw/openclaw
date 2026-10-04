@@ -1,12 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import "./session-accessor.sqlite-compaction.js";
-import "./session-accessor.sqlite-delta.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-events.js";
-import "./session-accessor.sqlite-metadata-read.js";
 import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
-import "./session-accessor.sqlite-suffix-read.js";
-import "./session-accessor.sqlite-transcript-message-rewrite.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
@@ -18,6 +11,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
 export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
@@ -31,7 +25,6 @@ export {
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
-  loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptExportSnapshotReadOnlySync,
@@ -41,6 +34,7 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { loadTranscriptEvents } from "./session-transcript-events.js";
 export {
   loadTranscriptSuffixEventsBoundedSync,
   readPreviousIndexedTranscriptEventSync,
@@ -49,6 +43,7 @@ export {
   rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
+export { readSessionTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-store.js";
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,

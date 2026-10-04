@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -105,31 +106,22 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
     if (arg === "--help" || arg === "-h") {
       throw new Error(usage());
     }
-    if (arg === "--all") {
-      options.all = true;
-      continue;
-    }
-    if (arg === "--deep") {
-      options.deep = true;
-      continue;
-    }
-    if (arg === "--explain") {
-      options.explain = true;
-      continue;
-    }
-    if (arg === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (arg === "--reuse") {
-      options.reuse = true;
+    const flag = arg.startsWith("--") ? arg.slice(2) : undefined;
+    if (
+      flag === "all" ||
+      flag === "deep" ||
+      flag === "explain" ||
+      flag === "json" ||
+      flag === "reuse"
+    ) {
+      options[flag] = true;
       continue;
     }
     if (arg.startsWith("--out=")) {
       options.outDir = path.resolve(repoRoot, arg.slice("--out=".length));
       continue;
     }
-    if (!(arg in GRAPH_DEFINITIONS)) {
+    if (!Object.hasOwn(GRAPH_DEFINITIONS, arg)) {
       throw new Error(`Unknown graph: ${arg}\n\n${usage()}`);
     }
     graphNames.push(arg as GraphName);
@@ -147,12 +139,6 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
 function ensureDirs(outDir: string): void {
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(path.join(outDir, "cache"), { recursive: true });
-}
-
-function removeIfFreshMode(filePath: string, reuse: boolean): void {
-  if (!reuse) {
-    fs.rmSync(filePath, { force: true });
-  }
 }
 
 function runTsgo(
@@ -349,8 +335,11 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
   const noCheckBuildInfo = path.join(graphCacheRoot, `${name}-nocheck.tsbuildinfo`);
   const configPath = graph.config;
 
-  removeIfFreshMode(checkBuildInfo, options.reuse);
-  removeIfFreshMode(noCheckBuildInfo, options.reuse);
+  if (!options.reuse) {
+    for (const filePath of [checkBuildInfo, noCheckBuildInfo]) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
 
   const baseArgs = ["-p", configPath, "--pretty", "false"];
   const listFiles = runTsgo(`${name}:listFilesOnly`, [...baseArgs, "--listFilesOnly"], {
@@ -431,6 +420,7 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
 
 async function main(argv: string[]): Promise<void> {
   const { options, selectedGraphs } = parseArgs(argv);
+  await ensureKyselyTypes(repoRoot);
   ensureDirs(options.outDir);
   const report: ProfileReport = {
     generatedAt: new Date().toISOString(),

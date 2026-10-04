@@ -3,15 +3,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { VirtualizerController } from "@tanstack/lit-virtual";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
-  flushDeferredRowPrune,
   installTranscriptDomMocks,
   observedElements,
   resetTranscriptTestDom,
+  resizeObservers,
 } from "./chat-transcript.test-support.ts";
 
-function mountRows() {
+function mountRows(scrolling = true) {
   const viewport = document.body.appendChild(document.createElement("div"));
   const rows = Array.from({ length: 12 }, (_, index) => {
     const row = viewport.appendChild(document.createElement("div"));
@@ -35,9 +36,10 @@ function mountRows() {
         callback({ width: 800, height: 300 });
       },
       observeElementOffset: (_, callback) => {
-        callback(0, true);
+        callback(0, scrolling);
       },
       scrollToFn: vi.fn(),
+      measureElement: measureTranscriptRow,
     },
   );
   controller.hostConnected();
@@ -48,7 +50,6 @@ function mountRows() {
   const readViewport = vi.fn(() => 300);
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
   const refs = new TranscriptRowRefs(virtualizer, {
-    canMeasureVisibleRows: () => true,
     isCurrentRow: (row) => viewport.contains(row),
     onMount: () => {},
   });
@@ -71,7 +72,9 @@ describe("transcript mounted-row measurement", () => {
           }
           refs.forKey(String(index))(rows[index]);
         }
-        await flushDeferredRowPrune();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
         expect(readViewport).not.toHaveBeenCalled();
         for (const index of indexes) {
           expect(observedElements.has(expectDefined(rows[index], "mounted row"))).toBe(true);
@@ -82,49 +85,28 @@ describe("transcript mounted-row measurement", () => {
     },
   );
 
-  it("reads cold visible rows without intervening style or scroll writes", async () => {
-    const { rows, virtualizer, refs, readViewport, cleanup } = mountRows();
-    const operations: string[] = [];
-    const firstRow = expectDefined(rows[0], "first row");
-    const secondRow = expectDefined(rows[1], "second row");
-    secondRow.style.setProperty("content-visibility", "auto", "important");
+  it.each([false, true])("lets observers measure cold rows (scrolling=%s)", async (scrolling) => {
+    const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
+    const readHeight = vi.fn(() => 80);
     for (const row of rows.slice(0, 3)) {
-      const setProperty = row.style.setProperty.bind(row.style);
-      const removeProperty = row.style.removeProperty.bind(row.style);
-      vi.spyOn(row.style, "setProperty").mockImplementation((...args) => {
-        operations.push("write");
-        setProperty(...args);
-      });
-      vi.spyOn(row.style, "removeProperty").mockImplementation((...args) => {
-        operations.push("write");
-        return removeProperty(...args);
-      });
-      Object.defineProperty(row, "offsetHeight", {
-        configurable: true,
-        get: () => {
-          operations.push("read");
-          return 80;
-        },
-      });
+      Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
     }
-    virtualizer.setOptions({
-      ...virtualizer.options,
-      onChange: () => operations.push("notify"),
-    });
     try {
       for (let index = 0; index < 3; index++) {
         refs.forKey(String(index))(rows[index]);
       }
-      await flushDeferredRowPrune();
-      const firstRead = operations.indexOf("read");
-      const lastRead = operations.lastIndexOf("read");
-      expect(operations.slice(firstRead, lastRead + 1)).toEqual(["read", "read", "read"]);
-      expect(readViewport).toHaveBeenCalledOnce();
-      expect([...virtualizer.itemSizeCache.values()]).toEqual([80, 80, 80]);
-      expect(firstRow.style.getPropertyValue("content-visibility")).toBe("");
-      expect(secondRow.style.getPropertyValue("content-visibility")).toBe("auto");
-      expect(secondRow.style.getPropertyPriority("content-visibility")).toBe("important");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(readHeight).not.toHaveBeenCalled();
+      expect(readViewport).not.toHaveBeenCalled();
       expect(rows.slice(0, 3).every((row) => observedElements.has(row))).toBe(true);
+      for (const observer of resizeObservers) {
+        for (const row of rows.slice(0, 3)) {
+          observer.emitTarget(row, 800, 80);
+        }
+      }
+      expect([...virtualizer.itemSizeCache.values()]).toEqual([80, 80, 80]);
+      expect(readHeight).not.toHaveBeenCalled();
     } finally {
       cleanup();
     }
@@ -143,7 +125,12 @@ describe("transcript mounted-row measurement", () => {
           height = 80;
         });
       });
-      await flushDeferredRowPrune();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      for (const observer of resizeObservers) {
+        observer.emitTarget(secondRow, 800, height);
+      }
       expect(virtualizer.itemSizeCache.get("1")).toBe(80);
       expect(observedElements.has(secondRow)).toBe(true);
     } finally {

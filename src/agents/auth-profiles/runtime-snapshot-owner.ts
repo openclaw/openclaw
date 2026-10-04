@@ -5,6 +5,7 @@ import { isSecretRef } from "../../config/types.secrets.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -138,6 +139,9 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
         loadPersistedAuthProfileStoreAtDatabasePath(owner.sharedDatabasePath, sharedKind) ??
           createEmptyAuthProfileStore(),
       ));
+  if (sharedStore && !options.inheritedStore) {
+    observeCanonicalAuthProfileCredentials(owner.sharedDatabasePath, sharedStore.profiles);
+  }
   if (options.candidates && sharedStore) {
     // Check committed shared facts before a fallible local read can enter publication recovery.
     assertAuthProfileMigrationCandidates({
@@ -152,6 +156,7 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
       isShared ? sharedKind : "agent",
     ) ?? createEmptyAuthProfileStore(),
   );
+  observeCanonicalAuthProfileCredentials(owner.databasePath, localStore.profiles);
   if (options.candidates) {
     assertAuthProfileMigrationCandidates({
       databasePath: owner.databasePath,

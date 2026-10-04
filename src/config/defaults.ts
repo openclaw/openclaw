@@ -43,9 +43,8 @@ const defaultWarnState: WarnState = { warned: false };
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-5-5",
-  sonnet: "anthropic/claude-sonnet-5",
+  sonnet: "anthropic/claude-sonnet-5-5",
 
-  // OpenAI
   gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
@@ -377,32 +376,34 @@ export function applyModelDefaults(
   }
 
   let nextAgents = nextCfg.agents;
-  const rawAgentList = nextAgents?.list;
-  if (Array.isArray(rawAgentList)) {
-    let listMutated = false;
-    const agentList = rawAgentList.map((agent) => {
-      if (!isRecord(agent)) {
-        return agent;
-      }
-      let nextAgent = agent;
-      if (Object.hasOwn(agent, "model")) {
-        const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-        if (normalizedModel !== agent.model) {
-          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-          listMutated = true;
+  const agentEntries = nextAgents?.entries;
+  if (agentEntries) {
+    let entriesMutated = false;
+    const entries = Object.fromEntries(
+      Object.entries(agentEntries).map(([id, agent]) => {
+        if (!isRecord(agent)) {
+          return [id, agent];
         }
-      }
-      if (isRecord(agent.models)) {
-        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-        if (normalizedModels !== agent.models) {
-          nextAgent = { ...nextAgent, models: normalizedModels };
-          listMutated = true;
+        let nextAgent = agent;
+        if (Object.hasOwn(agent, "model")) {
+          const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
+          if (normalizedModel !== agent.model) {
+            nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+            entriesMutated = true;
+          }
         }
-      }
-      return nextAgent;
-    });
-    if (listMutated) {
-      nextAgents = { ...nextAgents, list: agentList };
+        if (isRecord(agent.models)) {
+          const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+          if (normalizedModels !== agent.models) {
+            nextAgent = { ...nextAgent, models: normalizedModels };
+            entriesMutated = true;
+          }
+        }
+        return [id, nextAgent];
+      }),
+    );
+    if (entriesMutated) {
+      nextAgents = { ...nextAgents, entries };
       mutated = true;
     }
   }
@@ -513,26 +514,21 @@ export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.Proce
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
+  const isAnthropicProvider = (provider: string) => {
+    const normalized = normalizeProviderId(provider);
+    return normalized === "anthropic" || normalized === "claude-cli";
+  };
   const profiles = cfg.auth?.profiles;
-  if (profiles) {
-    for (const profile of Object.values(profiles)) {
-      const provider = normalizeProviderId(profile?.provider);
-      if (provider === "anthropic" || provider === "claude-cli") {
-        return true;
-      }
-    }
+  if (
+    profiles &&
+    Object.values(profiles).some((profile) => isAnthropicProvider(profile?.provider))
+  ) {
+    return true;
   }
   const order = cfg.auth?.order;
-  if (!order) {
-    return false;
-  }
-  return Object.keys(order).some((provider) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (normalizedProvider !== "anthropic" && normalizedProvider !== "claude-cli") {
-      return false;
-    }
-    return (order as Record<string, unknown>)[provider] !== undefined;
-  });
+  return Object.keys(order ?? {}).some(
+    (provider) => isAnthropicProvider(provider) && order?.[provider] !== undefined,
+  );
 }
 
 export function applyContextPruningDefaults(

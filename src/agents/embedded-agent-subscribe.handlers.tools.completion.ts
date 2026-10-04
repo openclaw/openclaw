@@ -87,7 +87,6 @@ import {
   isAsyncStartedToolResult,
   isToolResultTimedOut,
   readAsyncStartedTaskIds,
-  sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
@@ -108,6 +107,7 @@ import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  readResult: () => unknown,
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
@@ -119,7 +119,7 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = evt.isError || isToolResultError(result);
-  const sanitizedResult = sanitizeToolResult(result);
+  const sanitizedResult = readResult();
   const approvalUnavailable =
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
@@ -391,6 +391,13 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
+  ctx.state.turnToolsOnlySourceProgress =
+    (ctx.state.turnToolsOnlySourceProgress ?? true) &&
+    sourceReplyFinal === false &&
+    isMessagingSend &&
+    !isToolError &&
+    !messageDelivery?.partialDelivery;
+  ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&

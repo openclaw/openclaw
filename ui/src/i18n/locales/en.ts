@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  mcpApp: TranslationMap;
   linkReader: TranslationMap;
   agentTools: TranslationMap;
   board: TranslationMap & { widget: TranslationMap };
@@ -29,6 +30,7 @@ export const en: TranslationMap & {
         string
       >;
     pullRequests: TranslationMap;
+    processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
   configPage: TranslationMap;
@@ -252,19 +254,7 @@ export const en: TranslationMap & {
     bundle: {},
     label: "Support files",
   },
-  mcpApp: {
-    title: "MCP App",
-    unavailable: "MCP App unavailable: {error}",
-    errors: {
-      gatewayUnavailable: "MCP App gateway unavailable",
-      mountUnavailable: "MCP App mount unavailable",
-      sandboxTimedOut: "MCP App sandbox timed out",
-      sandboxUnavailable: "MCP App sandbox unavailable",
-      initializationTimedOut: "MCP App initialization timed out",
-      requestFailed: "Request failed",
-      invalidSandboxUrl: "MCP App sandbox URL is invalid",
-    },
-  },
+  mcpApp: {},
   sessionHovercard: {
     ariaLabel: "Session information",
     agentNotepad: "Agent Notepad",
@@ -313,7 +303,8 @@ export const en: TranslationMap & {
     shortCount: "{completed} of {total}",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
-    dismissFailed: "Could not dismiss the progress card. Try again.",
+    clearSaved: "Clear saved progress for everyone",
+    clearFailed: "Could not clear saved progress card.",
     refresh: {
       label: "Refresh task progress",
       retry: "Retry progress refresh",
@@ -554,6 +545,11 @@ export const en: TranslationMap & {
       },
     },
   },
+  agentStartup: {
+    title: "Starting up",
+    description: "The agent is getting ready. This view will load automatically.",
+    short: "Starting up…",
+  },
   lazyView: {
     errorTitle: "Panel failed to load",
     genericSubtitle: "Something went wrong while loading this panel.",
@@ -565,12 +561,12 @@ export const en: TranslationMap & {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   communityInvite: {
-    cardLabel: "Join the OpenClaw community on Discord",
-    artAlt: "A lobster beside the Discord mark on a lit seafloor pedestal",
-    title: "Come build with us",
-    body: "Ask anything, show what you're making, and find out what everyone else is building.",
-    bodyGreeting: "Or just say hi.",
-    action: "Join us on Discord",
+    title: "Pull up a chair.",
+    body: "There’s a place for you in the AI future. Join the Community on Reddit, Discord, and X.",
+    join: "Join",
+    follow: "Follow",
+    joinPlatform: "Join the OpenClaw community on {platform}",
+    followPlatform: "Follow OpenClaw on {platform}",
     dismissForever: "Dismiss and don't show again",
     dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
@@ -968,7 +964,7 @@ export const en: TranslationMap & {
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
     actionRequiresScope: "This action requires {scope} access.",
-    actionRequiresOwnership: "Only the session owner can make this change.",
+    actionRequiresOwnership: "Only the session creator or an admin can make this change.",
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
       busy: "live run or cleanup active",
@@ -1013,6 +1009,17 @@ export const en: TranslationMap & {
     unknown: "Unknown",
     sessionState: "Session state",
     all: "All",
+    snooze: "Snooze",
+    wakeSession: "Wake session",
+    snoozeHour: "In 1 hour",
+    snoozeThreeHours: "In 3 hours",
+    snoozeEvening: "This evening",
+    snoozeTomorrow: "Tomorrow",
+    snoozeNextWeek: "Next week",
+    snoozed: "Snoozed",
+    snoozeWakes: "Wakes {time}",
+    sessionSnoozed: "Snoozed until {time}",
+    snoozeTomorrowTime: "tomorrow {time}",
     sessionArchived: "Session archived",
     archiving: "Archiving…",
     sessionsArchived: "Archived {count} sessions",
@@ -1262,6 +1269,8 @@ export const en: TranslationMap & {
     groupDefaultsWorktree: "New worktree",
     groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
+    groupDefaultsRequiresAdmin:
+      "This folder is outside agent workspaces. Saving defaults for it requires operator.admin. Open Inbox, select Limited access, request admin, then approve in Devices.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
@@ -2159,6 +2168,9 @@ export const en: TranslationMap & {
       cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
+      gatewayNotResponding:
+        "The Gateway is not responding. Check that it is running, then try again.",
+      gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -2384,6 +2396,15 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    filters: {
+      label: "Filter & sort people",
+      noMatches: "No people match this filter",
+      presence: "Active people first",
+      reset: "Reset to defaults",
+      running: "Running sessions",
+      total: "Total sessions",
+      name: "Name",
+    },
     active: "Active",
     onlineActive: "Online · Active",
     onlineIdle: "Online · Idle",
@@ -2472,8 +2493,8 @@ export const en: TranslationMap & {
     agent: "Agent override",
     publishAs: "Publish as @{account}",
     account: "Publication account",
-    choose: "Choose an account",
     newAction: "Choose a new publication",
+    failedAttempt: "Publication attempt failed",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
     confirm: "Confirm original publication",
@@ -2493,12 +2514,9 @@ export const en: TranslationMap & {
     effectPush: "push",
     effectPullRequest: "pull request",
     personalWorkspace:
-      "My GitHub requires an idle, reconciled local workspace. Wait for work to finish and reclaim the workspace. System and agent publication keep their existing shared flow.",
-    scopeHelp:
-      "My GitHub applies only to this explicit Publish PR action. Agent commands, previews, and cloud workers keep the shared account.",
+      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp:
-      "Connect or repair My GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
   },
   githubConnections: {
     title: "GitHub connections",
@@ -2693,6 +2711,9 @@ export const en: TranslationMap & {
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
       runtimeError: "Script error: {message}",
+      waitingForConnection: "Waiting for the connection. This view will recover automatically.",
+      resourceUnavailable:
+        "A widget resource could not load. Retry when the connection is available.",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       sandboxOriginRequired:
         "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
@@ -2969,6 +2990,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",
@@ -2997,6 +3019,10 @@ export const en: TranslationMap & {
     },
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
+    errorBusySummary: "OpenClaw is busy. Check status before trying again.",
+    errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
+    errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
     copyError: "Copy error",
@@ -3024,6 +3050,13 @@ export const en: TranslationMap & {
       criticalBody:
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
+    workerRuntimeInstall: {
+      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
+      installingTitle: "Installing worker runtime",
+      transferringBody:
+        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
+      installingBody: "Installing the new worker runtime on this device.",
+    },
     sendErrors: {
       outboxPayloadCopied:
         "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
@@ -3036,6 +3069,9 @@ export const en: TranslationMap & {
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",
+    waitingOnSubagents: "Waiting on subagents",
+    yieldWaiting: "Handed off and waiting",
+    yieldResumed: "Resumed",
     startupStatus: {
       retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
@@ -3050,8 +3086,24 @@ export const en: TranslationMap & {
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
-    subagentSessionDisabled:
-      "This is a subagent of {parent}. Continue the conversation in its parent session.",
+    subagentSessionDisabled: "Continue in {parent}.",
+    processesPanel: { title: "Processes", refresh: "Refresh processes" },
+    subagentsPanel: {
+      title: "Subagents",
+      back: "Back to Subagents",
+      running: "Running ({count})",
+      finished: "Finished ({count})",
+      callsOne: "{count} call",
+      callsMany: "{count} calls",
+      empty: "No subagents in this conversation.",
+      noRunning: "No running subagents",
+      refresh: "Refresh subagents",
+      loadMore: "Show more subagents",
+      stop: "Stop {name}",
+      stopping: "Stopping…",
+      elapsed: "Elapsed time",
+      duration: "Run duration",
+    },
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
@@ -3200,6 +3252,20 @@ export const en: TranslationMap & {
       publicDisabled: "Public access disabled.",
       publicUnavailable: "Public access requires a saved, non-incognito session.",
     },
+    reactions: {
+      add: "Add reaction",
+      quick: "Quick reactions",
+      emoji: "Emoji",
+      more: "More…",
+      back: "Back to quick reactions",
+      placeholder: "Any emoji",
+      shortcut: "{shortcut} opens your emoji picker.",
+      hint: "Type or paste an emoji.",
+      invalid: "Reactions are a single emoji.",
+      you: "You",
+      andOthers: "{names} and {count} others",
+      reactedWith: "{names} reacted with {emoji}",
+    },
     sessionSuggestions: {
       suggest: "Suggest",
       suggestMessage: "Suggest message",
@@ -3281,6 +3347,12 @@ export const en: TranslationMap & {
       unsupportedViewOnly: "This external session source is view-only.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
+      importToOpenClaw: "Import to OpenClaw",
+      importComplete: "Imported {count} transcript items.",
+      importUnchanged: "The imported transcript is up to date.",
+      importIncomplete:
+        "Imported {count} transcript items. Older history exceeded the import limit.",
+      openImportedSession: "Open imported session",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
       deleteSessionConfirm:
@@ -3422,20 +3494,33 @@ export const en: TranslationMap & {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
-    outboxRecoveryTitle: "Saved messages need a destination",
-    outboxRecoveryFailedTitle: "Saved messages could not be loaded",
-    outboxRecoveryDescription:
-      "These saved drafts and queued messages need a conversation. Open an empty non-Incognito conversation, then restore an entry for review. Nothing is sent automatically. Attachment drafts may appear separately.",
-    outboxRecoveryConfirm:
-      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
-    outboxRecoveryRestore: "Restore here for review",
+    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
+    outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
-      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
-      "Your saved data has been kept. Reload to try again. If the problem continues, check that browser storage is available. Do not clear site data while you have messages to recover.",
+      "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
-      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
-    outboxRecoveryMessages: "Queued messages: {count}",
+      "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
+    outboxRecoveryDraft: "Draft",
+    outboxRecoveryQueued: "Unsent",
+    outboxRecoverySource: "from {chat}",
+    outboxRecoveryUpdated: "Last updated {time}",
+    outboxRecoveryGoal: "Includes an unsent goal change",
+    outboxRecoveryReply: "Reply to: {text}",
+    outboxRecoveryAttachments: "Attachments: {files}",
+    outboxRecoveryUnconfirmedLabel: "may have been sent",
+    outboxRecoveryUnconfirmed:
+      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
+    outboxRecoveryAttachmentMissing:
+      "An attachment could not be loaded. Review the message and reattach the file before sending.",
+    outboxRecoveryDelete: "Delete",
+    outboxRecoveryDeleteTitle: "Delete this saved copy?",
+    outboxRecoveryDeleteConfirm:
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+    outboxRecoveryDeleteConflict:
+      "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     privateDraftReload: {
       blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
       review: "Review private draft",
@@ -3580,7 +3665,6 @@ export const en: TranslationMap & {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
-      toolActivity: "Using {tool}",
       catalogDiscoveryHelp:
         "{error}. Configure automatic session discovery in Settings > Appearance > Session sources.",
       catalogPaginationFailed: "Session catalog returned a repeated page cursor",
@@ -3665,6 +3749,9 @@ export const en: TranslationMap & {
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
+      resourcePreview: "Preview resource",
+      addResources: "Add resources",
+      resourceUploadTooLarge: "Selected resources exceed the upload limits.",
       other: "Type your own answer here",
       multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
@@ -3737,6 +3824,17 @@ export const en: TranslationMap & {
       videoPreview: "Video preview: {title}",
       closeVideoPreview: "Close video preview",
     },
+    youtube: {
+      provider: "YouTube",
+      video: "YouTube video",
+      player: "YouTube player: {title}",
+      play: "Play {title}",
+      open: "Open on YouTube",
+      openVideo: "Open {title} on YouTube",
+      close: "Close player",
+      strict: "Inline playback is disabled in strict embed mode. Open this video on YouTube.",
+      narrow: "Open this video on YouTube to play it in a larger window.",
+    },
     modelControls: {},
     nativeRuntimeRecovery: {},
     permissionControls: {},
@@ -3762,6 +3860,10 @@ export const en: TranslationMap & {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      selectionTooLong:
+        "These comments are too long for Side chat. Use a shorter selection or comment.",
+      selectionQuoteOnly:
+        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
@@ -3822,6 +3924,10 @@ export const en: TranslationMap & {
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
       companionEmpty: "Ask a focused question about this session.",
+      processes: "Processes",
+      processesEmpty: "Inspect background commands and their output for this conversation.",
+      subagents: "Subagents",
+      subagentsEmpty: "Follow delegated work from this conversation.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       portal: "Portal",
@@ -4059,6 +4165,8 @@ export const en: TranslationMap & {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureInvalidReference:
+        "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
         "Rejected by the local attachment allowlist. Send a supported file type.",
@@ -4526,6 +4634,7 @@ export const en: TranslationMap & {
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
       deliveryModeLabel: "Mode",
+      selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
       webhookPost: "Webhook POST",
       noneInternal: "None (internal)",
@@ -4641,6 +4750,8 @@ export const en: TranslationMap & {
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
+      deliveryModeRequired:
+        "Choose a delivery mode explicitly, or run openclaw doctor --fix to repair legacy settings.",
       webhookUrlRequired: "Webhook URL is required.",
       webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",

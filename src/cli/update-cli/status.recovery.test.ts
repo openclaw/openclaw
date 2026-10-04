@@ -26,7 +26,7 @@ vi.mock("../../infra/deferred-plugin-migrations.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
 }));
-vi.mock("../../infra/update-run-status.js", () => ({ readUpdateRunStatus: () => ({}) }));
+vi.mock("../../infra/update-run-status.js", () => ({ readUpdateRunStatus: async () => ({}) }));
 vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks }));
 vi.mock("../../gateway/call.js", () => ({ callGateway: async () => ({}) }));
 vi.mock("../../infra/channels-status-issues.js", () => ({ collectChannelStatusIssues: () => [] }));
@@ -173,7 +173,10 @@ it.each([true, false])(
       expect(output).toContain("Next action: openclaw update status --json");
     }
     expect(await fs.readFile(first.manifestPath, "utf8")).toBe(first.raw);
-    expect(await fs.readdir(first.directory)).toEqual(["manifest.json", "outcome.json"]);
+    expect((await fs.readdir(first.directory)).toSorted()).toEqual([
+      "manifest.json",
+      "outcome.json",
+    ]);
   },
 );
 it("reports an absent inventory explicitly without creating it", async () => {
@@ -182,42 +185,99 @@ it("reports an absent inventory explicitly without creating it", async () => {
   expect(result()).not.toHaveProperty("recoverySetsError");
   await expect(fs.stat(`${stateDir}.update-captures`)).rejects.toMatchObject({ code: "ENOENT" });
 });
-it("distinguishes missing durable ownership from a safe recovery choice", async () => {
-  const c = await capture();
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status: "ambiguous",
-    message: expect.stringContaining("no matching update run"),
-  });
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
-});
 it.each([true, false])(
-  "reports malformed manifests distinctly without hiding normal status (JSON: %s)",
+  "reports standalone Doctor captures as manual evidence (JSON: %s)",
+  async (json) => {
+    const c = await capture("doctor-11111111-1111-4111-8111-111111111111");
+    await updateStatusCommand({ json });
+    if (json) {
+      expect(result()).not.toHaveProperty("recoverySetsError");
+      expect(result().recoverySets).toEqual([
+        expect.objectContaining({
+          runId: c.manifest.runId,
+          manifestPath: c.manifestPath,
+          status: "manual",
+          message: expect.stringContaining("No repair outcome is recorded"),
+        }),
+      ]);
+    } else {
+      const output = mocks.log.mock.calls.flat().join("\n");
+      expect(output).toContain(c.manifestPath);
+      expect(output).toContain("No repair outcome is recorded");
+      expect(output).not.toContain("no matching update run");
+      expect(output).not.toContain("unresolved after a failed update");
+    }
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+    expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  },
+);
+it.each([true, false])(
+  "keeps valid recovery sets visible beside an unfinished capture (JSON: %s)",
   async (json) => {
     const c = await capture();
-    await fs.writeFile(c.manifestPath, "{");
-    await expect(updateStatusCommand({ json })).resolves.toBeUndefined();
+    await terminal(c, "committed");
+    const directory = path.join(path.dirname(c.directory), "22222222-2222-4222-8222-222222222222");
+    await fs.mkdir(directory);
+    const partialPath = path.join(directory, "manifest.json.partial");
+    await fs.writeFile(partialPath, '{"schemaVersion":2');
+    await updateStatusCommand({ json });
     if (json) {
-      expect(result()).toHaveProperty("availability");
-      expect(result().recoverySetsError).toBeTypeOf("string");
-      expect(result()).not.toHaveProperty("recoverySets");
+      expect(result()).not.toHaveProperty("recoverySetsError");
+      expect(result().recoverySets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: c.manifest.runId,
+            manifestPath: c.manifestPath,
+            status: "stale",
+          }),
+          expect.objectContaining({ directory, status: "incomplete" }),
+        ]),
+      );
+      expect(result().recoverySets).toHaveLength(2);
+      const incomplete = result().recoverySets.find(
+        (set: { status: string }) => set.status === "incomplete",
+      );
+      for (const field of ["ref", "manifestPath", "manifestSha256", "runId"]) {
+        expect(incomplete).not.toHaveProperty(field);
+      }
     } else {
-      expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
+      const output = mocks.log.mock.calls.flat().join("\n");
+      expect(output).toContain(c.manifestPath);
+      expect(output).toContain(directory);
+      expect(output).toContain("incomplete");
+      expect(output).not.toContain("Update recovery sets unavailable");
     }
-    expect(await fs.readFile(c.manifestPath, "utf8")).toBe("{");
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+    expect(await fs.readFile(partialPath, "utf8")).toBe('{"schemaVersion":2');
+    expect(await fs.readdir(directory)).toEqual(["manifest.json.partial"]);
   },
 );
 it.each([
   "foreign-state",
   "wrong-run-directory",
   "terminal-binding",
-  "incomplete-publication",
   "manifest-symlink",
   "manifest-hardlink",
   "canary-file",
   "archive-directory",
-])("refuses %s through the production status reader", async (fault) => {
-  const c = await capture();
+  "malformed-json",
+  "malformed-text",
+  "canary-manifest",
+  "durable-binding",
+])("refuses %s without hiding normal status", async (fault) => {
+  const c = await capture(
+    fault === "canary-manifest" ? "openclaw-update-canary-aB12cD" : undefined,
+  );
+  const malformed = fault.startsWith("malformed-") || fault === "canary-manifest";
+  if (malformed) {
+    await fs.writeFile(c.manifestPath, "{");
+  }
+  if (fault === "durable-binding") {
+    await terminal(c, "committed");
+    const row = await run(c);
+    row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
+    mocks.readRun.mockResolvedValue(row);
+  }
   if (fault === "foreign-state") {
     await fs.writeFile(
       c.manifestPath,
@@ -232,9 +292,6 @@ it.each([
       path.join(c.directory, "outcome.json"),
       JSON.stringify({ status: "committed", manifestSha256: "a".repeat(64) }),
     );
-  }
-  if (fault === "incomplete-publication") {
-    await fs.unlink(c.manifestPath);
   }
   if (fault === "manifest-symlink" || fault === "manifest-hardlink") {
     const target = path.join(root, "manifest-target.json");
@@ -251,10 +308,21 @@ it.each([
   if (fault === "archive-directory") {
     await fs.mkdir(path.join(path.dirname(c.directory), "agent-schema-run-id.tar.gz"));
   }
-  await updateStatusCommand({ json: true });
-  expect(result()).not.toHaveProperty("recoverySets");
-  expect(result().recoverySetsError).toBeTypeOf("string");
-  expect(result().recoverySetsError.length).toBeGreaterThan(0);
+  await expect(updateStatusCommand({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
+  if (fault === "malformed-text") {
+    expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
+  } else {
+    expect(result()).toHaveProperty("availability");
+    expect(result()).not.toHaveProperty("recoverySets");
+    expect(result().recoverySetsError).toBeTypeOf("string");
+    expect(result().recoverySetsError.length).toBeGreaterThan(0);
+    if (fault === "durable-binding") {
+      expect(result().recoverySetsError).toContain("identity changed");
+    }
+  }
+  if (malformed) {
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe("{");
+  }
 });
 it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
   "keeps recovery sets visible beside a known %s without changing either artifact",
@@ -293,25 +361,29 @@ it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
     // Recognized siblings must not hide genuinely incomplete captures.
     await fs.unlink(c.manifestPath);
     await updateStatusCommand({ json: true });
-    expect(result().recoverySetsError).toContain("incomplete publication");
+    expect(result()).not.toHaveProperty("recoverySetsError");
+    expect(result().recoverySets).toEqual([
+      expect.objectContaining({ directory: c.directory, status: "incomplete" }),
+    ]);
   },
 );
-it("still validates a manifest in a canary-named directory", async () => {
-  const c = await capture("openclaw-update-canary-aB12cD");
-  await fs.writeFile(c.manifestPath, "{");
-  await updateStatusCommand({ json: true });
-  expect(result()).not.toHaveProperty("recoverySets");
-  expect(result().recoverySetsError).toBeTypeOf("string");
-});
 
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
   mocks.readRun.mockResolvedValue(await run(c));
   await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status: "unresolved",
-    nextAction: "npx openclaw@latest doctor --fix",
-  });
+  const unresolved = result().recoverySets[0];
+  expect(unresolved.status).toBe("unresolved");
+  expect(unresolved.nextAction).toContain(c.manifestPath);
+  expect(unresolved.nextAction).toMatch(/preserve current state/i);
+  expect(unresolved.nextAction).toContain(
+    "https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures",
+  );
+  expect(unresolved.message).toMatch(/retained original.*manual inspection/i);
+  for (const guidance of [unresolved.nextAction, unresolved.message]) {
+    expect(guidance).not.toContain("openclaw update status --json");
+    expect(guidance).not.toContain("doctor --fix");
+  }
   const second = await capture("22222222-2222-4222-8222-222222222222");
   const rows = new Map([
     [c.manifest.runId, await run(c)],
@@ -324,24 +396,33 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     "ambiguous",
   ]);
 });
-it("rejects a changed durable manifest binding even with a terminal outcome", async () => {
+it.each([
+  { evidence: "missing run", status: "ambiguous", message: "no matching update run" },
+  { evidence: "package rollback", status: "ambiguous", message: "update run is rolled-back" },
+  { evidence: "restored capture", status: "stale", message: "restored state" },
+  { evidence: "contradictory outcome", status: "ambiguous", message: "outcomes disagree" },
+])("classifies retained capture with $evidence", async ({ evidence, status, message }) => {
   const c = await capture();
-  await terminal(c, "committed");
-  const row = await run(c);
-  row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
-  mocks.readRun.mockResolvedValue(row);
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySetsError).toContain("identity changed");
-});
-it("keeps contradictory terminal outcomes ambiguous", async () => {
-  const c = await capture();
-  await terminal(c, "restored");
-  mocks.readRun.mockResolvedValue(await run(c, "succeeded"));
+  if (evidence !== "missing run") {
+    const row = await run(c, evidence === "contradictory outcome" ? "succeeded" : "rolled-back");
+    if (evidence === "restored capture") {
+      row.origin.updateRecoveryCapture!.restored = true;
+    } else if (evidence === "contradictory outcome") {
+      await terminal(c, "restored");
+    } else {
+      row.steps.push({ step: evidence, status: "completed", exitCode: 0 });
+    }
+    mocks.readRun.mockResolvedValue(row);
+  }
   await updateStatusCommand({ json: true });
   expect(result().recoverySets[0]).toMatchObject({
-    status: "ambiguous",
-    message: expect.stringContaining("outcomes disagree"),
+    status,
+    nextAction: "openclaw update status --json",
+    message: expect.stringContaining(message),
   });
+  if (evidence === "missing run") {
+    expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  }
 });
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();

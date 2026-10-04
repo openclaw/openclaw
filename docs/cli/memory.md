@@ -13,9 +13,23 @@ doc-schema-version: 1
 
 Manage semantic memory indexing, search, promotion into `MEMORY.md`, and
 provenance-based deletion.
-Provided by the bundled `memory-core` plugin, available when
-`plugins.slots.memory` selects `memory-core` (the default). Other memory
-plugins expose their own CLI namespaces.
+Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
+`memory-core` by default. Other memory plugins expose their own CLI namespaces.
+
+When another plugin owns the memory slot and `memory-core` runs only as the
+dreaming consolidation sidecar:
+
+- `memory status` reports the selected provider's id and health (opened with
+  host status authority) and the dreaming state instead of Memory Core's own
+  index. `--json` returns
+  `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
+  `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
+  Memory Core's own index.
+- `memory search` exits with code 1 and names the slot owner instead of
+  searching the sidecar index.
+- `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
+  Memory Core's sidecar index and print a notice saying so (on stderr with
+  `--json`).
 
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
@@ -76,6 +90,11 @@ memory searches.
 For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
+
+Session eligibility excludes unindexed transcripts whose parsed content is
+entirely system-generated, matching the indexer's admission rules. These
+transcripts do not keep status dirty; later user content makes them eligible
+for indexing again.
 
 ## `memory index`
 

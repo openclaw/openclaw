@@ -37,7 +37,12 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
   document.body.append(current, superseded);
   try {
     await Promise.all([current.updateComplete, superseded.updateComplete, loading.promise]);
-    superseded.host = { ...host, connected: false };
+    superseded.host = {
+      ...host,
+      connected: false,
+      client: createTestGatewayClient(async () => ({})),
+    };
+    superseded.host.client.retireOfflineRecoveryScope();
     superseded.identity = "disconnected-owner";
     await superseded.updateComplete;
     const failedImport = import("../../lib/chat/composer-draft-store.runtime.ts").catch(

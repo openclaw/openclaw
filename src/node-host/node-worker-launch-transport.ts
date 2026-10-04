@@ -1,9 +1,14 @@
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
-import { WORKER_LINEAGE_START_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_LINEAGE_START_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
 } from "../process/supervisor/adapters/child.js";
+import { assertProcessGroupControl } from "../process/supervisor/service-child-group-ownership.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -73,7 +78,12 @@ export async function prepareNodeWorkerLaunchTransport(
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
-    const args = [entry, "--internal-worker-ipc", "--internal-worker-session"];
+    const args = [
+      ...resolveRuntimeArgs(),
+      entry,
+      "--internal-worker-ipc",
+      "--internal-worker-session",
+    ];
     const workerOptions = {
       env: options.workerEnv,
       ownedWorker: true,
@@ -102,6 +112,11 @@ export async function prepareNodeWorkerLaunchTransport(
     ) {
       const { adapter, ready } = await createServiceChildRelayAdapter({
         ...workerOptions,
+        ...(options.descriptor.admission.handshake.protocolFeatures.includes(
+          WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+        )
+          ? { nativeProcessOwnerSupported: true as const }
+          : {}),
         cleanupBinding: await options.store.cleanupBinding({
           launchId: options.input.launchId,
           planHash: options.planHash,
@@ -112,8 +127,9 @@ export async function prepareNodeWorkerLaunchTransport(
         oomScoreWrapperSelected: false,
       });
       await ready;
-      return { kind: "started", adapter, cleanupMode: "owned-anchor" };
+      return { kind: "started", adapter, cleanupMode: adapter.treeOwnership ?? "owned-anchor" };
     }
+    assertProcessGroupControl();
     const { adapter, ready } = await createChildAdapter({
       ...workerOptions,
       argv: [process.execPath, ...args],

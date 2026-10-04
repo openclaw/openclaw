@@ -1,7 +1,6 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
 import {
@@ -26,11 +25,6 @@ const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_PROPOSAL_DIRECTORY_DEPTH = 8;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
-type SkillProposalDraftValidationError = {
-  cause: Error;
-  message: string;
-};
-
 type PreparedSkillProposalDraft = {
   content: string;
   description: string;
@@ -54,10 +48,14 @@ export function prepareSkillProposalDraft(input: {
   secretScanMetadata?: readonly { file: string; content: string | undefined }[];
   goal?: string;
   evidence?: string;
-}): Result<PreparedSkillProposalDraft, SkillProposalDraftValidationError> {
+}): PreparedSkillProposalDraft {
   try {
-    assertProposalDescriptionWithinLimit(input.description);
-    assertProposalContentWithinLimit(input.content, input.maxSkillBytes);
+    assertProposalFieldWithinLimit(
+      "description",
+      input.description,
+      MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES,
+    );
+    assertProposalFieldWithinLimit("content", input.content, input.maxSkillBytes);
     const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
     const content = renderProposalMarkdown({
       name: input.name,
@@ -77,7 +75,7 @@ export function prepareSkillProposalDraft(input: {
       { file: "evidence", content: evidence },
     ]);
     assertProposalContainsNoLiteralSecrets(scan);
-    return ok({
+    return {
       content,
       description: input.description,
       draftHash: hashSkillProposalContent(content),
@@ -85,10 +83,9 @@ export function prepareSkillProposalDraft(input: {
       supportFiles,
       ...(goal ? { goal } : {}),
       ...(evidence ? { evidence } : {}),
-    });
+    };
   } catch (cause) {
-    const error = cause instanceof Error ? cause : new Error(String(cause));
-    return err({ cause: error, message: error.message });
+    throw cause instanceof Error ? cause : new Error(String(cause));
   }
 }
 
@@ -189,21 +186,14 @@ function decodeProposalTextFile(buffer: Buffer, label: string): string {
   return buffer.toString("utf8");
 }
 
-function assertProposalDescriptionWithinLimit(description: string): void {
-  const sizeBytes = Buffer.byteLength(description, "utf8");
-  if (sizeBytes > MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES) {
-    throw new Error(
-      `Skill proposal description is too large (${sizeBytes} bytes, max ${MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES}).`,
-    );
-  }
-}
-
-function assertProposalContentWithinLimit(content: string, maxSkillBytes: number): void {
+function assertProposalFieldWithinLimit(
+  field: "description" | "content",
+  content: string,
+  maxBytes: number,
+): void {
   const sizeBytes = Buffer.byteLength(content, "utf8");
-  if (sizeBytes > maxSkillBytes) {
-    throw new Error(
-      `Skill proposal content is too large (${sizeBytes} bytes, max ${maxSkillBytes}).`,
-    );
+  if (sizeBytes > maxBytes) {
+    throw new Error(`Skill proposal ${field} is too large (${sizeBytes} bytes, max ${maxBytes}).`);
   }
 }
 

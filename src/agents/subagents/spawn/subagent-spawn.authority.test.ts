@@ -48,9 +48,13 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+} from "../registry/subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
@@ -109,8 +113,8 @@ describe("pending spawn invocation authority", () => {
         });
         registerAgentRunContext(id, { sessionKey: key(id), sessionId: `${id}-session` });
       }
-      const completedB = subagentRuns.get("b")!;
-      const completedGeneration = completedB.generation;
+      const registeredB = subagentRuns.get("b")!;
+      const completedGeneration = registeredB.generation;
       const cleanupEntered = createDeferred();
       const releaseCleanup = createDeferred();
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
@@ -132,9 +136,9 @@ describe("pending spawn invocation authority", () => {
         });
         await cleanupEntered.promise;
         expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
-        expect(completedB.cleanupCompletedAt).toBeUndefined();
+        expect(subagentRuns.get("b")?.cleanupCompletedAt).toBeUndefined();
         let ready = false;
-        cleanup = waitForSubagentCleanupCompleted(completedB).then(() => {
+        cleanup = waitForSubagentCleanupCompleted(registeredB).then(() => {
           ready = true;
         });
         // Imports can be idle while completion still has not scheduled its cleanup tails.
@@ -147,6 +151,7 @@ describe("pending spawn invocation authority", () => {
       }
       clearAgentRunContext("b");
       await fixture.settle();
+      const completedB = subagentRuns.get("b")!;
       expect(completedB).toMatchObject({
         generation: completedGeneration,
         cleanupCompletedAt: expect.any(Number),
@@ -191,11 +196,10 @@ describe("pending spawn invocation authority", () => {
       const freshInterrupted = vi.fn();
       const dispatch = vi.fn();
       try {
-        // Completed B visits its empty child list synchronously while the other
-        // branch enters its asynchronous mutation/drain, before this barrier opens.
+        // The sibling drain and B's delivery bookkeeping publish independently.
         await entered.promise;
-        expect(subagentRuns.get("b")).toBe(completedB);
-        expect(completedB.generation).toBe(completedGeneration);
+        expect(isSameSubagentRunOwner(subagentRuns.get("b"), completedB)).toBe(true);
+        expect(subagentRuns.get("b")?.generation).toBe(completedGeneration);
         expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
         const original = loadSessionEntry({ storePath, sessionKey: key("b") });
         expect(original).toMatchObject({ sessionId: "b-session", lifecycleRevision: "original" });
@@ -279,8 +283,8 @@ describe("pending spawn invocation authority", () => {
           expect.objectContaining({ aborted: true }),
         );
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
-        expect(subagentRuns.get("b")).toBe(completedB);
-        expect(completedB.generation).toBe(completedGeneration);
+        expect(isSameSubagentRunOwner(subagentRuns.get("b"), completedB)).toBe(true);
+        expect(subagentRuns.get("b")?.generation).toBe(completedGeneration);
         expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
         expect(loadSessionEntry({ storePath, sessionKey: key("b") })).toMatchObject({
           sessionId: "b-session",
@@ -338,7 +342,7 @@ describe("pending spawn invocation authority", () => {
           },
         });
       let registrationAbortRequested = false;
-      const stopObservingRegistration = onSubagentRegistryPersisted(() => {
+      const stopObservingRegistration = subscribeSubagentRunChanges("persistence", () => {
         if (
           closure === "abort during registration" &&
           !registrationAbortRequested &&
@@ -527,6 +531,7 @@ describe("pending spawn invocation authority", () => {
       const createdAt = entry.createdAt;
       const taskRunId = entry.taskRunId;
       const schedulerSlotId = entry.schedulerSlotId;
+      const runtimeOwner = getSubagentRunRuntimeKey(entry);
       cancellation = killSubagentRunAdmin({
         cfg,
         sessionKey: spawned.childSessionKey!,
@@ -541,13 +546,38 @@ describe("pending spawn invocation authority", () => {
           throw new Error(`Cancellation returned before drain: ${JSON.stringify(result)}`);
         }),
       ]);
-      response.resolve();
-      await vi.waitFor(() => expect(subagentRuns.get("accepted-task-run")).toBe(entry));
-      expect(entry).toMatchObject({ generation, createdAt, taskRunId, schedulerSlotId });
+      const accepted = createDeferred<typeof entry>();
+      const stopObservingAcceptance = subscribeSubagentRunChanges("persistence", () => {
+        const current = subagentRuns.get("accepted-task-run");
+        if (current) {
+          accepted.resolve(current);
+        }
+      });
+      try {
+        response.resolve();
+        const acceptedEntry = await Promise.race([
+          accepted.promise,
+          cancellation.then((result) => {
+            throw new Error(`Cancellation returned before acceptance: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        expect(acceptedEntry).toMatchObject({
+          runId: "accepted-task-run",
+          childSessionKey: entry.childSessionKey,
+          generation,
+          createdAt,
+          taskRunId,
+          schedulerSlotId,
+        });
+        expect(getSubagentRunRuntimeKey(acceptedEntry)).toBe(runtimeOwner);
+        expect(subagentRuns.has(entry.runId)).toBe(false);
+      } finally {
+        stopObservingAcceptance();
+      }
       lease?.release();
       const result = await cancellation;
       expect(result).toMatchObject({ found: true, killed: true });
-      expect(entry.endedReason).toBe("subagent-killed");
+      expect(subagentRuns.get("accepted-task-run")?.endedReason).toBe("subagent-killed");
     } finally {
       response.resolve();
       lease?.release();

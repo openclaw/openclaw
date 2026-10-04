@@ -1,4 +1,5 @@
 // Gateway assistant-avatar tests cover selected-source precedence and safe fallbacks.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,7 +21,7 @@ function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   fs.mkdirSync(workspace);
   return {
     workspace,
-    cfg: { agents: { list: [{ id: "main", workspace }] } },
+    cfg: { agents: { entries: { main: { workspace } } } },
   };
 }
 
@@ -33,7 +34,7 @@ describe("resolveGatewayAssistantAvatar", () => {
   it("inlines the selected local file", async () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "avatar.png"), REAL_PNG);
-    cfg.agents!.list![0]!.identity = { avatar: "avatar.png" };
+    cfg.agents!.entries!.main!.identity = { avatar: "avatar.png" };
 
     expect(await projectAvatar(cfg)).toMatchObject({
       avatar: REAL_PNG_DATA_URL,
@@ -45,7 +46,7 @@ describe("resolveGatewayAssistantAvatar", () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "identity.png"), REAL_PNG);
     fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
-    cfg.agents!.list![0]!.identity = { emoji: "🦞" };
+    cfg.agents!.entries!.main!.identity = { emoji: "🦞" };
 
     expect(await projectAvatar(cfg)).toEqual({ avatar: "🦞", resolution: null });
   });
@@ -55,14 +56,14 @@ describe("resolveGatewayAssistantAvatar", () => {
     ["data URI", REAL_PNG_DATA_URL],
   ])("preserves a selected %s", async (_name, avatar) => {
     const { cfg } = createWorkspace();
-    cfg.agents!.list![0]!.identity = { avatar };
+    cfg.agents!.entries!.main!.identity = { avatar };
 
     expect(await projectAvatar(cfg)).toMatchObject({ avatar, resolution: { source: avatar } });
   });
 
   it("uses a configured emoji when the selected local path is rejected", async () => {
     const { cfg } = createWorkspace();
-    cfg.agents!.list![0]!.identity = { avatar: "missing.png", emoji: "🦞" };
+    cfg.agents!.entries!.main!.identity = { avatar: "missing.png", emoji: "🦞" };
 
     expect(await projectAvatar(cfg)).toEqual({
       avatar: "🦞",
@@ -89,7 +90,7 @@ describe("resolveGatewayAssistantAvatar", () => {
 
   it("never maps a rejected local path back to an authenticated avatar route", async () => {
     const { cfg } = createWorkspace();
-    cfg.agents!.list![0]!.identity = { avatar: "missing.png" };
+    cfg.agents!.entries!.main!.identity = { avatar: "missing.png" };
 
     expect(await projectAvatar(cfg)).toEqual({
       avatar: "A",
@@ -101,7 +102,7 @@ describe("resolveGatewayAssistantAvatar", () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "original.png"), REAL_PNG);
     fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "avatar.png"));
-    cfg.agents!.list![0]!.identity = { avatar: "avatar.png" };
+    cfg.agents!.entries!.main!.identity = { avatar: "avatar.png" };
 
     expect(await projectAvatar(cfg)).toEqual({
       avatar: "A",
@@ -111,7 +112,7 @@ describe("resolveGatewayAssistantAvatar", () => {
 
   it.each(["PS", "🦞"])("keeps the %s text avatar free of file metadata", async (avatar) => {
     const { cfg } = createWorkspace();
-    cfg.agents!.list![0]!.identity = { avatar };
+    cfg.agents!.entries!.main!.identity = { avatar };
 
     expect(await projectAvatar(cfg)).toEqual({ avatar, resolution: null });
   });

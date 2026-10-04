@@ -12,9 +12,7 @@ import ai.openclaw.app.GatewayApprovalKind
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
-import ai.openclaw.app.GatewayCronJobEdit
 import ai.openclaw.app.GatewayCronJobSummary
-import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalNotice
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewaySummaryState
@@ -36,6 +34,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -74,11 +73,8 @@ import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -87,7 +83,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -171,7 +166,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -312,17 +306,13 @@ private fun CronJobsSettingsScreen(
       label = nativeString("Search"),
       enabled = isConnected,
     )
-    val filterOptions = CronJobsListFilter.entries.map(CronJobsListFilter::label)
     ClawSegmentedControl(
-      options = filterOptions,
-      selected = filter.label,
-      onSelect = { selected ->
-        CronJobsListFilter.entries.firstOrNull { it.label == selected }?.let {
-          filterName = it.name
-        }
-      },
+      options = CronJobsListFilter.entries,
+      selected = filter,
+      onSelect = { filterName = it.name },
       modifier = Modifier.fillMaxWidth(),
-      enabledOptions = if (isConnected) filterOptions.toSet() else emptySet(),
+      enabledOptions = if (isConnected) CronJobsListFilter.entries.toSet() else emptySet(),
+      optionLabel = CronJobsListFilter::label,
     )
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
@@ -496,7 +486,7 @@ private fun CronJobDetailSettingsScreen(
       }
 
       else -> {
-        CronJobDetailPanel(
+        CronJobManagementPanel(
           job = current,
           editorDraft = editorDraft ?: CronEditorDraftState.from(current),
           onEditorDraftChange = ::updateEditorDraft,
@@ -512,6 +502,7 @@ private fun CronJobDetailSettingsScreen(
           onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
           onDelete = { viewModel.deleteCronJob(current.id) },
         )
+        CronJobDetailPanel(job = current)
       }
     }
   }
@@ -691,7 +682,7 @@ private fun VoiceSettingsScreen(
   fun setVoiceWake(checked: Boolean) {
     if (!checked) {
       viewModel.setVoiceWakeEnabled(false)
-    } else if (hasPermission(context, Manifest.permission.RECORD_AUDIO)) {
+    } else if (context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
       viewModel.refreshVoiceWakePermission()
       viewModel.setVoiceWakeEnabled(true)
     } else {
@@ -873,19 +864,7 @@ private fun AudioInputDeviceRow(
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
   )
 }
@@ -1081,7 +1060,7 @@ private fun NotificationSettingsScreen(
       openNotificationListenerSettings(context)
       return
     }
-    if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
+    if (Build.VERSION.SDK_INT >= 33 && !context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
@@ -1125,17 +1104,10 @@ private fun NotificationSettingsScreen(
     ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = nativeString("Forwarding Mode"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       ClawSegmentedControl(
-        options = listOf(nativeString("Blocklist"), nativeString("Allowlist")),
-        selected = nativeString(modeLabel),
-        onSelect = { selected ->
-          viewModel.setNotificationForwardingMode(
-            if (selected == nativeString("Allowlist")) {
-              NotificationPackageFilterMode.Allowlist
-            } else {
-              NotificationPackageFilterMode.Blocklist
-            },
-          )
-        },
+        options = listOf(NotificationPackageFilterMode.Blocklist, NotificationPackageFilterMode.Allowlist),
+        selected = mode,
+        onSelect = viewModel::setNotificationForwardingMode,
+        optionLabel = { if (it == NotificationPackageFilterMode.Blocklist) nativeString("Blocklist") else nativeString("Allowlist") },
       )
     }
     NotificationPackagePickerPanel(
@@ -1155,7 +1127,7 @@ private fun NotificationSettingsScreen(
         } else {
           next.remove(packageName)
         }
-        viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+        viewModel.setNotificationForwardingPackages(next.toList())
       },
     )
   }
@@ -1291,7 +1263,7 @@ private fun PhoneCapabilitiesScreen(
   val locationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
       val foregroundGranted = hasLocationPermission(context)
-      val fineGranted = hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+      val fineGranted = context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
       if (pendingPreciseLocation) {
         pendingPreciseLocation = false
         viewModel.setLocationPreciseEnabled(fineGranted)
@@ -1376,7 +1348,7 @@ private fun PhoneCapabilitiesScreen(
       viewModel.setCameraEnabled(false)
       return
     }
-    if (hasPermission(context, Manifest.permission.CAMERA)) {
+    if (context.hasPermission(Manifest.permission.CAMERA)) {
       viewModel.setCameraEnabled(true)
     } else {
       cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -1430,7 +1402,7 @@ private fun PhoneCapabilitiesScreen(
       viewModel.setLocationPreciseEnabled(false)
       return
     }
-    if (hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
+    if (context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
       viewModel.setLocationPreciseEnabled(true)
       if (locationMode == LocationMode.Off) {
         viewModel.setLocationMode(LocationMode.WhileUsing)
@@ -1495,9 +1467,10 @@ private fun PhoneCapabilitiesScreen(
     ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       ClawSegmentedControl(
-        options = locationModeLabels(backgroundLocationAvailable),
-        selected = locationMode.displayLabel,
-        onSelect = { selected -> setLocationAccess(locationModeForLabel(selected)) },
+        options = locationModeOptions(backgroundLocationAvailable),
+        selected = locationMode,
+        onSelect = ::setLocationAccess,
+        optionLabel = { it.displayLabel },
       )
       if (backgroundLocationAvailable) {
         Text(
@@ -1533,9 +1506,16 @@ private fun PhoneCapabilitiesScreen(
       showBackgroundLocationExplanation = false
     }
 
-    AppAlertDialog(
-      onDismissRequest = ::cancelBackgroundLocationRequest,
-      title = { Text(nativeString("Allow background location?")) },
+    AppConfirmationDialog(
+      onDismiss = ::cancelBackgroundLocationRequest,
+      title = nativeString("Allow background location?"),
+      confirmLabel = nativeString("Open Settings"),
+      dismissLabel = nativeString("Not Now"),
+      onConfirm = {
+        showBackgroundLocationExplanation = false
+        awaitingBackgroundSettings = true
+        openAppPermissionSettings(context)
+      },
       text = {
         Text(
           nativeString(
@@ -1543,22 +1523,6 @@ private fun PhoneCapabilitiesScreen(
             backgroundPermissionLabel,
           ),
         )
-      },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            showBackgroundLocationExplanation = false
-            awaitingBackgroundSettings = true
-            openAppPermissionSettings(context)
-          },
-        ) {
-          Text(nativeString("Open Settings"))
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = ::cancelBackgroundLocationRequest) {
-          Text(nativeString("Not Now"))
-        }
       },
     )
   }
@@ -1569,9 +1533,12 @@ private fun InstalledAppsDisclosureDialog(
   onDismiss: () -> Unit,
   onAgree: () -> Unit,
 ) {
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(nativeString("Share installed app information?")) },
+  AppConfirmationDialog(
+    onDismiss = onDismiss,
+    title = nativeString("Share installed app information?"),
+    confirmLabel = nativeString("Agree and Enable"),
+    dismissLabel = nativeString("Not Now"),
+    onConfirm = onAgree,
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         Text(
@@ -1580,16 +1547,6 @@ private fun InstalledAppsDisclosureDialog(
         Text(
           nativeString("Your phone sends this information to your Gateway, not to a server run by OpenClaw. Your Gateway may include it in requests to the AI provider you chose."),
         )
-      }
-    },
-    confirmButton = {
-      TextButton(onClick = onAgree) {
-        Text(nativeString("Agree and Enable"))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(nativeString("Not Now"))
       }
     },
   )
@@ -2017,17 +1974,12 @@ private fun GatewaySettingsScreen(
           )
         }
         Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        val securityOptions = listOf(nativeString("Unencrypted"), nativeString("Secure (TLS)"))
         ClawSegmentedControl(
-          options = securityOptions,
-          selected = if (transport.effectiveTls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
-          onSelect = { selected -> tlsInput = selected == nativeString("Secure (TLS)") },
-          enabledOptions =
-            if (transport.requiresTls) {
-              setOf(nativeString("Secure (TLS)"))
-            } else {
-              securityOptions.toSet()
-            },
+          options = listOf(false, true),
+          selected = transport.effectiveTls,
+          onSelect = { tlsInput = it },
+          enabledOptions = if (transport.requiresTls) setOf(true) else setOf(false, true),
+          optionLabel = { if (it) nativeString("Secure (TLS)") else nativeString("Unencrypted") },
         )
         transport.helperText?.let { helperText ->
           Text(
@@ -2154,9 +2106,10 @@ private fun AppearanceSettingsScreen(
         modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
       )
       ClawSegmentedControl(
-        options = appearanceThemeOptions(),
-        selected = appearanceThemeSummary(themeMode),
-        onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        options = AppearanceThemeMode.entries,
+        selected = themeMode,
+        onSelect = viewModel::setAppearanceThemeMode,
+        optionLabel = ::appearanceThemeSummary,
       )
       Text(
         text = nativeString("Accent color"),
@@ -2312,20 +2265,18 @@ private fun AppLanguageRow(
     title = appLanguageTitle(language),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
+  )
+}
+
+@Composable
+private fun SettingsSelectionCheck() {
+  Icon(
+    imageVector = Icons.Default.Check,
+    contentDescription = nativeString("Selected"),
+    modifier = Modifier.size(18.dp),
+    tint = ClawTheme.colors.primary,
   )
 }
 
@@ -2339,25 +2290,7 @@ internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
     AppearanceThemeMode.Light -> nativeString("Light")
   }
 
-internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
-
-internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode =
-  AppearanceThemeMode.entries.firstOrNull { appearanceThemeSummary(it).equals(label.trim(), ignoreCase = true) }
-    ?: AppearanceThemeMode.Dark
-
-internal fun locationModeLabels(backgroundLocationAvailable: Boolean): List<String> =
-  if (backgroundLocationAvailable) {
-    listOf(nativeString("Off"), nativeString("While Using"), nativeString("Always"))
-  } else {
-    listOf(nativeString("Off"), nativeString("While Using"))
-  }
-
-internal fun locationModeForLabel(label: String): LocationMode =
-  when (label) {
-    nativeString("While Using") -> LocationMode.WhileUsing
-    nativeString("Always") -> LocationMode.Always
-    else -> LocationMode.Off
-  }
+internal fun locationModeOptions(backgroundLocationAvailable: Boolean): List<LocationMode> = LocationMode.entries.filter { backgroundLocationAvailable || it != LocationMode.Always }
 
 private val LocationMode.displayLabel: String
   get() =
@@ -2866,34 +2799,7 @@ private fun CronJobListRow(
 }
 
 @Composable
-private fun CronJobDetailPanel(
-  job: GatewayCronJobDetail,
-  editorDraft: CronEditorDraftState,
-  onEditorDraftChange: (CronEditorDraftState) -> Unit,
-  historyState: GatewayCronRunHistoryState,
-  actionState: GatewayCronActionState,
-  runPending: Boolean,
-  operatorAdminScopeAvailable: Boolean,
-  onRun: () -> Unit,
-  onToggleEnabled: () -> Unit,
-  onSave: (GatewayCronJobEdit) -> Unit,
-  onRefreshHistory: () -> Unit,
-  onDelete: () -> Unit,
-) {
-  CronJobManagementPanel(
-    job = job,
-    editorDraft = editorDraft,
-    onEditorDraftChange = onEditorDraftChange,
-    historyState = historyState,
-    actionState = actionState,
-    runPending = runPending,
-    operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-    onRun = onRun,
-    onToggleEnabled = onToggleEnabled,
-    onSave = onSave,
-    onRefreshHistory = onRefreshHistory,
-    onDelete = onDelete,
-  )
+private fun CronJobDetailPanel(job: GatewayCronJobDetail) {
   SettingsMetricPanel(
     rows =
       listOf(
@@ -2989,9 +2895,7 @@ private fun copySettingsDetailValue(
   title: String,
   value: String,
 ) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
-  Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
+  context.copyTextWithConfirmation("OpenClaw $title", value, nativeString("\$title copied", title))
 }
 
 @Composable
@@ -3402,17 +3306,12 @@ private fun SettingsIconMark(icon: ImageVector) {
   }
 }
 
-private fun hasPermission(
-  context: Context,
-  permission: String,
-): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
 /** Returns true when either fine or coarse location is available to settings callers. */
 private fun hasLocationPermission(context: Context): Boolean =
-  hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
-    hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+  context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+    context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
 
-private fun hasBackgroundLocationPermission(context: Context): Boolean = hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+private fun hasBackgroundLocationPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
 
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

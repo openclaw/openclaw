@@ -1,4 +1,3 @@
-// Runtime warning helpers for daemon install plans that depend on Node.
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 

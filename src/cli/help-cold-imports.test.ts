@@ -1,6 +1,7 @@
 // Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loaded = vi.hoisted(() => {
   const modules = new Set<string>();

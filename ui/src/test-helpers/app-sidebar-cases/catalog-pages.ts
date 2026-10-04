@@ -33,6 +33,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -90,6 +91,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
@@ -171,6 +173,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });

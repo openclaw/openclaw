@@ -1,11 +1,22 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import type {
+  WorkerWorkspaceJournalOwner,
+  WorkspaceJournalChange,
+  WorkspaceJournalMutation,
+  WorkspaceJournalReadCommand,
+  WorkspaceJournalReadResult,
+} from "./placement-workspace-journal.types.js";
 import { MAX_RECONCILIATION_PACK_BYTES } from "./workspace-manifest.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
@@ -21,13 +32,6 @@ type WorkspaceJournalDatabase = Pick<
 >;
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceJournalDatabase>(db);
-
-type WorkerWorkspaceJournalOwner = {
-  sessionId: string;
-  environmentId: string;
-  ownerEpoch: number;
-  placementGeneration: number;
-};
 
 export function isCurrentJournalOwner(
   db: DatabaseSync,
@@ -105,50 +109,77 @@ export function clearWorkerWorkspaceReconciliation(
   );
 }
 
-export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
-  const { now, read, write } = runtime;
+function getWorkspaceReconciliationPlacement(db: DatabaseSync, owner: WorkerWorkspaceJournalOwner) {
+  const placement = find(db, owner.sessionId);
+  return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
+}
+
+function listWorkspaceReconciliationOwners(db: DatabaseSync): WorkerWorkspaceJournalOwner[] {
+  return executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_reconciliations")
+      .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
+      .orderBy("session_id"),
+  ).rows.map((row) => ({
+    sessionId: row.session_id,
+    environmentId: row.environment_id,
+    ownerEpoch: row.owner_epoch,
+    placementGeneration: row.placement_generation,
+  }));
+}
+
+function loadWorkspaceReconciliation(
+  db: DatabaseSync,
+  owner: WorkerWorkspaceJournalOwner,
+  options: { allowFailedOwner?: boolean } = {},
+): WorkerWorkspaceReconciliationJournal | undefined {
+  const placement = assertJournalOwner(db, owner, options);
+  const row = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_reconciliations")
+      .selectAll()
+      .where("session_id", "=", owner.sessionId),
+  ).rows[0];
+  if (!row) {
+    return undefined;
+  }
+  const plan = parseWorkerWorkspaceReconciliationPlan(row.plan_json);
+  if (
+    row.environment_id !== owner.environmentId ||
+    row.owner_epoch !== owner.ownerEpoch ||
+    row.placement_generation !== owner.placementGeneration ||
+    (placement.workspaceBaseManifestRef !== row.base_manifest_ref &&
+      placement.workspaceBaseManifestRef !== plan.appliedManifestRef)
+  ) {
+    throw new Error(`Worker workspace journal owner is stale for session ${owner.sessionId}`);
+  }
+  if (
+    plan.baseManifestRef !== row.base_manifest_ref ||
+    plan.currentManifestRef !== row.current_manifest_ref
+  ) {
+    throw new Error(`Worker workspace journal metadata is inconsistent for ${owner.sessionId}`);
+  }
+  if (
+    row.base_pack.byteLength > MAX_RECONCILIATION_PACK_BYTES ||
+    createHash("sha256").update(row.base_pack).digest("hex") !== plan.basePackSha256
+  ) {
+    throw new Error(`Worker workspace journal snapshot is invalid for ${owner.sessionId}`);
+  }
+  return { ...plan, basePack: row.base_pack };
+}
+
+export function createPlacementWorkspaceJournalOps(
+  runtime: Pick<PlacementStoreRuntime, "now" | "write">,
+) {
+  const { now, write } = runtime;
   return {
-    getWorkspaceReconciliationPlacement(owner: WorkerWorkspaceJournalOwner) {
-      const db = read();
-      const placement = find(db, owner.sessionId);
-      return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
-    },
-
-    listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
-      const db = read();
-      return executeSqliteQuerySync(
-        db,
-        query(db)
-          .selectFrom("worker_workspace_reconciliations")
-          .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
-          .orderBy("session_id"),
-      ).rows.map((row) => ({
-        sessionId: row.session_id,
-        environmentId: row.environment_id,
-        ownerEpoch: row.owner_epoch,
-        placementGeneration: row.placement_generation,
-      }));
-    },
-
-    pruneOrphanedWorkspaceReconciliations(options: {
-      retainFailedOwner: (recoveryError: string) => boolean;
-    }): WorkerWorkspaceJournalOwner[] {
+    pruneOrphanedWorkspaceReconciliations(): WorkspaceJournalMutation {
       return write((db) => {
-        const rows = executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("worker_workspace_reconciliations")
-            .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
-            .orderBy("session_id"),
-        ).rows;
         const pruned: WorkerWorkspaceJournalOwner[] = [];
-        for (const row of rows) {
-          const owner = {
-            sessionId: row.session_id,
-            environmentId: row.environment_id,
-            ownerEpoch: row.owner_epoch,
-            placementGeneration: row.placement_generation,
-          };
+        const changes: WorkspaceJournalChange[] = [];
+        for (const owner of listWorkspaceReconciliationOwners(db)) {
           const placement = find(db, owner.sessionId);
           const stillOwned = isCurrentJournalOwner(db, placement, owner);
           const retainedFailedOwner =
@@ -156,7 +187,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
             placement.environmentId === owner.environmentId &&
             placement.activeOwnerEpoch === owner.ownerEpoch &&
             placement.generation > owner.placementGeneration &&
-            options.retainFailedOwner(placement.recoveryError);
+            placement.recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR);
           if (stillOwned || retainedFailedOwner) {
             continue;
           }
@@ -173,66 +204,24 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
           if (deleted.numAffectedRows === 1n) {
             pruned.push(owner);
             if (placement) {
-              sessionChanges.emit(
-                { agentId: placement.agentId, sessionKey: placement.sessionKey },
-                db,
-              );
+              const change = { agentId: placement.agentId, sessionKey: placement.sessionKey };
+              changes.push(change);
+              sessionChanges.emit(change, db);
             }
           }
         }
-        return pruned;
+        return { owners: pruned, changes };
       });
-    },
-
-    loadWorkspaceReconciliation(
-      owner: WorkerWorkspaceJournalOwner,
-      options: { allowFailedOwner?: boolean } = {},
-    ): WorkerWorkspaceReconciliationJournal | undefined {
-      const db = read();
-      const placement = assertJournalOwner(db, owner, options);
-      const row = executeSqliteQuerySync(
-        db,
-        query(db)
-          .selectFrom("worker_workspace_reconciliations")
-          .selectAll()
-          .where("session_id", "=", owner.sessionId),
-      ).rows[0];
-      if (!row) {
-        return undefined;
-      }
-      const plan = parseWorkerWorkspaceReconciliationPlan(row.plan_json);
-      if (
-        row.environment_id !== owner.environmentId ||
-        row.owner_epoch !== owner.ownerEpoch ||
-        row.placement_generation !== owner.placementGeneration ||
-        (placement.workspaceBaseManifestRef !== row.base_manifest_ref &&
-          placement.workspaceBaseManifestRef !== plan.appliedManifestRef)
-      ) {
-        throw new Error(`Worker workspace journal owner is stale for session ${owner.sessionId}`);
-      }
-      if (
-        plan.baseManifestRef !== row.base_manifest_ref ||
-        plan.currentManifestRef !== row.current_manifest_ref
-      ) {
-        throw new Error(`Worker workspace journal metadata is inconsistent for ${owner.sessionId}`);
-      }
-      if (
-        row.base_pack.byteLength > MAX_RECONCILIATION_PACK_BYTES ||
-        createHash("sha256").update(row.base_pack).digest("hex") !== plan.basePackSha256
-      ) {
-        throw new Error(`Worker workspace journal snapshot is invalid for ${owner.sessionId}`);
-      }
-      return { ...plan, basePack: row.base_pack };
     },
 
     beginWorkspaceReconciliation(
       owner: WorkerWorkspaceJournalOwner,
       journal: WorkerWorkspaceReconciliationJournal,
-    ): void {
+    ): WorkspaceJournalMutation {
       if (journal.appliedManifestRef) {
         throw new Error("Worker workspace reconciliation cannot begin as already applied");
       }
-      write((db) => {
+      return write((db) => {
         const placement = assertJournalOwner(db, owner);
         if (placement.workspaceBaseManifestRef !== journal.baseManifestRef) {
           throw new Error(`Worker workspace base changed for session ${owner.sessionId}`);
@@ -259,20 +248,23 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
             `Worker workspace reconciliation is already pending for ${owner.sessionId}`,
           );
         }
-        sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
+        const change = { agentId: placement.agentId, sessionKey: placement.sessionKey };
+        sessionChanges.emit(change, db);
+        return { owners: [owner], changes: [change] };
       });
     },
 
     abortWorkspaceReconciliation(
       owner: WorkerWorkspaceJournalOwner,
       options: { force?: boolean } = {},
-    ): void {
-      write((db) => {
+    ): WorkspaceJournalMutation {
+      return write((db) => {
         if (!options.force) {
           const placement = assertJournalOwner(db, owner);
           clearWorkerWorkspaceReconciliation(db, owner.sessionId);
-          sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
-          return;
+          const change = { agentId: placement.agentId, sessionKey: placement.sessionKey };
+          sessionChanges.emit(change, db);
+          return { owners: [owner], changes: [change] };
         }
         // Forced teardown owns this exact durable journal even when placement
         // state advanced after a failed recovery sweep.
@@ -288,8 +280,33 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
         }
-        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
+        const change: WorkspaceJournalChange = { all: true, scope: "worker-placements" };
+        sessionChanges.emit(change, db);
+        return { owners: [owner], changes: [change] };
       });
     },
   };
+}
+
+export function readWorkspaceJournalInDatabase(
+  db: DatabaseSync,
+  command: WorkspaceJournalReadCommand,
+): WorkspaceJournalReadResult {
+  return runSqliteDeferredTransactionSync(db, () => {
+    if (command.type === "placementJournals.owners") {
+      return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
+    }
+    if (command.type === "placementJournals.placement") {
+      return {
+        type: command.type,
+        placement: getWorkspaceReconciliationPlacement(db, command.owner),
+      };
+    }
+    return {
+      type: command.type,
+      journal: loadWorkspaceReconciliation(db, command.owner, {
+        allowFailedOwner: command.allowFailedOwner,
+      }),
+    };
+  });
 }

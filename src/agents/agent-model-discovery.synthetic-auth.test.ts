@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentDiscoveryAuthFacts } from "./agent-auth-discovery.js";
 
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
 
@@ -37,8 +38,6 @@ vi.mock("./agent-auth-discovery-core.js", () => ({
   addEnvBackedAgentCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
 }));
 
-let resolveAgentDiscoveryAuthFacts: typeof import("./agent-auth-discovery.js").resolveAgentDiscoveryAuthFacts;
-
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-synthetic-auth-"));
   try {
@@ -49,10 +48,6 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("agent model discovery synthetic auth", () => {
-  beforeAll(async () => {
-    ({ resolveAgentDiscoveryAuthFacts } = await import("./agent-auth-discovery.js"));
-  });
-
   beforeEach(() => {
     resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();

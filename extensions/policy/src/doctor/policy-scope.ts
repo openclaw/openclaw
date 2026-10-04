@@ -1,15 +1,16 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
-import { getPolicyPath, scopedPolicyValue } from "../policy-value.js";
 import {
-  SANDBOX_CONTAINER_POLICY_RULES,
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
+import { getPolicyPath } from "../policy-value.js";
+import {
+  POLICY_RULE_METADATA,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./metadata.js";
-import { POLICY_RULES } from "./policy-constants.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { policyShapeFinding } from "./shape-helpers.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 import { ocPathSegment } from "./utils.js";
@@ -59,143 +60,45 @@ export function scopedAgentIdMatches(
   );
 }
 
-function hasPolicyPaths(value: unknown, paths: readonly string[]): boolean {
-  return paths.some((path) => getPolicyPath(value, path.split(".")) !== undefined);
-}
-
-function policyOrScopeHasRules(
+export function policyHasRules(
   policy: unknown,
-  section: string,
-  hasRules: (value: unknown) => boolean,
+  section:
+    | "agents"
+    | "auth"
+    | "dataHandling"
+    | "execApprovals"
+    | "gateway"
+    | "ingress"
+    | "sandbox"
+    | "secrets"
+    | "tools",
 ): boolean {
   if (!isRecord(policy)) {
     return false;
   }
+  const hasRules = (document: Record<string, unknown>) => {
+    // Even an empty approvals section requests artifact evidence.
+    if (section === "execApprovals") {
+      const value = document.execApprovals;
+      return (
+        isRecord(value) &&
+        (value.requireFile !== undefined || isRecord(value.defaults) || isRecord(value.agents))
+      );
+    }
+    return POLICY_RULE_METADATA.some(
+      (rule) =>
+        rule.policyPath[0] === section &&
+        (section !== "tools" || rule.policyPath[1] !== "requireMetadata") &&
+        getPolicyPath(document, rule.policyPath) !== undefined,
+    );
+  };
   return (
-    hasRules(policy[section]) ||
-    agentScopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay[section]))
+    hasRules(policy) ||
+    (section !== "auth" &&
+      section !== "gateway" &&
+      section !== "secrets" &&
+      agentScopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay)))
   );
-}
-
-export function policyHasExecApprovalsRules(policy: unknown): boolean {
-  return policyOrScopeHasRules(policy, "execApprovals", execApprovalsPolicyHasRules);
-}
-
-function execApprovalsPolicyHasRules(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value.requireFile !== undefined || isRecord(value.defaults) || isRecord(value.agents))
-  );
-}
-
-export function policyHasSecretRules(policy: unknown): boolean {
-  return hasPolicyPaths(policy, [
-    "secrets.requireManagedProviders",
-    "secrets.denySources",
-    "secrets.allowInsecureProviders",
-  ]);
-}
-
-export function policyHasAuthProfileRules(policy: unknown): boolean {
-  return hasPolicyPaths(policy, ["auth.profiles.requireMetadata", "auth.profiles.allowModes"]);
-}
-
-export function policyHasIngressRules(policy: unknown): boolean {
-  return policyOrScopeHasRules(policy, "ingress", ingressPolicyHasRules);
-}
-
-export function policyHasRoutingRules(policy: unknown): boolean {
-  return isRecord(policy) && isRecord(policy.routing);
-}
-
-function ingressPolicyHasRules(value: unknown): boolean {
-  return hasPolicyPaths(value, [
-    "session.requireDmScope",
-    "channels.allowDmPolicies",
-    "channels.denyOpenGroups",
-    "channels.requireMentionInGroups",
-  ]);
-}
-
-export function policyHasGatewayRules(policy: unknown): boolean {
-  return hasPolicyPaths(policy, [
-    "gateway.exposure.allowNonLoopbackBind",
-    "gateway.exposure.allowTailscaleFunnel",
-    "gateway.auth.requireAuth",
-    "gateway.auth.requireExplicitRateLimit",
-    "gateway.controlUi.allowInsecure",
-    "gateway.remote.allow",
-    "gateway.http.denyEndpoints",
-    "gateway.http.requireUrlAllowlists",
-    "gateway.nodes.denyCommands",
-  ]);
-}
-
-export function policyHasAgentWorkspaceRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (isRecord(policy.agents) && workspacePolicyHasRules(policy.agents.workspace)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) => {
-    const scopedAgents = isRecord(overlay.agents) ? overlay.agents : {};
-    return workspacePolicyHasRules(scopedAgents.workspace);
-  });
-}
-
-export function policyHasSandboxPostureRules(policy: unknown): boolean {
-  return policyOrScopeHasRules(policy, "sandbox", sandboxPosturePolicyHasRules);
-}
-
-function sandboxPosturePolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const sandbox = value;
-  const containers = isRecord(sandbox.containers) ? sandbox.containers : undefined;
-  const browser = isRecord(sandbox.browser) ? sandbox.browser : undefined;
-  return (
-    sandbox.requireMode !== undefined ||
-    sandbox.allowBackends !== undefined ||
-    (containers !== undefined &&
-      SANDBOX_CONTAINER_POLICY_RULES.some((rule) => containers[rule.key] !== undefined)) ||
-    browser?.requireCdpSourceRange !== undefined
-  );
-}
-
-export function policyHasDataHandlingRules(policy: unknown): boolean {
-  return policyOrScopeHasRules(policy, "dataHandling", dataHandlingPolicyHasRules);
-}
-
-export function dataHandlingPolicyHasRules(value: unknown): boolean {
-  return hasPolicyPaths(value, [
-    "sensitiveLogging.requireRedaction",
-    "telemetry.denyContentCapture",
-    "retention.requireSessionMaintenance",
-    "memory.denySessionTranscriptIndexing",
-  ]);
-}
-
-export function policyHasToolPostureRules(policy: unknown): boolean {
-  return policyOrScopeHasRules(policy, "tools", toolPosturePolicyHasRules);
-}
-
-function workspacePolicyHasRules(value: unknown): boolean {
-  return isRecord(value) && (value.allowedAccess !== undefined || value.denyTools !== undefined);
-}
-
-function toolPosturePolicyHasRules(value: unknown): boolean {
-  return hasPolicyPaths(value, [
-    "profiles.allow",
-    "fs.requireWorkspaceOnly",
-    "exec.allowSecurity",
-    "exec.requireAsk",
-    "exec.allowHosts",
-    "elevated.allow",
-    "alsoAllow.expected",
-    "denyTools",
-  ]);
 }
 
 type AgentScopedPolicyTarget = {
@@ -362,8 +265,8 @@ function scopedPolicyFields(
   selector: PolicyScopeSelectorKind,
 ): readonly ScopedPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULES.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
-    .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
+  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
+    .map((rule) => ({ rule, value: getPolicyPath(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
       propertyPath: rule.policyPath.join("."),

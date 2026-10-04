@@ -221,10 +221,6 @@ function resolveChannelPackageStateChecker(params: {
   return null;
 }
 
-function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {
-  return normalizeOptionalString(entry.channel.id);
-}
-
 /**
  * Lists bundled channel ids that declare the requested package-state metadata.
  */
@@ -233,7 +229,7 @@ export function listBundledChannelIdsForPackageState(
   discovery?: PluginDiscoveryResult,
 ): string[] {
   return listChannelPackageStateCatalog(metadataKey, discovery)
-    .map((entry) => resolvePackageStateChannelId(entry))
+    .map((entry) => normalizeOptionalString(entry.channel.id))
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -268,7 +264,7 @@ export function hasBundledChannelPackageState(params: {
 }): boolean {
   const requestedChannelId = normalizeOptionalString(params.channelId);
   const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
-    (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
+    (candidate) => normalizeOptionalString(candidate.channel.id) === requestedChannelId,
   );
   if (!entry) {
     return false;

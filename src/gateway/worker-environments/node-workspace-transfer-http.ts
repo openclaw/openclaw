@@ -207,14 +207,7 @@ export function createNodeWorkspaceTransferHttpCallback(
           }
           if (route.kind === "blob") {
             const blob = service.blob(authorization);
-            if (
-              !blob ||
-              !(await service.verifyBlob({
-                path: blob.path,
-                size: blob.size,
-                sha256: blob.sha256,
-              }))
-            ) {
+            if (!blob || !(await service.verifyBlob(blob))) {
               sendOpaqueNotFound(res);
               return;
             }
@@ -233,29 +226,17 @@ export function createNodeWorkspaceTransferHttpCallback(
             if (!stillCurrent()) {
               return;
             }
-            const body = Buffer.from(JSON.stringify(result));
-            res.writeHead(200, {
-              "content-type": "application/json; charset=utf-8",
-              "content-length": String(body.byteLength),
-            });
-            res.end(body);
+            sendJson(res, 200, result);
           } catch (error) {
             if (signal.aborted || res.destroyed) {
               return;
             }
             const limit = error instanceof NodeWorkspaceTransferLimitError;
             const reason = nodeWorkspaceTransferInvalidReason(error);
-            const body = Buffer.from(
-              JSON.stringify({
-                error: limit ? "workspace_transfer_limit" : "workspace_transfer_invalid",
-                ...(reason ? { reason } : {}),
-              }),
-            );
-            res.writeHead(limit ? 413 : 400, {
-              "content-type": "application/json; charset=utf-8",
-              "content-length": String(body.byteLength),
+            sendJson(res, limit ? 413 : 400, {
+              error: limit ? "workspace_transfer_limit" : "workspace_transfer_invalid",
+              ...(reason ? { reason } : {}),
             });
-            res.end(body);
           }
         } catch (error) {
           if (!signal.aborted && !res.destroyed) {

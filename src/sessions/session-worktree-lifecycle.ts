@@ -51,15 +51,6 @@ export async function removeSessionWorktree(params: {
   if (!record || record.removedAt !== undefined) {
     return undefined;
   }
-  const preserved = (
-    current: ManagedWorktreeRecord,
-    reason: PreservedSessionWorktree["reason"],
-  ) => ({
-    id: current.id,
-    branch: current.branch,
-    path: current.path,
-    reason,
-  });
   const assertCurrent = () => {
     params.commitGuard?.();
     const current = getRegistryWorktree(env, record.id);
@@ -91,7 +82,7 @@ export async function removeSessionWorktree(params: {
         sessionKey: params.sessionKey,
         reason,
       });
-      return preserved(current, reason);
+      return { id: current.id, branch: current.branch, path: current.path, reason };
     }
   }
   return undefined;
@@ -201,7 +192,7 @@ export async function cleanUpAutomaticallyArchivedWorktrees(
 ): Promise<void> {
   for (const target of targets) {
     try {
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("worktree-cleanup", {
         scope: target.storePath,
         identities: [target.sessionKey, target.entry.sessionId],
         run: async () => {

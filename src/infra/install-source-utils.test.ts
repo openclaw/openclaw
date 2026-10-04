@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -480,15 +481,14 @@ describe("packNpmSpecToArchive", () => {
         },
       });
       expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-        [
-          "npm",
+        expectedNpmCommand([
           "pack",
           "openclaw-plugin@1.2.3",
           "--ignore-scripts",
           "--json",
           "--dry-run=false",
           `--pack-destination=${cwd}`,
-        ],
+        ]),
         {
           cwd,
           timeoutMs: expectedTimeoutMs,

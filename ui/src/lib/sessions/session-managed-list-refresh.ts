@@ -1,7 +1,11 @@
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { isAwaitingGatewayFailure } from "../gateway-availability.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../gateway-availability.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
@@ -81,6 +85,7 @@ export function createSessionManagedListRefresh(
         refresh.invalidated &&
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
+        entry.readGeneration += 1;
         entry.queued = refresh;
       }
       return entry.pending;
@@ -116,9 +121,29 @@ export function createSessionManagedListRefresh(
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const issuedRevision = nextRevision();
-          const response = await requestSessionListParams(scope.client, requestParams);
+          const generation = entry.readGeneration;
+          const readIsCurrent = () =>
+            isCurrent() &&
+            (!requestParams.pageSize ||
+              (generation === entry.readGeneration && isPageActive() && entry.listeners.size > 0));
+          const response = await requestSessionListParams(
+            scope.client,
+            requestParams,
+            readIsCurrent,
+          );
           if (!isCurrent()) {
             return;
+          }
+          if (!readIsCurrent()) {
+            // Retired pages cannot start another RPC or publish a partial window.
+            // Automatic invalidation stays paced by the existing coordinator.
+            publishManagedList(entry, { ...entry.snapshot, loading: false }, isCurrent);
+            if (!entry.queued || entry.queued.background || !isPageActive()) {
+              return;
+            }
+            next = entry.queued;
+            entry.queued = null;
+            continue;
           }
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
@@ -153,6 +178,7 @@ export function createSessionManagedListRefresh(
             false,
           );
           entry.connectionEpoch = scope.epoch;
+          entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
             result: decorated,
             agentId: agentId ?? null,
@@ -182,12 +208,21 @@ export function createSessionManagedListRefresh(
             return;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
+          const startupPending = isAgentDatabaseInspectionPendingError(error);
+          if (startupPending) {
+            entry.coordinator.scheduleRetry(
+              resolveGatewayReadRetryDelayMs(error, entry.startupRetryAttempt++),
+            );
+          } else {
+            entry.startupRetryAttempt = 0;
+          }
           publishManagedList(
             entry,
             {
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              startupPending,
             },
             isCurrent,
           );

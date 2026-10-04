@@ -33,7 +33,9 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "entry.js"), "original\n");
-  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockImplementation(
+    async (bindingEnv, options) => (options?.includeInvoking ? [{ env: bindingEnv }] : []),
+  );
   vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
     installed: false,
     loadState: { status: "not-loaded" },
@@ -42,6 +44,11 @@ beforeEach(async () => {
     command: null,
     runtime: { status: "stopped", missingUnit: true },
   });
+  vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation((binding) =>
+    gatewayService.readGatewayServiceState(gatewayService.resolveGatewayService(), {
+      env: binding.env,
+    }),
+  );
   vi.spyOn(systemdFiles, "readSystemdServiceCommandLocation").mockRejectedValue(
     new Error("native service metadata unavailable"),
   );
@@ -281,4 +288,18 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
   expect(finalize).not.toHaveBeenCalled();
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
+});
+
+it("keeps UI preparation current-head even after another runtime group was prepared", async () => {
+  commands.prepare.mockResolvedValueOnce(7);
+  expect(
+    await prepareVitestRuntime([{ configs: ["test/vitest/vitest.ui-e2e.config.ts"] }], env, {
+      runtimePrepared: true,
+    }),
+  ).toBe(7);
+  expect(commands.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({
+      args: ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+    }),
+  );
 });

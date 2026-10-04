@@ -238,6 +238,43 @@ describe("live device scope upgrade", () => {
     expect((hello as { auth?: { scopes?: string[] } }).auth?.scopes).toContain("operator.admin");
   });
 
+  test("explains approval that preserves a previously narrowed token without granting admin", async () => {
+    const limited = await issueOperatorToken({
+      name: "live-scope-upgrade-preserved-token",
+      approvedScopes: FULL_SCOPES,
+      tokenScopes: ["operator.read"],
+    });
+    const ws = await openWs();
+    await connectOk(ws, {
+      skipDefaultAuth: true,
+      deviceToken: limited.token,
+      deviceIdentityPath: limited.identityPath,
+      scopes: ["operator.read"],
+    });
+    const registration = await rpcReq<{ requestId: string }>(ws, "device.scopes.requestUpgrade", {
+      scopes: FULL_SCOPES,
+    });
+    expect(registration.ok).toBe(true);
+    const requestId = registration.payload?.requestId;
+    const wait = rpcReq(ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
+    expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+
+    const result = await wait;
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("previously narrowed"),
+      },
+    });
+    expect(result.error?.message).toContain("openclaw dashboard");
+    expect(result.error).not.toMatchObject({ retryable: true });
+    expect(result.payload).toBeUndefined();
+    expect(
+      (await devicePairing.getPairedDevice(limited.deviceId))?.tokens?.operator?.scopes,
+    ).toEqual(["operator.read"]);
+  });
+
   test("rejects a scope-upgrade connection from a mismatched browser origin", async () => {
     const limited = await openLimitedBrowserDevice("live-scope-upgrade-wrong-browser-origin");
     limited.ws.close();

@@ -1,4 +1,5 @@
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 
 /**
  * In-memory cache of Discord user presence data.
@@ -24,12 +25,7 @@ export function setPresence(
     presenceCache.set(accountKey, accountCache);
   }
   accountCache.set(userId, data);
-  if (accountCache.size > MAX_PRESENCE_PER_ACCOUNT) {
-    const oldest = accountCache.keys().next().value;
-    if (oldest !== undefined) {
-      accountCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(accountCache, MAX_PRESENCE_PER_ACCOUNT);
 }
 
 export function getPresence(

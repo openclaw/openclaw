@@ -30,7 +30,7 @@ export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]): {
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function registerAttachCli(program: Command, _argv: string[] = process.argv) {
+export async function registerAttachCli(program: Command) {
   program
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")

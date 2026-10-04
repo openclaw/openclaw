@@ -10,10 +10,7 @@ import {
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
 
-async function scanPolicyTools(raw: string) {
-  const evidence = await collectPolicyEvidence({}, { toolsRaw: raw });
-  return evidence.tools ?? [];
-}
+const scanPolicyTools = (raw: string) => collectPolicyEvidence({}, { toolsRaw: raw }).tools ?? [];
 
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
@@ -233,7 +230,7 @@ describe("scanPolicyToolPosture", () => {
     const evidence = scanPolicyToolPosture({
       tools: { exec: { mode: "auto" } },
       agents: {
-        list: [{ id: "reviewer", tools: { exec: { ask: "always" } } }],
+        entries: { reviewer: { tools: { exec: { ask: "always" } } } },
       },
     });
 
@@ -249,7 +246,7 @@ describe("scanPolicyToolPosture", () => {
           id: "reviewer-exec-ask",
           kind: "execAsk",
           value: "always",
-          source: "oc://openclaw.config/agents/list/#0/tools/exec/ask",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/ask",
         }),
       ]),
     );
@@ -300,8 +297,8 @@ describe("scanPolicyRouting", () => {
 });
 
 describe("scanPolicyTools", () => {
-  it("scans documented bullet tool declarations", async () => {
-    await expect(
+  it("scans documented bullet tool declarations", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -311,7 +308,7 @@ describe("scanPolicyTools", () => {
           "  owner: support",
         ].join("\n"),
       ),
-    ).resolves.toEqual([
+    ).toEqual([
       {
         id: "deploy-tool",
         source: "oc://AGENTS.md/tools/deploy-tool",
@@ -332,10 +329,10 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("does not treat indented metadata bullets as tool declarations", async () => {
-    await expect(
+  it("does not treat indented metadata bullets as tool declarations", () => {
+    expect(
       scanPolicyTools(["## Tools", "- deploy: risk: critical", "  - owner: ops"].join("\n")),
-    ).resolves.toEqual([
+    ).toEqual([
       {
         id: "deploy",
         source: "oc://AGENTS.md/tools/deploy",
@@ -346,8 +343,8 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("ignores local-note examples inside fenced blocks", async () => {
-    await expect(
+  it("ignores local-note examples inside fenced blocks", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -357,19 +354,11 @@ describe("scanPolicyTools", () => {
           "```",
         ].join("\n"),
       ),
-    ).resolves.toEqual([]);
+    ).toEqual([]);
   });
 
-  it("ignores the complete local-notes subsection", async () => {
-    await expect(
-      scanPolicyTools(
-        ["## Tools", "### Local notes", "- SSH: prod-host", "### deploy risk: high"].join("\n"),
-      ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
-  });
-
-  it("parses a tool literally named tools after local notes", async () => {
-    await expect(
+  it("parses a tool literally named tools after local notes", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -378,7 +367,7 @@ describe("scanPolicyTools", () => {
           "### tools risk: high sensitivity: restricted owner: ops",
         ].join("\n"),
       ),
-    ).resolves.toEqual([
+    ).toEqual([
       expect.objectContaining({
         id: "tools",
         risk: "high",
@@ -388,8 +377,8 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("ignores deeper Tools sections outside the governed H1/H2 contract", async () => {
-    await expect(
+  it("ignores deeper Tools sections outside the governed H1/H2 contract", () => {
+    expect(
       scanPolicyTools(
         [
           "## Build",
@@ -399,11 +388,11 @@ describe("scanPolicyTools", () => {
           "### deploy risk: low owner: release",
         ].join("\n"),
       ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
+    ).toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
   });
 
-  it("does not carry metadata across repeated Tools section boundaries", async () => {
-    const evidence = await scanPolicyTools(
+  it("does not carry metadata across repeated Tools section boundaries", () => {
+    const evidence = scanPolicyTools(
       [
         "## Tools",
         "### deploy risk: high",
@@ -419,14 +408,14 @@ describe("scanPolicyTools", () => {
     expect(evidence[0]).not.toHaveProperty("owner");
   });
 
-  it("keeps longer fences open across shorter delimiter runs", async () => {
-    await expect(
+  it("keeps longer fences open across shorter delimiter runs", () => {
+    expect(
       scanPolicyTools(["## Tools", "````markdown", "```", "- SSH: home-server", "````"].join("\n")),
-    ).resolves.toEqual([]);
+    ).toEqual([]);
   });
 
-  it("scans a migrated legacy Tools section after its document heading", async () => {
-    await expect(
+  it("scans a migrated legacy Tools section after its document heading", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -436,7 +425,7 @@ describe("scanPolicyTools", () => {
           "### deploy risk: high sensitivity: restricted owner: ops",
         ].join("\n"),
       ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
+    ).toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
   });
 });
 
@@ -517,15 +506,21 @@ describe("scanPolicyExecApprovals", () => {
     ]);
   });
 
-  it("normalizes legacy default agents and string allowlist entries", () => {
+  it("projects canonical approval entries while retaining source indices across invalid entries", () => {
     expect(
       scanPolicyExecApprovals(
         JSON.stringify({
           version: 1,
           agents: {
-            default: {
+            main: {
               security: "allowlist",
-              allowlist: ["legacy", { pattern: "doctor" }],
+              allowlist: [
+                null,
+                { id: "entry-1", pattern: "legacy" },
+                "not-an-approval-entry",
+                { pattern: " " },
+                { id: "entry-2", pattern: "doctor" },
+              ],
             },
           },
         }),
@@ -540,21 +535,21 @@ describe("scanPolicyExecApprovals", () => {
         kind: "agent",
         agentId: "main",
         security: "allowlist",
-        source: "oc://exec-approvals.json/agents/default",
+        source: "oc://exec-approvals.json/agents/main",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:0",
         kind: "allowlist",
         agentId: "main",
         pattern: "legacy",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#0",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#1",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:1",
         kind: "allowlist",
         agentId: "main",
         pattern: "doctor",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#1",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#4",
       }),
     ]);
   });

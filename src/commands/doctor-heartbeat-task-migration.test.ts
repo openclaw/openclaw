@@ -8,7 +8,8 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatMonitorPlan } from "../cron/heartbeat-monitor.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
@@ -93,7 +94,7 @@ tasks:
   process.env.HOME = env.HOME;
   process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
   const cfg = {
-    agents: { defaults: { heartbeat: { every: "30m" } }, list: [{ id: "main" }] },
+    agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
@@ -103,7 +104,7 @@ tasks:
   }
   const added = await cron.add(spec.input, { enabledExplicit: true, systemOwned: true });
   const monitor = "job" in added ? added.job : added;
-  writeCronJobScratch({
+  writeCronJobScratchForMaintenance({
     storePath,
     jobId: monitor.id,
     content: scratchContent,
@@ -201,7 +202,7 @@ describe("heartbeat scratch task cron migration", () => {
     tempDirs.push(root);
     const env = { ...process.env, HOME: path.join(root, "home"), OPENCLAW_STATE_DIR: root };
     const cfg = {
-      agents: { defaults: { heartbeat: { every: "30m" } }, list: [{ id: "main" }] },
+      agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
     } as OpenClawConfig;
 
     await expect(collectHeartbeatTaskMigrationFindings(cfg, env)).resolves.toEqual([]);
@@ -309,7 +310,7 @@ tasks:
 `;
     const migration = migrate(fixture);
     const current = readScratch(fixture);
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: concurrentScratch,
@@ -398,7 +399,7 @@ tasks:
     interval: 1h
     prompt: Second
 `;
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: duplicate,

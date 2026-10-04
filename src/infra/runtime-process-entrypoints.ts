@@ -16,9 +16,13 @@ export const runtimeProcessEntrypoints = {
   codeModeNode: runtimeProcessEntrypoint("agents/code-mode-node.worker"),
   cronReadOnly: runtimeProcessEntrypoint("cron/store/read-only.worker"),
   stateRead: runtimeProcessEntrypoint("state/openclaw-state-read.worker"),
+  workerNativeLifecycle: runtimeProcessEntrypoint("infra/worker-native-lifecycle.worker"),
   spawnBroker: runtimeProcessEntrypoint("process/spawn-broker/worker"),
   cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
   controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
+  nodeBootstrapArtifact: runtimeProcessEntrypoint(
+    "gateway/worker-environments/node-bootstrap-artifact.worker",
+  ),
   nativeHookRelayClient: runtimeProcessEntrypoint("agents/harness/native-hook-relay-client.worker"),
   computerHost: runtimeProcessEntrypoint("gateway/desktop/computer.worker"),
   imageProcessor: runtimeProcessEntrypoint("media/image-processor.worker"),
@@ -28,14 +32,22 @@ export const runtimeProcessEntrypoints = {
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
+  pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
   agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
   workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
   localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
   identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
   workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
+  progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
+  acpParentStreamStore: runtimeProcessEntrypoint(
+    "agents/subagents/spawn/acp-parent-stream-store.worker",
+  ),
+  messageToolRunOutcomeStore: runtimeProcessEntrypoint(
+    "infra/message-tool-run-outcome-store.worker",
+  ),
   contextEngineTurnOutbox: runtimeProcessEntrypoint(
     "agents/harness/context-engine-turn-outbox.worker",
   ),
@@ -44,8 +56,11 @@ export const runtimeProcessEntrypoints = {
   stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
   githubExec: runtimeProcessEntrypoint("agents/github-exec-launcher"),
   sqliteReadOnly: runtimeProcessEntrypoint("infra/sqlite-readonly-location.worker"),
+  sqliteSnapshotStaging: runtimeProcessEntrypoint("infra/sqlite-snapshot-staging.worker"),
+  sqliteReadOnlyNativeResource: runtimeProcessEntrypoint("infra/sqlite-readonly-native-resource"),
   sqliteSourceRevision: runtimeProcessEntrypoint("infra/sqlite-source-revision.worker"),
   sqliteIntegrity: runtimeProcessEntrypoint("infra/sqlite-integrity.worker"),
+  sqliteCloseProbe: runtimeProcessEntrypoint("infra/bun-sqlite-close-probe.worker"),
   preparedModelCatalog: runtimeProcessEntrypoint("agents/prepared-model-catalog.worker"),
   providerPromptState: runtimeProcessEntrypoint(
     "agents/embedded-agent-runner/provider-prompt-state.worker",
@@ -56,11 +71,18 @@ export const runtimeProcessEntrypoints = {
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
   doctor: runtimeProcessEntrypoint("commands/doctor.worker"),
   databaseVerify: runtimeProcessEntrypoint("state/openclaw-database-verify.worker"),
+  stateOwnership: runtimeProcessEntrypoint("state/openclaw-state-ownership.worker"),
   stateLeaseHeartbeat: runtimeProcessEntrypoint("state/openclaw-state-lease-heartbeat.worker"),
+  gatewayStateOwnerHeartbeat: runtimeProcessEntrypoint(
+    "infra/gateway-state-owner-heartbeat.worker",
+  ),
   sessionTranscriptArchive: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-archive.worker",
   ),
   sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+  workerTranscriptCommit: runtimeProcessEntrypoint(
+    "gateway/worker-environments/transcript-commit.worker",
+  ),
   sessionManagerMetadata: runtimeProcessEntrypoint(
     "agents/sessions/session-manager-metadata.worker",
   ),

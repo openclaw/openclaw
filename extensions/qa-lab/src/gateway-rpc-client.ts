@@ -4,9 +4,14 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 type QaGatewayClientOptions = ConstructorParameters<typeof GatewayClient>[0];
+type QaGatewayHello = Parameters<NonNullable<QaGatewayClientOptions["onHelloOk"]>>[0];
+type QaGatewayReconnectPausedInfo = Parameters<
+  NonNullable<QaGatewayClientOptions["onReconnectPaused"]>
+>[0];
 
 type QaGatewayRpcRequestOptions = {
   deadlineMs?: number;
@@ -54,19 +59,9 @@ async function waitForQaGatewayConnection(
   if (remainingMs <= 0) {
     throw qaGatewayDeadlineError();
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      gate.promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(qaGatewayDeadlineError()), remainingMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(gate.promise, remainingMs, () => {
+    throw qaGatewayDeadlineError();
+  });
 }
 
 export async function startQaGatewayRpcClient(params: {
@@ -96,7 +91,7 @@ export async function startQaGatewayRpcClient(params: {
     ...(params.deviceIdentity ? { sharedStateMode: "read-only" as const } : {}),
     mode: "backend",
     scopes: params.scopes ?? ["operator.admin"],
-    onHelloOk: (hello) => {
+    onHelloOk: (hello: QaGatewayHello) => {
       // Retain only target-observed protocol/version, never hello auth or tokens.
       evidenceIdentity = { protocol: hello.protocol, version: hello.server.version };
       connection.connected = true;
@@ -108,7 +103,7 @@ export async function startQaGatewayRpcClient(params: {
         connection = createQaGatewayConnectionGate();
       }
     },
-    onReconnectPaused: (info) => {
+    onReconnectPaused: (info: QaGatewayReconnectPausedInfo) => {
       evidenceIdentity = null;
       const error = new Error(
         `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,

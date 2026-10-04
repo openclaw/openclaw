@@ -1,4 +1,3 @@
-// Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -6,6 +5,7 @@ import pLimit, { type LimitFunction } from "p-limit";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
   comparePackageDistContentInventory,
   createPackageDistContentInventoryEntry,
@@ -18,10 +18,10 @@ import { root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists } from "./json-files.js";
 export {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 
-export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
@@ -53,6 +53,7 @@ const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(
     "channel-contract-testing",
     "channel-target-testing",
     "channel-test-helpers",
+    "compiled-subprocess-testing",
     "plugin-test-api",
     "plugin-test-contracts",
     "plugin-test-runtime",
@@ -84,23 +85,13 @@ type PackageDistExclusionRules = {
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
-function splitRelativePath(relativePath: string): string[] {
-  return normalizeRelativePath(relativePath).split("/");
-}
-
 function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
-  const parts = splitRelativePath(relativePath);
+  const parts = normalizeRelativePath(relativePath).split("/");
   if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
     return false;
   }
 
-  const rootDependencyDir = parts[2] ?? "";
-  if (rootDependencyDir.toLowerCase() === "node_modules") {
-    return true;
-  }
-
-  const pluginDependencyDir = parts[3] ?? "";
-  return pluginDependencyDir.toLowerCase() === "node_modules";
+  return parts[2]?.toLowerCase() === "node_modules" || parts[3]?.toLowerCase() === "node_modules";
 }
 
 function compilePackageFilesExclusionPattern(pattern: string): RegExp {
@@ -168,13 +159,6 @@ function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDist
   };
 }
 
-async function collectPackageDistExclusionRulesForRoot(
-  packageRoot: string,
-): Promise<PackageDistExclusionRules> {
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
-}
-
 function isPackageFilesExcludedDistPath(
   relativePath: string,
   exclusions: PackageDistExclusionRules,
@@ -196,41 +180,20 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistExclusionRul
       !isLegacyPluginDependencyDirPath(relativePath)
     );
   }
-  if (isPackageFilesExcludedDistPath(relativePath, rules)) {
-    return false;
-  }
-  if (isLegacyPluginDependencyDirPath(relativePath)) {
-    return false;
-  }
-  if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-    return false;
-  }
-  if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith(".map")) {
-    return false;
-  }
-  if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
-    return false;
-  }
-  if (OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath)) {
-    return false;
-  }
-  if (relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX)) {
-    return false;
-  }
-  if (
+  return !(
+    isPackageFilesExcludedDistPath(relativePath, rules) ||
+    isLegacyPluginDependencyDirPath(relativePath) ||
+    relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH ||
+    isLocalBuildMetadataDistPath(relativePath) ||
+    relativePath.endsWith(".map") ||
+    relativePath === "dist/plugin-sdk/.tsbuildinfo" ||
+    OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath) ||
+    relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
-    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
-  ) {
-    return false;
-  }
-  if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return false;
-  }
-  return true;
+    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
+    OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
 }
 
 function isOmittedDistSubtree(relativePath: string, rules: PackageDistExclusionRules): boolean {
@@ -307,7 +270,9 @@ export async function collectPackageDistInventory(
   const rules = options.includePackageExcludedFiles
     ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
     : options.packageManifest === undefined
-      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
       : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(
@@ -343,7 +308,6 @@ async function openPackageDistFsRootIfPresent(
 ): Promise<PackageDistFsRoot | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   let distStats;
@@ -373,7 +337,6 @@ async function readPackageDistJsonIfExists<T>(
     return await packageFs.readJson<T>(relativePath, {
       hardlinks: "allow",
       maxBytes: 16 * 1024 * 1024,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
   } catch (error) {
@@ -404,7 +367,6 @@ export async function collectPackageDistContentInventory(
       fsLimit(async () => {
         await using opened = await packageFs.open(relativePath, {
           hardlinks: "allow",
-          nonBlockingRead: true,
           symlinks: "reject",
         });
         return createPackageDistContentInventoryEntry(

@@ -5,7 +5,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
 import {
@@ -36,6 +37,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
       nodeId: "node-1",
       connected: true,
       platform: "darwin",
+      caps: ["system.run.execution-context.v1"],
       commands: ["system.run", "system.run.prepare"],
     },
   ],
@@ -162,6 +164,7 @@ it.each([
       security: "full",
       ask: "off",
       notifyOnExit: false,
+      channelContext: { sender: { id: "sender-1" }, chat: { id: "chat-1" } },
       allowBackground: false,
       config: { session: { store: storePath } },
       sessionKey: "agent:main:main",
@@ -169,11 +172,26 @@ it.each([
       notifySessionKey: childSessionKey,
     });
     const result = await tool.execute("child-exec-context", {
-      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(process.env.OPENCLAW_SUBAGENT_EXEC || 'missing')")}`,
-      env: { OPENCLAW_SUBAGENT_EXEC: "0" },
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(JSON.stringify([process.env.OPENCLAW_SUBAGENT_EXEC, JSON.parse(process.env.OPENCLAW_CHANNEL_CONTEXT || 'null')]))")}`,
+      ...(host === "gateway" ? { env: { OPENCLAW_SUBAGENT_EXEC: "0" } } : {}),
       workdir: state.root,
     });
-    expect(result.details).toMatchObject({ status: "completed", aggregated: "1" });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      aggregated: JSON.stringify(["1", { sender: { id: "sender-1" }, chat: { id: "chat-1" } }]),
+    });
+    if (host === "node") {
+      const invocations = rpc.mock.calls.filter(([method]) => method === "node.invoke");
+      for (const invocation of invocations) {
+        const invoke = invocation[2];
+        expect(invoke.params.env).toBeUndefined();
+        expect(invoke.params.executionContext).toEqual({
+          senderId: "sender-1",
+          chatId: "chat-1",
+          subagent: true,
+        });
+      }
+    }
   },
 );
 

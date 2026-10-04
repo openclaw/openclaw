@@ -1,7 +1,7 @@
 // Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
+  isJsonSchemaValueValid as isSupportedConfigValueValid,
+  jsonSchemaValuesEqual as configValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
 import {
   asFiniteNumber as finiteNumber,
@@ -11,11 +11,7 @@ import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-f
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
-export const configValuesEqual = jsonSchemaValuesEqual;
-
-export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown): boolean {
-  return isJsonSchemaValueValid(schema, value);
-}
+export { configValuesEqual, isSupportedConfigValueValid };
 
 function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
   const properties = schema.properties;
@@ -78,11 +74,7 @@ function alignToStep(value: number, step: number, direction: "ceil" | "floor" | 
     direction === "floor"
       ? floor
       : direction === "ceil"
-        ? remainder === 0n
-          ? truncated
-          : remainder > 0n
-            ? truncated + 1n
-            : truncated
+        ? truncated + (remainder > 0n ? 1n : 0n)
         : (dividend - floor * divisor) * 2n < divisor
           ? floor
           : floor + 1n;

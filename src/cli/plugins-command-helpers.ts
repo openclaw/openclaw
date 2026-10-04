@@ -1,4 +1,3 @@
-// Shared plugin CLI helpers for install logging, file specs, and hooks.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

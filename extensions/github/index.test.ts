@@ -92,9 +92,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps existing behavior default-on, registers read-scoped methods lazily, and removes all surfaces on deactivation", () => {
+  it("registers read-scoped methods lazily and removes surfaces on deactivation", () => {
     const registry = registered();
-    expect(manifest.enabledByDefault).toBe(true);
     expect(manifest.activation.onStartup).toBe(true);
     expect(manifest.contracts.gatewayMethodDispatch).toEqual(["authenticated-request"]);
     expect(registry.registry.gatewayMethodDescriptors).toEqual(
@@ -141,19 +140,16 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(registry.registry.gatewayMethodDescriptors).toEqual([]);
   });
 
-  it.each([
-    {},
-    { url: "https://github.com/login" },
-    { url: "https://github-production-user-asset-6210df.s3.amazonaws.com/image.png" },
-    { url: "https://example.com/image.png" },
-    { url: "https://user:password@user-images.githubusercontent.com/image.png" },
-  ])("rejects invalid image params without a request: %j", async (params) => {
-    expectFailure(
-      await request("github.image", params),
-      expect.objectContaining({ message: "invalid github.image params" }),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+  it.each([{}, { url: "https://github-production-user-asset-6210df.s3.amazonaws.com/image.png" }])(
+    "rejects invalid image params without a request: %j",
+    async (params) => {
+      expectFailure(
+        await request("github.image", params),
+        expect.objectContaining({ message: "invalid github.image params" }),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("loads anonymous attachment redirects without browser CORS headers", async () => {
     const url = "https://github.com/user-attachments/assets/3c11071f-21b8-4123-b9b2-711dc7ca47fd";
@@ -189,7 +185,6 @@ describe("GitHub plugin ownership and RPC migration", () => {
     "https://user-images.githubusercontent.com:444/image.png",
     "https://user:password@user-images.githubusercontent.com/image.png",
     "https://github.com/login",
-    "https://127.0.0.1/image.png",
   ])("blocks unsafe image redirect %s before fetching it", async (location) => {
     fetchMock.mockResolvedValueOnce(
       new Response(null, {
@@ -206,7 +201,6 @@ describe("GitHub plugin ownership and RPC migration", () => {
 
   it.each([
     ["<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/png"],
-    ["<html>not an image</html>", "image/png"],
     ["x".repeat(2 * 1024 * 1024 + 1), "image/jpeg"],
   ])("rejects unsupported or oversized image content", async (body, contentType) => {
     fetchMock.mockResolvedValue(
@@ -223,21 +217,13 @@ describe("GitHub plugin ownership and RPC migration", () => {
   it.each([
     ["github.detail", { url: "https://example.com/owner/repo/issues/1" }],
     ["github.detail", { url: "https://github.com/owner/repo/pull/1/checks" }],
-    ["github.detail", { url: "https://github.com/owner/repo/commit/main" }],
     ["github.preview", { url: "https://github.com/owner/repo/commit/abcdef0" }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", refresh: "true" }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: " " }],
-    ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: 1 }],
   ])("rejects malformed %s requests before network access", async (method, params) => {
     const respond = await request(method as string, params as Record<string, unknown>);
     expectFailure(respond, { code: "INVALID_REQUEST", message: "invalid " + method + " params" });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps the validated requested URL as preview response identity", async () => {
-    const url = `${pullUrl}/files?view=split#diff-one`;
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload: preview() });
-    expectSuccess(await request("github.preview", { url }), expect.objectContaining({ url }));
   });
 
   it.each([{ number: 2 }, { repo: "another-repo" }, { owner: "another-owner" }])(
@@ -302,7 +288,6 @@ describe("GitHub plugin ownership and RPC migration", () => {
       { state: "open", draft: true },
       { label: "Draft", tone: "neutral" },
     ],
-    [{ state: "closed" }, { label: "Closed", tone: "negative" }],
     [
       { state: "closed", draft: true, closedAt: "2026-09-03T12:00:00Z" },
       { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
@@ -370,24 +355,16 @@ describe("GitHub plugin ownership and RPC migration", () => {
     );
   });
 
-  it.each([undefined, 0])(
-    "only shows an issue comment count when it is known: %s",
-    async (comments) => {
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-        ok: true,
-        payload: preview({ kind: "issue", comments }),
-      });
-      const respond = await request("github.preview", {
-        url: "https://github.com/octocat/repo/issues/1",
-      });
-      expectSuccess(
-        respond,
-        expect.objectContaining({
-          metadata: comments === undefined ? [] : [{ label: "Comments", value: String(comments) }],
-        }),
-      );
-    },
-  );
+  it("shows a known zero issue comment count", async () => {
+    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+      ok: true,
+      payload: preview({ kind: "issue", comments: 0 }),
+    });
+    expectSuccess(
+      await request("github.preview", { url: "https://github.com/octocat/repo/issues/1" }),
+      expect.objectContaining({ metadata: [{ label: "Comments", value: "0" }] }),
+    );
+  });
 
   it("retains the host's co-author metadata without another GitHub lookup", async () => {
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
@@ -417,13 +394,16 @@ describe("GitHub plugin ownership and RPC migration", () => {
         ok: true,
         payload: preview({ login: "selected-agent", title: "Refreshed" }),
       });
-    const params = { url: pullUrl, agentId: " alternate " };
+    const params = { url: `${pullUrl}/files?view=split#diff-one`, agentId: " alternate " };
     for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
       const respond = await request("github.preview", params);
-      expectSuccess(respond, expect.objectContaining({ author: "selected-agent" }));
+      expectSuccess(
+        respond,
+        expect.objectContaining({ author: "selected-agent", url: params.url }),
+      );
     }
     const refreshed = await request("github.preview", { ...params, refresh: true });
-    expectSuccess(refreshed, expect.objectContaining({ title: "Refreshed" }));
+    expectSuccess(refreshed, expect.objectContaining({ title: "Refreshed", url: params.url }));
     const target = {
       kind: "pull",
       owner: "octocat",

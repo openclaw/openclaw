@@ -29,9 +29,9 @@ function arm(state: CronServiceState): void {
   if (state.stopped || current.timer || current.byJobId.size === 0 || !reconcile) {
     return;
   }
-  current.timer = state.deps.scheduler.schedule({
+  current.timer = state.schedulerScope.schedule({
     id: `cron:${state.deps.storePath}:foreign-receipts`,
-    atMs: state.deps.scheduler.now() + CRON_FOREIGN_RECEIPT_RECHECK_MS,
+    atMs: state.schedulerScope.now() + CRON_FOREIGN_RECEIPT_RECHECK_MS,
     everyMs: CRON_FOREIGN_RECEIPT_RECHECK_MS,
     run: () =>
       runInDetachedAsyncContext(() => {

@@ -1,14 +1,14 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -64,10 +64,6 @@ function createOutputStamp() {
   return new Date().toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-");
 }
 
-function createVmSuffix() {
-  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-}
-
 async function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
   try {
     return await runExec(file, args, {
@@ -100,16 +96,9 @@ function resolveExistingPath(value: string) {
   return currentPath;
 }
 
-function validatePnpmVersion(version: string) {
-  if (!/^[0-9A-Za-z.+_-]+$/u.test(version)) {
-    throw new Error(`unsupported pnpm version in packageManager: ${version}`);
-  }
-  return version;
-}
-
 function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
   const relativePath = path.relative(repoRoot, hostPath);
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath) || relativePath.length === 0) {
+  if (!isPathStrictlyInside(repoRoot, hostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
     );
@@ -137,7 +126,11 @@ function resolvePnpmVersion(repoRoot: string) {
   if (!match?.[1]) {
     throw new Error(`unable to resolve pnpm version from packageManager in ${packageJsonPath}`);
   }
-  return match[1];
+  const version = match[1];
+  if (!/^[0-9A-Za-z.+_-]+$/u.test(version)) {
+    throw new Error(`unsupported pnpm version in packageManager: ${version}`);
+  }
+  return version;
 }
 
 function resolveMultipassInstallHint() {
@@ -187,16 +180,15 @@ function createQaMultipassPlan(params: {
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
-  const forwardedEnv = provider.appliesLiveEnvAliases ? resolveQaForwardedLiveEnv() : {};
+  const forwardedEnv = provider.kind === "live" ? resolveQaForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
-  const liveProviderConfig = provider.usesModelProviderPlugins
-    ? resolveQaLiveProviderConfigPath()
-    : undefined;
+  const liveProviderConfig =
+    provider.kind === "live" ? resolveQaLiveProviderConfigPath() : undefined;
   const hostLiveProviderConfigPath =
     liveProviderConfig && fs.existsSync(liveProviderConfig.path)
       ? liveProviderConfig.path
       : undefined;
-  const vmName = `openclaw-qa-${createVmSuffix()}`;
+  const vmName = `openclaw-qa-${createQaArtifactRunId()}`;
   const guestOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
   const qaCommand = [
     "pnpm",
@@ -237,7 +229,7 @@ function createQaMultipassPlan(params: {
     cpus: params.cpus ?? qaMultipassDefaultResources.cpus,
     memory: params.memory ?? qaMultipassDefaultResources.memory,
     disk: params.disk ?? qaMultipassDefaultResources.disk,
-    pnpmVersion: validatePnpmVersion(resolvePnpmVersion(params.repoRoot)),
+    pnpmVersion: resolvePnpmVersion(params.repoRoot),
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -259,6 +251,12 @@ function renderQaMultipassGuestScript(
   plan: QaMultipassPlan,
   options: RenderGuestScriptOptions = {},
 ) {
+  const nodeVersionCheck = [
+    `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
+      `file://${plan.guestMountedRepoPath}/node-version.mjs`,
+    )};`,
+    "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
+  ].join(" ");
   const redactSecrets = options.redactSecrets ?? false;
   const rsyncCommand = [
     "rsync -a --delete",
@@ -305,12 +303,10 @@ function renderQaMultipassGuestScript(
     "}",
     "",
     "ensure_node() {",
-    "  if command -v node >/dev/null; then",
-    "    local node_major",
-    '    node_major="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
-    '    if [ "${node_major}" -ge 22 ]; then',
-    "      return 0",
-    "    fi",
+    // The mounted launcher contract is dependency-free; Node 24 also supplies
+    // Corepack, which newer supported Node releases may omit.
+    `  if command -v corepack >/dev/null && node --input-type=module -e ${shellQuote(nodeVersionCheck)} 2>/dev/null; then`,
+    "    return 0",
     "  fi",
     "  local node_arch",
     '  case "$(uname -m)" in',
@@ -321,7 +317,7 @@ function renderQaMultipassGuestScript(
     "  local node_tmp_dir tarball_name extract_dir base_url",
     '  node_tmp_dir="$(mktemp -d)"',
     "  trap 'rm -rf \"${node_tmp_dir}\"' RETURN",
-    '  base_url="https://nodejs.org/dist/latest-v22.x"',
+    '  base_url="https://nodejs.org/dist/latest-v24.x"',
     '  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt" >>"$BOOTSTRAP_LOG" 2>&1',
     '  tarball_name="$(awk \'/linux-\'"${node_arch}"\'\\.tar\\.xz$/ { print $2; exit }\' "${node_tmp_dir}/SHASUMS256.txt")"',
     '  [ -n "${tarball_name}" ] || { echo "unable to resolve node tarball for ${node_arch}" >&2; return 1; }',
@@ -335,6 +331,9 @@ function renderQaMultipassGuestScript(
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npm" /usr/local/bin/npm >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npx" /usr/local/bin/npx >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/corepack" /usr/local/bin/corepack >>"$BOOTSTRAP_LOG" 2>&1',
+    '  export PATH="/usr/local/bin:$PATH"',
+    "  hash -r",
+    `  node --input-type=module -e ${shellQuote(nodeVersionCheck)}`,
     "}",
     "",
     "ensure_pnpm() {",
@@ -371,11 +370,10 @@ async function appendMultipassLog(logPath: string, message: string) {
 async function runMultipassCommand(logPath: string, args: string[], options: ExecFileOptions = {}) {
   await appendMultipassLog(logPath, `$ ${["multipass", ...args].join(" ")}\n`);
   const result = await execFileAsync("multipass", args, options);
-  if (result.stdout.trim()) {
-    await appendMultipassLog(logPath, `${result.stdout.trim()}\n`);
-  }
-  if (result.stderr.trim()) {
-    await appendMultipassLog(logPath, `${result.stderr.trim()}\n`);
+  for (const output of [result.stdout, result.stderr]) {
+    if (output.trim()) {
+      await appendMultipassLog(logPath, `${output.trim()}\n`);
+    }
   }
   await appendMultipassLog(logPath, "\n");
   return result;

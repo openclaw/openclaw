@@ -1,10 +1,14 @@
+import type { StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -68,9 +72,14 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
     prepare: (
       paired: import("../infra/device-pairing.types.js").PairedDevice[],
     ) => { start: () => T } | undefined,
+    preparePublication?: () => Promise<void>,
   ) => {
     await prepareDevicePairingMock();
-    return prepare(listDevicePairingMock().paired)?.start();
+    const paired = listDevicePairingMock().paired;
+    if (preparePublication) {
+      await preparePublication();
+    }
+    return prepare(paired)?.start();
   },
 }));
 
@@ -159,6 +168,7 @@ function humanMention(overrides: Partial<HumanMentionWebPush> = {}): HumanMentio
     agentId: "research",
     senderLabel: "Alice",
     sessionTitle: "Review",
+    prepare: async () => {},
     isCurrent: mentionCurrentMock,
     ...overrides,
   };
@@ -703,6 +713,11 @@ describe("event Web Push classification", () => {
               createdActor: { type: "human", source: "profile", id: owner.id },
             },
           );
+          if (scenario === "eligible admin") {
+            // Cold-store preparation must use the persisted rows after native and worker handles close.
+            await closeOpenClawAgentDatabasesAsync();
+            await closeOpenClawStateDatabaseAsync();
+          }
           const subscription = boundSubscription("admin-browser", recipient.id);
           listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
           listDevicePairingMock.mockReturnValue({
@@ -733,8 +748,17 @@ describe("event Web Push classification", () => {
             cfg = {};
           }
           const { StatementSync } = requireNodeSqlite();
+          const reads: Array<{ sql: string; stack: string | undefined }> = [];
+          // oxlint-disable-next-line typescript/unbound-method -- apply preserves the original statement receiver.
+          const originalGet = StatementSync.prototype.get;
           const statements = {
-            get: vi.spyOn(StatementSync.prototype, "get"),
+            get: vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+              this: NativeStatement,
+              ...args
+            ) {
+              reads.push({ sql: this.sourceSQL, stack: new Error("Unexpected caller SQL").stack });
+              return originalGet.apply(this, args);
+            }),
             all: vi.spyOn(StatementSync.prototype, "all"),
             run: vi.spyOn(StatementSync.prototype, "run"),
             iterate: vi.spyOn(StatementSync.prototype, "iterate"),
@@ -746,6 +770,7 @@ describe("event Web Push classification", () => {
               Object.fromEntries(
                 Object.entries(statements).map(([method, spy]) => [method, spy.mock.calls.length]),
               ),
+              JSON.stringify(reads, null, 2),
             ).toEqual({ get: 0, all: 0, run: 0, iterate: 0 });
             expect(canReceiveSessionEventMock).toHaveBeenCalledOnce();
             if (scenario === "eligible admin") {
@@ -898,6 +923,25 @@ describe("event Web Push classification", () => {
       }));
       expect(identities[0]).toEqual(identities[1]);
       expect(identities[0]).not.toEqual(identities[2]);
+    });
+
+    it("refreshes the mention after awaited pairing preparation before its final send fence", async () => {
+      let durable = true;
+      let prepared = true;
+      prepareDevicePairingMock.mockImplementationOnce(async () => {
+        durable = false;
+      });
+      const prepare = vi.fn(async () => {
+        prepared = durable;
+      });
+      mentionCurrentMock.mockImplementation(() => prepared);
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).deliverMention(
+        humanMention({ prepare }),
+      );
+      await authorityCompleted.promise;
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(mentionCurrentMock).toHaveBeenCalledOnce();
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
     });
 
     it("runs the mention's final owner fence without yielding before network I/O", async () => {

@@ -7,6 +7,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -113,7 +115,9 @@ async function configureGlobalAgentSessionStore(dir: string) {
     `${JSON.stringify(
       {
         agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
         },
         session: { scope: "global", store: storeTemplate },
       },
@@ -508,6 +512,29 @@ test("sessions.reset rejects unknown selected global agents", async () => {
   });
 });
 
+test.each(["!!!", "   "])(
+  "sessions.reset rejects an unrepresentable explicit agent %j without resetting main",
+  async (agentId) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeMainSessionEntry("sess-preserved");
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    const before = loadEntry(scope);
+
+    const reset = await directSessionReq("sessions.reset", {
+      key: scope.sessionKey,
+      agentId,
+    });
+
+    expect(reset.ok).toBe(false);
+    expect(reset.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Unknown agent id"),
+    });
+    expect(loadEntry(scope)).toEqual(before);
+    expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  },
+);
+
 test("sessions.reset emits inferred selected global agent scope", async () => {
   const { dir } = await createSessionStoreDir();
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {
@@ -561,6 +588,13 @@ test("sessions.reset of an incognito session broadcasts a delete, not a reset", 
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.deleted).toBe(true);
+  const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+  expect(
+    readAttachedSessionEndTranscriptSourceForTest(incognitoEndContext as PluginHookSessionContext),
+  ).toEqual({
+    available: false,
+    reason: "incognito-deleted",
+  });
   // The row is gone; only reason "delete" makes clients drop it and navigate away.
   expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
   expect(broadcast.mock.calls[0]?.[1]).toEqual({
@@ -596,6 +630,20 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expect(endEvent.nextSessionId).toBe("sess-main");
   expectMainHookContext(endContext, "sess-main");
+  const endedTranscript = readAttachedSessionEndTranscriptSourceForTest(
+    endContext as PluginHookSessionContext,
+  );
+  expect(endedTranscript.available).toBe(true);
+  if (!endedTranscript.available) {
+    throw new Error("expected reset transcript source");
+  }
+  await expect(
+    endedTranscript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 }),
+  ).resolves.toMatchObject({
+    messages: [expect.objectContaining({ role: "user", content: "hello from transcript" })],
+    totalMessages: 1,
+    truncated: false,
+  });
   expect(startEvent.sessionKey).toBe("agent:main:main");
   expect(startEvent.sessionId).toBe("sess-main");
   expect(startEvent.resumedFrom).toBe("sess-main");

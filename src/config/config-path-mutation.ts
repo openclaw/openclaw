@@ -1,4 +1,3 @@
-// Applies immutable path removals to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -64,7 +63,15 @@ function unsetPathForWriteAt(
 export function applyUnsetPathsForWrite(
   root: OpenClawConfig,
   unsetPaths: readonly string[][] | undefined,
-): OpenClawConfig {
+): OpenClawConfig;
+export function applyUnsetPathsForWrite(
+  root: unknown,
+  unsetPaths: readonly string[][] | undefined,
+): unknown;
+export function applyUnsetPathsForWrite(
+  root: unknown,
+  unsetPaths: readonly string[][] | undefined,
+): unknown {
   let next = root;
   for (const unsetPath of unsetPaths ?? []) {
     if (!Array.isArray(unsetPath) || unsetPath.length === 0) {

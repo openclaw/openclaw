@@ -38,6 +38,13 @@ export function createKernelStores(
       hasCards: async (boardId) => kernel.cards.hasCards(boardId),
     },
     boards: asyncKeyedStore(kernel.boards),
+    sessionsBoard: {
+      get: async (boardId) => kernel.sessionsBoard.get(boardId),
+      update: async (boardId, patch) => kernel.sessionsBoard.update(boardId, patch),
+      listPlacements: async (boardId) => kernel.sessionsBoard.listPlacements(boardId),
+      repairPlacements: async () => kernel.sessionsBoard.repairPlacements(),
+      writePlacement: async (...args) => kernel.sessionsBoard.writePlacement(...args),
+    },
     subscriptions: asyncKeyedStore(kernel.subscriptions),
     attachments: asyncKeyedStore(kernel.attachments),
   };

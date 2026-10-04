@@ -3,6 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -184,6 +186,61 @@ describe("chat history model selection defaults", () => {
 
 describe("chat history sharing projection", () => {
   it.each(["chat.history", "chat.startup"] as const)(
+    "%s projects unbound canonical ACP metadata without host ACP reads",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:acp:unbound-history";
+        seedCanonicalAcpSessionMeta({
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "unbound-history",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
+        const context = await createHistoryReadContext();
+        const client = identifiedClient("unbound-history-operator");
+        client.connect.scopes = ["operator.admin"];
+        const respond = vi.fn<RespondFn>();
+        const hostSql = observeHostDataSql();
+        try {
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: { sessionKey },
+            context,
+            client,
+            respond,
+            req: { type: "req", id: "unbound-history", method },
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                runtimeSelectionLocked: true,
+                agentRuntime: {
+                  id: "acpx",
+                  source: "session-key",
+                  cloudPlacementSupported: false,
+                  devicePlacementSupported: false,
+                },
+              }),
+            }),
+          );
+          expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+        } finally {
+          hostSql.restore();
+        }
+      });
+    },
+  );
+
+  it.each(["chat.history", "chat.startup"] as const)(
     "%s carries current caller sharing controls on sessionInfo",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -341,6 +398,9 @@ describe("chat history delta publication", () => {
         const initial = await call();
         const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
         expect(initialResponse[0]).toBe(true);
+        expect(initialResponse[1]).toMatchObject({
+          sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
+        });
         const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
         if (typeof cursor !== "string") {
           throw new Error("expected initial delta cursor");
@@ -387,6 +447,18 @@ describe("chat history delta publication", () => {
           expect.objectContaining({ code, ...(code === "UNAVAILABLE" ? { retryable: true } : {}) }),
         );
         expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
+        if (change === "reset") {
+          // A reset can retain the physical transcript ID while invalidating cached full messages.
+          expect(await call()).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: scope.sessionId,
+                lifecycleRevision: "after-reset",
+              }),
+            }),
+          );
+        }
       });
     },
   );

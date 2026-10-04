@@ -3,10 +3,7 @@
  * Classifies stored and runtime credentials into profile/provider rollups for
  * status commands and doctor output without prompting keychain access.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +16,7 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import { resolveExplicitAuthOrderSelection } from "./auth-profiles/explicit-order.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -108,13 +106,11 @@ function resolveOAuthStatus(
   if (expiryState === "invalid_expires" || expiryState === "missing") {
     return { status: "missing" };
   }
-  if (expiryState === "expired") {
-    return { status: "expired", expiresAt: normalizedExpiresAt, remainingMs };
-  }
-  if (expiryState === "expiring") {
-    return { status: "expiring", expiresAt: normalizedExpiresAt, remainingMs };
-  }
-  return { status: "ok", expiresAt: normalizedExpiresAt, remainingMs };
+  return {
+    status: expiryState === "valid" ? "ok" : expiryState,
+    expiresAt: normalizedExpiresAt,
+    remainingMs,
+  };
 }
 
 function buildProfileHealth(params: {
@@ -306,22 +302,17 @@ export function buildAuthHealthSummary(params: {
     }
   }
 
-  const resolveExplicitAuthOrder = (provider: string): string[] | undefined => {
-    const authProvider = resolveProviderIdForAuth(provider, {
-      config: params.cfg,
-      ...params.authAliasLookupParams,
-      storedCredential: true,
-    });
-    return (
-      findNormalizedProviderValue(params.store.order, authProvider) ??
-      findNormalizedProviderValue(params.store.order, provider) ??
-      findNormalizedProviderValue(params.cfg?.auth?.order, authProvider) ??
-      findNormalizedProviderValue(params.cfg?.auth?.order, provider)
-    );
-  };
-
   const resolveProviderStatusProfiles = (provider: AuthProviderHealth): AuthProfileHealth[] => {
-    const explicitOrder = resolveExplicitAuthOrder(provider.provider);
+    const { order: explicitOrder } = resolveExplicitAuthOrderSelection({
+      storeOrder: params.store.order,
+      configuredOrder: params.cfg?.auth?.order,
+      providerKey: provider.provider,
+      providerAuthKey: resolveProviderIdForAuth(provider.provider, {
+        config: params.cfg,
+        ...params.authAliasLookupParams,
+        storedCredential: true,
+      }),
+    });
     if (explicitOrder && explicitOrder.length === 0) {
       return [];
     }
@@ -359,58 +350,25 @@ export function buildAuthHealthSummary(params: {
       continue;
     }
 
-    let hasApiKeyProfile = false;
-    let hasExpirableProfile = false;
-    let hasExpired = false;
-    let hasMissing = false;
-    let hasExpiring = false;
+    const expirableProfiles = effectiveProfiles.filter((profile) => profile.type !== "api_key");
+    const statuses = new Set(effectiveProfiles.map((profile) => profile.status));
+    provider.status =
+      (["expired", "missing", "expiring"] as const).find((status) => statuses.has(status)) ??
+      (expirableProfiles.length > 0 ? "ok" : "static");
+
     let earliestExpiry: number | undefined;
-    for (const profile of effectiveProfiles) {
-      if (profile.type === "api_key") {
-        if (profile.status === "static") {
-          hasApiKeyProfile = true;
-        } else if (profile.status === "missing") {
-          hasMissing = true;
-        }
-        continue;
-      }
-      if (profile.type !== "oauth" && profile.type !== "token") {
-        continue;
-      }
-      hasExpirableProfile = true;
-      if (typeof profile.expiresAt === "number" && Number.isFinite(profile.expiresAt)) {
+    for (const profile of expirableProfiles) {
+      if (profile.expiresAt !== undefined) {
         earliestExpiry =
           earliestExpiry === undefined
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
       }
-      if (profile.status === "expired") {
-        hasExpired = true;
-      } else if (profile.status === "missing") {
-        hasMissing = true;
-      } else if (profile.status === "expiring") {
-        hasExpiring = true;
-      }
-    }
-
-    if (!hasExpirableProfile) {
-      provider.status = hasMissing ? "missing" : hasApiKeyProfile ? "static" : "missing";
-      continue;
     }
 
     if (earliestExpiry !== undefined) {
       provider.expiresAt = earliestExpiry;
       provider.remainingMs = provider.expiresAt - now;
-    }
-
-    if (hasExpired) {
-      provider.status = "expired";
-    } else if (hasMissing) {
-      provider.status = "missing";
-    } else if (hasExpiring) {
-      provider.status = "expiring";
-    } else {
-      provider.status = "ok";
     }
   }
 

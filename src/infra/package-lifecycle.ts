@@ -10,6 +10,7 @@ import {
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
 const DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS = 20 * 60_000;
@@ -265,7 +266,7 @@ function runPackageLifecycleScript(
   timeoutMs: number,
 ): void {
   const scriptPath = path.join(packageRoot, script.relativePath);
-  const result = spawnSync(process.execPath, [scriptPath], {
+  const result = spawnSync(process.execPath, [...resolveRuntimeArgs(), scriptPath], {
     cwd: packageRoot,
     env: process.env,
     stdio: "inherit",

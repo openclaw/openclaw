@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -11,11 +12,15 @@ import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import {
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
@@ -27,13 +32,14 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-// Draft progress uses compact tool rows; native Slack uses task_update chunks.
+// Draft progress uses compact tool rows; the Slack Block Kit card uses plain
+// "Exec — detail" rows; native Slack uses task_update chunks.
 const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
 const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
 type WireWrite = {
@@ -364,39 +370,6 @@ async function startPresentationApi(
   };
 }
 
-function isCompletionUserText(text: string): boolean {
-  return (
-    text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent in this batch has now settled")
-  );
-}
-
-function readCurrentProviderUserText(body: Record<string, unknown>): string {
-  // Ignore trailing context carriers, but a protected task completion is
-  // itself a new request. Older prompts cannot override a newer user turn.
-  const userTexts = Array.isArray(body.input)
-    ? body.input
-        .map(asRecord)
-        .filter((item) => item.role === "user")
-        .map((item) =>
-          Array.isArray(item.content)
-            ? item.content.map((part) => readStringValue(asRecord(part).text) ?? "").join("\n")
-            : (readStringValue(item.content) ?? ""),
-        )
-    : [];
-  const currentText =
-    userTexts.findLast(
-      (text) =>
-        text.trim() &&
-        (isCompletionUserText(text) ||
-          !(
-            text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
-            text.trimEnd().endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-          )),
-    ) ?? "";
-  return currentText;
-}
-
 function sendCompletionResponse(response: ServerResponse, marker: string, sequence: number) {
   const item = {
     type: "message",
@@ -514,8 +487,115 @@ async function waitForFact(
   }
 }
 
+async function startTablePresentationFixture(
+  params: {
+    channel: "discord" | "slack";
+    native: boolean;
+    tools: boolean;
+    compact: boolean;
+    rejectStop: boolean;
+    clearOrigin: () => Promise<void>;
+  },
+  cleanups: Array<() => Promise<void>>,
+) {
+  const { channel, native, tools, compact, rejectStop } = params;
+  const directory = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
+  );
+  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  const writes: WireWrite[] = [];
+  const adapter = await startOpenClawCrablineAdapter({
+    channel,
+    recorderPath: path.join(directory, "provider.jsonl"),
+  });
+  cleanups.push(() => adapter.close());
+  const api = await startPresentationApi(adapter, writes, directory, {
+    rejectStop,
+    clearOrigin: params.clearOrigin,
+  });
+  cleanups.push(() => api.stop());
+  const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
+  cleanups.push(() => provider.stop());
+  const owner = createQaGatewayChild();
+  cleanups.push(() =>
+    stopQaGatewayFixture(owner, {
+      preserveToDir: path.join(
+        process.cwd(),
+        ".artifacts",
+        "channel-progress-presentation",
+        path.basename(directory),
+      ),
+    }),
+  );
+  const environment = adapter.createProviderReadinessEnv({});
+  if (channel === "slack") {
+    environment.SLACK_API_URL = `${api.baseUrl}/api/`;
+  } else {
+    environment.NODE_EXTRA_CA_CERTS = api.caPath;
+  }
+  const gateway = await owner.start({
+    repoRoot: process.cwd(),
+    providerBaseUrl: `${provider.baseUrl}/v1`,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    controlUiEnabled: false,
+    transportBaseUrl: api.baseUrl,
+    transport: {
+      requiredPluginIds: adapter.requiredPluginIds,
+      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
+    },
+    runtimeEnvPatch: environment,
+    mutateConfig: (config) => {
+      const configured = progressConfig(config, channel, native, tools, compact);
+      if (channel === "discord") {
+        configured.channels!.discord!.proxy = api.proxyUrl;
+        const qa = configured.agents!.entries!.qa!;
+        qa.tools = {
+          ...qa.tools,
+          alsoAllow: [...(qa.tools?.alsoAllow ?? []), "message"],
+        };
+      }
+      return configured;
+    },
+  });
+  await waitForFact(async () => {
+    const status = asRecord(await gateway.call("channels.status", { probe: false }));
+    const accounts = asRecord(status.channelAccounts)[channel];
+    return (
+      Array.isArray(accounts) &&
+      accounts.some((account) => {
+        const state = asRecord(account);
+        return state.running === true && (channel !== "discord" || state.connected === true);
+      })
+    );
+  }, `${channel} ready`);
+  return { writes, adapter, api, gateway };
+}
+
 describe("channel progress presentation through an isolated Gateway", () => {
   const cleanups: Array<() => Promise<void>> = [];
+  const sharedSlackCleanups: Array<() => Promise<void>> = [];
+  let sharedSlackFixture:
+    | Promise<Awaited<ReturnType<typeof startTablePresentationFixture>>>
+    | undefined;
+  let sharedSlackCaseIndex = 0;
+
+  afterAll(async () => {
+    // The identical Slack cases run last; startup and every acquired owner stay joined through teardown.
+    await Promise.allSettled(sharedSlackFixture ? [sharedSlackFixture] : []);
+    const errors: unknown[] = [];
+    for (const cleanup of sharedSlackCleanups.splice(0).toReversed()) {
+      try {
+        await cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "shared Slack presentation fixture cleanup failed");
+    }
+  });
   afterEach(async () => {
     const errors: unknown[] = [];
     for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -556,7 +636,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    cleanups.push(() => stopChildProcess(provider, 5_000));
+    const providerExited = once(provider, "exit");
+    void providerExited.catch(() => {});
+    cleanups.push(async () => {
+      if (provider.pid) {
+        if (provider.exitCode === null && provider.signalCode === null) {
+          provider.kill("SIGTERM");
+        }
+        await providerExited;
+      }
+    });
     let providerOutput = "";
     let providerError: Error | undefined;
     provider.on("error", (error) => {
@@ -782,8 +871,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const raw = Buffer.concat(buffers).toString("utf8");
         const body = parseBody(raw);
-        const currentText = readCurrentProviderUserText(body);
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         providerRequests.push({
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
@@ -1171,8 +1261,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
           buffers.push(Buffer.from(chunk));
         }
         const raw = Buffer.concat(buffers).toString("utf8");
-        const currentText = readCurrentProviderUserText(parseBody(raw));
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         const worker =
           !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
         const requester =
@@ -1474,121 +1565,82 @@ describe("channel progress presentation through an isolated Gateway", () => {
     { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: false },
     { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: true },
     { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: true },
     { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: false },
     { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      compact: true,
+    },
+    {
+      channel: "slack" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      compact: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: false,
+      failTool: true,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      thread: "root",
+      rejectStop: false,
+      tools: true,
+      failTool: true,
+    },
+    // Keep this static fixture last so no other Gateway overlaps its lifetime.
+    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: true },
     { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
     { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      compact: true,
-    },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      compact: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      failTool: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      failTool: true,
-    },
   ])(
     "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
     async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
-      const directory = await fs.mkdtemp(
-        path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
-      );
-      cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
-      const writes: WireWrite[] = [];
-      const adapter = await startOpenClawCrablineAdapter({
-        channel,
-        recorderPath: path.join(directory, "provider.jsonl"),
-      });
-      cleanups.push(() => adapter.close());
+      const sharedSlack =
+        channel === "slack" && !native && tools && !compact && !rejectStop && !failTool;
+      const conversationId = sharedSlack
+        ? `C${String(++sharedSlackCaseIndex).padStart(8, "0")}`
+        : channel === "slack"
+          ? "C12345678"
+          : "123456789012345678";
       let originCleared = false;
-      const api = await startPresentationApi(adapter, writes, directory, {
-        rejectStop,
-        clearOrigin: async () => {
-          await clearOrigin();
-          originCleared = true;
-        },
-      });
-      cleanups.push(() => api.stop());
-      const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
-      cleanups.push(() => provider.stop());
-      const owner = createQaGatewayChild();
-      cleanups.push(() =>
-        stopQaGatewayFixture(owner, {
-          preserveToDir: path.join(
-            process.cwd(),
-            ".artifacts",
-            "channel-progress-presentation",
-            path.basename(directory),
-          ),
-        }),
-      );
-      const environment = adapter.createProviderReadinessEnv({});
-      if (channel === "slack") {
-        environment.SLACK_API_URL = `${api.baseUrl}/api/`;
-      } else {
-        environment.NODE_EXTRA_CA_CERTS = api.caPath;
-      }
-      const gateway = await owner.start({
-        repoRoot: process.cwd(),
-        providerBaseUrl: `${provider.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL,
-        alternateModel: MODEL,
-        controlUiEnabled: false,
-        transportBaseUrl: api.baseUrl,
-        transport: {
-          requiredPluginIds: adapter.requiredPluginIds,
-          createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-        },
-        runtimeEnvPatch: environment,
-        mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native, tools, compact);
-          if (channel === "discord") {
-            configured.channels!.discord!.proxy = api.proxyUrl;
-            const qa = configured.agents!.entries!.qa!;
-            qa.tools = {
-              ...qa.tools,
-              alsoAllow: [...(qa.tools?.alsoAllow ?? []), "message"],
-            };
-          }
-          return configured;
-        },
-      });
-      await waitForFact(async () => {
-        const status = asRecord(await gateway.call("channels.status", { probe: false }));
-        const accounts = asRecord(status.channelAccounts)[channel];
-        return (
-          Array.isArray(accounts) &&
-          accounts.some((account) => {
-            const state = asRecord(account);
-            return state.running === true && (channel !== "discord" || state.connected === true);
-          })
+      const startFixture = (): ReturnType<typeof startTablePresentationFixture> =>
+        startTablePresentationFixture(
+          {
+            channel,
+            native,
+            tools,
+            compact,
+            rejectStop,
+            clearOrigin: async () => {
+              await clearOrigin();
+              originCleared = true;
+            },
+          },
+          sharedSlack ? sharedSlackCleanups : cleanups,
         );
-      }, `${channel} ready`);
+      const fixture = sharedSlack
+        ? await (sharedSlackFixture ??= startFixture())
+        : await startFixture();
+      const { adapter, api, gateway } = fixture;
+      const caseWrites = () =>
+        sharedSlack
+          ? fixture.writes.filter((write) => write.body.channel === conversationId)
+          : fixture.writes;
+      const caseMessages = () =>
+        [...api.messages.values()].filter(
+          (message) => !sharedSlack || message.channel === conversationId,
+        );
       const clearOrigin = async () => {
         const scope = {
           agentId: "qa",
@@ -1599,7 +1651,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           ({ entry }) =>
             entry.delivery?.kind === "external" &&
             entry.delivery.context.channel === "slack" &&
-            entry.delivery.context.to?.includes("C12345678"),
+            entry.delivery.context.to?.includes(conversationId),
         );
         expect(sessions).toHaveLength(1);
         const { sessionKey, entry } = sessions[0]!;
@@ -1619,7 +1671,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         const inbound = adapter.createInbound({
           input: {
             conversation: {
-              id: channel === "slack" ? "C12345678" : "123456789012345678",
+              id: conversationId,
               kind: "group",
             },
             senderId: channel === "slack" ? "U12345678" : "123456789012345679",
@@ -1676,9 +1728,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         await injected.arrayBuffer();
       }
       const finalWrites = () =>
-        writes.filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
+        caseWrites().filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
       const finalMessages = () =>
-        [...api.messages.values()].filter((message) =>
+        caseMessages().filter((message) =>
           (readStringValue(message.text ?? message.content) ?? "").includes(FINAL_MARKER),
         );
       if (threadId) {
@@ -1691,18 +1743,18 @@ describe("channel progress presentation through an isolated Gateway", () => {
       await waitForFact(
         () =>
           channel === "discord"
-            ? writes.some(
+            ? caseWrites().some(
                 (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
               )
             : native
-              ? writes.some((write) => write.route.endsWith("chat.stopStream"))
-              : writes.some((write) =>
+              ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
+              : caseWrites().some((write) =>
                   write.route.endsWith(compact ? "chat.delete" : "chat.update"),
                 ),
         "progress finalization",
       );
 
-      const progressWrites = writes.filter(
+      const progressWrites = caseWrites().filter(
         (write) =>
           !JSON.stringify(write.body).includes(FINAL_MARKER) &&
           (channel === "discord"
@@ -1724,10 +1776,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
+      const slackCard = channel === "slack" && !native && !compact;
+      const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
       if (!tools) {
-        expect(progressText).not.toMatch(toolRow);
+        expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
-        expect(progressText).toMatch(toolRow);
+        expect(progressText).toMatch(expectedToolRow);
+      }
+      if (slackCard) {
+        // The fallback card adds no emoji status or tool chrome.
+        expect(progressText).not.toMatch(/🛠️|🔄/u);
       }
       if (failTool) {
         if (tools) {
@@ -1737,7 +1795,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           expect(progressText).not.toContain("exit 1");
         }
       }
-      const reactionAdds = writes.filter((write) =>
+      const reactionAdds = caseWrites().filter((write) =>
         channel === "discord"
           ? write.method === "PUT" && write.route.includes("/reactions/")
           : write.route.endsWith("reactions.add"),
@@ -1759,30 +1817,35 @@ describe("channel progress presentation through an isolated Gateway", () => {
           {
             rejectStop,
             originCleared,
-            writes: writes.slice(-80).map(({ at, method, route, body, accepted }) => ({
-              at,
-              method,
-              route: route.slice(0, 250),
-              markerFields: Object.entries(body)
-                .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
-                .map(([key]) => key),
-              rendered: Object.fromEntries(
-                ["content", "text", "blocks", "chunks"]
-                  .filter((key) => body[key] !== undefined)
-                  .map((key) => [
-                    key,
-                    (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
-                      0,
-                      250,
-                    ),
-                  ]),
-              ),
-              accepted,
-            })),
-            acceptedMessages: [...api.messages].slice(-80).map(([id, message]) => ({
-              id,
-              text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
-            })),
+            writes: caseWrites()
+              .slice(-80)
+              .map(({ at, method, route, body, accepted }) => ({
+                at,
+                method,
+                route: route.slice(0, 250),
+                markerFields: Object.entries(body)
+                  .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
+                  .map(([key]) => key),
+                rendered: Object.fromEntries(
+                  ["content", "text", "blocks", "chunks"]
+                    .filter((key) => body[key] !== undefined)
+                    .map((key) => [
+                      key,
+                      (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
+                        0,
+                        250,
+                      ),
+                    ]),
+                ),
+                accepted,
+              })),
+            acceptedMessages: [...api.messages]
+              .filter(([, message]) => !sharedSlack || message.channel === conversationId)
+              .slice(-80)
+              .map(([id, message]) => ({
+                id,
+                text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
+              })),
           },
           null,
           2,
@@ -1794,7 +1857,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(originCleared).toBe(true);
         expect(expectedThreadTs).toEqual(expect.any(String));
         expect(finalMessages()[0]).toMatchObject({
-          channel: "C12345678",
+          channel: conversationId,
           thread_ts: expectedThreadTs,
         });
         expect(finalWrites()[0]?.accepted).toBeDefined();
@@ -1802,7 +1865,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       if (threadId) {
         expect(finalMessages()[0]?.thread_ts).toBe(threadId);
       }
-      const tasks = writes
+      const tasks = caseWrites()
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
       if (channel === "slack" && native) {
@@ -1870,7 +1933,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         cleanups.push(() => disconnectGatewayClient(client));
-        const firstWrite = writes.length;
+        const firstWrite = caseWrites().length;
         const sent = asRecord(
           await client.request("tools.invoke", {
             name: "message",
@@ -1886,7 +1949,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         );
         expect(sent.ok).toBe(true);
         const portableWrites = () =>
-          writes
+          caseWrites()
             .slice(firstWrite)
             .filter(
               (write) => write.method === "POST" && /\/channels\/\d+\/messages$/u.test(write.route),

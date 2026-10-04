@@ -22,7 +22,8 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { readGatewayOwnerLease, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
 import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,
@@ -66,8 +67,6 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
-  // Only the in-process deferral owner can attest that the drain budget was spent.
-  drainBudgetExhausted?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";

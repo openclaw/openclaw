@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isMissingPathError } from "../infra/errors.js";
+import { isMissingPathError, readErrorCause } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import {
@@ -38,7 +38,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
       .readFile(absolutePath)
       .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
       .catch((error: unknown) => {
-        if (!isMissingPathError(error)) {
+        if (!isMissingPathError(error) && !isMissingPathError(readErrorCause(error))) {
           throw error;
         }
         return "";

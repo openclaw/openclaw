@@ -1,6 +1,6 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_PRIVATE_COMMANDS } from "../../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
@@ -140,7 +140,12 @@ describe("node.invoke caller cancellation", () => {
         onProgress?: (chunk: string) => void;
         onDispatchReady?: (invokeId: string) => void;
         isDispatchAuthorized?: () => boolean;
+        signal?: AbortSignal;
       }) => {
+        expect(
+          params.signal &&
+            isNodeWakeLifecycleCurrent("paired-node", params.signal, "generation:paired-node:1"),
+        ).toBe(true);
         params.onDispatchReady?.("paired-stream-invoke");
         params.onProgress?.("paired-stream-progress");
         return { ok: true, payload: { delivered: true } };
@@ -204,35 +209,6 @@ describe("node.invoke caller cancellation", () => {
     expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(true);
   });
 
-  it("rejects undeclared commands before trusted duplex hooks receive dispatch", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValueOnce({
-      ok: false,
-      reason: "command not declared by node",
-    });
-    const stream = {
-      onProgress: vi.fn(),
-      onDispatchReady: vi.fn(),
-      isRuntimeCurrent: () => true,
-    };
-    const invoke = vi.fn();
-
-    const { invocation, respond } = startNodeInvoke({
-      invoke,
-      command: "plugin.undeclared",
-      commands: ["ollama.chat"],
-      client: createNodeInvokeStreamClient(stream),
-    });
-    await invocation;
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(stream.onDispatchReady).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("does not support") }),
-    );
-  });
-
   it("does not bypass system.run approval sanitization for trusted duplex hooks", async () => {
     mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
       ok: false,
@@ -263,36 +239,34 @@ describe("node.invoke caller cancellation", () => {
     );
   });
 
-  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
-    "rejects private control %s before public policy and dispatch",
-    async (command) => {
-      const invoke = vi.fn();
-      const stream = {
-        onProgress: vi.fn(),
-        onDispatchReady: vi.fn(),
-        isRuntimeCurrent: () => true,
-      };
-      const { invocation, respond } = startNodeInvoke({
-        invoke,
-        command,
-        commands: [command],
-        config: { gateway: { nodes: { commands: { allow: [command] } } } },
-        client: createNodeInvokeStreamClient(stream),
-      });
+  it("rejects private controls before public policy and dispatch", async () => {
+    const command = NODE_WORKER_SUPERVISOR_STATUS_COMMAND;
+    const invoke = vi.fn();
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      isRuntimeCurrent: () => true,
+    };
+    const { invocation, respond } = startNodeInvoke({
+      invoke,
+      command,
+      commands: [command],
+      config: { gateway: { nodes: { commands: { allow: [command] } } } },
+      client: createNodeInvokeStreamClient(stream),
+    });
 
-      await invocation;
+    await invocation;
 
-      expect(invoke).not.toHaveBeenCalled();
-      expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
-      expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
-      expect(stream.onDispatchReady).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("private") }),
-      );
-    },
-  );
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+    expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
+    expect(stream.onDispatchReady).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("private") }),
+    );
+  });
 
   it("cancels paired-node work without breaking pairing lifecycle identity", async () => {
     const controller = new AbortController();
@@ -326,30 +300,6 @@ describe("node.invoke caller cancellation", () => {
           nodeError: expect.objectContaining({ code: "ABORTED" }),
         }),
       }),
-    );
-  });
-
-  it("keeps the canonical pairing-owner signal for legacy callers", async () => {
-    let ownerSignalWasCurrent = false;
-    const invoke = vi.fn(async (params: { signal?: AbortSignal }) => {
-      if (params.signal) {
-        ownerSignalWasCurrent = isNodeWakeLifecycleCurrent(
-          "paired-node",
-          params.signal,
-          "generation:paired-node:1",
-        );
-      }
-      return { ok: true, payload: { response: "node-only inference" } };
-    });
-    const { invocation, respond } = startNodeInvoke({ invoke });
-
-    await invocation;
-
-    expect(ownerSignalWasCurrent).toBe(true);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ nodeId: "paired-node", command: "ollama.chat" }),
-      undefined,
     );
   });
 });

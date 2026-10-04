@@ -9,6 +9,208 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Workspace mutation guards
+
+Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
+Prepare database-derived inputs asynchronously before calling it; `assertHost`
+must synchronously check current caller authority without accessing SQLite.
+Core-owned recovery predicates execute on the worker's transaction connection.
+
+The released `beforePersistentApply: () => void` option remains supported for
+TypeScript and JavaScript plugins until the next Plugin SDK major. It runs on the
+host once immediately before each worker mutation dispatch, outside admission
+grants, and at host filesystem mutation boundaries. Throwing stops that apply.
+Synchronous OpenClaw database access in the callback is allowed and deprecated;
+a warning explains the timing and typed replacement once per process.
+
+There is no compatibility break for legacy callbacks or their database reads.
+The timing nuance is that the legacy check runs just before dispatch, while
+`guard.assertHost` is also rechecked inside transaction and commit grants.
+Prefer the typed guard for live revocation at commit. Callback errors continue
+to propagate. No schema, retention, durability, or update migration is required.
+
+## Await Mention Inbox operations
+
+Replace synchronous `context.mentionInbox.list(client)` and
+`context.mentionInbox.dismiss(client, ids)` calls with
+`listAsync(client, publish)` and `dismissAsync(client, ids, publish)`.
+Both methods prepare durable state in workers, then call `publish` synchronously
+with the current authorized result. Send the Gateway response inside that
+callback without awaiting more work:
+
+```ts
+await mentionInbox.listAsync(client, (result) => {
+  respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+});
+```
+
+Await the returned promise before releasing request resources or starting work
+that depends on the operation. Dismissal IDs retain exact-match semantics.
+
+Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
+and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
+recording before reading the resulting Inbox, and await invalidation before
+depending on refreshed connected views.
+
+The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
+remain synchronous third-party adapters until the next Plugin SDK major and
+explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
+deprecation warning once per plugin and method per process; calls outside a
+plugin invocation warn once per method. Existing return values and completion
+timing stay intact, including recording before an immediate synchronous list.
+Notifications publish after the enclosing transaction commits and are discarded
+on rollback. This migration changes no schema, retained data, retention, or
+update behavior.
+
+## Await session transcript persistence
+
+Use the awaited `SessionManager` methods from
+`openclaw/plugin-sdk/agent-sessions`. Await each mutation before reading the new
+view, publishing its result, starting dependent work, or releasing the session's
+write authority:
+
+```typescript
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+
+const manager = await SessionManager.openAsync(target);
+const entryId = await manager.appendCustomEntryAsync("plugin-checkpoint", {
+  stage: "ready",
+});
+await manager.appendLabelChangeAsync(entryId, "Ready");
+```
+
+Here `target` is the session owner's prepared transcript target. The async calls
+retain that binding and the caller's live authority across queue waits. File-backed
+SQLite persistence uses the existing writer worker and per-session FIFO order.
+Append and persisted tree-mutation promises resolve after the manager adopts the
+committed result; failed writes reject instead of publishing an uncommitted view. Parent,
+leaf, branch, idempotency, and returned-entry semantics stay with the existing
+transcript owner. Handle errors before continuing; do not retry an uncertain write
+by calling a synchronous method.
+
+| Deprecated synchronous method              | Awaited replacement                             | Resolved result                                                            |
+| ------------------------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------- |
+| `appendMessage`                            | `appendMessageAsync`                            | Persisted message entry ID                                                 |
+| `appendMessageWithTranscriptAnchor`        | `appendMessageWithTranscriptAnchorAsync`        | Append result, including the entry ID and transcript anchor                |
+| `appendCompaction`                         | `appendCompactionAsync`                         | Compaction entry ID                                                        |
+| `appendResetBoundary`                      | `appendResetBoundaryAsync`                      | Reset entry ID                                                             |
+| `appendCustomEntry`                        | `appendCustomEntryAsync`                        | Custom entry ID                                                            |
+| `appendSessionInfo`                        | `appendSessionInfoAsync`                        | Session-info entry ID                                                      |
+| `appendCustomMessageEntry`                 | `appendCustomMessageEntryAsync`                 | Custom-message entry ID                                                    |
+| `appendLeafControl`                        | `appendLeafControlAsync`                        | Leaf-control record                                                        |
+| `appendLabelChange`                        | `appendLabelChangeAsync`                        | Label entry ID                                                             |
+| `branch`                                   | `branchAsync`                                   | `void`; prepares the selected branch                                       |
+| `branchWithSummary`                        | `branchWithSummaryAsync`                        | Branch-summary entry ID                                                    |
+| `removeTrailingEntries`                    | `removeTrailingEntriesAsync`                    | Number of removed entries                                                  |
+| `persist`                                  | `persistAsync`                                  | Existing raw persistence result; does not add the entry to the loaded tree |
+| `prepareTranscriptRewrite`                 | `prepareTranscriptRewriteAsync`                 | Prepared rewrite; await its `commit(...)` as well                          |
+| `SessionManager.appendMessageToTranscript` | `SessionManager.appendMessageToTranscriptAsync` | Persisted message entry ID                                                 |
+
+Hydration follows the same naming convention: replace `open`, `openBounded`,
+`openDetachedBounded`, and `openModelContext` with their `Async` static methods;
+replace `setSessionTarget` and `reloadPersistedTranscript` with their `Async`
+instance methods. See [session transcript hydration](/plugins/sdk-runtime/agent#session-transcript-hydration)
+for read limits, cancellation, and target-binding rules. Synchronous getters read
+the prepared view. `inMemory()` and `fromEntries()` remain synchronous;
+`appendModelChange`, `appendThinkingLevelChange`, and `createBranchedSession`
+already return promises and keep their names.
+
+`branchAsync` can hydrate missing history through the read worker before selecting
+the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
+with queued session writes. Neither operation writes a leaf record by itself;
+the following append retains the existing branch semantics. `resetLeaf()` remains
+supported synchronous in-memory navigation and is not deprecated.
+
+The low-level `persistAsync` mirrors `persist`: it writes a supplied entry and
+returns its persistence result without adding that entry to the loaded tree.
+Prefer the append methods when the caller needs view adoption; otherwise await
+`reloadPersistedTranscriptAsync()` before reading the resulting tree. For a
+prepared rewrite, await both `prepareTranscriptRewriteAsync()` and the returned
+`commit(rewrittenEntryIds)` before using the rewritten view.
+
+User and custom messages use the worker append path, including appends with
+`beforeFreshMessageCommit`; those options do not select synchronous persistence.
+Incognito storage is the explicit exception: it remains with its process-local
+owner until its worker cutover. Await its calls too so dependent publication
+keeps the same ordering. This migration changes no transcript format, schema,
+retention, or update/Doctor behavior, and needs no data conversion.
+
+Synchronous methods remain named third-party compatibility adapters. They keep
+their existing immediate return values and emit one `DeprecationWarning` per
+method per process with code `DEP_SESSION_PERSISTENCE`, naming the
+awaited replacement. The
+`session-manager-sync-persistence` compatibility record deprecates them on
+October 1, 2026, with removal at the next Plugin SDK major
+(`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
+use the awaited methods. Do not add a sync fallback when adopting the new API.
+
+User-turn transcript recorders also provide optional
+`completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
+Await processing completion before publishing its outcome. Completion records
+processing separately from transcript consumption; it does not append or consume
+the pending input. The synchronous `completeProcessing` callback shipped in
+`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+uses that legacy callback only when a supplied recorder has no async companion,
+never after an async failure or an undefined async result.
+
+`finishPendingInput(disposition)` still revokes prompt custody synchronously.
+After calling it, await `waitForPendingInputSettlement()` when available before
+releasing the turn's session admission. This joins accepted completion and
+disposition writes, including each original source of a collected input. An
+uncertain write outcome is preserved and must not be replayed through either
+callback. These additions change no schema, retention, or update behavior.
+
+### Await extension session changes
+
+Extensions should await the new methods before reading or publishing their
+effects:
+
+| Deprecated method             | Awaited replacement                                | Resolved result                     |
+| ----------------------------- | -------------------------------------------------- | ----------------------------------- |
+| `ExtensionAPI.appendEntry`    | `ExtensionAPI.appendEntryAsync(customType, data?)` | Persisted entry ID                  |
+| `ExtensionAPI.setSessionName` | `ExtensionAPI.setSessionNameAsync(name)`           | `void`                              |
+| `ExtensionAPI.setLabel`       | `ExtensionAPI.setLabelAsync(entryId, label)`       | `void`; `undefined` removes a label |
+| `AgentSession.setSessionName` | `AgentSession.setSessionNameAsync(name)`           | `void`                              |
+
+The old methods retain their synchronous `void` contract for third-party
+extensions. `extension-session-sync-persistence` records their deprecation and
+next-Plugin-SDK-major removal gate. The added methods preserve existing source
+contracts while allowing the host to await persistence failures and committed
+state before continuing. Deprecated calls emit the same once-per-method
+`DEP_SESSION_PERSISTENCE` warning.
+
+Custom extension hosts should supply `ExtensionActionsV2` through
+`ExtensionRunner.bindCoreAsync(...)`. Binding remains synchronous; the required
+actions return promises. `ExtensionRuntimeV2` also requires those actions, while
+the original `ExtensionActions`, `ExtensionRuntime`, and `bindCore(...)` contracts
+remain source-compatible. `createExtensionRuntime()` retains its original return
+type. A new async API called without an async host binding rejects with a
+`bindCoreAsync` migration error instead of falling back to synchronous persistence.
+
+### Await provider replay metadata
+
+Implement `ProviderPlugin.sanitizeReplayHistoryAsync` with
+`ProviderSanitizeReplayHistoryContextV2`. Its optional `sessionState` is a
+`ProviderReplaySessionStateV2`; when present, it supplies the required
+`appendCustomEntryAsync(customType, data): Promise<string>` capability. Await
+metadata appends before returning the sanitized replay messages. The host prefers
+this hook when both versions exist and does not retry a failed async hook through
+the legacy one.
+
+For Gemini replay, use `sanitizeGoogleGeminiReplayHistoryAsync(ctx)` from
+`openclaw/plugin-sdk/provider-model-shared`, or the existing
+`buildProviderReplayFamilyHooks(...)` builder, which supplies the awaited hook.
+The synchronous `sanitizeGoogleGeminiReplayHistory`, legacy
+`sanitizeReplayHistory` hook, and `ProviderReplaySessionState.appendCustomEntry`
+remain third-party compatibility adapters. The original context types keep their
+signatures; the V2 types add the required awaited capability. These surfaces are
+recorded as `provider-replay-sync-persistence` for removal at the next Plugin SDK
+major. Deprecated calls emit the same once-per-method
+`DEP_SESSION_PERSISTENCE` warning. The family builder retains its
+legacy hook for supported older consumers. The awaited Gemini helper propagates
+metadata write failures; the legacy adapter retains its historical best-effort
+metadata behavior.
+
 ## Managed node workspace acquisition
 
 Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`
@@ -26,6 +228,76 @@ instead of falling back to synchronous acquisition. Removal of the deprecated
 callback requires an explicitly approved future breaking Plugin SDK release.
 The `next-plugin-sdk-major` gate does not itself authorize removal or shorten
 an existing compatibility window.
+
+## Migrate durable ingress files through Doctor
+
+Keep legacy file readers in the plugin's `PluginDoctorStateMigration`, exposed
+through its Doctor contract. Declare source directories and the destination
+database in `collectBackupResources`; detection remains read-only. Runtime
+consumers use canonical SQLite ingress queues.
+
+During repair, trusted channel plugins receive channel-bound access through
+`context.channelIngressQueues`. Require `assertCurrent` and
+`importLegacyEntries` before changing state; these capabilities expire when the
+repair section ends. Use `backupLegacyStateSource({ filePath, assertCurrent })`
+from `openclaw/plugin-sdk/runtime-doctor-migrations` before parsing or normalizing
+the source. It preserves exact bytes in a private, durable `.migrated` file
+(or a numbered successor), verifies source identity, and returns the snapshot
+plus guarded source cleanup.
+During discovery, normalize interrupted claim filenames with
+`resolveLegacyMigrationSourcePath`, deduplicate the original paths, and pass each
+source's discovered `claimPaths` to the backup helper. It restores interrupted
+claims through the shared migration owner before
+capturing its snapshot; receipts always use the original source path.
+
+Call `importLegacyEntries({ accountId, entries })` with canonical channel/account
+identities. Each item contains an `entry` and `sources`, whose records contain
+`sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits
+pending entries or payload-free failed tombstones together with source receipts
+in the existing migration ledger. Equivalent rows and completed work remain
+authoritative; conflicting rows receive no completed receipt and keep their
+source files. Receipts suppress repeat imports even after queue rows are consumed
+or pruned. Changed source bytes form a distinct source generation.
+Historical receipt and failure timestamps are preserved. Imported rows start
+their mutation age at import time so pending-row pruning cannot discard old
+updates before their first replay.
+
+After a successful import or confirmed prior receipt, call
+`backup.removeSource(() => { result.markSourcesRemoved([backup.snapshot.sourcePath]); })`.
+The shared owner claims the original name, records its removal, then removes the
+claim. A failed bookkeeping operation keeps a discoverable source for the next
+Doctor pass. The callback must be synchronous. Preserve backups
+and report unresolved conflicts with `openclaw doctor --fix` recovery guidance.
+After a confirmed commit, cleanup-only failures may return
+`warningDisposition: "recoverable"` when current repair authority and retained
+source/backup identities still verify. Conflicts, lost authority, and uncertain
+imports remain refusals.
+Do not implement import as runtime `enqueue` followed by `fail`: an interruption
+would expose a historical failure as new pending work.
+
+## Agent roster config
+
+Author agent rosters as `agents.entries`, keyed by agent ID. Entries contain no
+`id` field or `default` marker; their insertion order is the roster order. Read
+`cfg.agents.entries` directly, or use `listAgentIds` and `resolveAgentConfig` from
+`openclaw/plugin-sdk/agent-runtime`. Select the owner explicitly for the surface
+you use, such as `agents.defaults.systemAgent.agentId` for system work.
+
+Authored `agents.list` and boolean entry `default` markers are rejected. Run
+`openclaw doctor --fix` to migrate stored legacy configs; Doctor also records
+explicit ownership for migrated multi-agent rosters.
+
+Entries also carry no `agentRuntime` or `compaction`. Validation rejects both, so
+the authored config type omits them and `resolveAgentConfig` no longer returns
+`agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
+compaction settings from `agents.defaults.compaction`.
+
+Plugins built against stable SDK releases through 2026.9.x may still read the
+deprecated, non-enumerable runtime `agents.list` projection introduced in
+[#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed
+or read internally, is not serialized or copied by `structuredClone`, and is
+scheduled for removal after January 2, 2027. Config mutation drafts must read and
+write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## How to migrate
 
@@ -66,8 +338,8 @@ an existing compatibility window.
     must receive config from their boundary, and long-lived runtime modules
     allow zero ambient `loadConfig()` calls.
 
-    New plugin code should avoid the broad `openclaw/plugin-sdk/config-runtime`
-    barrel. Use the narrow subpath for the job:
+    The broad `openclaw/plugin-sdk/config-runtime` barrel has been removed.
+    Use the narrow subpath for the job:
 
     | Need | Import |
     | --- | --- |
@@ -89,19 +361,15 @@ an existing compatibility window.
     resolver preserves channel/account precedence and channel defaults;
     `markdown-table-runtime` is a private, JavaScript-only host export.
 
-    Check named types separately. `config-contracts` does not export `TtsMode`,
-    `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`, or `SessionResetMode`;
-    `session-store-runtime` does not export `SessionResetMode` either. Existing
-    callers needing those names must keep retained type imports or explicitly
-    adapt their types. Talk config, cron-store operations, context-visibility
-    config resolution, and dangerous-name checks also lack a complete modern
-    typed-public mapping. Missing public contracts require an SDK-owner decision,
-    not an import of the private focused implementation.
+    The named types `TtsMode`, `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`,
+    and `SessionResetMode` move unchanged to `config-contracts`. Talk config,
+    cron-store operations, context-visibility config resolution, and
+    dangerous-name checks lack a complete modern typed-public mapping.
+    Adapt plugin-owned behavior or request a focused
+    public contract; do not import the private host implementation.
 
     Bundled plugins and their tests are scanner-guarded against the broad
-    barrel so imports and mocks stay local to the behavior they need. The
-    barrel still exists for external compatibility, but new code should not
-    depend on it.
+    barrel so imports and mocks stay local to the behavior they need.
 
   </Step>
 
@@ -194,13 +462,16 @@ an existing compatibility window.
     grep -r "plugin-sdk/compat" my-plugin/
     grep -r "plugin-sdk/infra-runtime" my-plugin/
     grep -r "plugin-sdk/config-runtime" my-plugin/
+    grep -r "plugin-sdk/channel-lifecycle" my-plugin/
+    grep -r "plugin-sdk/channel-message" my-plugin/
+    grep -r "plugin-sdk/channel-reply-pipeline" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
   </Step>
 
   <Step title="Replace with focused imports">
     Check the exported name and typed-public contract as well as the import
-    path. Some functions are renamed; not every retained helper or named type
+    path. Some functions are renamed; not every removed helper or named type
     has a modern public replacement:
 
     ```typescript
@@ -219,7 +490,7 @@ an existing compatibility window.
 
     The explicit alias preserves existing `createChannelReplyPipeline(...)`
     call sites. The modern export is `createChannelMessageReplyPipeline`;
-    see [Retained channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+    see [Removed channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
     for the remaining functions and named types.
 
     For host-side helpers, use the injected plugin runtime instead of
@@ -249,13 +520,13 @@ an existing compatibility window.
   </Step>
 
   <Step title="Replace broad infra-runtime imports">
-    `openclaw/plugin-sdk/infra-runtime` still exists for external
-    compatibility, but new code should use the supported surface it actually
-    needs:
+    `openclaw/plugin-sdk/infra-runtime` has been removed. Use the supported
+    surface for each operation:
 
     | Need | Typed-public import or injected API |
     | --- | --- |
     | New system event producers | `api.runtime.system.enqueueSystemEvent` |
+    | System event snapshot inspection and consumption | `openclaw/plugin-sdk/system-event-runtime` |
     | Heartbeat wake requests | `api.runtime.system.requestHeartbeat` |
     | Channel activity telemetry | `api.runtime.channel.activity.record` and `.get` |
     | `createDedupeCache`, `resolveGlobalDedupeCache` | `openclaw/plugin-sdk/dedupe-runtime` |
@@ -267,14 +538,19 @@ an existing compatibility window.
     | `generateSecureToken`, `generateSecureUuid` | `openclaw/plugin-sdk/core` |
     | `parseFiniteNumber`, `parseStrictFiniteNumber`, `parseStrictInteger`, `parseStrictNonNegativeInteger`, `parseStrictPositiveInteger` | `openclaw/plugin-sdk/string-coerce-runtime` |
 
+    OpenClaw no longer uses `commandRequiresSecurityAuditSuppressionApproval`
+    internally: suppression reads and writes follow ordinary exec policy. The
+    SDK export was removed with the compatibility barrel. Remove this call when
+    adopting ordinary exec policy; there is no replacement command-text detector.
+
     These are symbol-specific mappings, not replacements for the whole barrel.
     Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host
     exports, not typed third-party APIs. Heartbeat event/summary/visibility
     helpers, pending-delivery drain, transport readiness, concurrency, and file
-    locking do not have equivalent modern typed-public mappings here. Retain
-    existing compatibility imports for those operations pending an SDK-owner
-    decision.
+    locking do not have equivalent modern typed-public mappings here. Adapt
+    plugin-owned behavior or request a focused public contract for the missing
+    host capability.
 
     `fetchWithSsrFGuard` is not a drop-in replacement for dispatcher-aware fetch:
     it takes an options object and returns `{ response, finalUrl, release, ... }`,
@@ -288,11 +564,13 @@ an existing compatibility window.
     `stringifyNonErrorCause`, `ErrorKind`, or `detectErrorKind`; the last helper
     preserves legacy substring classification. The numeric and random mappings
     likewise do not cover every timer, expiry, hex, fraction, or integer helper.
-    Keep unsupported retained imports until their public contract is resolved.
+    Adapt those operations explicitly; the removed imports no longer load.
 
-    System event snapshot inspection and consume helpers remain available only
-    through the deprecated `openclaw/plugin-sdk/infra-runtime` compatibility
-    surface; there is no modern public replacement. Current snapshots carry an
+    Import system event snapshot inspection and consume helpers from
+    `openclaw/plugin-sdk/system-event-runtime`: use `peekSystemEventEntries`
+    to inspect and `consumeSelectedSystemEventEntries` to consume selected
+    snapshots. Replace the legacy `consumeSystemEventEntries` alias with
+    `consumeSelectedSystemEventEntries`. Current snapshots carry an
     opaque `id` for one queued occurrence. Preserve it through copies and
     serialization when returning a snapshot to consume. Legacy ID-less callers
     retain structural matching, which can be ambiguous after queue churn. Do

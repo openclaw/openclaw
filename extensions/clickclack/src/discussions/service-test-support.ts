@@ -4,6 +4,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
@@ -69,6 +70,18 @@ export function asyncDiscussionTestStore<T>(
     },
     entries: async () => store.entries(),
     clear: async () => store.clear(),
+  };
+}
+
+export function discussionChannel<T extends Partial<ClickClackChannel>>(fields: T) {
+  return {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    name: "discussion",
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+    ...fields,
   };
 }
 
@@ -205,12 +218,13 @@ export function createHarness(
     clientFactory: () => client,
     installationId: TEST_INSTALLATION_ID,
     bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    startTimer: options.startTimer ?? false,
     ...(options.maxRetainedDetachedBindings !== undefined
       ? { maxRetainedDetachedBindings: options.maxRetainedDetachedBindings }
       : {}),
-    ...(options.gatewayEvents ? { gatewayEvents: options.gatewayEvents } : {}),
   });
+  if (options.gatewayEvents || options.startTimer) {
+    void service.bindGatewayEvents(options.gatewayEvents, createTestPluginServiceScheduler());
+  }
   return {
     runtime,
     service,

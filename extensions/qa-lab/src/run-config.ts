@@ -8,7 +8,6 @@ import type {
   QaLabRunnerSnapshot,
   QaLabRunSelection,
 } from "../runner-contract.js";
-import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import {
   defaultQaRuntimeModelForMode,
   resolveQaRuntimeModelPair,
@@ -49,12 +48,6 @@ export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
   return defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined);
 }
 
-type QaDefaultModelResolver = (mode: QaProviderMode, alternate?: boolean) => string;
-
-function defaultStaticModelForMode(mode: QaProviderMode, alternate = false) {
-  return defaultStaticQaModelForMode(mode, alternate ? { alternate: true } : undefined);
-}
-
 function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profileId: string) {
   const profile = profiles.find((entry) => entry.id === profileId);
   if (!profile) {
@@ -65,18 +58,16 @@ function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profile
 
 function createDefaultQaRunSelection(
   profiles: readonly QaLabRunProfileOption[],
-  options?: { resolveDefaultModel?: QaDefaultModelResolver },
 ): QaLabRunSelection {
   const profile = requireQaRunProfile(profiles, "smoke-ci");
   const providerMode: QaProviderMode = "mock-openai";
-  const resolveDefaultModel = options?.resolveDefaultModel ?? defaultQaModelForMode;
   return {
     profile: profile.id,
     channel: null,
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    ...resolveQaRuntimeModelPair({ providerMode, resolveDefaultModel }),
+    ...resolveQaRuntimeModelPair({ providerMode }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -428,9 +419,7 @@ export function createIdleQaRunnerSnapshot(
 ): QaLabRunnerSnapshot {
   return {
     status: "idle",
-    selection: createDefaultQaRunSelection(profiles, {
-      resolveDefaultModel: defaultStaticModelForMode,
-    }),
+    selection: createDefaultQaRunSelection(profiles),
     plan,
     artifacts: null,
     error: null,

@@ -198,22 +198,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
   );
 }
 
-function filterPolicyActiveBundleMcpDiagnostics(params: {
-  diagnostics: readonly McpToolCatalogDiagnostic[];
-  cfg: OpenClawConfig;
-  agentId: string;
-  modelRef: { provider: string; model: string };
-}): readonly McpToolCatalogDiagnostic[] {
-  return params.diagnostics.filter((diagnostic) =>
-    shouldReportBundleMcpRuntimeDiagnostic({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelRef: params.modelRef,
-      diagnostic,
-    }),
-  );
-}
-
 export async function collectRuntimeToolSchemaFindings(
   sourceConfig: OpenClawConfig,
   options: DoctorToolSchemaOptions = {},
@@ -428,20 +412,15 @@ export async function collectRuntimeToolSchemaFindings(
         }
         const bundleRuntime = bundleRuntimeByContext.get(runtimeContext);
         if (bundleRuntime) {
-          if (bundleRuntime.diagnostics && bundleRuntime.diagnostics.length > 0) {
-            const policyActiveDiagnostics = filterPolicyActiveBundleMcpDiagnostics({
-              diagnostics: bundleRuntime.diagnostics,
-              cfg,
-              agentId,
-              modelRef,
-            });
-            for (const diagnostic of policyActiveDiagnostics) {
-              if (reportedBundleRuntimeDiagnostics.has(diagnostic.serverName)) {
-                continue;
-              }
-              findings.push(bundleMcpRuntimeDiagnosticFinding(diagnostic));
-              reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
+          const policyActiveDiagnostics = (bundleRuntime.diagnostics ?? []).filter((diagnostic) =>
+            shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic }),
+          );
+          for (const diagnostic of policyActiveDiagnostics) {
+            if (reportedBundleRuntimeDiagnostics.has(diagnostic.serverName)) {
+              continue;
             }
+            findings.push(bundleMcpRuntimeDiagnosticFinding(diagnostic));
+            reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
           }
           findings.push(
             ...(await collectBundleMcpRuntimeToolSchemaFindings({

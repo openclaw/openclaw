@@ -64,7 +64,7 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
   resolvePolicy: (account) => account.dmPolicy,
   resolveAllowFrom: (account) => account.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => normalizeE164(raw),
+  normalizeEntry: normalizeE164,
   inheritSharedDefaultsFromDefaultAccount: true,
 });
 
@@ -150,6 +150,7 @@ export function createWhatsAppPluginBase() {
       chatTypes: ["direct", "group", "channel"],
       polls: true,
       reactions: true,
+      reactionSlots: "single",
       media: true,
       tts: {
         voice: {
@@ -212,8 +213,7 @@ export function createWhatsAppPluginBase() {
       deriveLegacySessionChatType,
       resolveLegacyGroupSessionKey,
       isLegacyGroupSessionKey,
-      canonicalizeLegacySessionKey: (paramsLocal) =>
-        canonicalizeLegacySessionKey({ key: paramsLocal.key, agentId: paramsLocal.agentId }),
+      canonicalizeLegacySessionKey,
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

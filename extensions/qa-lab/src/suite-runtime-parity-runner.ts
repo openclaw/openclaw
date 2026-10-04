@@ -3,12 +3,10 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
-import type { QaLabLatestReport } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { RuntimeId } from "./runtime-id.js";
 import { runRuntimeParityScenario, type RuntimeParityCell } from "./runtime-parity.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {
   collectQaSuiteTransportPolicy,
@@ -17,6 +15,7 @@ import {
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 import type {
   QaSuiteRunParams,
@@ -167,11 +166,7 @@ export async function runQaRuntimeParitySuite(
                 );
                 // A callback can capture an unfinished child with no selection.
                 // Admit that pending history too before an exception unwinds it.
-                if (selected === null) {
-                  cells.invocation.select(cellIndex, null);
-                } else {
-                  cells.invocation.select(cellIndex, selected);
-                }
+                cells.invocation.select(cellIndex, selected);
                 return selected;
               };
               let cellResult: QaSuiteResult;
@@ -229,45 +224,22 @@ export async function runQaRuntimeParitySuite(
                 }
                 throw error;
               }
-              if (cellResult.evidence?.schemaVersion === 3) {
-                childEvidence = cellResult.evidence;
-              }
+              childEvidence = cellResult.evidence;
               const childSelectedId = importChild();
               if (cellResult.startedScenarioIds.includes(scenario.id)) {
                 startedScenarioIndexes.add(index);
               }
-              let scenarioResult =
-                cellResult.scenarios[0] ??
-                ({
-                  name: scenario.title,
-                  status: "fail",
-                  details: "runtime parity cell returned no scenario result",
-                  steps: [
-                    {
-                      name: "runtime parity cell",
-                      status: "fail",
-                      details: "runtime parity cell returned no scenario result",
-                    },
-                  ],
-                } satisfies QaSuiteScenarioResult);
-              if (childEvidence) {
-                if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
-                  throw new Error("runtime parity result does not match its child observation");
-                }
-                cells.invocation.complete(dispatchId, {
-                  status: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
-                  entries: [],
-                });
-              } else {
-                // Only this just-returned child can supply legacy rows. Keep their
-                // complete contents; runtime labels do not establish target proof.
-                const legacy = cellResult.evidence
-                  ? rebaseQaSuiteEvidence(cellResult.evidence, cellOutputDir, comparisonDir)
-                  : undefined;
-                scenarioResult = await cells.record(cellIndex, dispatchId, scenarioResult, {
-                  importedEntries: legacy?.entries,
-                });
+              const scenarioResult = cellResult.scenarios[0];
+              if (!scenarioResult) {
+                throw new Error("runtime parity cell returned no scenario result");
               }
+              if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
+                throw new Error("runtime parity result does not match its child observation");
+              }
+              cells.invocation.complete(dispatchId, {
+                status: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
+                entries: [],
+              });
               const fallbackCell = {
                 runtime,
                 transcriptBytes: "",
@@ -342,15 +314,12 @@ export async function runQaRuntimeParitySuite(
     terminalScenarios = scenarios;
     publishTerminalResult = async () => {
       const finishedAt = new Date();
-      const { evidence, evidencePath, report, reportPath, summaryPath } =
-        await writeQaSuiteArtifacts({
-          repoRoot: params.repoRoot,
+      return await completeQaSuiteRun(
+        {
           outputDir: params.outputDir,
           startedAt: params.startedAt,
           finishedAt,
           scenarios,
-          scenarioDefinitions: params.selectedScenarios,
-          evidenceMode: params.evidenceMode,
           recordedEvidence: recording.snapshot(),
           transport,
           providerMode: params.providerMode,
@@ -367,26 +336,13 @@ export async function runQaRuntimeParitySuite(
               : undefined,
           runtimePair: params.runtimePair,
           writeEvidenceFile: params.writeEvidenceFile,
-        });
-      lab.setLatestReport({
-        outputPath: reportPath,
-        markdown: report,
-        generatedAt: finishedAt.toISOString(),
-      } satisfies QaLabLatestReport);
-      progress.complete([], finishedAt.toISOString());
-      return {
-        outputDir: params.outputDir,
-        evidence,
-        evidencePath,
-        reportPath,
-        summaryPath,
-        report,
-        scenarios,
-        startedScenarioIds: params.selectedScenarios
+        },
+        lab,
+        progress,
+        params.selectedScenarios
           .filter((_scenario, index) => startedScenarioIndexes.has(index))
           .map((scenario) => scenario.id),
-        watchUrl: lab.baseUrl,
-      } satisfies QaSuiteResult;
+      );
     };
   } catch (error) {
     runFailed = true;

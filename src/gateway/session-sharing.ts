@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -62,10 +63,10 @@ import {
   readProjectedSessionMutationTarget,
   readSessionMutationTarget,
 } from "./session-sharing-target-read.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   resolveGatewaySessionStoreTarget,
   type GatewaySessionStoreCache,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
@@ -156,6 +157,13 @@ export function resolveSessionMutationAuthorization(params: {
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
+  const patch =
+    params.method === "sessions.patchMany" && isRecord(params.requestParams)
+      ? params.requestParams.patch
+      : params.method === "sessions.patch"
+        ? params.requestParams
+        : undefined;
+  const requiresArchiveOwnership = isRecord(patch) && typeof patch.archived === "boolean";
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
@@ -226,6 +234,7 @@ export function resolveSessionMutationAuthorization(params: {
           cfg,
           client: params.client,
           target,
+          requireOwner: requiresArchiveOwnership,
           isMember: projection
             ? Boolean(
                 identity &&
@@ -424,7 +433,7 @@ export function resolveSessionMutationAuthorization(params: {
           }
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
-      ...(!target && ["sessions.send", "sessions.create"].includes(params.method)
+      ...(!target && ["sessions.send", "sessions.create", "sessions.patch"].includes(params.method)
         ? {
             absentTarget: resolveGatewaySessionStoreTarget({
               cfg: getCfg(),

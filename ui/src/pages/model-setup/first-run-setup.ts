@@ -64,6 +64,22 @@ export function captureModelSetupConnection(
 
 type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
 
+export function modelSetupOwnerChanges(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+) {
+  const authenticatedOwnerLost =
+    previous && (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+  const ownerChanged =
+    previous &&
+    (connection.agentId !== previous.agentId ||
+      connection.selectionIntentRevision !== previous.selectionIntentRevision ||
+      connection.firstRun !== previous.firstRun ||
+      connection.connectionRevision !== previous.connectionRevision ||
+      authenticatedOwnerLost);
+  return { authenticatedOwnerLost, ownerChanged };
+}
+
 export function reconcileModelSetupConnection(
   previous: ConnectionSnapshot | null,
   connection: ConnectionSnapshot,
@@ -119,7 +135,7 @@ type FirstRunActivation = {
   kind: string;
   deadlineMs: number;
   receipt: FirstRunActivationReceipt | null;
-  outcome: "pending" | "verified" | "rejected";
+  outcome: "pending" | "verified" | "rejected" | "missing";
 };
 
 type FirstRunSetupHost = {
@@ -222,6 +238,9 @@ export class FirstRunSetup {
     if (this.host.actionsDisabled()) {
       return false;
     }
+    if (this.pending?.outcome === "missing") {
+      return true;
+    }
     if (this.pending && Date.now() < this.pending.deadlineMs) {
       this.host.setRefreshWarning(
         t("modelSetup.recovery.wait", { time: formatDateTimeMs(this.pending.deadlineMs) }),
@@ -242,6 +261,24 @@ export class FirstRunSetup {
       this.started = Boolean(retryingConfigured);
     }
     return true;
+  }
+
+  wizardMissing(): void {
+    if (this.pending && this.ownsActivation()) {
+      this.pending.outcome = "missing";
+    }
+  }
+
+  reconcileMissingWizard(detection: SystemAgentSetupDetectResult): void {
+    const activation = this.pending;
+    if (activation?.outcome !== "missing" || !this.ownsActivation(activation)) {
+      return;
+    }
+    this.host.setRefreshWarning(null);
+    if (!this.configuredActivationModel(detection)) {
+      this.pending = null;
+      clearFirstRunActivationReceipt(activation.receipt);
+    }
   }
 
   dispose(): void {

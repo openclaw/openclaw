@@ -15,6 +15,7 @@ import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handle
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
+import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -22,11 +23,11 @@ import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
+import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
-import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -117,7 +118,7 @@ export function finalizeEmbeddedAttempt(
     promptError,
   };
 
-  trajectoryRecorder.recordEvent("model.completed", {
+  const modelFields = {
     ...terminalFields,
     promptErrorSource: terminalState.promptErrorSource,
     terminalError: terminal.terminalError,
@@ -127,21 +128,17 @@ export function finalizeEmbeddedAttempt(
     assistantTexts: result.assistantTexts,
     stopReason,
     finalPromptText: result.finalPromptText,
+  };
+  trajectoryRecorder.recordEvent("model.completed", {
+    ...modelFields,
     messagesSnapshot: result.messagesSnapshot,
   });
   trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
-      ...terminalFields,
-      promptErrorSource: terminalState.promptErrorSource,
-      terminalError: terminal.terminalError,
-      usage: result.attemptUsage,
-      promptCache: result.promptCache,
+      ...modelFields,
       compactionCount: result.compactionCount ?? 0,
-      assistantTexts: result.assistantTexts,
-      stopReason,
-      finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,
       didSendViaMessagingTool: result.didSendViaMessagingTool,
@@ -196,7 +193,7 @@ export async function completeEmbeddedAttemptAfterTurn(
   const { hookRunner } = sessionRuntime.agentSession;
   const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
   const { sessionIdUsed, promptError, messagesSnapshot } = settled;
-  const { nestedToolActivities } = toolBase;
+  const { nestedToolActivityState } = toolBase;
   const { prePromptMessageCount } = sessionRuntime.state;
   const contextEngineAfterTurnCheckpoint = sessionRuntime.contextGuards.getAfterTurnCheckpoint();
   const { lastCallUsage, promptCache, compactionOccurredThisAttempt } = settled;
@@ -287,23 +284,23 @@ export async function completeEmbeddedAttemptAfterTurn(
 
   const shouldPersistBootstrapCompletion = () => {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    return shouldPersistCompletedBootstrapTurn({
-      shouldRecordCompletedBootstrapTurn,
-      promptError,
-      aborted: lifecycleState.aborted,
-      timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
-      compactionOccurredThisAttempt,
-    });
+    return (
+      shouldRecordCompletedBootstrapTurn &&
+      !promptError &&
+      !lifecycleState.aborted &&
+      !lifecycleState.timedOutDuringCompaction &&
+      !compactionOccurredThisAttempt
+    );
   };
   if (!beforeAgentFinalizeRevisionReason && shouldPersistBootstrapCompletion()) {
     await withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         // Cancellation can arrive while an eligible completion waits for its writer.
         if (!shouldPersistBootstrapCompletion()) {
           return;
         }
         try {
-          sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+          await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
             timestamp: Date.now(),
             runId: attempt.runId,
             sessionId: attempt.sessionId,
@@ -356,12 +353,19 @@ export async function completeEmbeddedAttemptAfterTurn(
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }
           : undefined,
-      event: {
-        messages: projectNestedToolActivityForHooks(messagesSnapshot, nestedToolActivities ?? []),
-        success: !lifecycleForAgentEnd.aborted && !promptError,
-        error: agentEndError,
-        durationMs: Date.now() - promptStartedAt,
-      },
+      event: bindAgentHarnessHookMessages(
+        {
+          messages: messagesSnapshot,
+          success: !lifecycleForAgentEnd.aborted && !promptError,
+          error: agentEndError,
+          durationMs: Date.now() - promptStartedAt,
+        },
+        async () =>
+          projectNestedToolActivityForHooks(
+            messagesSnapshot,
+            await readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
+          ),
+      ),
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
         agentId: sessionAgentId,

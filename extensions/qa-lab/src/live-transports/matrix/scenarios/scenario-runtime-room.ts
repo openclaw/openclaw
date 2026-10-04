@@ -21,6 +21,7 @@ import {
   createMatrixQaScenarioClient,
   isMatrixQaMessageLikeKind,
   primeMatrixQaDriverScenarioClient,
+  resolveMatrixQaActorSyncParams,
   resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
   runNoReplyExpectedScenario,
@@ -175,28 +176,18 @@ async function restoreMembershipLossRoom(params: {
     userId: params.context.sutUserId,
   });
   await waitForMembershipEvent({
-    accessToken: params.context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: params.context.baseUrl,
+    ...resolveMatrixQaActorSyncParams(params.context, "driver"),
     membership: "invite",
-    observedEvents: params.context.observedEvents,
     roomId: params.roomId,
     stateKey: params.context.sutUserId,
-    syncState: params.context.syncState,
-    syncStreams: params.context.syncStreams,
     timeoutMs: params.context.timeoutMs,
   });
   await params.sutClient.joinRoom(params.roomId);
   return await waitForMembershipEvent({
-    accessToken: params.context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: params.context.baseUrl,
+    ...resolveMatrixQaActorSyncParams(params.context, "driver"),
     membership: "join",
-    observedEvents: params.context.observedEvents,
     roomId: params.roomId,
     stateKey: params.context.sutUserId,
-    syncState: params.context.syncState,
-    syncStreams: params.context.syncStreams,
     timeoutMs: params.context.timeoutMs,
   });
 }
@@ -236,30 +227,20 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       userId: context.sutUserId,
     });
     const leaveEvent = await waitForMembershipEvent({
-      accessToken: context.driverAccessToken,
-      actorId: "driver",
-      baseUrl: context.baseUrl,
+      ...resolveMatrixQaActorSyncParams(context, "driver"),
       membership: "leave",
-      observedEvents: context.observedEvents,
       roomId,
       stateKey: context.sutUserId,
-      syncState: context.syncState,
-      syncStreams: context.syncStreams,
       timeoutMs: context.timeoutMs,
     });
 
     const noReplyToken = buildMatrixQaToken("MATRIX_QA_MEMBERSHIP_LOSS");
     await runNoReplyExpectedScenario({
-      accessToken: context.driverAccessToken,
-      actorId: "driver",
+      ...resolveMatrixQaActorSyncParams(context, "driver"),
       actorUserId: context.driverUserId,
-      baseUrl: context.baseUrl,
       body: buildMentionPrompt(context.sutUserId, noReplyToken),
       mentionUserIds: [context.sutUserId],
-      observedEvents: context.observedEvents,
       roomId,
-      syncState: context.syncState,
-      syncStreams: context.syncStreams,
       sutUserId: context.sutUserId,
       timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       token: noReplyToken,
@@ -347,7 +328,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
   return {
     artifacts: {
       driverEventId: thread.driverEventId,
-      ...buildMatrixQaReactionArtifacts({ reaction }),
+      ...buildMatrixQaReactionArtifacts(reaction),
       reply: thread.reply,
       rootEventId: thread.rootEventId,
       token: thread.token,
@@ -359,11 +340,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
         extraLines: [`thread reply event: ${thread.reply.eventId}`],
         replyLabel: "thread reply",
       }),
-      ...buildMatrixQaReactionDetailLines({
-        reactionEmoji: reaction.reactionEmoji,
-        reactionEventId: reaction.reactionEventId,
-        reactionTargetEventId: reaction.reactionTargetEventId,
-      }),
+      ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

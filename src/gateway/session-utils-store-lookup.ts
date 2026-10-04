@@ -2,21 +2,11 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
-import {
-  isConfiguredSessionStoreAgentId,
-  isPerAgentSessionStoreConfig,
-  resolveAgentMainSessionKey,
-  resolveExistingAgentSessionStoreTargetsSync,
-  resolveSessionStorePathCore,
-  type SessionEntry,
-  type SessionStoreTarget,
-} from "../config/sessions.js";
+import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import type {
-  SessionEntryListScope,
-  SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
-import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -30,6 +20,11 @@ import {
   resolveStoredSessionKeyForAgentStore,
   selectStoredSessionLineage,
 } from "./session-store-key.js";
+import {
+  resolveGatewaySessionStoreCandidates,
+  resolveGatewaySessionStoreLookupCandidates,
+  type GatewaySessionStoreDiscoveryCache,
+} from "./session-utils-store-candidates.js";
 import {
   loadGatewaySessionStoreReads,
   readGatewaySessionStore,
@@ -46,145 +41,22 @@ import type {
 } from "./session-utils-store.types.js";
 export type { GatewaySessionStoreCache } from "./session-utils-store-read.js";
 
-function buildGatewaySessionStoreScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
-
-type GatewaySessionStoreDiscovery = {
-  existing: SessionStoreTarget[];
-  fallback: SessionStoreTarget;
-};
-
-function resolveGatewaySessionStoreCandidates(
-  cfg: OpenClawConfig,
-  agentId: string,
-  cache?: GatewaySessionStoreDiscoveryCache,
-  excludeConfiguredFallback = false,
-  env: NodeJS.ProcessEnv = process.env,
-  registeredDatabases?: readonly { agentId: string; path: string }[],
-  resolveExistingTargets?: ExistingAgentSessionStoreTargetResolver,
-): GatewaySessionStoreDiscovery {
-  const cached = cache?.get(agentId);
-  if (cached) {
-    return cached;
-  }
-  const storeConfig = cfg.session?.store;
-  const fallback = {
-    agentId,
-    storePath: resolveSessionStorePathCore(storeConfig, { agentId, env }),
-  };
-  // Cached discovery also serves existing-only deleted-main lookups.
-  const excludeStorePath =
-    !cache && excludeConfiguredFallback && !isPerAgentSessionStoreConfig(storeConfig)
-      ? fallback.storePath
-      : undefined;
-  const discovery = {
-    existing: resolveExistingTargets
-      ? resolveExistingTargets(agentId, excludeStorePath)
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
-          env,
-          registeredDatabases,
-          excludeStorePath,
-        }),
-    fallback,
-  };
-  cache?.set(agentId, discovery);
-  return discovery;
-}
-
-/**
- * Sharing resolves every returned row, but store targets are stable within one request.
- * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
- */
-export type GatewaySessionStoreDiscoveryCache = Map<string, GatewaySessionStoreDiscovery>;
-
-export function resolveGatewaySessionStoreLookupCandidates(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  env?: NodeJS.ProcessEnv;
-  registeredDatabases?: readonly { agentId: string; path: string }[];
-  resolveExistingTargets?: ExistingAgentSessionStoreTargetResolver;
-}): {
-  configured: boolean;
-  fallback: SessionStoreTarget;
-  candidates: SessionStoreTarget[];
-  readSources?: SessionEntryReadSource[];
-} {
-  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
-  if (!configured && params.registeredDatabases) {
-    // Prepared discovery already holds registered owners; don't rescan retired roots per page.
-    const readSources = params.registeredDatabases
-      .filter((source) => normalizeAgentId(source.agentId) === params.agentId)
-      .map((source) => ({ agentId: source.agentId, path: source.path }));
-    return {
-      configured,
-      fallback: {
-        agentId: params.agentId,
-        storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-          agentId: params.agentId,
-          env: params.env,
-        }),
-      },
-      candidates: readSources.map((source) => ({
-        agentId: source.agentId,
-        storePath: source.path,
-      })),
-      readSources,
-    };
-  }
-  const { existing, fallback } = resolveGatewaySessionStoreCandidates(
-    params.cfg,
-    params.agentId,
-    params.targetDiscoveryCache,
-    configured,
-    params.env,
-    params.registeredDatabases,
-    params.resolveExistingTargets,
-  );
-  return {
-    configured,
-    fallback,
-    candidates: configured
-      ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
-      : existing,
-  };
-}
-
 type GatewaySessionStoreLookupParams = {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
+  preserveQualifiedAddress?: boolean;
   clone?: boolean;
   projection?: SessionEntryListScope["projection"];
   readConsistency?: SessionEntryListScope["readConsistency"];
   readOnly?: boolean;
   exactRead?: boolean;
-  listCandidatesOnly?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  readStore?: typeof readGatewaySessionStore;
 };
 
 type GatewaySessionStorePlan<T> = {
@@ -198,9 +70,9 @@ function storeReadOptions(
   readOnly: boolean | undefined,
 ): GatewaySessionStoreRead["options"] {
   return {
+    env: params.env,
     readOnly,
-    ...(params.exactRead ? { exactKeys: keys } : {}),
-    ...(params.listCandidatesOnly ? { listKeys: keys } : {}),
+    ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
     ...(params.storeCache ? { cache: params.storeCache } : {}),
@@ -235,7 +107,7 @@ function prepareGatewaySessionStoreLookup(
       resolveGatewaySessionStoreReadResults({
         ...params,
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets,
       }),
   };
@@ -247,6 +119,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
   if (
+    params.preserveQualifiedAddress ||
     !parsed ||
     isIncognitoSessionKey(params.key) ||
     legacyAgentId !== DEFAULT_AGENT_ID ||
@@ -287,7 +160,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
       }
       const best = resolveGatewaySessionStoreReadResults({
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets: lookupSeeds,
         canonicalKey,
       });
@@ -324,6 +197,7 @@ function prepareGatewaySessionStoreTarget(
     cfg: params.cfg,
     sessionKey: key,
     agentId: params.agentId,
+    preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
@@ -341,7 +215,7 @@ function prepareGatewaySessionStoreTarget(
         storePath,
         canonicalKey,
         storeKeys: [canonicalKey],
-        store: readGatewaySessionStore(read),
+        store: (params.readStore ?? readGatewaySessionStore)(read),
         ...(read.readSource ? { readSource: read.readSource } : {}),
         ...(read.capturedReadSource
           ? {
@@ -352,7 +226,14 @@ function prepareGatewaySessionStoreTarget(
       }),
     };
   }
-  const storeKeys = buildGatewaySessionStoreScanTargets({ ...params, canonicalKey, agentId });
+  const storeKeys = params.preserveQualifiedAddress
+    ? [canonicalKey]
+    : collectCanonicalSessionLookupKeys({
+        agentId,
+        canonicalKey,
+        mainKey: params.cfg.session?.mainKey,
+        requestedKey: key,
+      });
   const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId }, storeKeys);
   return {
     reads: lookup.reads,
@@ -369,6 +250,33 @@ function prepareGatewaySessionStoreTarget(
         ...(capturedReadSource ? { capturedReadSource } : {}),
         ...(capturedReadSources ? { capturedReadSources } : {}),
       };
+    },
+  };
+}
+
+/** Prepare discovery before a writer uses transaction-local rows in the same routing selection. */
+export function prepareGatewaySessionStoreTargetLookup(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
+  const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  let current: Result<GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>, unknown>;
+  try {
+    current = ok(prepareGatewaySessionStoreTarget(normalized));
+  } catch (error) {
+    current = err(error);
+  }
+  return {
+    reads: [...(deletedMain?.reads ?? []), ...(current.ok ? current.value.reads : [])],
+    resolve() {
+      const legacy = deletedMain?.resolve();
+      if (legacy) {
+        return legacy;
+      }
+      if (!current.ok) {
+        throw current.error;
+      }
+      return current.value.resolve();
     },
   };
 }
@@ -440,20 +348,17 @@ export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
     if (isIncognitoSessionKey(key)) {
       return readAlias(key, agentId);
     }
-    return prepareGatewaySessionStoreLookup(
-      {
-        cfg,
-        agentId,
-        key,
-        canonicalKey: key,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "list",
-        targetDiscoveryCache,
-      },
-      [key],
-    ).resolve().store[key];
+    return prepareGatewaySessionStoreTarget({
+      cfg,
+      agentId,
+      key,
+      preserveQualifiedAddress: true,
+      readOnly: true,
+      exactRead: true,
+      clone: false,
+      projection: "list",
+      targetDiscoveryCache,
+    }).resolve().store[key];
   };
   return { readStored, readAlias };
 }
@@ -621,7 +526,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
-  // Keep listing validation and read mode while avoiding unrelated entry clones.
+  // Routing needs canonical candidates, not a listing's unrelated rows and participants.
   const {
     store: _store,
     readSource: _readSource,
@@ -631,7 +536,8 @@ export function resolveGatewaySessionStoreTarget(params: {
   } = resolveGatewaySessionStoreTargetWithStore({
     ...params,
     projection: "list",
-    listCandidatesOnly: true,
+    exactRead: true,
+    readOnly: false,
   });
   return target;
 }

@@ -83,7 +83,7 @@ function claimStoreWriterTurn(immediate: boolean): Promise<void> | undefined {
   return undefined;
 }
 
-function isActiveStoreWriter(
+export function isActiveStoreWriter(
   queues: StoreWriterQueues,
   storePath: string,
   keys?: ReadonlySet<string>,

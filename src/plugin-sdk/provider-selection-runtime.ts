@@ -1,4 +1,3 @@
-// Provider selection runtime helpers resolve plugin/provider choices from config and CLI input.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */
@@ -138,6 +137,23 @@ export function resolveConfiguredCapabilityProvider<
   }) => boolean;
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
   const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
+  const resolveCandidate = (
+    provider: TProvider,
+  ): ResolvedConfiguredProvider<TProvider, TConfig> => {
+    const providerConfig = params.resolveProviderConfig({
+      provider,
+      cfg: params.cfgForResolve,
+      rawConfig: resolveProviderRawConfig({
+        providerId: provider.id,
+        providerAliases: provider.aliases,
+        configuredProviderId,
+        providerConfigs: params.providerConfigs,
+      }),
+    });
+    return params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })
+      ? { ok: true, configuredProviderId, provider, providerConfig }
+      : { ok: false, code: "provider-not-configured", configuredProviderId, provider };
+  };
   if (configuredProviderId) {
     const provider = params.getConfiguredProvider(configuredProviderId);
     if (!provider) {
@@ -148,11 +164,7 @@ export function resolveConfiguredCapabilityProvider<
       };
     }
 
-    return resolveProviderCandidate({
-      ...params,
-      configuredProviderId,
-      provider,
-    });
+    return resolveCandidate(provider);
   }
 
   const providers = [...params.listProviders()].toSorted(compareProviderAutoSelectOrder);
@@ -170,29 +182,18 @@ export function resolveConfiguredCapabilityProvider<
       firstUnavailable ??= provider;
       continue;
     }
-    const resolution = resolveProviderCandidate({
-      ...params,
-      configuredProviderId,
-      provider,
-    });
+    const resolution = resolveCandidate(provider);
     if (resolution.ok) {
       return resolution;
     }
     firstUnconfigured ??= provider;
   }
 
-  if (!firstUnconfigured && firstUnavailable) {
-    return {
-      ok: false,
-      code: "provider-unavailable",
-      provider: firstUnavailable,
-    };
-  }
-
   return {
     ok: false,
-    code: "provider-not-configured",
-    provider: firstUnconfigured,
+    code:
+      !firstUnconfigured && firstUnavailable ? "provider-unavailable" : "provider-not-configured",
+    provider: firstUnconfigured ?? firstUnavailable,
   };
 }
 
@@ -227,56 +228,4 @@ function readProviderConfig(
   }
   const providerConfig = providerConfigs?.[providerId];
   return providerConfig && typeof providerConfig === "object" ? providerConfig : undefined;
-}
-
-function resolveProviderCandidate<
-  TConfig,
-  TFullConfig,
-  TProvider extends AutoSelectableProvider,
->(params: {
-  configuredProviderId?: string;
-  providerConfigs?: Record<string, Record<string, unknown> | undefined>;
-  cfg: TFullConfig | undefined;
-  cfgForResolve: TFullConfig;
-  provider: TProvider;
-  resolveProviderConfig: (params: {
-    provider: TProvider;
-    cfg: TFullConfig;
-    rawConfig: Record<string, unknown>;
-  }) => TConfig;
-  isProviderConfigured: (params: {
-    provider: TProvider;
-    cfg: TFullConfig | undefined;
-    providerConfig: TConfig;
-  }) => boolean;
-}): ResolvedConfiguredProvider<TProvider, TConfig> {
-  const rawProviderConfig = resolveProviderRawConfig({
-    providerId: params.provider.id,
-    providerAliases: params.provider.aliases,
-    configuredProviderId: params.configuredProviderId,
-    providerConfigs: params.providerConfigs,
-  });
-  const providerConfig = params.resolveProviderConfig({
-    provider: params.provider,
-    cfg: params.cfgForResolve,
-    rawConfig: rawProviderConfig,
-  });
-
-  if (
-    !params.isProviderConfigured({ provider: params.provider, cfg: params.cfg, providerConfig })
-  ) {
-    return {
-      ok: false,
-      code: "provider-not-configured",
-      configuredProviderId: params.configuredProviderId,
-      provider: params.provider,
-    };
-  }
-
-  return {
-    ok: true,
-    configuredProviderId: params.configuredProviderId,
-    provider: params.provider,
-    providerConfig,
-  };
 }

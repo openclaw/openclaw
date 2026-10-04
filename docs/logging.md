@@ -283,6 +283,16 @@ because the final outcome is unknown. Failed or incomplete terminal responses,
 including content filtering, cannot be overridden by identity recovery. The
 identity checks stay enforced on every attempt.
 
+When OpenAI Responses cuts off a tool call at `max_output_tokens`, the embedded
+runner can continue once in the same run after earlier tools have settled. It
+appends a runtime transcript notice identifying the unfinished call when its ID
+is available and instructing the model to split the work into smaller tool calls.
+The incomplete call is not executed, completed tool results remain available,
+and earlier transcript entries are unchanged. A second truncation ends the run
+with the existing unfinished-tool-call warning. Transport error logs include the
+allowlisted incomplete reason without raw provider text; content-filtered and
+unrecognized incomplete responses retain their existing failure behavior.
+
 A worker message-size failure is separate from a model context-window limit.
 Retry with a smaller response or continue on the Gateway. If the worker cannot
 preserve the model's continuation data, stop or reclaim it before retrying on
@@ -546,8 +556,9 @@ holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
-labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
-callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
+`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
 
@@ -555,6 +566,10 @@ fields remain unknown; no new trace or audit execution identity is created.
 identity. It correlates only inside the same JavaScript runtime isolate and
 diagnostic epoch. Raw session keys and paths are omitted. The digest is
 operational correlation, not anonymization or authorization evidence.
+Both records include `sessionScopeHash`, the salted digest of the first normalized
+identity, and `identityCount`. For batches this names one scope, not every affected
+session. `holderSessionScopeHash` identifies that same scope for the current holder.
+No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
 second through their actual queued work's settlement. It separates
@@ -577,7 +592,11 @@ capacity or after enablement. `omittedObservations` on a later record reports
 suppressed observations; missing records never prove no wait.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
-and queue totals need not form a disjoint partition. A holder sample identifies
+and queue totals need not form a disjoint partition. `isMainThread=true` identifies
+the emitting thread; a long `.run` interval does not establish event-loop blocking.
+Correlate it with event-loop delay or a CPU profile before attributing a stall.
+Work before lifecycle admission, including request preflight, is outside these intervals.
+A holder sample identifies
 who owns that queue at the sampled instant, not every predecessor responsible
 for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
@@ -657,6 +676,15 @@ attribution. These diagnostics measure cleanup without changing its ordering or
 completion behavior.
 
 ### Slow agent database opens
+
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Gateway records identify database preflight, authentication, startup maintenance,
+listener binding, and readiness. Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the detailed nested phase breakdown.
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:

@@ -15,7 +15,7 @@ import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogDetail } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
-import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import type { PluginHelpController } from "./plugin-help-controller.ts";
 import {
@@ -60,7 +60,7 @@ type PluginsPageViewActions = {
   installCatalogEntry: (id: string) => void;
   setQuery: (query: string) => void;
   refreshCatalog: () => void;
-  openPluginSettings: (pluginId: string | null, fromDiscovery: boolean) => void;
+  openPluginSettings: (pluginId: string | null) => void;
   handlePluginIconError: (pluginId: string) => void;
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
@@ -172,12 +172,9 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     const components = detail?.inspection?.components;
     const skills = components?.skillDetails ?? components?.skills.map((name) => ({ name })) ?? [];
     const current = model.routeData?.location;
-    const search = new URLSearchParams(current?.search);
-    search.set("view", "settings");
     const settings = model.installedDetailTab === "configuration";
-    const backSearch = new URLSearchParams(current?.search);
-    backSearch.delete("view");
-    const overviewHref = `${current?.pathname ?? ""}${backSearch.size ? `?${backSearch}` : ""}`;
+    const settingsLocation = pluginDetailLocation(current, true);
+    const overviewLocation = pluginDetailLocation(current, false);
     return renderPluginSettingsDetail({
       ...settingsShared,
       pluginId,
@@ -202,11 +199,11 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
         : !components
           ? catalogSkillsSection
           : undefined,
-      settingsHref: `${current?.pathname ?? ""}?${search}`,
+      settingsHref: `${settingsLocation.pathname ?? ""}${settingsLocation.search}`,
       configSchema: pluginConfigSchema(configAnalysis.schema, pluginId),
       hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, pluginId),
       backHref: settings
-        ? overviewHref
+        ? `${overviewLocation.pathname ?? ""}${overviewLocation.search}`
         : pathForRoute(
             model.surface === "discovery" ? "plugins" : settingsParentRoute,
             context.basePath,
@@ -235,7 +232,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             secondaryAction: {
               label: t("pluginsPage.pluginSettings"),
               icon: icons.settings,
-              onClick: () => actions.openPluginSettings(null, false),
+              onClick: () => actions.openPluginSettings(null),
             },
           })
         : nothing
@@ -337,7 +334,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                 onTabChange: actions.selectSettingsTab,
                 onQueryChange: actions.setQuery,
                 pluginHref: (pluginId) => pathForPluginSettings(pluginId, context.basePath),
-                onOpenPlugin: (pluginId) => actions.openPluginSettings(pluginId, false),
+                onOpenPlugin: (pluginId) => actions.openPluginSettings(pluginId),
               })
       }
     `)}

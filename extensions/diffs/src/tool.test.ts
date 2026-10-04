@@ -244,7 +244,9 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expectArtifactOnlyFileResult(screenshotter, result);
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect(readDetails(result).mode).toBe("file");
+    expect(readDetails(result).viewerUrl).toBeUndefined();
     expect(requireString(readDetails(result).artifactId, "artifactId")).toMatch(/^[a-f0-9]{20}$/u);
     expect(requireString(readDetails(result).expiresAt, "expiresAt")).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
@@ -592,15 +594,6 @@ function createToolWithScreenshotter(
     screenshotter,
     context,
   });
-}
-
-function expectArtifactOnlyFileResult(
-  screenshotter: DiffScreenshotter,
-  result: { details?: unknown } | null | undefined,
-) {
-  expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-  expect((result!.details as Record<string, unknown>).mode).toBe("file");
-  expect((result!.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(

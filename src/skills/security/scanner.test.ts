@@ -914,10 +914,13 @@ describe("scanDirectoryWithSummary", () => {
     const root = makeTmpDir();
     const fixture = path.join(root, "asset.png");
     await fs.writeFile(fixture, "image");
-    const readDirectory = fs.readdir.bind(fs);
-    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-      const [entry] = await readDirectory(...args);
-      return Array.from({ length: 100_001 }, () => entry!);
+    const openDirectory = fs.opendir.bind(fs);
+    const opendir = vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+      const directory = await openDirectory(...args);
+      const entry = await directory.read();
+      let remaining = 100_001;
+      directory.read = async () => (remaining-- > 0 ? entry : null);
+      return directory;
     });
     try {
       const summary = await scanDirectoryWithSummary(root);
@@ -925,7 +928,7 @@ describe("scanDirectoryWithSummary", () => {
       expect(summary.truncated).toBe(true);
       expect(summary.findings).toEqual([]);
     } finally {
-      readdir.mockRestore();
+      opendir.mockRestore();
     }
   });
 });

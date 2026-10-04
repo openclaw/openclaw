@@ -54,10 +54,21 @@ async function waitForTransportReady(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   timeoutMs = 45_000,
 ) {
-  await env.transport.waitReady({
-    gateway: env.gateway,
-    timeoutMs,
-  });
+  try {
+    await env.transport.waitReady({
+      gateway: env.gateway,
+      timeoutMs,
+    });
+  } catch (error) {
+    if (error instanceof QaSuiteInfraError) {
+      throw error;
+    }
+    throw new QaSuiteInfraError(
+      "transport_ready_timeout",
+      `transport did not become ready: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function waitForConfigRestartSettle(

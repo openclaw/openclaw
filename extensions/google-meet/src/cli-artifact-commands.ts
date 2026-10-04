@@ -4,11 +4,9 @@ import {
 } from "./cli-command-context.js";
 import {
   exportGoogleMeetBundle,
-  renderArtifactsMarkdown,
-  renderArtifactsSummary,
+  renderArtifacts,
   renderAttendanceCsv,
-  renderAttendanceMarkdown,
-  renderAttendanceSummary,
+  renderAttendance,
 } from "./cli-export.js";
 import {
   type MeetArtifactOptions,
@@ -41,7 +39,6 @@ function resolveTokenSource(refreshed: boolean) {
 }
 
 export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
   const { root } = context;
 
   addGoogleMeetArtifactOptions(
@@ -55,7 +52,7 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const result = await fetchResolvedGoogleMeetArtifacts(resolved);
       const tokenSource = resolveTokenSource(resolved.token.refreshed);
       let text: string;
@@ -69,9 +66,9 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
           2,
         );
       } else if (options.format === "markdown") {
-        text = renderArtifactsMarkdown(result);
+        text = renderArtifacts(result, "markdown");
       } else if (!options.format || options.format === "summary") {
-        text = `${renderArtifactsSummary(result)}token source: ${tokenSource}\n`;
+        text = `${renderArtifacts(result, "summary")}token source: ${tokenSource}\n`;
       } else {
         throw new Error("Unsupported format. Expected summary or markdown.");
       }
@@ -88,7 +85,7 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const result = await fetchResolvedGoogleMeetAttendance(resolved);
       const tokenSource = resolveTokenSource(resolved.token.refreshed);
       let text: string;
@@ -102,11 +99,11 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
           2,
         );
       } else if (options.format === "markdown") {
-        text = renderAttendanceMarkdown(result);
+        text = renderAttendance(result, "markdown");
       } else if (options.format === "csv") {
         text = renderAttendanceCsv(result);
       } else if (!options.format || options.format === "summary") {
-        text = `${renderAttendanceSummary(result)}token source: ${tokenSource}\n`;
+        text = `${renderAttendance(result, "summary")}token source: ${tokenSource}\n`;
       } else {
         throw new Error("Unsupported format. Expected summary, markdown, or csv.");
       }
@@ -128,7 +125,7 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--dry-run", "Fetch export data and print the manifest without writing files", false)
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const artifacts = await fetchResolvedGoogleMeetArtifacts(resolved);
       const attendance = await fetchResolvedGoogleMeetAttendance(resolved);
       const payload = await exportGoogleMeetBundle({

@@ -62,9 +62,9 @@ function inspectTokenFile(
     };
   }
   return {
-    token: result.status === "available" ? result.value : "",
+    token: result.value,
     tokenSource: "tokenFile",
-    tokenStatus: result.status === "available" ? "available" : "configured_unavailable",
+    tokenStatus: "available",
   };
 }
 
@@ -124,6 +124,12 @@ function inspectTelegramAccountPrimary(params: {
   const accountId = normalizeAccountId(params.accountId);
   const merged = mergeTelegramAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
+  const account = {
+    accountId,
+    enabled,
+    name: normalizeOptionalString(merged.name),
+    config: merged,
+  };
 
   const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
   const allowChannelCredentialFallback =
@@ -142,12 +148,9 @@ function inspectTelegramAccountPrimary(params: {
       inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
     if (credential) {
       return {
-        accountId,
-        enabled,
-        name: normalizeOptionalString(merged.name),
+        ...account,
         ...credential,
         configured: credential.tokenStatus !== "missing",
-        config: merged,
       };
     }
   }
@@ -160,21 +163,16 @@ function inspectTelegramAccountPrimary(params: {
     : "";
   if (envToken) {
     return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
+      ...account,
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
       configured: true,
-      config: merged,
     };
   }
 
   return {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(merged.name),
+    ...account,
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",
@@ -182,7 +180,6 @@ function inspectTelegramAccountPrimary(params: {
     stateReason: allowChannelCredentialFallback
       ? undefined
       : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
-    config: merged,
   };
 }
 

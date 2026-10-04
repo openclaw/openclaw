@@ -5,109 +5,57 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 
 describe("chat pane reply-source history navigation", () => {
-  it("resolves an unloaded reply preview through chat.message.get", async () => {
+  it("uses page-carried originals across reconnects without fetching or inserting them", () => {
     const message = {
       role: "assistant",
       content: "Original answer",
       __openclaw: { id: "source-message" },
     };
-    const request = vi.fn().mockResolvedValue({ ok: true, message });
+    const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    state.assistantAgentId = "main";
+    state.chatMessages = [
+      {
+        role: "user",
+        content: "Follow-up",
+        __openclaw: {
+          replyToId: "source-message",
+          replyToMessage: { ok: true, message },
+        },
+      },
+    ];
 
-    pane.requestReplyMessage("source-message");
-
-    await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(message));
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: state.sessionKey,
-      messageId: "source-message",
-      maxChars: 500,
-    });
-  });
-
-  it.each(["reconnect", "replacement client"] as const)(
-    "retires a resolved reply preview after %s",
-    async (transition) => {
-      const oldMessage = { role: "assistant", content: "Previous connection's answer" };
-      const newMessage = { role: "assistant", content: "Current connection's answer" };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({ ok: true, message: oldMessage })
-        .mockResolvedValueOnce({ ok: true, message: newMessage });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-      pane.requestReplyMessage("source-message");
-      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(oldMessage));
-      if (transition === "reconnect") {
-        pane.connectionGeneration += 1;
-        state.connectionEpoch = pane.connectionGeneration;
-      } else {
-        const replacement = { request } as unknown as GatewayBrowserClient;
-        state.client = replacement;
-        pane.connectedClient = replacement;
-        pane.context.gateway.snapshot.client = replacement;
-      }
-
-      expect(pane.readReplyMessage("source-message")).toBeUndefined();
-      pane.requestReplyMessage("source-message");
-      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(newMessage));
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each(["success", "failure"] as const)(
-    "ignores an obsolete reply lookup %s while a reconnected lookup is pending",
-    async (outcome) => {
-      const stale = createDeferred<{ ok: true; message: unknown }>();
-      const fresh = createDeferred<{ ok: true; message: unknown }>();
-      const currentMessage = { role: "assistant", content: "Current answer" };
-      const request = vi.fn().mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-      pane.requestReplyMessage("source-message");
-      pane.connectionGeneration += 1;
-      state.connectionEpoch = pane.connectionGeneration;
-      pane.requestReplyMessage("source-message");
-      expect(request).toHaveBeenCalledTimes(2);
-      if (outcome === "success") {
-        stale.resolve({ ok: true, message: { role: "assistant", content: "Obsolete answer" } });
-      } else {
-        stale.reject(new Error("Previous connection unavailable"));
-      }
-      await stale.promise.catch(() => {});
-      expect(pane.readReplyMessage("source-message")).toBeUndefined();
-      fresh.resolve({ ok: true, message: currentMessage });
-      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(currentMessage));
-      pane.requestReplyMessage("source-message");
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("retries a previously unavailable reply source after reconnect", async () => {
-    const message = { role: "assistant", content: "Source is available again" };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" })
-      .mockResolvedValueOnce({ ok: true, message });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    pane.requestReplyMessage("source-message");
-    await Promise.resolve();
-    pane.resetOlderMessagesViewport();
-    pane.requestReplyMessage("source-message");
-    expect(request).toHaveBeenCalledOnce();
+    expect(pane.readReplyMessage("source-message")).toBe(message);
     pane.connectionGeneration += 1;
     state.connectionEpoch = pane.connectionGeneration;
-    pane.requestReplyMessage("source-message");
+    expect(pane.readReplyMessage("source-message")).toBe(message);
+    expect(state.chatMessages).toHaveLength(1);
+    expect(request).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(message));
-    expect(request).toHaveBeenCalledTimes(2);
+    state.chatMessages = [];
+    expect(pane.readReplyMessage("source-message")).toBeUndefined();
+  });
+
+  it.each([
+    [undefined, "pending"],
+    [{ ok: false, unavailableReason: "oversized" }, "oversized"],
+    [{ ok: false, unavailableReason: "not_found" }, "missing"],
+  ] as const)("preserves page-carried reply availability (%j)", (result, expected) => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: {} as SessionCapability,
+    });
+    state.chatMessages = [
+      {
+        role: "user",
+        content: "Follow-up",
+        __openclaw: { replyToId: "source-message", replyToMessage: result },
+      },
+    ];
+    expect(pane.replyMessageStatus("source-message")).toBe(expected);
   });
 
   it("pages backward until a clicked reply target is loaded, then reveals it", async () => {

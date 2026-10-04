@@ -1,9 +1,9 @@
-/** Timeout and cleanup helpers for long-running ACP turns. */
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import type { ActiveTurnState, SessionAcpMeta } from "./manager.types.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
@@ -12,7 +12,6 @@ const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 export const ACP_TURN_TIMEOUT_DETAIL_CODE = "TURN_TIMEOUT";
 
-/** Resolves the effective ACP turn timeout from session runtime options or agent defaults. */
 export function resolveTurnTimeoutMs(params: {
   cfg: OpenClawConfig;
   meta: SessionAcpMeta;
@@ -31,7 +30,6 @@ export function resolveTurnTimeoutMs(params: {
   });
 }
 
-/** Awaits a turn promise with bounded timeout handling and late-error logging. */
 export async function awaitTurnWithTimeout<T>(params: {
   sessionKey: string;
   turnPromise: Promise<T>;
@@ -39,62 +37,23 @@ export async function awaitTurnWithTimeout<T>(params: {
   timeoutLabelMs: number;
   onTimeout: () => Promise<void>;
 }): Promise<T> {
-  const observedTurnPromise = params.turnPromise.then(
-    (value) => ({
-      kind: "value" as const,
-      value,
-    }),
-    (error: unknown) => ({
-      kind: "error" as const,
-      error,
-    }),
-  );
-
   const timeoutMs = params.timeoutMs <= 0 ? undefined : clampTimerTimeoutMs(params.timeoutMs, 1);
-  if (timeoutMs === undefined) {
-    const outcome = await observedTurnPromise;
-    if (outcome.kind === "error") {
-      throw outcome.error;
-    }
-    return outcome.value;
-  }
-
-  const timeoutToken = Symbol("acp-turn-timeout");
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutToken), timeoutMs);
-    timer.unref?.();
-  });
-
-  try {
-    const outcome = await Promise.race([observedTurnPromise, timeoutPromise]);
-    if (outcome === timeoutToken) {
-      void observedTurnPromise.then((lateOutcome) => {
-        if (lateOutcome.kind === "error") {
-          logVerbose(
-            `acp-manager: detached late turn error after timeout for ${params.sessionKey}: ${String(lateOutcome.error)}`,
-          );
-        }
-      });
-      await params.onTimeout();
-      throw new AcpRuntimeError(
-        "ACP_TURN_FAILED",
-        `ACP turn timed out after ${Math.max(1, Math.round(params.timeoutLabelMs / 1_000))}s.`,
-        { detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE },
+  if (timeoutMs !== undefined && !(await settlesWithin(params.turnPromise, timeoutMs))) {
+    void params.turnPromise.catch((error: unknown) => {
+      logVerbose(
+        `acp-manager: detached late turn error after timeout for ${params.sessionKey}: ${String(error)}`,
       );
-    }
-    if (outcome.kind === "error") {
-      throw outcome.error;
-    }
-    return outcome.value;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    });
+    await params.onTimeout();
+    throw new AcpRuntimeError(
+      "ACP_TURN_FAILED",
+      `ACP turn timed out after ${Math.max(1, Math.round(params.timeoutLabelMs / 1_000))}s.`,
+      { detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE },
+    );
   }
+  return await params.turnPromise;
 }
 
-/** Cancels a timed-out turn and clears non-persistent cached runtime state. */
 export async function cleanupTimedOutTurn(params: {
   sessionKey: string;
   activeTurn: ActiveTurnState;
@@ -148,37 +107,24 @@ async function awaitCleanupWithGrace(params: {
       error,
     }),
   );
-  const timeoutToken = Symbol(`acp-timeout-${params.label}`);
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutToken), ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS);
-    timer.unref?.();
-  });
-
-  try {
-    const outcome = await Promise.race([observedCleanupPromise, timeoutPromise]);
-    if (outcome === timeoutToken) {
-      void observedCleanupPromise.then((lateOutcome) => {
-        if (lateOutcome.kind === "error") {
-          logVerbose(
-            `acp-manager: detached timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(lateOutcome.error)}`,
-          );
-        }
-      });
-      logVerbose(
-        `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
-      );
-      return false;
-    }
-    if (outcome.kind === "error") {
-      logVerbose(
-        `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
-      );
-    }
-    return true;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+  if (!(await settlesWithin(observedCleanupPromise, ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS))) {
+    void observedCleanupPromise.then((lateOutcome) => {
+      if (lateOutcome.kind === "error") {
+        logVerbose(
+          `acp-manager: detached timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(lateOutcome.error)}`,
+        );
+      }
+    });
+    logVerbose(
+      `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
+    );
+    return false;
   }
+  const outcome = await observedCleanupPromise;
+  if (outcome.kind === "error") {
+    logVerbose(
+      `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
+    );
+  }
+  return true;
 }

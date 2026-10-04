@@ -1,7 +1,7 @@
 // Package manager tests cover resource discovery boundaries for package,
 // project, and npm-declared agent resources.
-import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -194,6 +194,34 @@ describe("DefaultPackageManager", () => {
     expect(await resolveSkillPaths(join(root, "scratch-state"))).not.toContain(personalSkill);
   });
 
+  it("discovers ancestor skills nearest-first through the repository root", async () => {
+    const root = tempDirs.make("openclaw-package-manager-ancestors-");
+    const repository = join(root, "repository");
+    const cwd = join(repository, "nested");
+    const skillPaths = [cwd, repository, root].map((dir) =>
+      join(dir, ".agents", "skills", "example", "SKILL.md"),
+    );
+    for (const skillPath of skillPaths) {
+      await mkdir(dirname(skillPath), { recursive: true });
+      await writeFile(skillPath, "# Example\n");
+    }
+    await mkdir(join(repository, ".git"));
+    const manager = new DefaultPackageManager({
+      cwd,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory(),
+    });
+    const discovered = async () =>
+      (await manager.resolve()).skills
+        .map((skill) => skill.path)
+        .filter((path) => skillPaths.includes(path));
+
+    expect(await discovered()).toEqual(skillPaths.slice(0, 2));
+
+    await rm(join(repository, ".git"), { recursive: true });
+    expect(await discovered()).toEqual(skillPaths);
+  });
+
   it("keeps auto-discovered project resources inside their resource roots", async () => {
     // Project resources may be auto-discovered, but each resource type remains
     // confined to its expected root.
@@ -333,6 +361,100 @@ describe("DefaultPackageManager", () => {
     expect((await resolveSource({ source: extensionDir, extensions: [] })).extensions).toEqual([
       expect.objectContaining({ path: extensionDir, enabled: false }),
     ]);
+  });
+
+  it("preserves manifest omission, convention fallback, and force-include ordering", async () => {
+    const root = tempDirs.make("openclaw-package-manager-manifest-");
+    const packageRoot = join(root, "package");
+    for (const dir of ["prompts", "custom"]) {
+      await mkdir(join(packageRoot, dir), { recursive: true });
+      for (const name of ["a", "b"]) {
+        await writeFile(join(packageRoot, dir, `${name}.md`), name);
+      }
+    }
+    const orderedManifest = {
+      prompts: ["custom/a.md", "custom/b.md", "!custom/a.md", "+custom/a.md"],
+    };
+    const cases: Array<{
+      name: string;
+      manifest?: { prompts?: string[] };
+      filter?: { prompts?: string[]; skills?: string[] };
+      expected: Array<[string, boolean]>;
+      ordered?: boolean;
+    }> = [
+      {
+        name: "no manifest",
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      { name: "omitted manifest type", manifest: {}, expected: [] },
+      { name: "empty manifest type", manifest: { prompts: [] }, expected: [] },
+      {
+        name: "another type filtered",
+        manifest: {},
+        filter: { skills: [] },
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      {
+        name: "empty entries with user filter",
+        manifest: { prompts: [] },
+        filter: { prompts: ["*.md"] },
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      {
+        name: "empty user filter",
+        manifest: {},
+        filter: { prompts: [] },
+        expected: [
+          ["prompts/a.md", false],
+          ["prompts/b.md", false],
+        ],
+      },
+      {
+        name: "unfiltered force-include order",
+        ordered: true,
+        manifest: orderedManifest,
+        expected: [
+          ["custom/a.md", true],
+          ["custom/b.md", true],
+        ],
+      },
+      {
+        name: "filtered force-include order",
+        ordered: true,
+        manifest: orderedManifest,
+        filter: { prompts: ["*.md", "!b.md"] },
+        expected: [
+          ["custom/b.md", false],
+          ["custom/a.md", true],
+        ],
+      },
+    ];
+    for (const { name, manifest, filter, expected, ordered } of cases) {
+      await writeFile(join(packageRoot, "package.json"), JSON.stringify({ openclaw: manifest }));
+      const manager = new DefaultPackageManager({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: SettingsManager.inMemory({
+          packages: [{ source: packageRoot, ...filter }],
+        }),
+      });
+      const prompts = (await manager.resolve()).prompts.map(
+        ({ path, enabled }) => [path, enabled] as const,
+      );
+      // Convention discovery follows filesystem order; explicit manifest order is contractual.
+      expect(ordered ? prompts : prompts.toSorted(([a], [b]) => a.localeCompare(b)), name).toEqual(
+        expected.map(([path, enabled]) => [join(packageRoot, path), enabled]),
+      );
+    }
   });
 
   it.each([

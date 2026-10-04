@@ -54,9 +54,14 @@
 
 .chat-footer__context:not(
   :has(
-    > :not(.agent-chat__composer-notices, openclaw-plugin-contributions),
+    > :not(
+      .agent-chat__composer-notices,
+      openclaw-plugin-contributions,
+      openclaw-chat-outbox-recovery
+    ),
     > .agent-chat__composer-notices > *,
-    > openclaw-plugin-contributions > *
+    > openclaw-plugin-contributions > *,
+    > openclaw-chat-outbox-recovery > *
   )
 ) {
   display: none;
@@ -297,6 +302,10 @@
 .agent-chat__input--offline,
 .agent-chat__input--offline:focus-within {
   z-index: 1;
+}
+
+.agent-chat__input--disabled {
+  opacity: 0.6;
 }
 
 @media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
@@ -656,10 +665,6 @@
     width: 36px;
     min-width: 36px;
     padding: 0;
-  }
-
-  .agent-chat__control-label {
-    display: none;
   }
 }
 
@@ -1231,20 +1236,15 @@
   }
 }
 
-/* Short split panes need the natural editor height before reserving transcript space. */
+/* Short panes spend height on a complete editor line and the action row first.
+   Context keeps its existing scrollport; neither region overflows the chat clip. */
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
-    --chat-footer-max-height: calc(100cqh - clamp(24px, 12cqh, 48px));
+    --chat-footer-max-height: 100cqh;
   }
 
   .chat-footer::before {
     display: none;
-  }
-
-  .chat-thread-viewport,
-  .chat-thread {
-    --chat-thread-padding-top: 0px;
-    --chat-thread-padding-bottom: 0px;
   }
 
   .agent-chat__input {
@@ -1252,13 +1252,24 @@
   }
 
   .agent-chat__composer-shell {
-    --chat-composer-top-margin: 4px;
-    --chat-composer-bottom-gap: 4px;
+    --chat-composer-top-margin: 0px;
+    --chat-composer-bottom-gap: 0px;
 
-    gap: 4px;
+    gap: 0;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
-    max-height: calc(var(--chat-composer-editor-line) + 8px);
+  .agent-chat__composer-input-row {
+    padding-top: 0;
+  }
+
+  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
+    min-height: calc(var(--chat-composer-editor-line) + 4px);
+    max-height: calc(var(--chat-composer-editor-line) + 4px);
+    padding-block: 2px;
+  }
+
+  .agent-chat__composer-footer {
+    margin-bottom: 0;
+    padding-block: 0;
   }
 }

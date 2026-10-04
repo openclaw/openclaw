@@ -16,18 +16,18 @@ import type {
   ChatGoalRecovery,
   ChatQueueItem,
   ChatQueueDisplayItem,
+  ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
+import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
@@ -59,19 +59,18 @@ type ChatQueuedEditProps = {
 
 export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
 
-type ChatComposerDisabledBannerContent = {
+export type ChatComposerDisabledBanner = {
+  kind: "above-composer" | "composer-replacement";
+  presentation?: "compact" | "hidden";
   title?: string;
   text: string;
   tone?: "info" | "neutral";
-  icon?: "warning" | "archive";
+  icon?: "warning" | "archive" | "eye";
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
-
-export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
-  ({ kind: "above-composer" } | { kind: "composer-replacement" });
 
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
@@ -98,6 +97,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
   progressCardLifetime?: object;
+  progressCardVisibility?: PresentationBinding;
   progressCardInitialLoading?: boolean;
   progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;
@@ -107,6 +107,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onProgressManipulate?: () => void;
   runId?: string | null;
   onDismissProgressCard?: (card: ProgressCard) => void;
+  onClearSavedProgressCard?: (card: ProgressCard) => void;
   /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
@@ -131,18 +132,12 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkInputNotice?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
-  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
   realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
@@ -155,11 +150,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  typingActors?: readonly ChatTypingActorView[];
-  typingOverflow?: ChatTypingOverflow;
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
+  composerRecovery?: TemplateResult | typeof nothing;
   notices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
@@ -195,12 +189,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
-type PendingClearedSubmittedDraft = {
-  key: string;
-  value: string;
-};
-
-type ComposingDraft = {
+type ScopedComposerDraft = {
   key: string;
   value: string;
 };
@@ -212,9 +201,9 @@ export type ChatComposerState = SkillMenuState &
     mentionMenu: HumanMentionMenu;
     emojiMenu: ComposerEmojiMenu;
     mentionInput?: HumanMentionInput;
-    composingDraft: ComposingDraft | null;
+    composingDraft: ScopedComposerDraft | null;
     composerInputIntentKey: string | null;
-    pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+    pendingClearedSubmittedDraft: ScopedComposerDraft | null;
     goalExpandedId: string | null;
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;

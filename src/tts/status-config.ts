@@ -1,4 +1,3 @@
-// TTS status config helpers resolve status output paths for speech generation.
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
@@ -61,7 +60,7 @@ function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
 
 function firstStatusDetail(
   record: Record<string, unknown> | undefined,
-  keys: string[],
+  keys: readonly string[],
 ): string | undefined {
   if (!record) {
     return undefined;
@@ -110,23 +109,15 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
   const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
   const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
   const details: Partial<TtsStatusSnapshot> = {};
-  const displayName = firstStatusDetail(record, ["displayName"]);
-  if (displayName) {
-    details.displayName = displayName;
-  }
-  const model = firstStatusDetail(record, ["model", "modelId"]);
-  if (model) {
-    details.model = model;
-  }
-  const voice = firstStatusDetail(record, [
-    "speakerVoice",
-    "speakerVoiceId",
-    "voice",
-    "voiceId",
-    "voiceName",
-  ]);
-  if (voice) {
-    details.voice = voice;
+  for (const [field, keys] of [
+    ["displayName", ["displayName"]],
+    ["model", ["model", "modelId"]],
+    ["voice", ["speakerVoice", "speakerVoiceId", "voice", "voiceId", "voiceName"]],
+  ] as const) {
+    const value = firstStatusDetail(record, keys);
+    if (value) {
+      details[field] = value;
+    }
   }
   if (sanitizedBaseUrl && (provider !== "openai" || customBaseUrl)) {
     details.baseUrl = sanitizedBaseUrl;

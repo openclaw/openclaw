@@ -1,8 +1,9 @@
-// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
+import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -10,14 +11,12 @@ import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 import { NODE_HOST_FIELD_LABELS } from "./zod-schema.node-host.js";
+import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
   worktreeAcceleration: "Worktree Acceleration",
-  "channels.discord.activities": "Discord Activities",
-  "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
-  "channels.discord.activities.applicationId": "Discord Activities Application ID",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   env: "Environment",
@@ -110,16 +109,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.contextLimits": "Agent Context Limits",
   "agents.entries.*.contextLimits.memoryGetMaxChars": "Agent memory_get Max Chars",
   "agents.entries.*.contextLimits.postCompactionMaxChars": "Agent Post-compaction Max Chars",
-  "agents.entries.*.models": "Agent Model Overrides",
-  "agents.entries.*.modelPolicy": "Agent Model Policy",
-  "agents.entries.*.modelPolicy.allow": "Allowed Agent Models",
-  "agents.entries.*.models.*.agentRuntime": "Agent Model Runtime",
-  "agents.entries.*.models.*.agentRuntime.id": "Agent Model Runtime ID",
-  "agents.entries.*.models.*.codeMode": "Code Mode",
-  "agents.entries.*.agentRuntime": "Legacy Agent Runtime",
-  "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...STORAGE_FIELD_LABELS,
   ...DESKTOP_FIELD_LABELS,
   ...GATEWAY_FIELD_LABELS,
   tools: "Tools",
@@ -127,16 +119,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.deny": "Tool Denylist",
   "tools.web": "Web Tools",
   "tools.exec": "Exec Tool",
-  "tools.github": "GitHub CLI Identity and Git Author",
-  "tools.github.profileId": "GitHub Profile Version",
-  "tools.github.kind": "GitHub Credential Kind",
-  "tools.github.gitAuthor.name": "Git Author Name",
-  "tools.github.gitAuthor.email": "Git Author Email",
-  "agents.entries.*.tools.github": "Agent GitHub CLI Identity Override",
-  "agents.entries.*.tools.github.profileId": "Agent GitHub Profile Version",
-  "agents.entries.*.tools.github.kind": "Agent GitHub Credential Kind",
-  "agents.entries.*.tools.github.gitAuthor.name": "Agent Git Author Name",
-  "agents.entries.*.tools.github.gitAuthor.email": "Agent Git Author Email",
+  ...GITHUB_TOOL_FIELD_LABELS,
   "tools.media.image.enabled": "Enable Image Understanding",
   "tools.media.image.preferredModel": "Preferred Image Understanding Model",
   "tools.media.image.maxBytes": "Image Understanding Max Bytes",
@@ -235,27 +218,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.grantExpiryDays": "Standing Grant Expiry (Days)",
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",
-  approvals: "Approvals",
-  "approvals.exec": "Exec Approval Forwarding",
-  "approvals.exec.enabled": "Forward Exec Approvals",
-  "approvals.exec.mode": "Approval Forwarding Mode",
-  "approvals.exec.agentFilter": "Approval Agent Filter",
-  "approvals.exec.sessionFilter": "Approval Session Filter",
-  "approvals.exec.targets": "Approval Forwarding Targets",
-  "approvals.exec.targets[].channel": "Approval Target Channel",
-  "approvals.exec.targets[].to": "Approval Target Destination",
-  "approvals.exec.targets[].accountId": "Approval Target Account ID",
-  "approvals.exec.targets[].threadId": "Approval Target Thread ID",
-  "approvals.plugin": "Plugin Approval Forwarding",
-  "approvals.plugin.enabled": "Forward Plugin Approvals",
-  "approvals.plugin.mode": "Plugin Approval Forwarding Mode",
-  "approvals.plugin.agentFilter": "Plugin Approval Agent Filter",
-  "approvals.plugin.sessionFilter": "Plugin Approval Session Filter",
-  "approvals.plugin.targets": "Plugin Approval Forwarding Targets",
-  "approvals.plugin.targets[].channel": "Plugin Approval Target Channel",
-  "approvals.plugin.targets[].to": "Plugin Approval Target Destination",
-  "approvals.plugin.targets[].accountId": "Plugin Approval Target Account ID",
-  "approvals.plugin.targets[].threadId": "Plugin Approval Target Thread ID",
+  ...APPROVAL_FIELD_LABELS,
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
   "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
@@ -768,15 +731,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults.botLoopProtection.maxEventsPerWindow": "Default Bot Loop Events per Window",
   "channels.defaults.botLoopProtection.windowSeconds": "Default Bot Loop Window Seconds",
   "channels.defaults.botLoopProtection.cooldownSeconds": "Default Bot Loop Cooldown Seconds",
-  "channels.mattermost": "Mattermost",
   "channels.modelByChannel": "Channel Model Overrides",
-  "channels.googlechat.botLoopProtection": "Google Chat Bot Loop Protection",
-  "channels.mattermost.botToken": "Mattermost Bot Token",
-  "channels.mattermost.baseUrl": "Mattermost Base URL",
-  "channels.mattermost.configWrites": "Mattermost Config Writes",
-  "channels.mattermost.chatmode": "Mattermost Chat Mode",
-  "channels.mattermost.oncharPrefixes": "Mattermost Onchar Prefixes",
-  "channels.mattermost.requireMention": "Mattermost Require Mention",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

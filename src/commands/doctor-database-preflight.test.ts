@@ -39,7 +39,7 @@ it.each([true, false])(
         writer.close();
       }
       await state.writeConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         session: { store: pathname },
       });
       const sourceFiles = [

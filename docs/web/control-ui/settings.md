@@ -10,6 +10,8 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+Browser-settings upgrades support shapes written by releases shipped on or after July 1, 2026. Older top-level session selections are ignored; select a session again in the sidebar. Saved conversations remain on the Gateway.
+
 **Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
 
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
@@ -48,7 +50,7 @@ The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the
 
 ## Community invitation
 
-The sidebar shows a Discord community invitation by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
+The sidebar shows a community invitation with Reddit, Discord, and X links by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. The redesigned invitation appears again for browsers that dismissed the older Discord-only card. Dismissing this version keeps it hidden across routine updates. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
 
 ```bash
 openclaw config set gateway.controlUi.communityInvite false
@@ -77,6 +79,8 @@ Administrators also see the default agent's effective GitHub account and verific
 Credentials reserved for Control UI link previews are excluded from both agent authentication and its displayed status, including when the preview credential uses a SecretRef.
 
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients. Where the transcript shows avatars, saved and streaming assistant replies use the configured agent image or text avatar. Agents without a configured avatar omit the repeated fallback icon.
+
+Browser-wide avatar overrides from before July 2026 are no longer migrated; set the avatar for each agent instead.
 
 In **Agent settings → Files**, an unread file stays unavailable for editing and preview until its content loads. If the initial read fails, choose **Refresh** to retry. Files already loaded and retained drafts stay editable during refresh; **Reset** becomes available once the current file content loads. Unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
 
@@ -231,7 +235,10 @@ shows the searchable local inventory. Select a plugin to open its overview.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
-description. The metadata rail shows available release details, categories, repository, and
+description. Expand an MCP server to see its published endpoint, transport,
+authentication method, requested permissions, and setup notes when available.
+These describe the connection; account connection status is shown separately.
+Plugins can bundle multiple MCP servers. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
 Installed, disabled plugins put **Enable** first as the primary action, followed
@@ -600,7 +607,7 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 Open **Activity** from the sidebar's page picker, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
-- The **Today** pulse shows one bar per hour of the local day, with counts of active sessions, new sessions, associated people, and sessions running now. It follows the current filters and counts matches beyond the 100-row window. Each session contributes to the hour of its latest activity.
+- The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes to the bar of its latest activity.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
 - Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
@@ -614,6 +621,8 @@ The Sessions view collects session-change events in a randomized four-to-five-se
 The Gateway updates recaps when new work happens, throttling ongoing updates and catching up after a run ends. A shared queue runs at most two recap calls at once and retries temporary overload or rate-limit failures up to three times with increasing delays, honoring provider retry timing. Authentication, configuration, and exhausted subscription failures require correction before retrying. Idle sessions make no repeated model calls. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening or new work resumes freshness checks. Older sessions backfill in bounded chronological chunks when requested from Activity. Recaps read user and assistant conversation text, preferring final answers and skipping tool calls/results. Existing cached recaps gradually adopt the shorter format through the same queue while retaining their previous coverage. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
 
 Visible conversations created by an agent receive recaps too, including spawned dashboard chats and conversations assigned to a sidebar group. Their parent-session link does not exclude them from recap generation; hidden background subagents remain excluded.
+
+The oversized-message notice applies only to omitted user or assistant messages. Oversized tool results, including screenshots, do not trigger it. Older cached notices remain visible until the next recap refresh, which clears screenshot-only notices while retaining notices for earlier oversized conversation messages. Legacy omission flags are rechecked once and marked with the current cache revision. Correcting an otherwise current recap does not call the model.
 
 To find an older archived conversation, choose **Sessions**, **All time**, and **Everyone** in the people filter, then enter its name or label in **Search session titles…**. This metadata search includes archived sessions and applies across the complete caller-visible store before the 100-result window. Narrow the query if results are truncated. Open an archived match to read its retained history, then select **Unarchive** to continue the same conversation.
 

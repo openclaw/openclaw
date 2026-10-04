@@ -22,7 +22,7 @@ import {
   type RuntimeConfigSnapshotRefreshParams,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -116,6 +116,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   assignmentConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
+  /** Caller-owned dirs retained across refreshes, distinct from the current config roster. */
+  explicitAgentDirs?: readonly string[] | null;
   /** Skip config and web-tool refs when only auth-profile stores need materialization. */
   includeConfigRefs?: boolean;
   includeAuthStoreRefs?: boolean;
@@ -146,6 +148,12 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const candidateDirs = params.agentDirs?.length
     ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  const explicitAgentDirs =
+    params.explicitAgentDirs !== undefined
+      ? params.explicitAgentDirs && [...params.explicitAgentDirs]
+      : params.agentDirs?.length
+        ? [...candidateDirs]
+        : null;
   let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
     const loaded = loadAdmittedAuthStores({
@@ -178,7 +186,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     };
     setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
-      explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      explicitAgentDirs,
       includeConfigRefs,
       includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
@@ -301,7 +309,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   };
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
-    explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+    explicitAgentDirs,
     includeConfigRefs,
     includeAuthStoreRefs,
     loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
@@ -393,6 +401,7 @@ async function prepareActiveSecretsRuntimeRefresh(
       assignmentConfig: snapshotConfig,
       env: activeRefreshContext.env,
       agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+      explicitAgentDirs: activeRefreshContext.explicitAgentDirs,
       includeConfigRefs: activeRefreshContext.includeConfigRefs ?? true,
       includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
       loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
@@ -457,7 +466,7 @@ function patchResolvedSecretRefLeaves(params: {
   resolved: unknown;
   defaults: NonNullable<OpenClawConfig["secrets"]>["defaults"];
 }): ResolvedSecretRefPatch {
-  if (coerceSecretRef(params.source, params.defaults)) {
+  if (parseSecretRef(params.source, params.defaults)) {
     return isDeepStrictEqual(params.source, params.resolved)
       ? { changed: false, value: params.current }
       : { changed: true, value: params.resolved };

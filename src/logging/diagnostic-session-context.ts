@@ -69,19 +69,20 @@ async function withSessionDiagnosticContext(
     }
   };
   let consumed = false;
+  let resolveName: ((jobId: string) => string | undefined) | undefined;
   const publish = (value: SessionDiagnosticContext) => {
     assertCurrent();
+    if (value.cronJobId) {
+      value.cronJobName = resolveName?.(value.cronJobId);
+    }
     consumed = true;
     consume(value);
   };
   try {
     assertCurrent();
     if (context.cronJobId) {
-      const resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(
-        () => undefined,
-      );
+      resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(() => undefined);
       assertCurrent();
-      context.cronJobName = resolveName?.(context.cronJobId);
     }
     if (sessionId) {
       await withSessionDiagnosticTextInWorker(

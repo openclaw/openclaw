@@ -6,14 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  AnthropicMessagesCompat,
-  Api,
-  Model,
-  OpenAICompletionsCompat,
-  OpenAIResponsesCompat,
-  SimpleStreamOptions,
-} from "../../llm/types.js";
+import type { Api, Model, OpenAICompletionsCompat, SimpleStreamOptions } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
@@ -107,7 +100,6 @@ export type ResolvedRequestAuth =
       error: string;
     };
 
-/** Result of loading custom models from models.json */
 interface CustomModelsResult {
   providers: RegistryProviderSources;
   error: string | undefined;
@@ -145,37 +137,30 @@ function mergeCompat(
     return baseCompat;
   }
 
-  const base = baseCompat;
-  const override = overrideCompat;
-  const merged = { ...base, ...override } as
-    | OpenAICompletionsCompat
-    | OpenAIResponsesCompat
-    | AnthropicMessagesCompat;
-
-  const baseCompletions = base as OpenAICompletionsCompat | undefined;
-  const overrideCompletions = override as OpenAICompletionsCompat;
-  const mergedCompletions = merged as OpenAICompletionsCompat;
-
-  if (baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting) {
-    mergedCompletions.openRouterRouting = {
-      ...baseCompletions?.openRouterRouting,
-      ...overrideCompletions.openRouterRouting,
-    };
-  }
-
-  if (baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting) {
-    mergedCompletions.vercelGatewayRouting = {
-      ...baseCompletions?.vercelGatewayRouting,
-      ...overrideCompletions.vercelGatewayRouting,
-    };
-  }
-
-  return merged as Model["compat"];
+  const baseCompletions = baseCompat as OpenAICompletionsCompat | undefined;
+  const overrideCompletions = overrideCompat as OpenAICompletionsCompat;
+  return {
+    ...baseCompat,
+    ...overrideCompat,
+    ...(baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting
+      ? {
+          openRouterRouting: {
+            ...baseCompletions?.openRouterRouting,
+            ...overrideCompletions.openRouterRouting,
+          },
+        }
+      : {}),
+    ...(baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting
+      ? {
+          vercelGatewayRouting: {
+            ...baseCompletions?.vercelGatewayRouting,
+            ...overrideCompletions.vercelGatewayRouting,
+          },
+        }
+      : {}),
+  };
 }
 
-/**
- * Model registry - loads and manages models, resolves API keys via AuthStorage.
- */
 export class ModelRegistry {
   private models: Model[] = [];
   private config: OpenClawConfig | undefined;
@@ -416,7 +401,7 @@ export class ModelRegistry {
           api: model.api ?? accepted.get(model.id)?.api ?? configured.api,
           baseUrl: model.baseUrl ?? accepted.get(model.id)?.baseUrl ?? configured.baseUrl,
           maxTokensSource: "configured",
-          headers: sanitizeModelHeaders(model.headers, { stripSecretRefMarkers: true }),
+          headers: sanitizeModelHeaders(model.headers),
         })),
       };
       providers[providerId] = inherited
@@ -433,7 +418,7 @@ export class ModelRegistry {
         apiKey: normalizeOptionalSecretInput(configured.apiKey),
         auth: configured.auth,
         authHeader: configured.authHeader,
-        headers: sanitizeModelHeaders(configured.headers, { stripSecretRefMarkers: true }),
+        headers: sanitizeModelHeaders(configured.headers),
       });
     }
     let combined = this.parseModels(providers);
@@ -626,18 +611,12 @@ export class ModelRegistry {
         );
       }
       for (const modelDef of models) {
-        const hasModelApi = Boolean(modelDef.api);
-
-        if (!hasProviderApi && !hasModelApi) {
+        if (!hasProviderApi && !modelDef.api) {
           throw new Error(
             `Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
           );
         }
 
-        if (!modelDef.id) {
-          throw new Error(`Provider ${providerName}: model missing "id"`);
-        }
-        // Validate contextWindow/maxTokens only if provided (they have defaults)
         if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
           throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
         }
@@ -652,12 +631,7 @@ export class ModelRegistry {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(providers)) {
-      const modelDefs = providerConfig.models ?? [];
-      if (modelDefs.length === 0) {
-        continue;
-      }
-
-      for (const modelDef of modelDefs) {
+      for (const modelDef of providerConfig.models ?? []) {
         const api = modelDef.api ?? providerConfig.api;
         if (!api) {
           continue;
@@ -975,7 +949,6 @@ export class ModelRegistry {
 
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
     if (config.oauth) {
-      // Ensure the OAuth provider ID matches the provider name
       const oauthProvider: OAuthProviderInterface = {
         ...config.oauth,
         id: providerName,
@@ -999,7 +972,6 @@ export class ModelRegistry {
     this.storeProviderRequestConfig(providerName, config);
 
     if (config.models && config.models.length > 0) {
-      // Full replacement: remove existing models for this provider
       this.models = this.models.filter((m) => m.provider !== providerName);
 
       for (const modelDef of config.models) {
@@ -1037,9 +1009,6 @@ export class ModelRegistry {
   }
 }
 
-/**
- * Input type for registerProvider API.
- */
 export interface ProviderConfigInput extends ProviderConfigBase {
   auth?: ProviderAuthMode;
   /** OAuth provider for /login support */

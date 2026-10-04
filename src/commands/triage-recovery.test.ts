@@ -313,7 +313,7 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it("prints a manual handoff instead of launching Claude without safe-mode support", async () => {
+  it("runs Claude recovery without safe mode after warning when the installed CLI lacks support", async () => {
     mocks.resolveExecutablePath.mockImplementation((binary: string) =>
       binary === "claude" ? "/usr/local/bin/claude" : undefined,
     );
@@ -325,19 +325,48 @@ describe("triage external recovery handoff", () => {
     });
     const runtime = createTriageRuntime();
 
-    await withOpenClawTestState({ layout: "split" }, async () => {
-      await withTriageTerminal(true, async () => {
-        await expect(triageCommand(runtime, { noExport: true })).rejects.toMatchObject({ code: 1 });
-      });
+    await withOpenClawTestState({ layout: "split" }, async (state) => {
+      const target = resolveInstallationTarget();
+      await withTriageTerminal(true, () =>
+        triageCommand(runtime, {
+          noExport: true,
+          recovery: {
+            target,
+            cwd: state.workspaceDir,
+            updateFailure: { result: failedUpdate(state.statePath("install")) },
+          },
+        }),
+      );
+      const promptPath = runtime.log.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.startsWith("Debugging prompt: "))!
+        .slice("Debugging prompt: ".length);
+      const prompt = await fs.readFile(promptPath, "utf8");
+      expect(prompt).toContain("injected-doctor-failure");
+      expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
+        "/usr/local/bin/claude",
+        ["-p", prompt],
+        expect.objectContaining({
+          stdio: "inherit",
+          cwd: state.workspaceDir,
+          env: expect.objectContaining({
+            OPENCLAW_STATE_DIR: target.stateDir,
+            OPENCLAW_CONFIG_PATH: target.configPath,
+            OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
+          }),
+        }),
+      );
     });
 
-    expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledWith(
       ["/usr/local/bin/claude", "--help"],
       expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
     );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Claude Code 2.1.169+"));
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run without safe mode:"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Claude --safe-mode unavailable; running claude -p with normal customization settings.",
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("redacts a rejected Claude capability probe and prints the manual handoff", async () => {

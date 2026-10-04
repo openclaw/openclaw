@@ -65,11 +65,10 @@ export function connectShellViewport(): () => void {
       root.style.removeProperty("--shell-safe-area-bottom");
     }
 
-    // CSS owns ordinary resizes, browser bars and standalone's large canvas.
-    // In particular, iOS standalone's shorter *layout* viewport is not itself
-    // keyboard occlusion. Compare visual and layout viewports, never lvh.
-    const obscured = nativeScale && layoutHeight - viewport.height >= KEYBOARD_MIN_SHRINK;
-    if (obscured) {
+    // Publish a cap independently of keyboard detection: browser chrome and
+    // standalone viewport-unit mismatches can hide less than 80px. CSS keeps
+    // the smaller dynamic canvas, so this never promotes it to a larger one.
+    if (nativeScale) {
       // A panned caret uses layout coordinates: height alone lifts the footer
       // twice. Insets are consumed by the app's CSS, not subtracted here too.
       root.style.setProperty(

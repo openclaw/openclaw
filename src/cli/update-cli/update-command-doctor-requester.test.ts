@@ -16,14 +16,15 @@ import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 it.each([
@@ -171,7 +172,7 @@ it.each([
       mocks.runGitUpdate.mockImplementation(runUpdate);
       const update = withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(root);
-        return executeMutableUpdate(params);
+        return executeMutableUpdate(await bindExecutionGuards(params));
       });
       if (fault === "requester-reassigned") {
         await expect(update).rejects.toThrow("requester-revoked");

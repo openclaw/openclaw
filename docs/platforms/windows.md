@@ -148,6 +148,16 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+**New workspace** also works with a native Windows Gateway. Install Git for
+Windows and make it available on `PATH`. Each empty workspace starts from a
+separate Git repository initialized without your global Git configuration.
+Workspace creation also avoids Git for Windows' `'$GIT_DIR' too big` error for
+deeply nested source repositories.
+Worker result staging, reads, and cleanup enable Git's Windows long-path support
+for each command. Other Git clients accessing the same deeply nested repository
+may need `core.longpaths=true` in their own configuration, for example with
+`git -C "<repository>" config core.longpaths true`.
+
 Managed startup uses Windows Scheduled Tasks when available. The task keeps
 the readable `gateway.cmd` script in the OpenClaw state dir but launches it
 through a generated `gateway.vbs` WScript wrapper, so the background Gateway
@@ -230,6 +240,26 @@ For CLI-only use without a managed Gateway service:
 openclaw onboard --non-interactive --accept-risk --skip-health
 openclaw gateway run
 ```
+
+### Updating from 2026.9.4
+
+The published 2026.9.4 Windows updater retains an old database reader in its
+service handoff. A target that migrates shared state beyond schema 17 can make
+that callback fail after activation. During a running 9.4 update, the candidate's
+package lifecycle asks Doctor's read-only preflight to refuse this migration
+while an updater driver has not been confirmed stopped. A failed npm stage leaves
+the original package and Gateway in place, before the old updater enters repair.
+The CLI preflight also retains this check when package scripts were skipped;
+that later refusal can be masked by a cleanup error in the old repair path.
+This containment does not complete the automatic update.
+
+Wait for the updater to exit and review its result. To upgrade, create a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+and use the existing [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+from an independent shell. Keep the original service account, package prefix,
+profile, and state/config overrides. Stop the Gateway through its owner before
+replacing the package, run the newly installed Doctor, then start and verify the
+Gateway. Do not lower schema markers or run an older build against migrated data.
 
 ## WSL2 Gateway
 
@@ -345,6 +375,16 @@ Notes:
 - Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
+
+### The Gateway Scheduled Task is disabled
+
+`openclaw gateway status` and Doctor name a registered but **DISABLED** task and
+show the recovery command. Run `openclaw gateway start` or `openclaw doctor --fix`
+to re-enable and start the managed Gateway. Use the same profile and state/config
+overrides as the installation. Recovery verifies the registered launcher and
+task ownership before enabling it; a foreign or unverifiable task is left
+unchanged with an explanation. A disabled task cannot start automatically after
+login or reboot until it is re-enabled.
 
 ### The Scheduled Task stops before the Gateway is ready
 

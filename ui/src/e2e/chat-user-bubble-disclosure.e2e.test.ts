@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -30,7 +31,8 @@ async function expectCenteredToggle(bubble: Locator) {
   expect(Math.abs(above - below)).toBeLessThanOrEqual(1);
 }
 
-async function expectReadableLastLine(content: Locator) {
+async function expectReadableLastLine(page: Page, content: Locator) {
+  await waitForLayoutSettled(page, ".chat-message-disclosure__content");
   const geometry = await content.evaluate((element) => {
     const paragraph = element.querySelector("p, li")!;
     const style = getComputedStyle(paragraph);
@@ -236,7 +238,7 @@ suite.define(() => {
 
         await page.evaluate(() => document.fonts.ready);
         await expectCenteredToggle(bubble);
-        await expectReadableLastLine(content);
+        await expectReadableLastLine(page, content);
         expect(await content.evaluate((element) => getComputedStyle(element).maskImage)).not.toBe(
           "none",
         );
@@ -312,25 +314,25 @@ suite.define(() => {
       const content = page.locator(".chat-message-disclosure__content");
       await content.waitFor();
       await page.evaluate(() => document.fonts.ready);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       const desktopHeight = await content.evaluate((element) => element.clientHeight);
       await page.setViewportSize({ width: 390, height: 844 });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .not.toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       await page.setViewportSize({ width: 1440, height: 844 });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       await content.locator(".chat-text").evaluate((element) => {
         (element as HTMLElement).style.fontSize = "18px";
       });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .not.toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
     } finally {
       await suite.closeBrowserContext(context);
     }

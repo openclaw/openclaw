@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -45,11 +46,7 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
 
 type IrcPrivmsgEvent = {
   senderNick: string;
-  senderUser?: string;
-  senderHost?: string;
   connectedNick: string;
-  target: string;
-  text: string;
   rawLine: string;
 };
 
@@ -162,20 +159,13 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   socket.setEncoding("utf8");
 
-  let resolveReady: (() => void) | null = null;
-  let rejectReady: ((error: Error) => void) | null = null;
-  const readyPromise = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
+  const readyDeferred = createDeferred<void>();
 
   const fail = (err: unknown) => {
     const error = toIrcError(err);
     options.onError?.(error);
-    if (!ready && rejectReady) {
-      rejectReady(error);
-      rejectReady = null;
-      resolveReady = null;
+    if (!ready) {
+      readyDeferred.reject(error);
     }
   };
 
@@ -355,9 +345,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
             fail(err);
           }
         }
-        resolveReady?.();
-        resolveReady = null;
-        rejectReady = null;
+        readyDeferred.resolve();
         continue;
       }
 
@@ -379,11 +367,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           void Promise.resolve(
             options.onPrivmsg({
               senderNick,
-              senderUser: prefix.user ? prefix.user.trim() : undefined,
-              senderHost: prefix.host ? prefix.host.trim() : undefined,
               connectedNick: currentNick,
-              target,
-              text,
               rawLine,
             }),
           ).catch((error: unknown) => {
@@ -440,7 +424,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   }
 
   try {
-    await withTimeout(readyPromise, timeoutMs, "IRC connect");
+    await withTimeout(readyDeferred.promise, timeoutMs, "IRC connect");
   } catch (error) {
     close();
     throw error;

@@ -1,7 +1,10 @@
 /** Real embedded subscriber/catalog executor shared by bridge lifecycle regressions. */
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
-import type { NestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { createCodeModeTools } from "./code-mode.js";
+import {
+  createAttemptNestedToolActivityState,
+  readAttemptNestedToolActivity,
+} from "./embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
@@ -32,7 +35,7 @@ export function createSubscribedCodeModeHarness(params: {
   const runAbortController = new AbortController();
   const { session, emit } = createStubSessionHarness();
   const sessionManager = params.sessionManager ?? SessionManager.inMemory();
-  const nestedToolActivities: NestedToolActivity[] = [];
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
   guardSessionManager(sessionManager, { config: {}, runId, sessionKey });
   const activeSession = Object.assign(session, {
     sessionManager,
@@ -70,7 +73,7 @@ export function createSubscribedCodeModeHarness(params: {
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, sessionKey, runId }),
-    nestedToolActivities,
+    nestedToolActivityState,
     isReplaySafeTool: () => false,
     runAbortController,
     abortRun: () => runAbortController.abort(),
@@ -97,7 +100,8 @@ export function createSubscribedCodeModeHarness(params: {
   return {
     ...context,
     sessionManager,
-    nestedToolActivities,
+    readNestedActivities: () =>
+      readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
     emit,
     tools: createCodeModeTools(context),
     runAbortController,

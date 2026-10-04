@@ -29,6 +29,13 @@ for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
+Start the macOS validate and preflight lanes right after the tag push, before
+core npm moves `latest`. The preflight's `pnpm release:check` requires npm
+`latest` and `beta` in the tag's update compatibility inventory, and the tag
+cannot record its own version. If `latest` flips first, record the new version
+on `release/YYYY.M.PATCH` and preflight with that `source_ref`. The real publish
+reuses the preflight and does not rerun the check.
+
 The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
 assets to the GitHub release whether it is still a draft or public. Let the
 selected publisher activate the release after its required checks; do not

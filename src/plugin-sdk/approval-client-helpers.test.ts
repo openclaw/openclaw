@@ -7,7 +7,7 @@ import {
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 
 describe("isChannelExecApprovalTargetRecipient", () => {
   it("matches targets by channel and account", () => {

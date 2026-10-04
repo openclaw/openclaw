@@ -25,9 +25,6 @@ export type StartupPluginConvergencePlan = {
 };
 
 function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (config.plugins?.enabled === false) {
-    return false;
-  }
   const entries = config.plugins?.entries;
   if (!isRecord(entries)) {
     return false;
@@ -73,40 +70,25 @@ function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): Re
 }
 
 function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const memoryEmbeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(config);
-  if (memoryEmbeddingProviderIds.size > 0) {
-    if (
-      hasOfficialExternalContractTarget({
-        contract: "embeddingProviders",
-        providerIds: memoryEmbeddingProviderIds,
-      })
-    ) {
-      return true;
-    }
-  }
-  const speechProviderIds = collectConfiguredSpeechProviderIds(config);
-  if (
+  const webFetchProviderId = normalizeOptionalLowercaseString(config.tools?.web?.fetch?.provider);
+  return (
+    hasOfficialExternalContractTarget({
+      contract: "embeddingProviders",
+      providerIds: collectConfiguredMemoryEmbeddingProviderIds(config),
+    }) ||
     hasOfficialExternalContractTarget({
       contract: "speechProviders",
-      providerIds: speechProviderIds,
-    })
-  ) {
-    return true;
-  }
-  const webFetchProviderId = normalizeOptionalLowercaseString(config.tools?.web?.fetch?.provider);
-  if (
-    webFetchProviderId &&
-    hasOfficialExternalContractTarget({
-      contract: "webFetchProviders",
-      providerIds: new Set([webFetchProviderId]),
-    })
-  ) {
-    return true;
-  }
-  return hasOfficialExternalWebContractEnvTarget({
-    contract: "webFetchProviders",
-    env,
-  });
+      providerIds: collectConfiguredSpeechProviderIds(config),
+    }) ||
+    Boolean(
+      webFetchProviderId &&
+      hasOfficialExternalContractTarget({
+        contract: "webFetchProviders",
+        providerIds: new Set([webFetchProviderId]),
+      }),
+    ) ||
+    hasOfficialExternalWebContractEnvTarget({ contract: "webFetchProviders", env })
+  );
 }
 
 /** True when config or environment state can require a missing managed plugin repair. */
@@ -117,34 +99,22 @@ export function configMayRequireStartupPluginConvergence(params: {
   if (params.config.plugins?.enabled === false) {
     return false;
   }
-  if (hasPotentialPluginConfig(params.config, params.env)) {
-    return true;
-  }
-  if (collectConfiguredRuntimeIds(params.config).length > 0) {
-    return true;
-  }
-  if (
+  const webSearchProvider = params.config.tools?.web?.search?.provider;
+  return (
+    hasPotentialPluginConfig(params.config, params.env) ||
+    collectConfiguredRuntimeIds(params.config).length > 0 ||
     hasOfficialExternalProviderTarget({
       providerIds: collectConfiguredProviderSelectionIds(params.config),
       env: params.env,
-    })
-  ) {
-    return true;
-  }
-  if (hasOfficialExternalChannelTarget(params)) {
-    return true;
-  }
-  const webSearchProvider = params.config.tools?.web?.search?.provider;
-  if (
-    params.config.tools?.web?.search?.enabled !== false &&
-    hasOfficialExternalWebSearchTarget({
-      providerId: typeof webSearchProvider === "string" ? webSearchProvider : undefined,
-      env: params.env,
-    })
-  ) {
-    return true;
-  }
-  return hasConfiguredCapabilityPlugin(params.config, params.env);
+    }) ||
+    hasOfficialExternalChannelTarget(params) ||
+    (params.config.tools?.web?.search?.enabled !== false &&
+      hasOfficialExternalWebSearchTarget({
+        providerId: typeof webSearchProvider === "string" ? webSearchProvider : undefined,
+        env: params.env,
+      })) ||
+    hasConfiguredCapabilityPlugin(params.config, params.env)
+  );
 }
 
 /** Carries the canonical install-record snapshot into the expensive convergence pass. */

@@ -56,17 +56,17 @@ test.each([
   {
     state: "pending-approval",
     disabledReason:
-      "Ask an administrator to approve the pending runtime.repository.v1 request, or pick another device.",
+      "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
   },
   {
     state: "unauthorized",
     disabledReason:
-      "Authorize runtime.repository.v1 in the Gateway node command policy, or pick another device.",
+      "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
   },
   {
     state: "undeclared",
     disabledReason:
-      "Make runtime.repository.v1 available on this device, then reconnect, or pick another device.",
+      "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
   },
 ] as const)(
   "sessions.list carries automatic runtime requirements through the recovery picker: $state",
@@ -163,7 +163,7 @@ test.each([
       expect(
         catalog.payload?.environments.find((environment) => environment.id === "node:node-host")
           ?.requiredNodeCommand,
-      ).toEqual({ command, state });
+      ).toEqual({ command, state, ...(disabledReason ? { message: disabledReason } : {}) });
       const devices = projectDevicePlacements(
         readDraftEnvironments(catalog.payload?.environments),
         runtime?.devicePlacement,
@@ -562,10 +562,10 @@ test.each([
         claimId: "retained-claim",
         runId: "retained-run",
       });
-      placements.markWorkspaceResultPending(claim);
+      await placements.markWorkspaceResultPending(claim);
     } else {
       const basePack = Buffer.from("retained workspace rollback");
-      placements.beginWorkspaceReconciliation(journalOwner, {
+      await placements.beginWorkspaceReconciliation(journalOwner, {
         version: 1,
         temporaryNonce: "a".repeat(32),
         baseManifestRef: active.workspaceBaseManifestRef,
@@ -580,19 +580,19 @@ test.each([
     if (recovery === "unstaged result") {
       seedFailedPlacementWithRetainedResult(database, identity.sessionId);
     } else {
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "previous worker failure",
@@ -636,11 +636,11 @@ test.each([
     expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
 
     if (recovery === "unstaged result") {
-      const pending = placements.listPendingWorkspaceResults(identity.sessionId);
+      const pending = await placements.listPendingWorkspaceResultsAsync(identity.sessionId);
       expect(pending).toHaveLength(1);
-      placements.abandonWorkspaceResult(pending[0]!);
+      await placements.abandonWorkspaceResult(pending[0]!);
     } else {
-      placements.abortWorkspaceReconciliation(journalOwner, { force: true });
+      await placements.abortWorkspaceReconciliation(journalOwner, { force: true });
     }
     const ready = await describe();
     expect(ready.ok).toBe(true);

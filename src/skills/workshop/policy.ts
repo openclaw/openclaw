@@ -5,14 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import { logDebug } from "../../logger.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
-import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-
-// Proposal reconciliation and skill-install dependencies belong to actual approval-detail lookup.
-const loadPendingSkillProposalResolver = createLazyRuntimeNamedExport(
-  () => import("./policy.runtime.js"),
-  "resolvePendingSkillProposal",
-);
 
 const SKILL_WORKSHOP_LIFECYCLE_APPROVALS = {
   apply: {
@@ -43,17 +36,12 @@ const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
 type SkillWorkshopLifecycleAction = keyof typeof SKILL_WORKSHOP_LIFECYCLE_APPROVALS;
 
-// Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
   if (typeof action !== "string" || !Object.hasOwn(SKILL_WORKSHOP_LIFECYCLE_APPROVALS, action)) {
     return undefined;
   }
   return action as SkillWorkshopLifecycleAction;
-}
-
-function formatBodySizeKb(content: string): string {
-  return (Buffer.byteLength(content, "utf8") / 1024).toFixed(1);
 }
 
 function formatApprovalField(value: string): string {
@@ -107,7 +95,8 @@ async function resolveLifecycleApprovalDescription(params: {
   }
   const toolParams = asNullableRecord(params.toolParams);
   try {
-    const resolvePendingSkillProposal = await loadPendingSkillProposalResolver();
+    // Proposal reconciliation and skill-install dependencies belong to actual approval-detail lookup.
+    const { resolvePendingSkillProposal } = await import("./service-query.js");
     const proposal = await resolvePendingSkillProposal({
       proposalId: normalizeOptionalString(toolParams?.proposal_id),
       name: normalizeOptionalString(toolParams?.name),
@@ -122,7 +111,7 @@ async function resolveLifecycleApprovalDescription(params: {
         skillName: record.target.skillName,
         description: record.description,
         supportFileCount: record.supportFiles?.length ?? 0,
-        bodySizeKb: formatBodySizeKb(proposal.content),
+        bodySizeKb: (Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1),
       }),
       proposalId: record.id,
     };
@@ -157,7 +146,6 @@ function lifecycleApprovalTimeoutReason(params: {
   ].join(" ");
 }
 
-/** Returns approval policy for skill workshop lifecycle tool calls. */
 export async function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;

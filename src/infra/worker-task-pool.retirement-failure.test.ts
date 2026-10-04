@@ -3,16 +3,20 @@ import type { EventEmitter } from "node:events";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nativeSections from "../../packages/worker-runtime/src/worker-task-native-sections.js";
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+
+type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
 
 type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: { taskId: number; responseId?: number }) => void>>;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const taskPosted = vi.hoisted(() => vi.fn());
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
@@ -24,7 +28,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      postMessage = vi.fn<(message: { taskId: number; responseId?: number }) => void>();
+      postMessage = vi.fn<(message: PostedTask) => void>(() => {
+        taskPosted();
+      });
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -61,15 +67,72 @@ function taskId(worker: FakeWorker) {
 beforeEach(() => {
   workers.splice(0);
   cleanup.mockReset().mockResolvedValue();
+  taskPosted.mockReset();
 });
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
 describe("worker task retirement failures", () => {
+  it("settles cancellation when native work finishes before its settlement wait is registered", async () => {
+    const pool = createOwnedWorkerTaskPool<string, string>({
+      workerUrl: new URL("data:text/javascript,"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    });
+    const controller = new AbortController();
+    const reason = new Error("cancel native work");
+    const executionSettled = vi.fn();
+    const result = pool
+      .run("input", { signal: controller.signal, onExecutionSettled: executionSettled })
+      .catch((error: unknown) => error);
+    const worker = expectDefined(workers[0], "task worker");
+    const state = new Int32Array(
+      expectDefined(worker.postMessage.mock.calls[0]?.[0].nativeSections, "native section state"),
+    );
+    const release = nativeSections.withWorkerTaskNativeSectionScope(
+      state,
+      () => true,
+      nativeSections.retainCurrentWorkerNativeSection,
+    );
+    const isSettled = nativeSections.areWorkerNativeSectionsSettled;
+    const observed = vi
+      .spyOn(nativeSections, "areWorkerNativeSectionsSettled")
+      .mockImplementationOnce((sections) => {
+        const settled = isSettled(sections);
+        // The worker can release its last section after the parent's atomic read.
+        release();
+        return settled;
+      });
+    try {
+      controller.abort(reason);
+      await yieldToEventLoop();
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      observed.mockRestore();
+      release();
+      // Explicit servicing also cleans up the deliberately stalled pre-fix owner.
+      const rotation = pool.startRotate();
+      rotation.service();
+      await rotation.result;
+      await pool.close();
+      await result;
+    }
+  });
+
   it.each([false, true])(
     "joins every retirement retry and its artifacts before rejecting (second retry fails: %s)",
     async (secondRetryFails) => {
+      const admitted = createDeferredCore();
+      let pendingAdmissions = 2;
+      taskPosted.mockImplementation(() => {
+        if (--pendingAdmissions === 0) {
+          admitted.resolve();
+        }
+      });
       const pool = new WorkerTaskPool<string, string>({
         workerUrl: new URL("data:text/javascript,"),
         maxWorkers: 2,
@@ -87,6 +150,8 @@ describe("worker task retirement failures", () => {
           .run(`input-${index}`, { signal: controller.signal, onInputConsumed: released[index] })
           .catch((error: unknown) => error),
       );
+      await admitted.promise;
+      expect(workers).toHaveLength(2);
       for (const [index, worker] of workers.entries()) {
         worker.terminate.mockRejectedValueOnce(new Error("initial exit uncertain"));
         controllers[index]!.abort(new Error("task canceled"));
@@ -347,109 +412,105 @@ describe("worker task retirement failures", () => {
     },
   );
 
-  it("preserves the retirement failure alone when the task succeeded", async () => {
-    const pool = createPool();
-    const released = vi.fn();
-    const result = pool.run("input", { onInputConsumed: released });
-    const retirementFailure = new Error("exit uncertain");
-    const worker = expectDefined(workers[0], "task worker");
-    worker.terminate.mockRejectedValueOnce(retirementFailure);
-    const rejected = expect(result).rejects.toBe(retirementFailure);
-    worker.emit("message", { status: "ok", taskId: taskId(worker), value: "result" });
-    await rejected;
-    expect(released).not.toHaveBeenCalled();
-    await pool.close();
-    expect(released).toHaveBeenCalledOnce();
-  });
+  it.each(["task", "retirement"] as const)(
+    "preserves the sole %s failure and releases input only after exit",
+    async (phase) => {
+      const failure =
+        phase === "task"
+          ? new WorkerTaskError("original task failure", "unavailable")
+          : new Error("exit uncertain");
+      const pool = createPool(
+        phase === "task"
+          ? () => {
+              throw failure;
+            }
+          : undefined,
+      );
+      const released = vi.fn();
+      const result = pool.run("input", { onInputConsumed: released });
+      const worker = expectDefined(workers[0], "task worker");
+      if (phase === "retirement") {
+        worker.terminate.mockRejectedValueOnce(failure);
+      }
+      const rejected = expect(result).rejects.toBe(failure);
+      worker.emit("message", { status: "ok", taskId: taskId(worker), value: "result" });
+      await rejected;
+      if (phase === "retirement") {
+        expect(released).not.toHaveBeenCalled();
+        await pool.close();
+      }
+      expect(released).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("preserves the original task error when retirement succeeds", async () => {
-    const taskFailure = new WorkerTaskError("original task failure", "unavailable");
-    const pool = createPool(() => {
-      throw taskFailure;
-    });
-    const released = vi.fn();
-    const result = pool.run("input", { onInputConsumed: released });
-    const rejected = expect(result).rejects.toBe(taskFailure);
-    const worker = expectDefined(workers[0], "task worker");
-    worker.emit("message", { status: "ok", taskId: taskId(worker), value: "result" });
-    await rejected;
-    expect(released).toHaveBeenCalledOnce();
-  });
-
-  it.each(["ok", "failed"] as const)(
-    "reports each native settlement when reusing frozen options after a %s reply",
-    async (outcome) => {
+  it.each([
+    { outcome: "ok", callbackThrows: false },
+    { outcome: "failed", callbackThrows: false },
+    { outcome: "ok", callbackThrows: true },
+    { outcome: "failed", callbackThrows: true },
+  ] as const)(
+    "preserves public result and settlement ordering after $outcome (callback throws: $callbackThrows)",
+    async ({ outcome, callbackThrows }) => {
       const pool = createPool();
       const order: string[] = [];
+      const callbackFailure = new Error("settlement callback failed");
       const executionSettled = vi.fn(({ retired }: { retired: boolean }) => {
         order.push(`settled:${retired}`);
+        if (callbackThrows) {
+          throw callbackFailure;
+        }
       });
       const options = Object.freeze({ onExecutionSettled: executionSettled });
       const first = pool.run("first", options).catch((error: unknown) => error);
       const worker = expectDefined(workers[0], "task worker");
       const nextPosted = createDeferredCore<{ taskId: number }>();
       worker.postMessage.mockImplementation((message) => nextPosted.resolve(message));
-      const next = pool
-        .run(() => {
-          order.push("successor");
-          return "next";
-        }, options)
-        .catch((error: unknown) => error);
+      const queued = callbackThrows
+        ? undefined
+        : pool
+            .run(() => {
+              order.push("successor");
+              return "next";
+            }, options)
+            .catch((error: unknown) => error);
       worker.emit(
         "message",
         outcome === "ok"
-          ? { status: "ok", taskId: taskId(worker), value: "completed" }
-          : { status: "failed", taskId: taskId(worker), error: "handler failure" },
+          ? { status: "ok", taskId: taskId(worker), value: callbackThrows ? "first" : "completed" }
+          : {
+              status: "failed",
+              taskId: taskId(worker),
+              error: callbackThrows ? "original worker failure" : "handler failure",
+            },
       );
       const result = await first;
       if (outcome === "ok") {
-        expect(result).toBe("completed");
+        expect(result).toBe(callbackThrows ? callbackFailure : "completed");
       } else {
-        expect(result).toMatchObject({ message: "handler failure", code: "failed" });
-      }
-      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
-      expect(order).toEqual(["settled:false", "successor"]);
-      expect(workers).toHaveLength(1);
-      expect(worker.terminate).not.toHaveBeenCalled();
-      const message = await nextPosted.promise;
-      worker.emit("message", { status: "ok", taskId: message.taskId, value: "next-completed" });
-      expect(await next).toBe("next-completed");
-      expect(executionSettled).toHaveBeenCalledTimes(2);
-      expect(order).toEqual(["settled:false", "successor", "settled:false"]);
-      expect(options.onExecutionSettled).toBe(executionSettled);
-    },
-  );
-  it.each(["ok", "failed"] as const)(
-    "preserves public result error precedence when settlement callback throws after %s",
-    async (outcome) => {
-      const pool = createPool();
-      const callbackFailure = new Error("settlement callback failed");
-      const executionSettled = vi.fn(() => {
-        throw callbackFailure;
-      });
-      const first = pool
-        .run("first", { onExecutionSettled: executionSettled })
-        .catch((error: unknown) => error);
-      const worker = expectDefined(workers[0], "task worker");
-      worker.emit(
-        "message",
-        outcome === "ok"
-          ? { status: "ok", taskId: taskId(worker), value: "first" }
-          : { status: "failed", taskId: taskId(worker), error: "original worker failure" },
-      );
-      const result = await first;
-      if (outcome === "ok") {
-        expect(result).toBe(callbackFailure);
-      } else {
-        expect(result).toMatchObject({ message: "original worker failure", code: "failed" });
+        expect(result).toMatchObject({
+          message: callbackThrows ? "original worker failure" : "handler failure",
+          code: "failed",
+        });
         expect(result).not.toBe(callbackFailure);
       }
       expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
-      expect(pool.getSnapshot().pendingTasks).toBe(0);
-      const next = pool.run("next", {});
-      const posted = expectDefined(worker.postMessage.mock.calls.at(-1)?.[0], "successor request");
-      worker.emit("message", { status: "ok", taskId: posted.taskId, value: "next" });
-      expect(await next).toBe("next");
+      if (callbackThrows) {
+        expect(pool.getSnapshot().pendingTasks).toBe(0);
+      } else {
+        expect(order).toEqual(["settled:false", "successor"]);
+      }
+      expect(workers).toHaveLength(1);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      const next = queued ?? pool.run("next", {});
+      const message = await nextPosted.promise;
+      const value = callbackThrows ? "next" : "next-completed";
+      worker.emit("message", { status: "ok", taskId: message.taskId, value });
+      expect(await next).toBe(value);
+      if (!callbackThrows) {
+        expect(executionSettled).toHaveBeenCalledTimes(2);
+        expect(order).toEqual(["settled:false", "successor", "settled:false"]);
+        expect(options.onExecutionSettled).toBe(executionSettled);
+      }
       expect(workers).toHaveLength(1);
       expect(worker.terminate).not.toHaveBeenCalled();
     },

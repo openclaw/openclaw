@@ -4,14 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createClient, prioritizeRelease, restoreReleasePriority } from "../../scripts/frv.mjs";
+import { createClient, restoreReleasePriority } from "../../scripts/frv.mjs";
 import {
   RELEASE_PRIORITY_VARIABLE,
   isDeferredCiJobSet,
   isReleaseBranch,
   selectDeferredRunCandidates,
   selectLatestRunsPerLane,
-  selectQueuedRunsToCancel,
 } from "../../scripts/lib/release-priority.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -55,7 +54,6 @@ function client(
   let variable = options.variable ?? "";
   return {
     calls,
-    cancelRun: async (id: string) => void calls.push(`cancel:${id}`),
     deleteVariable: async (name: string) => {
       calls.push(`delete:${name}`);
       variable = "";
@@ -84,27 +82,11 @@ function client(
     },
     repository: "openclaw/openclaw",
     rerunRun: async (id: string) => void calls.push(`rerun:${id}`),
-    setVariable: async (name: string, value: string) => {
-      calls.push(`set:${name}=${value}`);
-      variable = value;
-    },
   };
 }
 
 describe("release priority selection", () => {
-  it("cancels only queued hosted-runner runs outside release branches and dispatches", () => {
-    const runs = [
-      run(1, "CI"),
-      run(2, "CI", { head_branch: "release/2026.9.6" }),
-      run(3, "CI", { head_branch: "release-ci/abcdef012345-77" }),
-      run(4, "CI", { head_branch: "release-publish/abcdef012345-77" }),
-      run(5, "CI", { event: "workflow_dispatch" }),
-      run(6, "CI", { status: "in_progress" }),
-      run(7, "OpenClaw Release Checks"),
-      run(8, "Labeler", { event: "pull_request_target" }),
-      run(77, "CI"),
-    ];
-    expect(selectQueuedRunsToCancel(runs, "77").map((entry) => entry.id)).toEqual(["1", "8"]);
+  it("recognizes release branches", () => {
     expect(["release/x", "release-ci/x", "release-publish/x"].every(isReleaseBranch)).toBe(true);
     expect(isReleaseBranch("feat/release/x")).toBe(false);
   });
@@ -149,61 +131,36 @@ describe("release priority selection", () => {
   });
 });
 
-describe("pnpm frv prioritize", () => {
-  it("records intent, sets the variable, cancels still-queued runs, and restores newest-per-lane", async () => {
-    const fake = client({
-      queued: [
-        run(1, "CI"),
-        run(2, "CI", { event: "workflow_dispatch" }),
-        run(6, "Labeler", { event: "pull_request_target", head_branch: "other" }),
-        run(15, "CI", { head_branch: "already-restored" }),
-      ],
-    });
-    fake.getRun = async (id: string) =>
-      id === "77"
-        ? PARENT
-        : id === "6"
-          ? run(6, "Labeler", { status: "in_progress" })
-          : run(Number(id), "CI");
-    const outPath = join(mkdtempSync(join(tmpdir(), "frv-priority-")), "record.json");
-    await expect(prioritizeRelease("77", fake, { dryRun: true })).resolves.toMatchObject({
-      action: "would-prioritize",
-    });
-    expect(fake.calls.filter((call) => !call.startsWith("list:"))).toEqual([]);
-    const result = await prioritizeRelease("77", fake, { outPath });
-    expect(result).toMatchObject({
-      action: "prioritized",
-      failures: [],
-      recordPath: outPath,
-      skipped: [{ id: "6" }],
-    });
-    expect(fake.calls.filter((call) => !call.startsWith("list:"))).toEqual([
-      `set:${RELEASE_PRIORITY_VARIABLE}=77`,
-      "cancel:1",
-      "cancel:15",
-    ]);
-    const record = JSON.parse(readFileSync(outPath, "utf8"));
-    expect(record).toMatchObject({
+function writeRecord(cancelled: Record<string, unknown>[]) {
+  const outPath = join(mkdtempSync(join(tmpdir(), "frv-priority-")), "record.json");
+  writeFileSync(
+    outPath,
+    JSON.stringify({
+      kind: "openclaw.frv-release-priority",
       parentRunId: "77",
-      cancelled: [
-        { id: "1", name: "CI" },
-        { id: "15", name: "CI" },
-      ],
-    });
-    // A repeated call keeps the original window and cancellations.
-    const again = client({ queued: [run(8, "CI", { head_branch: "later" })] });
-    again.getRun = async (id: string) => (id === "77" ? PARENT : run(Number(id), "CI"));
-    await prioritizeRelease("77", again, { outPath });
-    const merged = JSON.parse(readFileSync(outPath, "utf8"));
-    expect(merged.recordedAt).toBe(record.recordedAt);
-    expect(merged.cancelled.map((entry: { id: string }) => entry.id)).toEqual(["1", "15", "8"]);
-    // Older pause records have no run-lane identity; restore resolves it from current run facts.
-    for (const cancelled of merged.cancelled) {
-      delete cancelled.lane;
-      cancelled.id = Number(cancelled.id);
-    }
-    writeFileSync(outPath, JSON.stringify(merged));
+      recordedAt: "2026-09-22T12:00:00.000Z",
+      cancelled,
+    }),
+  );
+  return outPath;
+}
 
+describe("pnpm frv prioritize --restore", () => {
+  it("restores newest-per-lane runs from a historical record", async () => {
+    // Older pause records have no run-lane identity; restore resolves it from current run facts.
+    const outPath = writeRecord(
+      [
+        run(1, "CI"),
+        run(15, "CI", { head_branch: "already-restored" }),
+        run(8, "CI", { head_branch: "later" }),
+      ].map((entry) => ({
+        event: entry.event,
+        headBranch: entry.head_branch,
+        id: entry.id,
+        name: entry.name,
+        url: entry.html_url,
+      })),
+    );
     const after = { created_at: "2999-01-01T00:00:00Z", status: "completed" };
     const restoreClient = client({
       variable: "77",
@@ -280,15 +237,9 @@ describe("pnpm frv prioritize", () => {
     ]);
   });
 
-  it("refuses a parent that is not an active Full Release Validation and keeps a foreign variable", async () => {
-    const fake = { ...client(), getRun: async () => ({ ...PARENT, status: "completed" }) };
-    await expect(prioritizeRelease("77", fake)).rejects.toThrow(
-      "run 77 is not an active Full Release Validation parent",
-    );
+  it("keeps a foreign variable", async () => {
     const other = client({ variable: "99" });
-    const outPath = join(mkdtempSync(join(tmpdir(), "frv-priority-")), "record.json");
-    await prioritizeRelease("77", other, { outPath });
-    other.calls.length = 0;
+    const outPath = writeRecord([]);
     await expect(
       restoreReleasePriority(outPath, { ...other, getVariable: async () => "99" }),
     ).resolves.toMatchObject({ cleared: false });
@@ -307,8 +258,7 @@ function priorityCli({
   args = [],
   skipped = [100],
   allowed = true,
-  prioritize = false,
-}: { args?: string[]; skipped?: number[]; allowed?: boolean; prioritize?: boolean } = {}) {
+}: { args?: string[]; skipped?: number[]; allowed?: boolean } = {}) {
   const directory = tempDirs.make("frv-priority-cli-");
   const recordPath = join(directory, "record.json");
   const record = JSON.stringify({
@@ -322,8 +272,8 @@ function priorityCli({
     run(id, "CI", {
       created_at: "2020-01-01T01:00:00Z",
       head_branch: `branch-${id}`,
-      status: prioritize ? "queued" : "completed",
-      conclusion: prioritize ? null : "failure",
+      status: "completed",
+      conclusion: "failure",
     }),
   );
   const gh = join(directory, "gh-fixture.cjs");
@@ -334,12 +284,11 @@ const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\n");
 const runs = ${JSON.stringify(runs)};
 const skipped = ${JSON.stringify(skipped)};
-const prioritize = ${prioritize};
 const reject = () => { throw new Error("unplanned fixture request: " + JSON.stringify(args)); };
 if (args[0] === "variable") {
-  if (!prioritize || JSON.stringify(args) !== JSON.stringify(["variable", "set", ${JSON.stringify(RELEASE_PRIORITY_VARIABLE)}, "--repo", "fixture/fixture", "--body", "77"])) reject();
+  reject();
 } else if (args[0] === "api" && args[1] === "-X") {
-  if (JSON.stringify(args) !== JSON.stringify(["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/" + (prioritize ? "cancel" : "rerun")])) reject();
+  if (JSON.stringify(args) !== JSON.stringify(["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"])) reject();
 } else {
   if (args[0] !== "api" || !args.includes("Cache-Control: max-age=0")) reject();
   const resource = args[1].replace("repos/fixture/fixture/", "");
@@ -353,17 +302,14 @@ if (args[0] === "variable") {
     if (branch) for (const run of [...found]) {
       if (skipped.includes(run.id)) found.push({ ...run, id: run.id + 1, status: "in_progress", conclusion: null });
     }
-    if (query.has("status")) {
-      if (!prioritize || !args.includes(".workflow_runs[] | @json")) reject();
-      value = query.get("status") === "queued" ? runs : [];
-    } else value = { total_count: found.length, workflow_runs: found };
+    if (query.has("status")) reject();
+    value = { total_count: found.length, workflow_runs: found };
   } else if (runs.some(run => resource === "actions/runs/" + run.id + "/attempts/1/jobs?per_page=100")) {
     if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) reject();
     value = ${JSON.stringify(deferredJobs)};
   } else {
     value = runs.find(run => resource === "actions/runs/" + run.id);
     if (!value) reject();
-    if (prioritize && skipped.includes(value.id)) value = { ...value, status: "in_progress" };
   }
   console.log(Array.isArray(value) ? value.map(row => JSON.stringify(row)).join("\n") : JSON.stringify(value));
 }
@@ -402,7 +348,8 @@ syncBuiltinESMExports();
       "prioritize",
       "--repo",
       "fixture/fixture",
-      ...(prioritize ? ["--run", "77", "--out", recordPath] : ["--restore", recordPath]),
+      "--restore",
+      recordPath,
       ...args,
     ],
     {
@@ -418,9 +365,7 @@ syncBuiltinESMExports();
     },
   );
   expect(result.status, result.stderr).toBe(0);
-  if (!prioritize) {
-    expect(readFileSync(recordPath, "utf8")).toBe(record);
-  }
+  expect(readFileSync(recordPath, "utf8")).toBe(record);
   const calls: string[][] = readFileSync(join(directory, "calls.jsonl"), "utf8")
     .trim()
     .split("\n")
@@ -492,20 +437,6 @@ describe("release-priority CLI output", () => {
     expect(result.stdout).toBe(
       "CI 100 branch-100 https://example.invalid/runs/100\nCI 200 branch-200 https://example.invalid/runs/200\naction: would-restore\n",
     );
-  });
-
-  it("labels prioritize skips as cancellations, not reruns", () => {
-    const result = priorityCli({ prioritize: true });
-    expect(result.mutations).toEqual([
-      ["variable", "set", RELEASE_PRIORITY_VARIABLE, "--repo", "fixture/fixture", "--body", "77"],
-      ["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/cancel"],
-    ]);
-    expect(result.stdout).toContain(
-      "skipped (cancellation not attempted): CI 100 branch-100 https://example.invalid/runs/100",
-    );
-    expect(result.stdout).not.toContain("rerun not attempted");
-    expect(result.stdout).not.toContain("--restore");
-    expect(result.stdout).toContain("action: prioritized");
   });
 });
 

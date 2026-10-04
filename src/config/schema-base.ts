@@ -1,4 +1,3 @@
-// Builds base config schema metadata shared across generated config surfaces.
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
@@ -19,40 +18,25 @@ type ConfigSchema = Record<string, unknown>;
  * preserved.
  */
 function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly string[] = [""]): void {
-  const props = node.properties;
-  if (props) {
-    for (const [key, child] of Object.entries(props)) {
-      const childObj = asSchemaObject(child);
-      if (!childObj) {
-        continue;
-      }
-      const childPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key));
-      applyNodeDocumentation(childObj, childPrefixes);
-      applyFieldDocumentation(childObj, childPrefixes);
-    }
+  for (const [key, child] of Object.entries(node.properties ?? {})) {
+    applyChildDocumentation(
+      child,
+      prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key)),
+    );
   }
-  // Handle additionalProperties (wildcard keys like "models.providers.*")
-  if (node.additionalProperties && typeof node.additionalProperties === "object") {
-    const addObj = asSchemaObject(node.additionalProperties);
-    if (addObj) {
-      const wildcardPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*"));
-      applyNodeDocumentation(addObj, wildcardPrefixes);
-      applyFieldDocumentation(addObj, wildcardPrefixes);
-    }
+  if (node.additionalProperties) {
+    applyChildDocumentation(
+      node.additionalProperties,
+      prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*")),
+    );
   }
-  // Handle array items. Help/labels may use either "[]" notation
-  // (bindings[].type) or wildcard "*" notation (agents.list.*.skills).
+  // Array help/labels accept both bindings[].type and bindings.*.type.
   if (node.items) {
-    const itemsObj = asSchemaObject(node.items);
-    if (itemsObj) {
-      const itemPrefixes = Array.from(
-        new Set(
-          prefixes.flatMap((prefix) => (prefix ? [`${prefix}.*`, `${prefix}[]`] : ["*", "[]"])),
-        ),
-      );
-      applyNodeDocumentation(itemsObj, itemPrefixes);
-      applyFieldDocumentation(itemsObj, itemPrefixes);
-    }
+    applyChildDocumentation(node.items, [
+      ...new Set(
+        prefixes.flatMap((prefix) => (prefix ? [`${prefix}.*`, `${prefix}[]`] : ["*", "[]"])),
+      ),
+    ]);
   }
   // Recurse into composition branches (anyOf, oneOf, allOf) using the same
   // path aliases so union/intersection variants inherit the same field docs.
@@ -69,7 +53,11 @@ function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly stri
   }
 }
 
-function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly string[]): void {
+function applyChildDocumentation(value: unknown, pathCandidates: readonly string[]): void {
+  const node = asSchemaObject(value);
+  if (!node) {
+    return;
+  }
   for (const path of pathCandidates) {
     const title = FIELD_LABELS[path];
     if (!node.title && title) {
@@ -80,6 +68,7 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
       node.description = description;
     }
   }
+  applyFieldDocumentation(node, pathCandidates);
 }
 
 type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;

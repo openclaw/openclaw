@@ -1,4 +1,3 @@
-// Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import type { Result } from "@openclaw/normalization-core/result";
@@ -6,13 +5,16 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
-import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
+import {
+  resolveConversationBindingChannelFromMessage,
+  resolveConversationBindingThreadIdFromMessage,
+} from "../conversation-binding-input.js";
 
 export const COMMAND = "/acp";
 const ACP_SPAWN_USAGE =
@@ -76,7 +78,7 @@ function readOptionValue(params: { tokens: string[]; index: number; flags: reado
       error?: string;
     }
   | { matched: false } {
-  const token = normalizeAcpOptionToken(params.tokens[params.index] ?? "");
+  const token = params.tokens[params.index] ?? "";
   const flag = params.flags.find(
     (candidate) => token === candidate || token.startsWith(`${candidate}=`),
   );
@@ -86,7 +88,7 @@ function readOptionValue(params: { tokens: string[]; index: number; flags: reado
   let value: string;
   let nextIndex = params.index + 1;
   if (token === flag) {
-    const nextValue = normalizeAcpOptionToken(params.tokens[params.index + 1] ?? "");
+    const nextValue = params.tokens[params.index + 1] ?? "";
     value = nextValue.startsWith("--") ? "" : nextValue;
     if (value) {
       nextIndex += 1;
@@ -118,11 +120,11 @@ function normalizeAcpOptionToken(raw: string): string {
 }
 
 function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
-  const channel = resolveAcpCommandChannel(params);
+  const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
   if (!supportsAutomaticThreadBindingSpawn(channel)) {
     return "off";
   }
-  const currentThreadId = resolveAcpCommandThreadId(params);
+  const currentThreadId = resolveConversationBindingThreadIdFromMessage(params.ctx);
   return currentThreadId ? "here" : "auto";
 }
 
@@ -130,7 +132,7 @@ export function parseSpawnInput(
   params: HandleCommandsParams,
   tokens: string[],
 ): Result<ParsedSpawnInput, string> {
-  const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
+  const normalizedTokens = tokens.map(normalizeAcpOptionToken);
   let mode: AcpRuntimeSessionMode = "persistent";
   let thread = resolveDefaultSpawnThreadMode(params);
   let sawThreadOption = false;
@@ -212,7 +214,7 @@ export function parseSpawnInput(
   }
 
   const fallbackAgent = normalizeOptionalString(params.cfg.acp?.defaultAgent) ?? "";
-  const selectedAgent = normalizeOptionalString(rawAgentId) ?? fallbackAgent;
+  const selectedAgent = rawAgentId ?? fallbackAgent;
   if (!selectedAgent) {
     return {
       ok: false,
@@ -244,7 +246,7 @@ export function parseSpawnInput(
 }
 
 export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, string> {
-  const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
+  const normalizedTokens = tokens.map(normalizeAcpOptionToken);
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
@@ -292,10 +294,7 @@ export function parseSingleValueCommandInput(
   usage: string,
 ): Result<ParsedSingleValueCommandInput, string> {
   const value = normalizeOptionalString(tokens[0]) ?? "";
-  if (!value) {
-    return { ok: false, error: usage };
-  }
-  if (tokens.length > 2) {
+  if (!value || tokens.length > 2) {
     return { ok: false, error: usage };
   }
   const sessionToken = normalizeOptionalString(tokens[1]);
@@ -311,13 +310,7 @@ export function parseSingleValueCommandInput(
 export function parseSetCommandInput(tokens: string[]): Result<ParsedSetCommandInput, string> {
   const key = normalizeOptionalString(tokens[0]) ?? "";
   const value = normalizeOptionalString(tokens[1]) ?? "";
-  if (!key || !value) {
-    return {
-      ok: false,
-      error: ACP_SET_USAGE,
-    };
-  }
-  if (tokens.length > 3) {
+  if (!key || !value || tokens.length > 3) {
     return {
       ok: false,
       error: ACP_SET_USAGE,
@@ -369,7 +362,7 @@ export function resolveAcpHelpText(): string {
     "/acp sessions",
     "",
     "Notes:",
-    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
+    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.entries id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
     "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
@@ -391,7 +384,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
     extras ? `extras={${extras}}` : null,
-  ].filter(Boolean) as string[];
+  ].filter(Boolean);
   if (parts.length === 0) {
     return "(none)";
   }
@@ -423,20 +416,17 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
   return randomUUID();
 }
 
-export async function withAcpCommandErrorBoundary<T>(params: {
-  run: () => Promise<T>;
-  fallbackCode: AcpRuntimeError["code"];
+export async function withAcpCommandErrorBoundary(params: {
+  run: () => Promise<CommandHandlerResult>;
   fallbackMessage: string;
-  onSuccess: (value: T) => CommandHandlerResult;
 }): Promise<CommandHandlerResult> {
   try {
-    const result = await params.run();
-    return params.onSuccess(result);
+    return await params.run();
   } catch (error) {
     return commandReply(
       toAcpRuntimeErrorText({
         error,
-        fallbackCode: params.fallbackCode,
+        fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: params.fallbackMessage,
       }),
     );

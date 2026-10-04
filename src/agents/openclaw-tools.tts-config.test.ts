@@ -72,7 +72,7 @@ describe("createOpenClawTools context wiring", () => {
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
-      agents: { list: [{ id: "reader" }, { id: "main" }] },
+      agents: { entries: { reader: {}, main: {} } },
       channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
     } satisfies OpenClawConfig;
     const tool = createTools({
@@ -180,19 +180,36 @@ describe("createOpenClawTools context wiring", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("uses the isolated cron run key for background media completions", () => {
-    createTools({
-      config: mediaConfig,
-      agentSessionKey: "agent:main:cron:daily-media",
-      runSessionKey: "agent:main:cron:daily-media:run:run-123",
-      onYield: vi.fn(),
-    });
-    for (const factory of [mocks.image, mocks.video, mocks.music]) {
-      expect(factory).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSessionKey: "agent:main:cron:daily-media:run:run-123" }),
-      );
-    }
-  });
+  it.each([
+    [
+      "agent:main:cron:daily-media",
+      "agent:main:cron:daily-media:run:run-123",
+      "agent:main:cron:daily-media:run:run-123",
+    ],
+    [
+      "agent:main:qa-channel:default:direct:media-requester",
+      "agent:main:main",
+      "agent:main:qa-channel:default:direct:media-requester",
+    ],
+  ])(
+    "passes a separate durable requester key for background media from %s",
+    (agentSessionKey, runSessionKey, taskSessionKey) => {
+      createTools({
+        config: mediaConfig,
+        agentSessionKey,
+        runSessionKey,
+        onYield: vi.fn(),
+      });
+      for (const factory of [mocks.image, mocks.video, mocks.music]) {
+        expect(factory).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentSessionKey: taskSessionKey,
+            requesterRunSessionKey: runSessionKey,
+          }),
+        );
+      }
+    },
+  );
 
   it("passes the active live-run route into session_status", () => {
     const sessionKey = "agent:main:discord:channel:1489550370136129537";

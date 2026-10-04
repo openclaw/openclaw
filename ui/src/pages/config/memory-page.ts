@@ -32,7 +32,7 @@ import {
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
-import "./memory-dreaming-page.ts";
+import "../agents/memory/memory-panel.ts";
 import "./memory-memories.ts";
 import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
@@ -40,7 +40,6 @@ import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overvi
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
-  memorySchemaKeysForTab,
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryEngineSelection,
@@ -79,15 +78,6 @@ type MemoryAddonNotice = {
   bootId: string | undefined;
 };
 
-type MemoryPageProps = {
-  configObject: Record<string, unknown>;
-  mutationDisabled: boolean;
-  pluginsHref: string;
-  memoryImportHref: string;
-  routeData: ConfigRouteData | null;
-  buildEditor: (keys: readonly string[]) => TemplateResult;
-};
-
 class MemorySettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -97,7 +87,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @property() pluginsHref = "";
   @property() memoryImportHref = "";
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
-  @property({ attribute: false }) buildEditor: MemoryPageProps["buildEditor"] = () => html``;
+  @property({ attribute: false }) buildEditor: () => TemplateResult = () => html``;
 
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
@@ -132,24 +122,20 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         return undefined;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       (selection) => this.selectAgent(selection.state.selectedId),
     )
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.syncGateway(gateway.snapshot),
     )
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => this.syncSupport(runtimeConfig),
     )
-    .watch(
+    .watchStore(
       () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
       () => void this.loadOverviewStatus(),
     );
 
@@ -682,9 +668,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
           .agentId=${agentId}
         ></openclaw-memory-memories>
       `,
-      dreams: html` <openclaw-memory-dreaming .agentId=${agentId}></openclaw-memory-dreaming> `,
-      editor:
-        activeTab === "settings" ? this.buildEditor(memorySchemaKeysForTab("settings")) : html``,
+      dreams: agentId
+        ? html`<openclaw-agent-memory-panel .agentId=${agentId}></openclaw-agent-memory-panel>`
+        : html``,
+      editor: activeTab === "settings" ? this.buildEditor() : html``,
       dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });
   }
@@ -692,17 +679,4 @@ class MemorySettingsPage extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-memory-settings")) {
   customElements.define("openclaw-memory-settings", MemorySettingsPage);
-}
-
-export function renderMemoryPage(props: MemoryPageProps) {
-  return html`
-    <openclaw-memory-settings
-      .configObject=${props.configObject}
-      .mutationDisabled=${props.mutationDisabled}
-      .pluginsHref=${props.pluginsHref}
-      .memoryImportHref=${props.memoryImportHref}
-      .routeData=${props.routeData}
-      .buildEditor=${props.buildEditor}
-    ></openclaw-memory-settings>
-  `;
 }

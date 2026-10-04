@@ -100,32 +100,28 @@ export function parseGatewayMatrixActivationDiagnostic(
   if (start < 0) {
     return undefined;
   }
-  try {
-    const value: unknown = JSON.parse(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
-    if (
-      !record(value) ||
-      value.boundary !== "activation" ||
-      typeof value.runId !== "string" ||
-      typeof value.active !== "boolean" ||
-      typeof value.toolsEnabled !== "boolean" ||
-      typeof value.toolsDisabled !== "boolean" ||
-      typeof value.rawRun !== "boolean" ||
-      typeof value.fallbackActive !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      runId: value.runId,
-      active: value.active,
-      toolsEnabled: value.toolsEnabled,
-      toolsDisabled: value.toolsDisabled,
-      rawRun: value.rawRun,
-      fallbackActive: value.fallbackActive,
-      ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
-    };
-  } catch {
+  const value = safeParseJson(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
+  if (
+    !record(value) ||
+    value.boundary !== "activation" ||
+    typeof value.runId !== "string" ||
+    typeof value.active !== "boolean" ||
+    typeof value.toolsEnabled !== "boolean" ||
+    typeof value.toolsDisabled !== "boolean" ||
+    typeof value.rawRun !== "boolean" ||
+    typeof value.fallbackActive !== "boolean"
+  ) {
     return undefined;
   }
+  return {
+    runId: value.runId,
+    active: value.active,
+    toolsEnabled: value.toolsEnabled,
+    toolsDisabled: value.toolsDisabled,
+    rawRun: value.rawRun,
+    fallbackActive: value.fallbackActive,
+    ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
+  };
 }
 
 export function evaluateGatewayMatrixActivation(params: {
@@ -339,13 +335,9 @@ function outputDetails(message: RecordValue): RecordValue {
     if (!record(item) || typeof item.text !== "string") {
       continue;
     }
-    try {
-      const decoded: unknown = JSON.parse(item.text);
-      if (record(decoded)) {
-        return decoded;
-      }
-    } catch {
-      /* A truncated display is evidence of truncation, not a complete result. */
+    const decoded = safeParseJson(item.text);
+    if (record(decoded)) {
+      return decoded;
     }
   }
   return record(message.details) ? message.details : {};
@@ -487,7 +479,9 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
 }
 
 function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] {
-  let outcome = trace.outcomes.findLast((item) => item.id === call.id);
+  const outcomeFor = (id: string) =>
+    trace.outcomes.findLast((item) => item.id === id && item.sessionKey === call.sessionKey);
+  let outcome = outcomeFor(call.id);
   const outcomes = outcome ? [outcome] : [];
   let cursor = trace.calls.indexOf(call);
   while (outcome && !outcome.isError && outcome.details.status === "waiting") {
@@ -496,14 +490,18 @@ function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] 
       break;
     }
     const next = trace.calls.findIndex(
-      (item, index) => index > cursor && item.name === "wait" && item.args.runId === runId,
+      (item, index) =>
+        index > cursor &&
+        item.name === "wait" &&
+        item.args.runId === runId &&
+        item.sessionKey === call.sessionKey,
     );
     const wait = trace.calls[next];
     if (!wait) {
       break;
     }
     cursor = next;
-    outcome = trace.outcomes.findLast((item) => item.id === wait.id);
+    outcome = outcomeFor(wait.id);
     if (outcome) {
       outcomes.push(outcome);
     }
@@ -613,10 +611,6 @@ function observedReferences(
   );
 }
 
-function referenceIds(trace: GatewayMatrixTrace): string[] {
-  return [...new Set(observedReferences(trace).map((reference) => reference.id))];
-}
-
 export function evaluateGatewayMatrixTask(params: {
   task: GatewayMatrixContractTask;
   expected: RecordValue;
@@ -718,7 +712,9 @@ export function evaluateGatewayMatrixTask(params: {
       record(fetched.details.value.reference)
         ? fetched
         : undefined;
-    const refs = automatic ? referenceIds({ ...trace, outcomes: [automatic] }) : [];
+    const refs = automatic
+      ? [...new Set(observedReferences({ ...trace, outcomes: [automatic] }).map(({ id }) => id))]
+      : [];
     const load = trace.calls.find(
       (call) =>
         refs.some((id) => source(call).includes(id)) && source(call).includes("results.load"),
@@ -742,7 +738,8 @@ export function evaluateGatewayMatrixTask(params: {
       (name) => receiptCalls.some((row) => row.tool === name),
     );
   } else if (task === "automation-contracts") {
-    const automations = activity.filter((item) => item.name === "automations");
+    const allAutomations = trace.activities.filter((item) => item.name === "automations");
+    const automations = allAutomations.filter((item) => !item.isError);
     const completeInventory = (item: ToolActivity) =>
       item.input.action === "list" &&
       item.input.includeDisabled === true &&
@@ -783,36 +780,30 @@ export function evaluateGatewayMatrixTask(params: {
           item.input.job.enabled === false &&
           (record(item.result.job) ? item.result.job.enabled : item.result.enabled) === false,
       );
-    checks.remainedDisabled = trace.activities
-      .filter((item) => item.name === "automations")
-      .every((item) => {
-        if (["run", "wake"].includes(String(item.input.action))) {
-          return false;
-        }
-        if (item.input.action !== "update") {
-          return true;
-        }
-        if (
-          item.input.enabled === true ||
-          (record(item.input.job) && item.input.job.enabled === true) ||
-          (record(item.input.patch) && item.input.patch.enabled === true)
-        ) {
-          return false;
-        }
-        const job = record(item.result.job) ? item.result.job : item.result;
-        return item.isError || job.enabled === false;
-      });
+    checks.remainedDisabled = allAutomations.every((item) => {
+      if (["run", "wake"].includes(String(item.input.action))) {
+        return false;
+      }
+      if (item.input.action !== "update") {
+        return true;
+      }
+      if (
+        item.input.enabled === true ||
+        (record(item.input.job) && item.input.job.enabled === true) ||
+        (record(item.input.patch) && item.input.patch.enabled === true)
+      ) {
+        return false;
+      }
+      const job = record(item.result.job) ? item.result.job : item.result;
+      return item.isError || job.enabled === false;
+    });
     const createdIds = new Set(created.map(jobId));
-    checks.onlyOwnedMutations = trace.activities
-      .filter(
-        (item) =>
-          item.name === "automations" && ["update", "remove"].includes(String(item.input.action)),
-      )
+    checks.onlyOwnedMutations = allAutomations
+      .filter((item) => ["update", "remove"].includes(String(item.input.action)))
       .every((item) => createdIds.has(item.input.jobId ?? item.input.id));
     checks.createdFacts =
       created.length === 1 &&
-      trace.activities.filter((item) => item.name === "automations" && item.input.action === "add")
-        .length === 1 &&
+      allAutomations.filter((item) => item.input.action === "add").length === 1 &&
       created.every((item) => {
         const job = record(item.result.job) ? item.result.job : item.result;
         const scheduledAt =

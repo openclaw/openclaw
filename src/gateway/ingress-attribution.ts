@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { firstHeaderValue } from "./http-header-value.js";
 import {
   hasForwardedRequestHeaders,
   isLoopbackAddress,
@@ -92,10 +93,6 @@ export function markGatewayIngressTransport(
   requestTransport.set(req, transport);
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
   return {
     kind: "unattributable-proxy",
@@ -141,7 +138,7 @@ function hasTailscaleOwnedHeaders(req: IncomingMessage): boolean {
 function resolveTailscaleClientIp(req: IncomingMessage): string | undefined {
   return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress,
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    forwardedFor: firstHeaderValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: ["127.0.0.1", "::1"],
   });
 }
@@ -160,7 +157,7 @@ function resolveManagedTailscaleIngress(params: {
   if (!clientIp || isLoopbackAddress(clientIp)) {
     return unattributableProxy(remoteAddress);
   }
-  const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
+  const funnelMarker = firstHeaderValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
     return !funnelMarker || funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
@@ -236,7 +233,7 @@ function resolveGatewayIngressAttribution(params: {
     }
     return {
       ...attributed("trusted-proxy", clientIp),
-      ...(headerValue(req.headers?.["tailscale-funnel-request"]) === "?1"
+      ...(firstHeaderValue(req.headers?.["tailscale-funnel-request"]) === "?1"
         ? { externalTailscaleExposure: "funnel" as const }
         : {}),
     };

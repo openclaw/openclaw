@@ -1,8 +1,12 @@
-// Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+  resolveOptionalIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -54,20 +58,6 @@ const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
 );
-
-function normalizeTimeoutDuration(value?: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-function clampCapturedOutputChars(value?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_MAX_CAPTURED_OUTPUT_CHARS;
-  }
-  return Math.max(256, Math.floor(value));
-}
 
 function appendCapturedOutput(
   current: string,
@@ -275,7 +265,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     let forceKillTimer: NodeJS.Timeout | null = null;
     let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
-    const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
+    const maxCapturedOutputChars = resolveIntegerOption(
+      asPositiveFiniteNumber(input.maxCapturedOutputChars),
+      DEFAULT_MAX_CAPTURED_OUTPUT_CHARS,
+      { min: 256 },
+    );
 
     const setForcedReason = (reason: TerminationReason) => {
       if (forcedReason || resultSettled) {
@@ -289,11 +283,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     const constructionAbortError = new Error("adapter construction aborted");
     const constructionAbortPromise = new Promise<never>((_, reject) => {
       const rejectConstruction = () => reject(constructionAbortError);
-      if (constructionAbort.signal.aborted) {
-        rejectConstruction();
-      } else {
-        constructionAbort.signal.addEventListener("abort", rejectConstruction, { once: true });
-      }
+      constructionAbort.signal.addEventListener("abort", rejectConstruction, { once: true });
     });
 
     const requestCancel = (reason: TerminationReason) => {
@@ -309,7 +299,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     owner.cancel = requestCancel;
 
     const createDeadline = (reason: "overall-timeout" | "no-output-timeout", value?: number) => {
-      const durationMs = normalizeTimeoutDuration(value);
+      const durationMs = resolveOptionalIntegerOption(asPositiveFiniteNumber(value), { min: 1 });
       let deadlineMs: number | null = null;
       let timer: ReturnType<typeof setProcessTimeout> | undefined;
       // Re-arm bounded intervals: a long deadline must not overflow Node's timer cap.
@@ -579,31 +569,29 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         forceKillTimer.unref?.();
       };
 
-      const waitOutcome = Promise.allSettled([
-        (async (): Promise<RunExit> => {
-          const result = await adapter.wait();
-          const terminalReason = forcedReason;
-          settleResult(adapter);
+      const waitPromise = (async (): Promise<RunExit> => {
+        const result = await adapter.wait();
+        const terminalReason = forcedReason;
+        settleResult(adapter);
 
-          const reason: TerminationReason =
-            terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
-          const exit: RunExit = {
-            reason,
-            exitCode: result.code,
-            exitSignal: result.signal,
-            oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
-            durationMs: Date.now() - startedAtMs,
-            ...captured,
-            timedOut: isTimeoutReason(reason),
-            noOutputTimedOut: terminalReason === "no-output-timeout",
-          };
-          return exit;
-        })().finally(() => {
-          if (!resultSettled) {
-            settleResult(adapter);
-          }
-        }),
-      ]);
+        const reason: TerminationReason =
+          terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+        return {
+          reason,
+          exitCode: result.code,
+          exitSignal: result.signal,
+          oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
+          durationMs: Date.now() - startedAtMs,
+          ...captured,
+          timedOut: isTimeoutReason(reason),
+          noOutputTimedOut: terminalReason === "no-output-timeout",
+        };
+      })().finally(() => {
+        if (!resultSettled) {
+          settleResult(adapter);
+        }
+      });
+      void waitPromise.catch(() => undefined);
 
       const managedRun: ManagedRun = {
         activity: Object.freeze({
@@ -623,13 +611,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
-        wait: async () => {
-          const [outcome] = await waitOutcome;
-          if (outcome.status === "rejected") {
-            throw outcome.reason;
-          }
-          return outcome.value;
-        },
+        wait: () => waitPromise,
         ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);

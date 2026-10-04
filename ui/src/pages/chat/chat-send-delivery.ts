@@ -22,7 +22,6 @@ import {
   type ChatOutboxDrainDependencies,
   type QueuedChatSendOptions,
   type QueuedChatSendResult,
-  type QueuedChatStorageMode,
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
@@ -44,6 +43,7 @@ import {
   prepareQueuedChatPayload,
   publishPendingSendMessage,
   resolveQueuedChatLeaf,
+  settleDeliverySettings,
   settleQueuedChatSendFailure,
   updateQueuedSendItem,
   waitForQueuedChatHistory,
@@ -79,75 +79,6 @@ import {
 import { scheduleChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
-
-async function settleDeliverySettings(
-  host: ChatHost,
-  item: ChatQueueItem,
-  storageMode: QueuedChatStorageMode,
-  queueSessionKey: string,
-  options: QueuedChatSendOptions | undefined,
-  deliver: (item: ChatQueueItem) => QueuedChatSendResult | Promise<QueuedChatSendResult>,
-): Promise<QueuedChatSendResult> {
-  const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, item.id);
-  const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
-  const consumed = new Set<Promise<boolean>>();
-  let pendingSettings =
-    options?.pendingSettings ?? getPendingChatPickerPatch(host, route, item.agentId);
-  let current = pendingSettings ? readQueuedMessageById(host, item.id) : item;
-
-  while (pendingSettings && !consumed.has(pendingSettings)) {
-    if (
-      current?.sendState === "held" ||
-      (current?.sendState === "unconfirmed" && !current.sendRunId)
-    ) {
-      return "pending";
-    }
-    if (current?.sendState !== "waiting-model") {
-      current = setState("waiting-model");
-      if (!current) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      }
-    }
-    host.requestUpdate?.();
-
-    const ready = await pendingSettings;
-    consumed.add(pendingSettings);
-    current = readQueuedMessageById(host, item.id);
-    if (!current) {
-      return "failed";
-    }
-    if (
-      current.sendState === "held" ||
-      (current.sendState === "unconfirmed" && !current.sendRunId)
-    ) {
-      return "pending";
-    }
-    if (!ready) {
-      const restored =
-        routeVisible(current.agentId) && restoreRejectedChatDelivery(host, current, options);
-      if (!restored && !setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      }
-      host.requestUpdate?.();
-      return "failed";
-    }
-    pendingSettings = getPendingChatPickerPatch(host, route, current.agentId);
-  }
-  if (consumed.size) {
-    // Publish only after the complete picker tail, then continue synchronously:
-    // returning to an awaiting caller would admit another picker in that gap.
-    current = setState(reconnectSafeQueuedSendState(host));
-  }
-  if (!current) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-    return "failed";
-  }
-  if (consumed.size) {
-    host.requestUpdate?.();
-  }
-  return deliver(current);
-}
 
 async function sendQueuedChatMessage(
   host: ChatHost,
@@ -721,5 +652,4 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       target: options.target,
     });
   },
-  setChatError,
 };

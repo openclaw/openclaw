@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
@@ -114,7 +115,7 @@ async function resolveNpmOwner(params: {
     .runCommand([params.command, "--version"], { timeoutMs: params.timeoutMs })
     .catch((error: unknown) => ({
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: coerceErrorMessage(error),
       code: 1,
     }));
   const version = result.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
@@ -227,15 +228,12 @@ function resolveNpmAliasPackageName(spec: string): string | null {
     return null;
   }
   const target = spec.slice(spec.indexOf(":") + 1).trim();
-  if (target.startsWith("@")) {
-    const scopeSeparator = target.indexOf("/");
-    if (scopeSeparator <= 1) {
-      return null;
-    }
-    const versionSeparator = target.indexOf("@", scopeSeparator + 1);
-    return versionSeparator === -1 ? target : target.slice(0, versionSeparator);
+  const scoped = target.startsWith("@");
+  const scopeSeparator = scoped ? target.indexOf("/") : -1;
+  if (scoped && scopeSeparator <= 1) {
+    return null;
   }
-  const versionSeparator = target.indexOf("@");
+  const versionSeparator = target.indexOf("@", scopeSeparator + 1);
   const packageName = versionSeparator === -1 ? target : target.slice(0, versionSeparator);
   return packageName || null;
 }
@@ -581,6 +579,7 @@ export async function createGlobalInstallEnv(
     applyNpmFreshnessBypassEnv(merged);
   }
   applyPosixNpmScriptShellEnv(merged);
+  // Candidate lifecycle uses this pin for Bun-only global launchers, including private staging.
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
   }
@@ -1034,18 +1033,15 @@ export async function resolveGlobalInstallTarget(params: {
   const pkgOwnership = params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs);
   await pkgOwnership.assertUnowned(params.pkgRoot);
   const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const requestedPnpmGlobalRoot =
-    requestedCommand.manager === "pnpm"
-      ? await resolveGlobalRoot(
-          requestedCommand,
-          params.runCommand,
-          params.timeoutMs,
-          params.pkgRoot,
-        )
-      : null;
+  let requestedPnpmGlobalRoot: Promise<string | null> | undefined;
+  const resolveRequestedPnpmGlobalRoot = () =>
+    (requestedPnpmGlobalRoot ??=
+      requestedCommand.manager === "pnpm"
+        ? resolveGlobalRoot(requestedCommand, params.runCommand, params.timeoutMs, params.pkgRoot)
+        : Promise.resolve(null));
   const inferredPnpmIsolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
   const pnpmIsolatedPackage = await resolvePnpmIsolatedGlobalPackage({
-    globalRoot: inferredPnpmIsolatedGlobalRoot || requestedPnpmGlobalRoot,
+    globalRoot: inferredPnpmIsolatedGlobalRoot || (await resolveRequestedPnpmGlobalRoot()),
     packageName: params.packageName,
     pkgRoot: params.pkgRoot,
   });
@@ -1093,7 +1089,7 @@ export async function resolveGlobalInstallTarget(params: {
     (requestedCommand.manager === "pnpm" &&
     command.manager === requestedCommand.manager &&
     command.command === requestedCommand.command
-      ? requestedPnpmGlobalRoot
+      ? await resolveRequestedPnpmGlobalRoot()
       : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot));
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??

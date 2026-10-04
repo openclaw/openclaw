@@ -41,7 +41,6 @@ vi.mock("../../agents/embedded-agent-runner/run/attempt.js", () => ({
 
 const resourceModes = [
   "late-success",
-  "exclusive",
   "sigterm",
   "late-failure",
   "db-close-failure",

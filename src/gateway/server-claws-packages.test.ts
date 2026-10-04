@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:sqlite";
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { buildClawRemovalFixture } from "../claws/lifecycle-remove.test-support.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import {
@@ -20,6 +22,7 @@ import {
   readClawInstallRecord,
   readClawPackageRefs,
   updateClawInstallRecordStatus,
+  updateClawPackageRefStatus,
 } from "../claws/provenance.js";
 import {
   PluginRuntimeApplicationError,
@@ -31,6 +34,7 @@ import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -40,7 +44,7 @@ type ClawPackageRemovalRequest = z.infer<typeof clawPackageRemovalRequestSchema>
 
 const mocks = vi.hoisted(() => ({ status: vi.fn(), resolve: vi.fn(), uninstall: vi.fn() }));
 vi.mock("../claws/lifecycle-status.js", () => ({
-  readClawStatus: (...args: unknown[]) => mocks.status(...args),
+  readClawPackageRemovalStatus: (...args: unknown[]) => mocks.status(...args),
 }));
 vi.mock("../plugins/plugin-install-preflight.js", async (original) => ({
   ...(await original<typeof import("../plugins/plugin-install-preflight.js")>()),
@@ -70,7 +74,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     version: "1.0.0",
     integrity: "sha256:audit",
   };
-  persistClawPackageRef(plan, pkg);
+  const packageRef = persistClawPackageRef(plan, pkg);
   const claim = () =>
     beginAgentDeletionJournal({
       operationId: randomUUID(),
@@ -83,12 +87,8 @@ async function fixture(uninstallWarnings: string[] = []) {
   const journal = claim();
   const application = { operationId: "runtime-removal", generation: 2, pluginIds: ["audit"] };
   mocks.status.mockImplementation(async () => ({
-    records: [
-      {
-        install: readClawInstallRecord("worker"),
-        packages: readClawPackageRefs({ agentId: "worker" }),
-      },
-    ],
+    install: readClawInstallRecord("worker"),
+    packages: readClawPackageRefs({ agentId: "worker" }),
   }));
   mocks.resolve.mockResolvedValue({
     status: "found",
@@ -175,6 +175,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     state,
     plan,
     pkg,
+    packageRef,
     decisions,
     input,
     application,
@@ -186,6 +187,100 @@ async function fixture(uninstallWarnings: string[] = []) {
 }
 
 describe("Gateway Claw package cleanup owner", () => {
+  it("revokes a delayed Gateway result before its deletion owner publishes retry status", async () => {
+    const f = await fixture();
+    const previous = readAgentDeletionJournal("worker");
+    if (!previous) {
+      throw new Error("Fixture deletion journal is missing");
+    }
+    await withAgentDeletion("worker", async (begin) => {
+      const deletion = begin(previous);
+      const oldOperationId = deletion.entry.operationId;
+      f.input.operationId = oldOperationId;
+      const entered = createDeferred();
+      const release = createDeferred();
+      const snapshot = {
+        install: readClawInstallRecord("worker"),
+        packages: readClawPackageRefs({ agentId: "worker" }),
+      };
+      mocks.status.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return snapshot;
+      });
+      const outcome = f.invoke().then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+      await Promise.race([
+        entered.promise,
+        outcome.then(() => {
+          throw new Error("Removal ended before reaching the controlled status read");
+        }),
+      ]);
+      try {
+        updateClawInstallRecordStatus("worker", "partial", { deletionOperation: deletion });
+        expect(readAgentDeletionJournal("worker")?.operationId).not.toBe(oldOperationId);
+        expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      expect((await outcome).ok).toBe(false);
+      expect(mocks.uninstall).not.toHaveBeenCalled();
+      expect(readClawPackageRefs({ agentId: "worker" })).toEqual(snapshot.packages);
+    });
+  });
+
+  it.each(["journal", "abort", "install writer"])(
+    "keeps removal authority current while the status worker waits (%s)",
+    async (change) => {
+      const f = await fixture();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const snapshot = {
+        install: readClawInstallRecord("worker"),
+        packages: readClawPackageRefs({ agentId: "worker" }),
+      };
+      mocks.status.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return snapshot;
+      });
+      const outcome = f.invoke().then(
+        (value) => ({ ok: true, value }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+      await Promise.race([
+        entered.promise,
+        outcome.then(() => {
+          throw new Error("Removal ended before reaching the controlled status read");
+        }),
+      ]);
+      try {
+        if (change === "journal") {
+          f.claim();
+        } else if (change === "abort") {
+          f.controller.abort(new Error("Removal was canceled during the state read"));
+        } else {
+          expect(() => updateClawInstallRecordStatus("worker", "partial")).toThrow(/deletion/i);
+          expect(readClawInstallRecord("worker")).toEqual(snapshot.install);
+        }
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      const result = await outcome;
+      expect(result.ok).toBe(change === "install writer");
+      if (change === "install writer") {
+        expect(mocks.uninstall).toHaveBeenCalledOnce();
+      } else {
+        expect(mocks.uninstall).not.toHaveBeenCalled();
+        expect(readClawPackageRefs({ agentId: "worker" })).toEqual(snapshot.packages);
+      }
+    },
+  );
+
   it("requires administrative scope", () => {
     expect(
       authorizeOperatorScopesForMethod("claws.packages.remove", ["operator.read"]),
@@ -196,30 +291,39 @@ describe("Gateway Claw package cleanup owner", () => {
   });
 
   it.each([
-    { runtimeWarnings: [], uninstallWarnings: [] },
-    { runtimeWarnings: ["Runtime cleanup is still finishing."], uninstallWarnings: [] },
-    { runtimeWarnings: [], uninstallWarnings: ["Package dependency pruning failed."] },
+    { runtimeWarnings: [], uninstallWarnings: [], expectedWarnings: [] },
     {
-      runtimeWarnings: ["Runtime cleanup is still finishing."],
-      uninstallWarnings: [
+      runtimeWarnings: ["Runtime cleanup is still finishing.", "Cleanup is still pending."],
+      uninstallWarnings: ["Package dependency pruning failed.", "Cleanup is still pending."],
+      expectedWarnings: [
         "Package dependency pruning failed.",
+        "Cleanup is still pending.",
         "Runtime cleanup is still finishing.",
       ],
     },
   ])("returns actual removal application and all cleanup warnings %j", async (warnings) => {
     const f = await fixture(warnings.uninstallWarnings);
     f.applyRuntime.mockResolvedValue({ ...f.application, warnings: warnings.runtimeWarnings });
-    const result = await f.invoke();
-    const expectedWarnings = [
-      ...new Set([...warnings.uninstallWarnings, ...warnings.runtimeWarnings]),
-    ];
-    expect(result).toEqual({
-      packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
-      application: f.application,
-      ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
-    });
-    expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
-    expect(mocks.uninstall).toHaveBeenCalledOnce();
+    const { db } = openOpenClawStateDatabase();
+    db.setAuthorizer((action, table) =>
+      action === constants.SQLITE_UPDATE && table === "claw_package_refs"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      expect(() => updateClawPackageRefStatus(f.packageRef, "pending")).toThrow(/not authorized/i);
+      const result = await f.invoke();
+      const { expectedWarnings } = warnings;
+      expect(result).toEqual({
+        packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
+        application: f.application,
+        ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
+      });
+      expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+      expect(mocks.uninstall).toHaveBeenCalledOnce();
+    } finally {
+      db.setAuthorizer(null);
+    }
   });
 
   it.each([true, false])(
@@ -268,10 +372,10 @@ describe("Gateway Claw package cleanup owner", () => {
       if (change === "journal") {
         f.claim();
       }
-      if (change === "install") {
-        updateClawInstallRecordStatus("worker", "partial");
-      }
       const overrides: Partial<ClawPackageRemovalRequest> = {};
+      if (change === "install") {
+        overrides.expectedInstallDigest = digestClawRemovalInstall(undefined);
+      }
       if (change === "selection") {
         overrides.cleanup = { ...f.input.cleanup, allowConflicts: true };
       }
@@ -307,25 +411,15 @@ describe("Gateway Claw package cleanup owner", () => {
       persistClawPackageRef({ ...f.plan, agent: { ...f.plan.agent, finalId: "other" } }, f.pkg);
     });
     await entered.promise;
-    let reply: unknown;
-    const pending = f
-      .invoke()
-      .catch((error: unknown) => error)
-      .then((result) => {
-        reply = result;
-      });
+    const pending = f.invoke();
     try {
-      await vi.waitFor(
-        () =>
-          expect(reply).toMatchObject({
-            cause: {
-              code: "UNAVAILABLE",
-              retryable: true,
-              message: expect.stringContaining("retry"),
-            },
-          }),
-        { timeout: 1_000 },
-      );
+      await expect(pending).rejects.toMatchObject({
+        cause: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringContaining("retry"),
+        },
+      });
       expect(mocks.uninstall).not.toHaveBeenCalled();
       expect(f.applyRuntime).not.toHaveBeenCalled();
       expect(readAgentDeletionJournal("worker")).toEqual(journal);

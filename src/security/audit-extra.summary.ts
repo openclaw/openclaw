@@ -1,5 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+} from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -30,15 +34,13 @@ const SMALL_MODEL_PARAM_B_MAX = 300;
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
   allowlist: number;
-  other: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
-    return { open: 0, allowlist: 0, other: 0 };
+    return { open: 0, allowlist: 0 };
   }
   let open = 0;
   let allowlist = 0;
-  let other = 0;
   for (const value of Object.values(channels)) {
     if (!value || typeof value !== "object") {
       continue;
@@ -49,11 +51,9 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
       open += 1;
     } else if (policy === "allowlist") {
       allowlist += 1;
-    } else {
-      other += 1;
     }
   }
-  return { open, allowlist, other };
+  return { open, allowlist };
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -134,7 +134,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
-  return [
+  const findings: SecurityAuditFinding[] = [
     {
       checkId: "summary.attack_surface",
       severity: "info",
@@ -142,6 +142,22 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
       detail,
     },
   ];
+  for (const entry of listAgentEntries(cfg)) {
+    if (typeof entry.id !== "string" || entry.tools?.github?.allowInSandbox !== true) {
+      continue;
+    }
+    const configPath = `agents.entries.${entry.id}.tools.github.allowInSandbox`;
+    findings.push({
+      checkId: "sandbox.github_identity_exposed",
+      severity: "warn",
+      title: "Managed GitHub identity reaches sandboxed execution",
+      detail:
+        `${configPath}=true allows agent "${entry.id}" to use its managed GitHub credentials ` +
+        "and Git author in its own sandboxed execution. Commands in that sandbox can read and use the credentials.",
+      remediation: `Set ${configPath}=false unless this agent's sandboxed code is trusted with its GitHub access.`,
+    });
+  }
+  return findings;
 }
 
 /** Surface default cross-agent session access, escalating when trust boundaries may differ. */
@@ -235,9 +251,7 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectAuditModelRefs(params.cfg).filter(
-    (entry) => !entry.source.includes("imageModel"),
-  );
+  const models = collectAuditModelRefs(params.cfg);
   if (models.length === 0) {
     return findings;
   }

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {

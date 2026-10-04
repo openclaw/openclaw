@@ -3,10 +3,17 @@
  * These types describe credential payloads, runtime selection state, and repair
  * results consumed by providers, sessions, doctor, and plugin-facing seams.
  */
+import type { z } from "zod";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import type { OAuthCredentialMetadata } from "./credential-schema.js";
+import type {
+  inlineAuthProfileCredentialSchema,
+  OAuthCredentialMetadata,
+} from "./credential-schema.js";
 import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
+
+type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
 
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
@@ -21,50 +28,32 @@ export type OAuthCredentials = OAuthCredentialMetadata & {
 };
 
 /** API-key credential with optional secret reference indirection. */
-export type ApiKeyCredential = {
-  type: "api_key";
-  provider: string;
+export type ApiKeyCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "api_key" }>, "key">
+> & {
   key?: string;
   keyRef?: SecretRef;
-  /** Explicit opt-out for copying this profile when creating another agent. */
-  copyToAgents?: boolean;
-  email?: string;
-  displayName?: string;
-  /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
-  metadata?: Record<string, string>;
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-type TokenCredential = {
-  /**
-   * Static bearer-style token (often OAuth access token / PAT).
-   * Not refreshable by OpenClaw (unlike `type: "oauth"`).
-   */
-  type: "token";
-  provider: string;
+type TokenCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "token" }>, "token">
+> & {
   token?: string;
   tokenRef?: SecretRef;
-  /** Explicit opt-out for copying this profile when creating another agent. */
-  copyToAgents?: boolean;
-  /** Optional expiry timestamp (ms since epoch). */
-  expires?: number;
-  email?: string;
-  displayName?: string;
 };
 
-/** Refreshable OAuth credential plus provider metadata and legacy references. */
-export type OAuthCredential = OAuthCredentials & {
-  type: "oauth";
-  provider: string;
-  oauthRef?: LegacyOAuthRef;
-  /**
-   * OAuth refresh tokens are not portable by default. Provider-owned flows may
-   * set this only when copying refresh material across agents is known safe.
-   */
-  copyToAgents?: boolean;
-  email?: string;
-  displayName?: string;
-};
+/**
+ * Refreshable OAuth credential plus provider metadata and legacy references.
+ * OAuth refresh tokens are not portable by default. Provider-owned flows may
+ * set copyToAgents only when copying refresh material across agents is known safe.
+ */
+export type OAuthCredential = OAuthCredentialMetadata &
+  SchemaContract<
+    Omit<Extract<InlineAuthProfileCredential, { type: "oauth" }>, keyof OAuthCredentialMetadata>
+  > & {
+    oauthRef?: LegacyOAuthRef;
+  };
 
 export type SavedSetupCredential = {
   apiKeyHeader?: true;

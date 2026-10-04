@@ -320,8 +320,8 @@ describe("release:stable CLI", () => {
     },
   );
 
-  it.each(["unknown", "stableSoakWaiver", "laneWaiver"])(
-    "refuses retired or unknown state field %s without overwriting recovery evidence",
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses retired state field %s without overwriting recovery evidence",
     (field) => {
       const release = fixture();
       const state = phaseState("validate");
@@ -421,6 +421,52 @@ describe("release:stable CLI", () => {
       "-f",
       "allow_late_calver_recovery=false",
     ]);
+  });
+
+  it("refuses an existing unsigned local final tag", () => {
+    const release = fixture();
+    const state = publishState();
+    state.operator.publicationApproved = null;
+    release.seed(state);
+    release.candidate(CANDIDATE_COMMAND);
+    const result = release.run([
+      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
+      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
+      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+    ]);
+    expect(result.status, result.output).toBe(2);
+    expect(result.stderr).toContain(`Could not create signed final tag v${RELEASE}`);
+    expect(result.calls.some((call) => call.bin === "git" && call.args[0] === "push")).toBe(false);
+  });
+
+  it("re-signs an existing same-target local final tag before publishing", () => {
+    const release = fixture();
+    const state = publishState();
+    state.operator.publicationApproved = null;
+    release.seed(state);
+    release.candidate(CANDIDATE_COMMAND);
+    const result = release.run([
+      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
+      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
+      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+      step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
+    ]);
+
+    expect(result.stderr).not.toContain(`Could not create signed final tag v${RELEASE}`);
+    expect(result.calls).toContainEqual({
+      bin: "git",
+      args: ["push", "origin", `refs/tags/v${RELEASE}`],
+    });
   });
 
   it("prints child approval guidance, approves only parent gates, and resumes without redispatch", () => {

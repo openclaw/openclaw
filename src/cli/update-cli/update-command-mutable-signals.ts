@@ -4,18 +4,87 @@ import {
   getUpdateRun,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
+import {
+  registerSignalExitBarrier,
+  registerSignalExitGate,
+  waitForSignalExitBarriers,
+} from "../signal-exit-barrier.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
+type MutableAdmission = {
+  record: UpdateRunRecord;
+  env: NodeJS.ProcessEnv;
+  dev: number;
+  ino: number;
+  active?: true;
+  sealed?: true;
+  compensations: Set<Promise<void>>;
+  unconfirmedWrite?: { error: unknown };
+};
 // Only the object minted by this local admission participates. A saved run ID,
 // inherited diagnostic row, or a recovered process identity cannot populate it.
-const admissions = new WeakMap<
-  Run,
-  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; dev: number; ino: number; active?: true }
->();
+const admissions = new WeakMap<Run, MutableAdmission>();
+
+function trackSignalSettlement(admission: MutableAdmission | undefined, completion: Promise<void>) {
+  return completion.catch((error: unknown) => {
+    if (!hasCommandProcessCleanupError(error)) {
+      return;
+    }
+    if (admission) {
+      admission.unconfirmedWrite ??= { error };
+    }
+    throw error;
+  });
+}
+
+/** Record uncertainty before signal gates release the original admission to its finalizer. */
+export function retainMutableUpdateSignalWrite(
+  run: Run | undefined,
+  completion: Promise<void>,
+): void {
+  const retained = trackSignalSettlement(run ? admissions.get(run) : undefined, completion);
+  const release = registerSignalExitGate(retained);
+  void retained.then(release, release);
+}
+
+/** Retain rollback work without retaining a potentially unbounded forward command. */
+export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
+  const run = opts.run;
+  const admission = run ? admissions.get(run) : undefined;
+  return async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (!admission) {
+      return await operation();
+    }
+    if (
+      !run ||
+      opts.run !== run ||
+      admissions.get(run) !== admission ||
+      run.runId !== admission.record.runId ||
+      !admission.active ||
+      admission.sealed
+    ) {
+      throw new Error("Update compensation admission is no longer current.");
+    }
+    const completion = createDeferredCore();
+    const retained = trackSignalSettlement(admission, completion.promise);
+    admission.compensations.add(retained);
+    const release = () => admission.compensations.delete(retained);
+    void retained.then(release, release);
+    try {
+      const result = await operation();
+      completion.resolve();
+      return result;
+    } catch (error) {
+      completion.reject(error);
+      throw error;
+    }
+  };
+}
 
 export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): void {
   const env = { ...run.env };
@@ -23,7 +92,7 @@ export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): 
   if (!file.isFile()) {
     throw new Error("Update admission requires its regular state database.");
   }
-  admissions.set(run, { record, env, dev: file.dev, ino: file.ino });
+  admissions.set(run, { record, env, dev: file.dev, ino: file.ino, compensations: new Set() });
 }
 
 export function retireMutableUpdateSignalRun(run: Run): void {
@@ -42,50 +111,79 @@ export async function withMutableUpdateSignals<T>(
   admission.active = true;
   const { env } = admission;
   const pathname = resolveOpenClawStateSqlitePath(env);
-  const assertCurrent = () => {
-    if (!run.executorFence) {
-      throw new Error("Interrupted update has no live installation owner.");
-    }
-    run.executorFence.assertCurrent();
-    const file = fs.lstatSync(pathname);
-    if (!file.isFile() || file.dev !== admission.dev || file.ino !== admission.ino) {
-      throw new Error("Interrupted update's canonical state generation changed.");
-    }
-  };
-  const settle = () => {
+  const prepareSettlement = () => {
+    const { executorFence, runId } = run;
     if (
       admissions.get(run) !== admission ||
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
       process.env.OPENCLAW_UPDATE_POST_CORE === "1" ||
-      !run.executorFence
+      !executorFence
     ) {
-      return;
+      return undefined;
     }
+    const assertCurrent = () => {
+      if (
+        opts.run !== run ||
+        admissions.get(run) !== admission ||
+        run.runId !== runId ||
+        run.executorFence !== executorFence ||
+        process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+        process.env.OPENCLAW_UPDATE_POST_CORE === "1"
+      ) {
+        throw new Error("Interrupted update has no live installation owner.");
+      }
+      executorFence.assertCurrent();
+      const file = fs.lstatSync(pathname);
+      if (!file.isFile() || file.dev !== admission.dev || file.ino !== admission.ino) {
+        throw new Error("Interrupted update's canonical state generation changed.");
+      }
+    };
     assertCurrent();
-    const expected = getUpdateRun(run.runId, { env });
-    if (
-      !expected ||
-      expected.status !== "running" ||
-      !["requested", "staging", "validating"].includes(expected.phase) ||
-      expected.createdAtMs !== admission.record.createdAtMs
-    ) {
-      return;
-    }
-    assertCurrent();
-    // This non-creating transaction cannot migrate or reopen a displaced family.
-    // Pending operational recovery keeps exclusive ownership of its outcome.
-    finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+    return () => {
+      assertCurrent();
+      if (admission.unconfirmedWrite) {
+        throw admission.unconfirmedWrite.error;
+      }
+      const expected = getUpdateRun(runId, { env });
+      if (
+        !expected ||
+        expected.status !== "running" ||
+        !["requested", "staging", "validating"].includes(expected.phase) ||
+        expected.createdAtMs !== admission.record.createdAtMs
+      ) {
+        return;
+      }
+      assertCurrent();
+      // Accepted worker writes have settled; the original interruption policy owns this row.
+      finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+    };
   };
+  let settle: (() => void) | undefined;
   let shutdown: Promise<void> | undefined;
+  const unregister = registerSignalExitBarrier(async () => {
+    admission.sealed = true;
+    const results = await Promise.allSettled(admission.compensations);
+    try {
+      settle?.();
+    } catch {
+      defaultRuntime.error("Update interruption could not be recorded; history remains pending.");
+    }
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Update compensation cleanup did not complete.");
+    }
+  });
   const onSignal = (code: number) => {
     if (shutdown) {
       return;
     }
-    // Finish the local diagnostic synchronously before a terminated package child
-    // can unwind. Native/post-activation work is excluded above and still drains
-    // through the existing process-wide signal barriers.
+    admission.sealed = true;
+    run.interrupted = true;
+    // Freeze custody before yielding; the executor stays held through signal settlement.
     try {
-      settle();
+      settle = prepareSettlement();
     } catch {
       defaultRuntime.error("Update interruption could not be recorded; history remains pending.");
     }
@@ -102,9 +200,10 @@ export async function withMutableUpdateSignals<T>(
   try {
     return await operation();
   } finally {
-    retireMutableUpdateSignalRun(run);
     await shutdown;
+    retireMutableUpdateSignalRun(run);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
+    unregister();
   }
 }

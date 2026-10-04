@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
 import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
+import { resolveNpmCommandInvocation } from "../../scripts/openclaw-npm-release-check.ts";
 import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
@@ -498,14 +499,14 @@ describe("plugin npm extended-stable workflow", () => {
       publishTag: "extended-stable",
       toolingTrusted: true,
       candidateMoved: false,
-      mainVersion: "2026.9.1",
+      mainVersion: "2026.8.1",
     },
     {
       publishTag: "extended-stable",
       toolingTrusted: true,
       candidateMoved: false,
-      mainVersion: "2026.10.1",
-      expectedFailure: "only the two trailing completed months",
+      mainVersion: "2026.9.1",
+      expectedFailure: "only the trailing completed month",
     },
     {
       publishTag: "extended-stable",
@@ -534,6 +535,11 @@ describe("plugin npm extended-stable workflow", () => {
     }) => {
       const nodeExecutable = requireNodeTool("node");
       const npmCli = realpathSync(requireNodeTool("npm"));
+      const npmConfig = resolveNpmCommandInvocation({
+        npmExecPath: npmCli,
+        nodeExecPath: nodeExecutable,
+        npmArgs: ["config", "get", "registry"],
+      });
       const root = mkdtempSync(join(tmpdir(), "plugin-oidc-artifact-"));
       try {
         const bin = join(root, "bin");
@@ -597,7 +603,8 @@ if (endpoint === "repos/openclaw/openclaw/compare/${toolingSha}...main") {
           `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const result = require("node:child_process").spawnSync(process.execPath, [process.env.NPM_CLI, "config", "get", "registry"], { env: process.env, encoding: "utf8", timeout: 10_000 });
+const npmConfig = ${JSON.stringify(npmConfig)};
+const result = require("node:child_process").spawnSync(npmConfig.command, npmConfig.args, { env: process.env, encoding: "utf8", timeout: 10_000, windowsVerbatimArguments: npmConfig.windowsVerbatimArguments });
 if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(result.status ?? 1); }
 fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, bytes: fs.readFileSync(args[1], "utf8"), token: Boolean(process.env.NPM_TOKEN || process.env.NODE_AUTH_TOKEN) }) + "\\n");
 `,
@@ -620,7 +627,6 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
             env: {
               PATH: `${bin}:/usr/bin:/bin`,
               EVENTS: events,
-              NPM_CLI: npmCli,
               RUNNER_TEMP: root,
               TARBALL_PATH: tarball,
               PUBLISH_TAG: publishTag,
@@ -699,8 +705,9 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     );
     expect(trusted.run).toContain("exact 40-character source SHA");
     expect(trusted.run).toContain(
-      'os.environ["WORKFLOW_REF"] in (f"refs/heads/{extended_branch}", "refs/heads/main")',
+      'workflow_ref in (f"refs/heads/{extended_branch}", "refs/heads/main")',
     );
+    expect(trusted.run).toContain('r"refs/heads/release-ci/([a-f0-9]{12})-[0-9]+"');
     expect(trusted.run).toContain(
       'exact_ref_match(\n        "HEAD",\n        f"refs/remotes/origin/{extended_branch}"',
     );
@@ -718,6 +725,90 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
       ).if,
     ).toBe("github.event_name == 'workflow_dispatch'");
   });
+
+  it.each([
+    ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true],
+    ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false],
+    ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false],
+  ])(
+    "admits extended-stable FRV preflight through %s",
+    (_label, workflowRef, toolingReachable, admitted) => {
+      const guard = step(
+        workflow().jobs?.preview_plugins_npm,
+        "Validate ref is on a trusted publish branch",
+      );
+      const policy = guard.run!.split("<<'PYTHON'\n")[1]!.split("\nPYTHON")[0];
+      const root = mkdtempSync(join(tmpdir(), "plugin-extended-stable-preflight-"));
+      try {
+        writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.8.33" }));
+        const result = spawnSync(
+          "python3",
+          [
+            "-c",
+            `
+import os, sys, types
+class GitFailure(Exception):
+    def __init__(self, code=1):
+        self.code = code
+target = os.environ["SOURCE_REF"]
+def git_output(_workspace, *args):
+    if args[0] == "rev-parse":
+        return target
+    raise RuntimeError("unexpected git_output call")
+def run_git(_workspace, *args, **_kwargs):
+    if args[0] == "merge-base":
+        expected = ("merge-base", "--is-ancestor", os.environ["WORKFLOW_SHA"], "origin/main")
+        if args != expected:
+            raise RuntimeError(f"unexpected merge-base arguments: {args!r}")
+        if os.environ["TOOLING_REACHABLE"] != "true":
+            raise GitFailure(1)
+        return None
+    if args[0] == "fetch":
+        return None
+    raise RuntimeError("unexpected run_git call")
+sys.modules["ci_git_owner"] = types.SimpleNamespace(
+    GitFailure=GitFailure,
+    git_output=git_output,
+    run_git=run_git,
+)
+${policy}`,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              GITHUB_WORKSPACE: root,
+              REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false",
+              WORKFLOW_REF: workflowRef,
+              WORKFLOW_SHA: "b".repeat(40),
+              TOOLING_REACHABLE: String(toolingReachable),
+              PREFLIGHT_ONLY: "true",
+              TRUSTED_PUBLISHER_PREFLIGHT: "false",
+              PREPARED_ARTIFACT: "",
+              RELEASE_PUBLISH_RUN_ID: "",
+              RELEASE_PUBLISH_RUN_ATTEMPT: "",
+              RELEASE_CANDIDATE_BRANCH: "",
+              SOURCE_REF: "a".repeat(40),
+              NPM_DIST_TAG: "extended-stable",
+              PUBLISH_SCOPE: "all-publishable",
+              RELEASE_PLUGINS: "",
+            },
+          },
+        );
+        expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
+        if (!admitted) {
+          expect(result.stderr).toContain(
+            toolingReachable
+              ? "release-ci ref does not match the workflow SHA"
+              : "release-ci workflow revision is not reachable from current main",
+          );
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
     const preview = workflow().jobs?.preview_plugins_npm;

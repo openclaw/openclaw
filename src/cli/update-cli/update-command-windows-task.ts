@@ -4,6 +4,7 @@ import {
 } from "../../daemon/schtasks.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -35,7 +36,7 @@ export type WindowsTaskAutoStartRecovery = {
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
   assertCurrentService?: () => Promise<void>;
-  assertCurrent?: () => void;
+  assertCurrent?: (phase?: "restore") => void;
   alreadySuspended?: true;
   updateRun?: UpdateCommandOptions["run"];
 }): WindowsTaskAutoStartRecovery {
@@ -49,16 +50,13 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let closed = false;
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
-  let finishUpdate: (() => void) | undefined;
-  const assertCurrentService = async () => {
-    params.assertCurrent?.();
+  const assertCurrentService = async (phase?: "restore") => {
+    params.assertCurrent?.(phase);
     await guard?.();
-    params.assertCurrent?.();
+    params.assertCurrent?.(phase);
   };
-  const updateFinished = new Promise<void>((resolve) => {
-    finishUpdate = resolve;
-  });
-  const unregisterSignalExitGate = registerSignalExitGate(updateFinished);
+  const updateFinished = createDeferredCore();
+  const unregisterSignalExitGate = registerSignalExitGate(updateFinished.promise);
   const onSignal = (exitCode: number) => {
     interrupted = true;
     void waitForSignalExitBarriers()
@@ -94,11 +92,9 @@ export function createWindowsTaskAutoStartRecovery(params: {
           return;
         }
         await resumeScheduledTaskAutoStartAfterUpdate(params.serviceEnv, {
-          assertCurrent: params.assertCurrent,
+          assertCurrent: () => params.assertCurrent?.("restore"),
           beforeMutation: async () => {
-            params.assertCurrent?.();
-            await guard?.();
-            params.assertCurrent?.();
+            await assertCurrentService("restore");
             // Repair cancellation fences activation, while compensation retains its service guard.
             assertCurrent?.();
             if (closed || !restoreAllowed) {
@@ -141,8 +137,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
           (await suspensionPromise.catch(() => false))
         ) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
-            assertCurrent: params.assertCurrent,
-            beforeMutation: assertCurrentService,
+            assertCurrent: () => params.assertCurrent?.("restore"),
+            beforeMutation: () => assertCurrentService("restore"),
             // Failed verification removed the original safety proof. A timed-out
             // /DISABLE must never be compensated by enabling that installation.
             restoreOnFailure: false,
@@ -153,8 +149,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
           cause instanceof Error ? cause : new Error("Windows native recovery failed", { cause });
       }
       try {
-        if (finishUpdate && recordInterruption && params.updateRun) {
-          params.assertCurrent?.();
+        if (recordInterruption && params.updateRun) {
+          params.assertCurrent?.("restore");
           const failed = restorationFailed || !restartSafe;
           finishUpdateRun(
             params.updateRun.runId,
@@ -183,8 +179,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           : settlementFailure;
       } finally {
         removeSignalHandlers();
-        finishUpdate?.();
-        finishUpdate = undefined;
+        updateFinished.resolve();
         unregisterSignalExitGate();
       }
       if (failure) {
@@ -208,7 +203,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   return {
     suspended: suspensionPromise,
     assertRecoveryCurrent: () => {
-      params.assertCurrent?.();
+      params.assertCurrent?.("restore");
       // Interruption can still recover the original runtime; transferred or settled owners cannot.
       if (closed || delegated) {
         throw new Error("Windows task recovery authority has closed or transferred.");

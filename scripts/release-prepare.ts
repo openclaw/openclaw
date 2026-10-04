@@ -4,8 +4,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { versionValueFlag } from "./lib/version-script-args.ts";
 
 type ReleasePrepareMode = "check" | "shadow" | "write";
 
@@ -45,72 +47,44 @@ const MAX_JOBS = 16;
 const GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
-  let android = false;
-  let help = false;
-  let jobs = DEFAULT_JOBS;
-  let json = false;
-  let manifestPath: string | null = null;
-  let mode: ReleasePrepareMode = "shadow";
+  const args: ReleasePrepareArgs = {
+    android: false,
+    help: false,
+    jobs: DEFAULT_JOBS,
+    json: false,
+    manifestPath: null,
+    mode: "shadow",
+    rootDir: path.resolve("."),
+    version: null,
+  };
   let modeFlag: string | null = null;
-  let rootDir = path.resolve(".");
-  let version: string | null = null;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--": {
-        break;
-      }
-      case "--android": {
-        android = true;
-        break;
-      }
-      case "--check":
-      case "--shadow":
-      case "--write": {
-        if (modeFlag) {
-          throw new Error(`Use only one mode flag; received ${modeFlag} and ${arg}.`);
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      booleanFlag("--android", "android", true, { repeatable: true }),
+      booleanFlag("--json", "json", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      versionValueFlag("--jobs", "jobs", parseJobs),
+      versionValueFlag("--manifest", "manifestPath", path.resolve),
+      versionValueFlag("--root", "rootDir", path.resolve),
+      versionValueFlag("--version", "version"),
+    ],
+    {
+      onUnhandledArg(arg) {
+        if (arg === "--check" || arg === "--shadow" || arg === "--write") {
+          if (modeFlag) {
+            throw new Error(`Use only one mode flag; received ${modeFlag} and ${arg}.`);
+          }
+          modeFlag = arg;
+          args.mode = arg === "--check" ? "check" : arg === "--shadow" ? "shadow" : "write";
+          return "handled";
         }
-        modeFlag = arg;
-        mode = arg.slice(2) as ReleasePrepareMode;
-        break;
-      }
-      case "--jobs": {
-        jobs = parseJobs(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      }
-      case "--json": {
-        json = true;
-        break;
-      }
-      case "--manifest": {
-        manifestPath = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      }
-      case "--root": {
-        rootDir = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      }
-      case "--version": {
-        version = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
         throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { android, help, jobs, json, manifestPath, mode, rootDir, version };
+      },
+    },
+  );
 }
 
 export function createReleasePrepareSteps(
@@ -375,14 +349,6 @@ function parseJobs(raw: string): number {
     throw new Error(`Invalid --jobs value '${raw}'. Expected 1 through ${MAX_JOBS}.`);
   }
   return jobs;
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
 }
 
 function printUsage(): void {

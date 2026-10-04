@@ -80,25 +80,6 @@ export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-function getCachedFileScanResult(params: {
-  filePath: string;
-  identity: FileScanIdentity;
-  maxFileBytes: number;
-}): FileScanCacheEntry | undefined {
-  const cached = FILE_SCAN_CACHE.get(params.filePath);
-  if (!cached) {
-    return undefined;
-  }
-  if (
-    !sameFileScanIdentity(cached.identity, params.identity) ||
-    cached.maxFileBytes !== params.maxFileBytes
-  ) {
-    FILE_SCAN_CACHE.delete(params.filePath);
-    return undefined;
-  }
-  return cached;
-}
-
 function fileScanIdentity({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileScanIdentity {
   return { dev, ino, size, mtimeMs, ctimeMs };
 }
@@ -259,16 +240,11 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   const collectSpecifiers = (specText: string): void => {
     for (const rawSpec of specText.split(",")) {
       const spec = rawSpec.trim();
-      if (!spec) {
-        continue;
-      }
       // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
       const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
       if (asMatch?.[1] && asMatch[2]) {
-        const original = asMatch[1];
-        const alias = asMatch[2];
-        if (CHILD_PROCESS_EXEC_METHODS.has(original)) {
-          methodAliases.add(alias);
+        if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
+          methodAliases.add(asMatch[2]);
         }
       }
       // Bare imported method name (`execFile`) is already matched by the
@@ -276,21 +252,15 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
     }
   };
 
-  let match: RegExpExecArray | null;
-  while ((match = esmNamed.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process esm named import specifiers"));
+  for (const pattern of [esmNamed, cjsDestructured]) {
+    for (const match of source.matchAll(pattern)) {
+      collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
+    }
   }
-  while ((match = cjsDestructured.exec(source))) {
-    collectSpecifiers(expectDefined(match[1], "child_process cjs destructured specifiers"));
-  }
-  while ((match = esmDefault.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm default namespace"));
-  }
-  while ((match = esmNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process esm namespace import"));
-  }
-  while ((match = cjsNamespace.exec(source))) {
-    namespaceAliases.add(expectDefined(match[1], "child_process cjs namespace"));
+  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
+    for (const match of source.matchAll(pattern)) {
+      namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
+    }
   }
 
   return { methodAliases, namespaceAliases };
@@ -324,25 +294,19 @@ function isBenignMemberExecMatch(
 
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
-  // Computed calls require a known receiver for every watched method.
+  let receiver: string | undefined;
+  // Computed calls require a known receiver for every watched method;
+  // direct calls require it only for .exec, excluding RegExp.exec.
   if (charAtMatch === '"' || charAtMatch === "'") {
-    const receiverMatch = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/);
-    const receiver = receiverMatch?.[1];
-    return (
-      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-    );
+    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+  } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+  } else {
+    return false;
   }
-
-  // Only .exec requires a known receiver; this excludes RegExp.exec.
-  if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
-    const receiverMatch = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/);
-    const receiver = receiverMatch?.[1];
-    return (
-      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-    );
-  }
-
-  return false;
+  return (
+    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+  );
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -698,17 +662,11 @@ async function scanFileWithCache(params: {
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }
-  const cached = getCachedFileScanResult({
-    filePath,
-    identity: st,
-    maxFileBytes,
-  });
-  if (cached) {
-    return {
-      scanned: cached.scanned,
-      findings: cached.findings,
-    };
+  const cached = FILE_SCAN_CACHE.get(filePath);
+  if (cached && sameFileScanIdentity(cached.identity, st) && cached.maxFileBytes === maxFileBytes) {
+    return cached;
   }
+  FILE_SCAN_CACHE.delete(filePath);
 
   if (st.size > maxFileBytes) {
     const skippedEntry: FileScanCacheEntry = {

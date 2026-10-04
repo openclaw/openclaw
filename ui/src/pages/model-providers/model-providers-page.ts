@@ -183,7 +183,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     getOrders: () => this.profileOrders,
     setData: (data) => (this.data = data),
-    setError: (_cardId, error) => showProfileActionError(error),
+    setError: showProfileActionError,
     setOrders: (orders) => (this.profileOrders = orders),
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
@@ -252,9 +252,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       (gateway) => this.installedAgents.subscribe(gateway),
     )
     .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => {
         if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
           void runtimeConfig.ensureLoaded().catch(() => undefined);
@@ -262,14 +261,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.profileActions.flushPendingOrders();
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.overlays,
-      (overlays, notify) => overlays.subscribe(notify),
       () => this.profileActions.flushPendingOrders(),
     )
-    .watch(
+    .watchStore(
       () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
       () => this.syncSelectedAgent(),
     )
     .effect(
@@ -662,6 +659,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       defaultModels: defaults,
       authStatus: data.authStatus,
       automaticUtilityModel: catalog?.defaultModels?.automaticUtilityModel,
+      utilityRuntime: catalog?.defaultModels?.utilityRuntime,
       thinkingLevel: defaults.thinkingLevel,
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,
@@ -683,7 +681,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       mutationBlockedReason: this.mutationBlockedReason(),
       defaultsMutationBlockedReason: modelProviderConfigMutationBlockedReason(this.context),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
-      probeAvailable: this.profileActions.probeAvailable && advertised !== false,
+      probeAvailable: advertised !== false,
       busy: this.busy,
       messages: this.messages,
       probeResults: this.probeResults,

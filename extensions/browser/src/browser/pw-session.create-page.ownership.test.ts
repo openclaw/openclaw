@@ -1,146 +1,117 @@
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupPwSessionConnectionTest } from "./pw-session.connection.test-support.js";
 
 const { connectOverCdpSpy, getChromeWebSocketUrlSpy, pwAi } = setupPwSessionConnectionTest();
 const { createPageViaPlaywright } = pwAi;
+const cdpUrl = "http://127.0.0.1:18792";
+const lightpanda = { cdpUrl: "ws://127.0.0.1:18792/", engine: "lightpanda" } as const;
+const targetInfo = { targetInfo: { targetId: "TARGET_1", title: "" } };
 
 function installBrowserMocks() {
   const openPages: Page[] = [];
-  const pageGoto = vi.fn(async () => null);
-  const pageRoute = vi.fn();
-  const pageFocus = vi.fn(async () => {});
-  const pageClose = vi.fn(async () => {
-    openPages.splice(openPages.indexOf(page), 1);
-  });
-  const sessionSend = vi.fn(async (_method: string) => ({
-    targetInfo: { targetId: "TARGET_1", title: "" },
-  }));
-  const page = {
+  const sessionSend = vi.fn(async (_method: string) => targetInfo);
+  const pageMock = {
     on: vi.fn(),
     context: () => context,
-    goto: pageGoto,
-    close: pageClose,
+    goto: vi.fn(async () => null),
+    close: vi.fn(async () => {
+      openPages.splice(openPages.indexOf(page), 1);
+    }),
     title: async () => "",
     url: () => "about:blank",
-    route: pageRoute,
-    bringToFront: pageFocus,
+    route: vi.fn(),
+    bringToFront: vi.fn(async () => {}),
     unroute: vi.fn(),
-  } as unknown as Page;
-  const contextClose = vi.fn(async () => {
-    openPages.length = 0;
-  });
-  const newPage = vi.fn(async () => {
-    openPages.push(page);
-    return page;
-  });
-  const context = {
+  };
+  const page = pageMock as unknown as Page;
+  const contextMock = {
     on: vi.fn(),
     pages: () => openPages,
     browser: () => browser,
-    newPage,
-    close: contextClose,
+    newPage: vi.fn(async () => {
+      openPages.push(page);
+      return page;
+    }),
+    close: vi.fn(async () => {
+      openPages.length = 0;
+    }),
     newCDPSession: async () => ({ send: sessionSend, detach: async () => {} }),
-  } as unknown as BrowserContext;
-  const newContext = vi.fn(async () => context);
-  const browserClose = vi.fn();
-  const browser = {
-    newContext,
+  };
+  const context = contextMock as unknown as BrowserContext;
+  const browserMock = {
+    newContext: vi.fn(async () => context),
     contexts: () => [context],
     on: vi.fn(),
     off: vi.fn(),
-    close: browserClose,
-  } as unknown as Browser;
+    close: vi.fn(),
+  };
+  const browser = browserMock as unknown as Browser;
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  return { browser, context, page, browserMock, contextMock, pageMock, sessionSend };
+}
+let f: ReturnType<typeof installBrowserMocks>;
+beforeEach(() => {
+  f = installBrowserMocks();
+});
+function create(opts: Partial<Parameters<typeof createPageViaPlaywright>[0]> = {}) {
+  return createPageViaPlaywright({ cdpUrl, url: "about:blank", ...opts });
+}
+function pauseAtBoundary() {
+  const entered = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<void>();
   return {
-    browser,
-    browserClose,
-    context,
-    page,
-    pageGoto,
-    pageRoute,
-    pageFocus,
-    pageClose,
-    sessionSend,
-    contextClose,
-    newContext,
-    newPage,
+    entered: entered.promise,
+    release: pending.resolve,
+    pause: async <T>(result: T) => {
+      entered.resolve();
+      await pending.promise;
+      return result;
+    },
   };
 }
 
 describe("Playwright created-page ownership", () => {
   it("closes the captured Lightpanda connection when its created page is released", async () => {
-    const fixture = installBrowserMocks();
-    const created = await createPageViaPlaywright({
-      cdpUrl: "ws://127.0.0.1:18792/",
-      engine: "lightpanda",
-      url: "about:blank",
-    });
+    const created = await create(lightpanda);
     expect(created.targetId).toMatch(/^connection:[^:]+:TARGET_1$/);
-    expect(fixture.newContext).not.toHaveBeenCalled();
+    expect(f.browserMock.newContext).not.toHaveBeenCalled();
     await created.close();
-    expect(fixture.browserClose).toHaveBeenCalledOnce();
-    expect(fixture.pageClose).not.toHaveBeenCalled();
-    expect(fixture.contextClose).not.toHaveBeenCalled();
+    expect(f.browserMock.close).toHaveBeenCalledOnce();
+    expect(f.pageMock.close).not.toHaveBeenCalled();
+    expect(f.contextMock.close).not.toHaveBeenCalled();
   });
-
   it("refuses a second Lightpanda page without closing the existing page or connection", async () => {
-    const fixture = installBrowserMocks();
-    await fixture.newPage();
-    fixture.newPage.mockClear();
-    await expect(
-      createPageViaPlaywright({
-        cdpUrl: "ws://127.0.0.1:18792/",
-        engine: "lightpanda",
-        url: "about:blank",
-      }),
-    ).rejects.toThrow("Lightpanda supports 1 page per connection");
-    expect(fixture.newContext).not.toHaveBeenCalled();
-    expect(fixture.newPage).not.toHaveBeenCalled();
-    expect(fixture.browserClose).not.toHaveBeenCalled();
-    expect(fixture.pageClose).not.toHaveBeenCalled();
-    expect(fixture.context.pages()).toEqual([fixture.page]);
+    await f.contextMock.newPage();
+    f.contextMock.newPage.mockClear();
+    await expect(create(lightpanda)).rejects.toThrow("Lightpanda supports 1 page per connection");
+    expect(f.browserMock.newContext).not.toHaveBeenCalled();
+    expect(f.contextMock.newPage).not.toHaveBeenCalled();
+    expect(f.browserMock.close).not.toHaveBeenCalled();
+    expect(f.pageMock.close).not.toHaveBeenCalled();
+    expect(f.context.pages()).toEqual([f.page]);
   });
-
   it.each(["connect", "context", "page", "target", "route"] as const)(
     "rejects an unsignalled authority revocation during %s before navigation",
     async (stage) => {
-      const fixture = installBrowserMocks();
       getChromeWebSocketUrlSpy.mockResolvedValue({
         url: "ws://127.0.0.1:18792/devtools/browser/authority-fixture",
       });
-      let started!: () => void;
-      let resume!: () => void;
-      const entered = new Promise<void>((resolve) => {
-        started = resolve;
-      });
-      const pending = new Promise<void>((resolve) => {
-        resume = resolve;
-      });
-      const pause = async <T>(result: T) => {
-        started();
-        await pending;
-        return result;
-      };
+      const { entered, release, pause } = pauseAtBoundary();
       if (stage === "connect") {
-        connectOverCdpSpy.mockImplementationOnce(() => pause(fixture.browser));
+        connectOverCdpSpy.mockImplementationOnce(() => pause(f.browser));
       } else if (stage === "context") {
-        fixture.newContext.mockImplementationOnce(() => pause(fixture.context));
+        f.browserMock.newContext.mockImplementationOnce(() => pause(f.context));
       } else if (stage === "page") {
-        fixture.newPage.mockImplementationOnce(() => pause(fixture.page));
+        f.contextMock.newPage.mockImplementationOnce(() => pause(f.page));
       } else if (stage === "target") {
-        fixture.sessionSend.mockImplementationOnce(() =>
-          pause({ targetInfo: { targetId: "TARGET_1", title: "" } }),
-        );
+        f.sessionSend.mockImplementationOnce(() => pause(targetInfo));
       } else {
-        fixture.pageRoute.mockImplementationOnce(async () => {
-          await pause(undefined);
-        });
+        f.pageMock.route.mockImplementationOnce(() => pause(undefined));
       }
       let current = true;
-      const creation = createPageViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+      const creation = create({
         url: "http://127.0.0.1:18793/revocation-fixture",
         isolatedContext: true,
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -158,29 +129,27 @@ describe("Playwright created-page ownership", () => {
           }),
         ]);
         current = false;
-        resume();
+        release();
         await expect(creation).rejects.toThrow("caller receipt expired");
       } finally {
-        resume();
+        release();
         await creation.catch(() => {});
       }
-      expect(fixture.pageGoto).not.toHaveBeenCalled();
-      expect(fixture.newContext).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
-      expect(fixture.contextClose).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
+      expect(f.pageMock.goto).not.toHaveBeenCalled();
+      expect(f.browserMock.newContext).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
+      expect(f.contextMock.close).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
     },
   );
-
   it("starts navigation in the same turn as its synchronous authority assertion", async () => {
     const { gotoPageWithNavigationGuard } = await import("./pw-session-navigation.js");
-    const fixture = installBrowserMocks();
     let expired = false;
-    fixture.pageGoto.mockImplementationOnce(async () => {
+    f.pageMock.goto.mockImplementationOnce(async () => {
       expect(expired).toBe(false);
       return null;
     });
     await gotoPageWithNavigationGuard({
-      cdpUrl: "http://127.0.0.1:18792",
-      page: fixture.page,
+      cdpUrl,
+      page: f.page,
       url: "http://127.0.0.1:18793/authority-turn",
       timeoutMs: 1000,
       assertPageCurrent: () => {
@@ -189,31 +158,23 @@ describe("Playwright created-page ownership", () => {
         });
       },
     });
-    expect(fixture.pageGoto).toHaveBeenCalledOnce();
+    expect(f.pageMock.goto).toHaveBeenCalledOnce();
     expect(expired).toBe(true);
   });
-
   it("closes a new page when its target identity cannot be read", async () => {
-    const { page, pageClose, sessionSend } = installBrowserMocks();
-    sessionSend.mockRejectedValue(new Error("Target metadata unavailable"));
-
-    await expect(
-      createPageViaPlaywright({ cdpUrl: "http://127.0.0.1:18792", url: "about:blank" }),
-    ).rejects.toThrow("Failed to get targetId for new page");
-
-    expect(pageClose).toHaveBeenCalledOnce();
-    expect(page.context().pages()).toEqual([]);
+    f.sessionSend.mockRejectedValue(new Error("Target metadata unavailable"));
+    await expect(create()).rejects.toThrow("Failed to get targetId for new page");
+    expect(f.pageMock.close).toHaveBeenCalledOnce();
+    expect(f.page.context().pages()).toEqual([]);
   });
-
   it("focuses an existing page in the same turn as its synchronous authority assertion", async () => {
-    const fixture = installBrowserMocks();
-    await fixture.newPage();
+    await f.contextMock.newPage();
     let expired = false;
-    fixture.pageFocus.mockImplementationOnce(async () => {
+    f.pageMock.bringToFront.mockImplementationOnce(async () => {
       expect(expired).toBe(false);
     });
     await pwAi.focusPageByTargetIdViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      cdpUrl,
       targetId: "TARGET_1",
       assertCurrent: () => {
         queueMicrotask(() => {
@@ -221,74 +182,38 @@ describe("Playwright created-page ownership", () => {
         });
       },
     });
-    expect(fixture.pageFocus).toHaveBeenCalledOnce();
+    expect(f.pageMock.bringToFront).toHaveBeenCalledOnce();
     expect(expired).toBe(true);
   });
-
   it("does not navigate when cancellation wins navigation validation", async () => {
-    const { pageGoto, page } = installBrowserMocks();
-    let started!: () => void;
-    const validationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    let release!: () => void;
-    const validationPending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { entered, release, pause } = pauseAtBoundary();
     const validation = vi
       .spyOn(await import("./navigation-guard.js"), "assertBrowserNavigationAllowed")
-      .mockImplementationOnce(async () => {
-        started();
-        await validationPending;
-      });
+      .mockImplementationOnce(() => pause(undefined));
     const controller = new AbortController();
     try {
-      const creation = createPageViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://example.com",
-        signal: controller.signal,
-      });
+      const creation = create({ url: "https://example.com", signal: controller.signal });
       const rejected = expect(creation).rejects.toThrow("cancelled validation");
-      await validationStarted;
+      await entered;
       controller.abort(new Error("cancelled validation"));
       release();
       await rejected;
-
-      expect(pageGoto).not.toHaveBeenCalled();
-      expect(page.context().pages()).toEqual([]);
+      expect(f.pageMock.goto).not.toHaveBeenCalled();
+      expect(f.page.context().pages()).toEqual([]);
     } finally {
       release();
       validation.mockRestore();
     }
   });
-
   it("closes a new page when cancellation wins target resolution", async () => {
-    const { pageClose, sessionSend } = installBrowserMocks();
-    let releaseTargetInfo: (() => void) | undefined;
-    let markTargetInfoStarted: (() => void) | undefined;
-    const targetInfoStarted = new Promise<void>((resolve) => {
-      markTargetInfoStarted = resolve;
-    });
-    const targetInfoReleased = new Promise<void>((resolve) => {
-      releaseTargetInfo = resolve;
-    });
-    sessionSend.mockImplementationOnce(async () => {
-      markTargetInfoStarted?.();
-      await targetInfoReleased;
-      return { targetInfo: { targetId: "TARGET_1", title: "" } };
-    });
+    const { entered, release, pause } = pauseAtBoundary();
+    f.sessionSend.mockImplementationOnce(() => pause(targetInfo));
     const controller = new AbortController();
-
-    const creation = createPageViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "about:blank",
-      signal: controller.signal,
-    });
-    await targetInfoStarted;
+    const creation = create({ signal: controller.signal });
+    await entered;
     controller.abort(new Error("cancelled page creation"));
-    releaseTargetInfo?.();
-
+    release();
     await expect(creation).rejects.toThrow("cancelled page creation");
-    expect(pageClose).toHaveBeenCalledOnce();
+    expect(f.pageMock.close).toHaveBeenCalledOnce();
   });
 });

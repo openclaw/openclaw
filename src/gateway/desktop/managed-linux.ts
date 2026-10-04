@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sleepWithAbort } from "@openclaw/retry";
+import { raceWithTimeout, sleepWithAbort } from "../../../packages/retry/src/index.js";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../../process/exec.js";
@@ -118,19 +118,14 @@ function chooseDisplayNumber(socketNames: readonly string[]): number {
 }
 
 function appendTail(current: string, chunk: string): string {
-  const next = current + chunk;
-  return next.length <= STDERR_TAIL_CHARS ? next : next.slice(-STDERR_TAIL_CHARS);
+  return (current + chunk).slice(-STDERR_TAIL_CHARS);
 }
 
 function lastStderrLine(stderr: string): string | undefined {
-  const lines = stderr.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (line) {
-      return line;
-    }
-  }
-  return undefined;
+  return stderr
+    .split(/\r?\n/u)
+    .findLast((line) => line.trim())
+    ?.trim();
 }
 
 async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
@@ -483,13 +478,8 @@ export function createManagedLinuxDesktop(
         },
       );
       const busExit = waitForRun(bus);
-      const busTimeout = setTimeout(
-        () =>
-          busReady.reject(new Error("managed Linux desktop D-Bus session did not become ready")),
-        readinessTimeoutMs,
-      );
-      try {
-        await Promise.race([
+      await raceWithTimeout(
+        Promise.race([
           busReady.promise,
           busExit.then((exit) => {
             throw new Error(describeExit("dbus-daemon", exit));
@@ -497,10 +487,12 @@ export function createManagedLinuxDesktop(
           vncExit.then((exit) => {
             throw new Error(describeExit("Xtigervnc", exit));
           }),
-        ]);
-      } finally {
-        clearTimeout(busTimeout);
-      }
+        ]),
+        readinessTimeoutMs,
+        () => {
+          throw new Error("managed Linux desktop D-Bus session did not become ready");
+        },
+      );
       const session = await spawnRun("startxfce4", ["startxfce4"], activeEpoch, env);
       const nextPair: ManagedPair = {
         current: true,

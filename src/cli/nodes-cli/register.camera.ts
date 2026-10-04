@@ -1,4 +1,3 @@
-// Node camera commands: list devices, capture photos, and capture short clips through node.invoke.
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -40,7 +39,6 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
-/** Register node camera list/snap/clip commands. */
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 

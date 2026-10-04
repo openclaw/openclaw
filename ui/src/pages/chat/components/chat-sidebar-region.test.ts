@@ -363,6 +363,13 @@ describe("chat sidebar region", () => {
       };
       const params: NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]> = {
         state,
+        paneId: "fixture",
+        panePresentationId: "fixture-main",
+        subagentsInputRegion: "page",
+        subagentsPresented: false,
+        subagentsAvailable: false,
+        onRefreshSubagents: vi.fn(),
+        onSubagentSessionSelect: vi.fn(),
         themeMode: "dark",
         agentId: "main",
         browserPresented: false,
@@ -382,8 +389,6 @@ describe("chat sidebar region", () => {
         renderDetail: () => html``,
         digest: null,
         activeRunId: null,
-        startedAt: undefined,
-        lastReadAt: undefined,
         pullRequests: [],
         companion: {
           turns: [],
@@ -392,7 +397,6 @@ describe("chat sidebar region", () => {
         },
         onCompanionSubmit: vi.fn(),
         onCompanionDraftChange: vi.fn(),
-        onCompanionVisibilityChange: vi.fn(),
         connected: false,
         onClearCompanion: vi.fn(),
         discussion: null,

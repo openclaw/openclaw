@@ -4,12 +4,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
-  mergeConcurrentReplySessionMetadata,
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
 import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-accessor.entry.js";
@@ -28,6 +26,8 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
+import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
@@ -62,10 +62,6 @@ function assertSessionInitializationAgentScope(agentId: string, sessionKey: stri
     throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
   }
 }
-
-const loadSessionArchiveRuntime = createLazyRuntimeModule(
-  () => import("../../gateway/session-archive.runtime.js"),
-);
 
 type ReplySessionInitializationSelection = {
   agentId: string;
@@ -194,28 +190,26 @@ export async function commitReplySessionInitialization(params: {
   let staleCommit: SessionEntry | null | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
+  const descriptor: ReplySessionInitializationUpsertDescriptor = {
+    kind: "reply-initialization",
+    expectedRevision: params.expectedRevision,
+    entry: sessionEntry,
+    snapshotEntry: params.snapshotEntry ?? params.previousEntry,
+    retiredEntry: params.retiredEntry,
+  };
+  let preparedUpserts: ReturnType<typeof resolveReplySessionInitializationUpserts> | undefined;
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
       ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
       buildEntry: async ({ currentEntry: commitEntry }) => {
-        const commitRevision = createReplySessionInitializationRevision(commitEntry);
-        if (commitRevision !== params.expectedRevision) {
-          staleCommit = commitEntry ? { ...commitEntry } : null;
+        preparedUpserts = resolveReplySessionInitializationUpserts(descriptor, commitEntry);
+        if (preparedUpserts.kind === "stale") {
+          staleCommit = preparedUpserts.currentEntry ? { ...preparedUpserts.currentEntry } : null;
           return null;
         }
-        // The identity-only guard allows commits when background activity
-        // touched non-identity metadata after the snapshot. Merge only fields
-        // that changed since the snapshot so delivery/context metadata is not
-        // rolled back, while reset-cleared fields stay cleared.
-        committedSessionEntry = commitEntry
-          ? mergeConcurrentReplySessionMetadata({
-              currentEntry: commitEntry,
-              preparedEntry: sessionEntry,
-              snapshotEntry: params.snapshotEntry ?? params.previousEntry,
-            })
-          : sessionEntry;
+        committedSessionEntry = preparedUpserts.entry;
         if (!beforeEntryMutationDone) {
           await params.beforeEntryMutation?.({
             ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
@@ -231,7 +225,8 @@ export async function commitReplySessionInitialization(params: {
     const retiredEntry = params.retiredEntry;
     upserts.push({
       sessionKey: retiredEntry.key,
-      buildEntry: () => (staleCommit === undefined ? retiredEntry.entry : null),
+      buildEntry: () =>
+        preparedUpserts?.kind === "ready" ? (preparedUpserts.retiredEntry?.entry ?? null) : null,
     });
   }
   try {
@@ -300,7 +295,7 @@ async function archivePreviousSessionTranscript(params: {
     return {};
   }
   const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-    await loadSessionArchiveRuntime();
+    await import("../../gateway/session-archive.runtime.js");
   const archivedTranscripts = archiveSessionTranscriptsDetailed({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,

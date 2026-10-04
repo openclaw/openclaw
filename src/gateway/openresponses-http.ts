@@ -1,11 +1,3 @@
-/**
- * OpenResponses HTTP Handler
- *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
- *
- * @see https://www.open-responses.com/
- */
-
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
@@ -27,13 +19,8 @@ import {
 } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -56,10 +43,8 @@ import {
   authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayAgentRequestError,
+  isGatewayRequestContextError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -75,20 +60,18 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
 import { resolveResponsesLimits } from "./openai-compatible-input-limits.js";
 import {
   applyToolChoice,
-  isToolChoiceConstraintSatisfied,
   resolveResponsesToolChoice,
-  resolveUnsatisfiedToolChoiceMessage,
-  type ToolChoiceConstraint,
+  resolveToolChoiceConstraintError,
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { lookupResponseSession, rememberResponseSession } from "./openresponses-session-store.js";
@@ -100,15 +83,6 @@ import {
 } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-
-function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const requestedSessionKey = scope.requestedSessionKey?.trim();
-  return {
-    authSubject: scope.authSubject.trim(),
-    agentId: scope.agentId,
-    requestedSessionKey: requestedSessionKey || undefined,
-  };
-}
 
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
@@ -138,16 +112,12 @@ function createResponseSessionScope(params: {
   agentId: string;
   resolveGatewayContext?: GatewayContextResolver;
 }): ResponseSessionScope {
-  return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject(params),
+  return {
+    authSubject: resolveResponseSessionAuthSubject(params).trim(),
     agentId: params.agentId,
-    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
-  });
+    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key")?.trim() || undefined,
+  };
 }
-
-export const testing = {
-  resolveResponsesLimits,
-};
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -164,10 +134,6 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
       strict: tool.strict,
     },
   }));
-}
-
-function createEmptyUsage(): Usage {
-  return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
@@ -230,11 +196,7 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isUnknownGatewayAgentError(err)
-    ) {
+    if (isGatewayAgentRequestError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -360,17 +322,9 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
   const clientTools = extractClientTools(payload);
-  let toolChoicePrompt: string | undefined;
-  let toolChoiceConstraint: ToolChoiceConstraint | undefined;
-  let resolvedClientTools = clientTools;
+  let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
-    const toolChoiceResult = applyToolChoice(
-      clientTools,
-      resolveResponsesToolChoice(payload.tool_choice),
-    );
-    resolvedClientTools = toolChoiceResult.tools;
-    toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
-    toolChoiceConstraint = toolChoiceResult.constraint;
+    toolChoice = applyToolChoice(clientTools, resolveResponsesToolChoice(payload.tool_choice));
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid tool configuration");
@@ -387,12 +341,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -438,9 +387,8 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
-  const toolChoiceContext = toolChoicePrompt?.trim();
+  const toolChoiceContext = toolChoice.extraSystemPrompt?.trim();
 
-  // Handle instructions + file context as extra system prompt
   const extraSystemPrompt = [
     payload.instructions,
     prompt.extraSystemPrompt,
@@ -500,7 +448,7 @@ export async function handleOpenResponsesHttpRequest(
       result = await runOpenAiCompatibleAgentCommand({
         message: prompt.message,
         images,
-        clientTools: resolvedClientTools,
+        clientTools: toolChoice.tools,
         extraSystemPrompt,
         modelOverride,
         streamParams,
@@ -550,17 +498,15 @@ export async function handleOpenResponsesHttpRequest(
       const assistantText = resolveAssistantResultText(result);
       const usage = extractUsageFromResult(result);
 
-      // A `required`/pinned `tool_choice` must reject a text-only turn instead
-      // of returning ordinary assistant prose, mirroring /v1/chat/completions.
-      // Shared satisfaction check lives in openai-tool-choice.ts.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         const failed = createFailedResponse(
           {
             code: "api_error",
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            message: toolChoiceError,
           },
           usage,
         );
@@ -568,11 +514,6 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      // If the agent invoked client tools, return one `function_call`
-      // output item per call (in arrival order) plus any assistant text the
-      // model produced before the tool calls. Pre-#52288 only the first
-      // pending call was emitted, so multi-tool turns lost every call but
-      // the leading one.
       const toolCalls =
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       const status = stopReason === "length" ? "incomplete" : "completed";
@@ -611,37 +552,19 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        const response = createFailedResponse({
-          code: "invalid_request_error",
-          message: "invalid tool configuration",
-        });
-        sendJson(res, 400, response);
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        const mappedResponse = createFailedResponse({
-          code: mapped.error.type,
-          message: mapped.error.message,
-        });
-        sendJson(res, mapped.status, mappedResponse);
-        return true;
-      }
-      sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
+      const mapped = resolveOpenAiCompatibleAgentError(err);
+      sendJson(
+        res,
+        mapped.status,
+        createFailedResponse({ code: mapped.error.type, message: mapped.error.message }),
+      );
     }
     return true;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Streaming mode
-  // ─────────────────────────────────────────────────────────────────────────
-
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
@@ -678,18 +601,15 @@ export async function handleOpenResponsesHttpRequest(
       }
       const usage = finalUsage;
       const status = finalizeRequested.status === "failed" ? "failed" : finalOutputStatus;
-      const finalText = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!finalText.startsWith(streamedAssistantText.text)) {
+      const finalText = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!finalText.startsWith(textStream.streamedText)) {
         finalizeUnrepresentableAssistantReplacement();
         return;
       }
-      const delta = finalText.slice(streamedAssistantText.text.length);
+      const delta = finalText.slice(textStream.streamedText.length);
       if (delta) {
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -817,7 +737,6 @@ export async function handleOpenResponsesHttpRequest(
     );
   };
 
-  // Send initial events
   const initialResponse = createResponseResource({
     ...responseIdentity,
     model,
@@ -841,7 +760,6 @@ export async function handleOpenResponsesHttpRequest(
     item: { ...outputItem, content: [] },
   });
 
-  // Add content part
   writeSseEvent(res, {
     type: "response.content_part.added",
     item_id: outputItemId,
@@ -856,45 +774,10 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement) {
+        unrepresentableAssistantReplacement = replacement === "unrepresentable";
       }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        if (
-          !input.replaceable &&
-          input.replace &&
-          input.text !== undefined &&
-          pendingAssistantText.text.startsWith(streamedAssistantText.text)
-        ) {
-          unrepresentableAssistantReplacement = false;
-        }
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Unconfirmed tool-choice prose may still be corrected before it is sent.
-      if (toolChoiceConstraint) {
-        return;
-      }
-      // Keep physical wire progress separate from a corrected item snapshot.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
-        unrepresentableAssistantReplacement = true;
-        return;
-      }
-      if (input.replace && input.text !== undefined) {
-        unrepresentableAssistantReplacement = false;
-      }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
@@ -958,17 +841,15 @@ export async function handleOpenResponsesHttpRequest(
       // lifecycle:end event may already have requested finalization.
       const resultPayloadText = resolveAssistantResultText(result);
 
-      // Reject an unsatisfied `required`/pinned `tool_choice` before any
-      // buffered prose is flushed, mirroring the non-streaming path and
-      // /v1/chat/completions. Closes the stream with a `response.failed` event.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         const failed = createFailedResponse(
           {
             code: "api_error",
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            message: toolChoiceError,
           },
           finalUsage,
         );
@@ -988,30 +869,13 @@ export async function handleOpenResponsesHttpRequest(
       terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
-      finalUsage = finalUsage ?? createEmptyUsage();
-      if (isClientToolNameConflictError(err)) {
-        finalizeFailedResponse(
-          createFailedResponse(
-            { code: "invalid_request_error", message: "invalid tool configuration" },
-            finalUsage,
-          ),
-        );
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        const mappedResponse = createFailedResponse(
-          {
-            code: mapped.error.type,
-            message: mapped.error.message,
-          },
-          finalUsage,
-        );
-        finalizeFailedResponse(mappedResponse);
-        return;
-      }
+      finalUsage = finalUsage ?? toOpenAiResponsesUsage(undefined);
+      const mapped = resolveOpenAiCompatibleAgentError(err);
       finalizeFailedResponse(
-        createFailedResponse({ code: "api_error", message: "internal error" }, finalUsage),
+        createFailedResponse(
+          { code: mapped.error.type, message: mapped.error.message },
+          finalUsage,
+        ),
       );
     } finally {
       releaseAgentRootWork?.();

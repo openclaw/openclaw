@@ -128,6 +128,9 @@ function buildPluginGroups(params: {
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
     const parameters = summarizeToolParameters(tool.parameters);
+    const fullDescription =
+      ownedMetadata?.description ??
+      (typeof tool.description === "string" ? tool.description : undefined);
     existing.tools.push({
       id: tool.name,
       label:
@@ -135,14 +138,10 @@ function buildPluginGroups(params: {
         normalizeOptionalString(tool.label) ??
         tool.name,
       description: summarizeToolDescriptionText({
-        rawDescription:
-          ownedMetadata?.description ??
-          (typeof tool.description === "string" ? tool.description : undefined),
+        rawDescription: fullDescription,
         displaySummary: tool.displaySummary,
       }),
-      fullDescription:
-        ownedMetadata?.description ??
-        (typeof tool.description === "string" ? tool.description : undefined),
+      fullDescription,
       ...(parameters?.length ? { parameters } : {}),
       source: "plugin",
       pluginId,
@@ -198,35 +197,6 @@ function buildPluginGroups(params: {
   }).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-/** Build the merged core/plugin tool catalog for one agent. */
-function buildToolsCatalogResult(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  includePlugins?: boolean;
-}): ToolsCatalogResult {
-  const agentId = params.agentId;
-  const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups({ cfg: params.cfg, agentId });
-  if (includePlugins) {
-    const existingToolNames = new Set(
-      groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-    );
-    groups.push(
-      ...buildPluginGroups({
-        cfg: params.cfg,
-        agentId,
-        existingToolNames,
-      }),
-    );
-  }
-  return {
-    agentId,
-    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-    groups,
-  };
-}
-
-/** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
@@ -241,13 +211,24 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
+    const { cfg, agentId } = resolved;
+    const groups = buildCoreGroups({ cfg, agentId });
+    if (params.includePlugins !== false) {
+      groups.push(
+        ...buildPluginGroups({
+          cfg,
+          agentId,
+          existingToolNames: new Set(groups.flatMap((group) => group.tools.map((tool) => tool.id))),
+        }),
+      );
+    }
     respond(
       true,
-      buildToolsCatalogResult({
-        cfg: resolved.cfg,
-        agentId: resolved.agentId,
-        includePlugins: params.includePlugins,
-      }),
+      {
+        agentId,
+        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+        groups,
+      } satisfies ToolsCatalogResult,
       undefined,
     );
   },

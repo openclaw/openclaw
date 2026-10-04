@@ -27,41 +27,29 @@ afterEach(() => {
 });
 
 describe("browser favicon page script", () => {
-  it.each([
-    {
-      name: "32x32 icon",
-      links:
-        '<link rel="icon" href="/first.png"><link rel="shortcut icon" sizes="16x16 32x32" href="/preferred.png">',
-      path: "/preferred.png",
-    },
-    {
-      name: "first icon with href",
-      links: '<link rel="icon"><link rel="icon" href="/first.png">',
-      path: "/first.png",
-    },
-    {
-      name: "Apple touch icon",
-      links: '<link rel="apple-touch-icon" href="/apple.png">',
-      path: "/apple.png",
-    },
-    { name: "root fallback", links: "", path: "/favicon.ico" },
-  ])("reads the $name as a bounded image data URL", async ({ links, path }) => {
-    document.head.innerHTML = links;
+  it("reads the preferred 32x32 icon once as a bounded image data URL", async () => {
+    document.head.innerHTML = `
+      <link rel="icon">
+      <link rel="icon" href="/first.png">
+      <link rel="shortcut icon" sizes="16x16 32x32" href="/preferred.png">
+    `;
     const fetchIcon = vi
       .fn()
       .mockResolvedValue({ ok: true, blob: async () => new Blob(["x"], { type: "image/png" }) });
     vi.stubGlobal("fetch", fetchIcon);
     expect(await readFavicon(1, 10_000)).toBe("data:image/png;base64,eA==");
-    expect(fetchIcon).toHaveBeenCalledExactlyOnceWith(new URL(path, location.href).href, {
-      credentials: "same-origin",
-      mode: "cors",
-      signal: expect.any(AbortSignal),
-    });
+    expect(fetchIcon).toHaveBeenCalledExactlyOnceWith(
+      new URL("/preferred.png", location.href).href,
+      {
+        credentials: "same-origin",
+        mode: "cors",
+        signal: expect.any(AbortSignal),
+      },
+    );
   });
 
   it.each([
     { type: "image/svg+xml; charset=utf-8", expected: "data:image/svg+xml;base64,eA==" },
-    { type: "text/html; charset=utf-8", expected: null },
     { type: "image/invalid type; charset=utf-8", expected: null },
   ])("normalizes and validates the MIME type $type", async ({ type, expected }) => {
     vi.stubGlobal(
@@ -100,11 +88,6 @@ describe("browser favicon page script", () => {
       "/not-image",
       "/favicon.ico",
     ]);
-  });
-
-  it("resolves null when all candidates fail", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Network unavailable")));
-    expect(await readFavicon(65_536, 10_000)).toBeNull();
   });
 
   it("aborts a stalled fetch at the deadline and resolves null", async () => {

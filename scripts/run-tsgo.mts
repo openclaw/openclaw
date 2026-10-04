@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { finished } from "node:stream/promises";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { readFlagValue } from "./lib/arg-utils.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -91,6 +92,7 @@ export async function runPreparedTsgoCommand(
   evidence: { evidenceId?: string; onEvidence?: () => void } = {},
 ): Promise<number> {
   try {
+    await ensureKyselyTypes(findRepoRoot(command.cwd) ?? command.cwd);
     const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
     if (tsBuildInfoFile) {
       fs.mkdirSync(path.dirname(path.resolve(command.cwd, tsBuildInfoFile)), { recursive: true });
@@ -108,7 +110,7 @@ export async function runPreparedTsgoCommand(
     let capturedBytes = 0;
     let overflow = false;
     let interrupted = false;
-    const code = await runManagedCommand({
+    const managedCommand = {
       ...command,
       args: capture ? [...command.args, "--pretty", "false"] : command.args,
       requireProcessTreeExit: process.platform !== "win32",
@@ -143,7 +145,14 @@ export async function runPreparedTsgoCommand(
             },
           }
         : {}),
-    });
+    };
+    const metricsDir = command.env.OPENCLAW_TSGO_METRICS_DIR?.trim();
+    // Keep CI output capture and cleanup callbacks on the same managed invocation.
+    const code = metricsDir
+      ? await (
+          await import("./lib/tsgo-performance.mts")
+        ).runMeasuredTsgoCommand(managedCommand, metricsDir)
+      : await runManagedCommand(managedCommand);
     await Promise.all(forwarding);
     const stdout = Buffer.concat(outputs[0]!).toString("utf8");
     const stderr = Buffer.concat(outputs[1]!).toString("utf8");

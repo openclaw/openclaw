@@ -29,7 +29,6 @@ vi.mock("node:sqlite", () => ({
   },
 }));
 vi.mock("../../auto-reply/internal-turn-source.js", () => ({}));
-vi.mock("../../infra/kysely-sync.js", () => ({}));
 vi.mock("../../infra/sqlite-number.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({}));

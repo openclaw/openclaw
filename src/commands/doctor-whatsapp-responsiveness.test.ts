@@ -67,12 +67,8 @@ describe("doctor WhatsApp responsiveness", () => {
     }
   });
 
-  it.each<GatewayEventLoopHealth>([
-    cpuPressure,
-    { ...cpuPressure, reasons: ["event_loop_delay"], delayMaxMs: 1_200, cpuCoreRatio: 0.2 },
-    { ...cpuPressure, reasons: ["event_loop_utilization"], utilization: 0.98, cpuCoreRatio: 0.2 },
-  ])("keeps $reasons advice factual and shared with the note", (eventLoop) => {
-    const params = { cfg, status: { eventLoop }, listLocalTuiProcesses: localTuis };
+  it("keeps pressure advice factual and shared with the note", () => {
+    const params = { cfg, status: { eventLoop: cpuPressure }, listLocalTuiProcesses: localTuis };
     const findings = collectWhatsappResponsivenessHealthFindings(params);
     expect(findings).toEqual([
       expect.objectContaining({

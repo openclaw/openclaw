@@ -5,8 +5,7 @@ import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
-  buildCellCreateArgs,
-  buildCellRunArgs,
+  buildCellContainerArgs,
   validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
@@ -426,15 +425,11 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_MAX_OUTPUT_BYTES,
   });
-  const normalized = {
+  return {
     stdout: result.stdout,
     stderr: redactEnvironmentValues(result.stderr, args, options.redactValues),
     code: result.code ?? 1,
   };
-  if (normalized.code !== 0 && !options.allowFailure) {
-    throw commandFailureError(runtime, args, normalized, options.redactValues);
-  }
-  return normalized;
 };
 
 const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
@@ -510,18 +505,10 @@ function isMissingNetworkError(stderr: string): boolean {
   );
 }
 
-function validateNetworkName(networkName: string): string {
-  const normalized = networkName.trim();
+function validateResourceName(resource: "container" | "network", name: string): string {
+  const normalized = name.trim();
   if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet network name is invalid.");
-  }
-  return normalized;
-}
-
-function validateContainerName(containerName: string): string {
-  const normalized = containerName.trim();
-  if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet container name is invalid.");
+    throw new Error(`Fleet ${resource} name is invalid.`);
   }
   return normalized;
 }
@@ -548,7 +535,7 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
     }
     args.push("--since", options.since);
   }
-  args.push(validateContainerName(containerName));
+  args.push(validateResourceName("container", containerName));
   return args;
 }
 export function createFleetContainerRuntime(
@@ -628,7 +615,7 @@ export function createFleetContainerRuntime(
       const result = await inspectResource(
         runtime,
         "container",
-        validateContainerName(containerName),
+        validateResourceName("container", containerName),
         isMissingContainerError,
         parseInspectOutput,
       );
@@ -646,7 +633,7 @@ export function createFleetContainerRuntime(
       return await inspectResource(
         runtime,
         "network",
-        validateNetworkName(networkName),
+        validateResourceName("network", networkName),
         isMissingNetworkError,
         parseNetworkInspectOutput,
       );
@@ -660,9 +647,7 @@ export function createFleetContainerRuntime(
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
       validateCellContainerProfile(profile);
       await withContainerEnvFile(profile.environment, async (environmentFile) => {
-        const args = start
-          ? buildCellRunArgs(profile, { environmentFile })
-          : buildCellCreateArgs(profile, { environmentFile });
+        const args = buildCellContainerArgs(start ? "run" : "create", profile, { environmentFile });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });
@@ -689,24 +674,24 @@ export function createFleetContainerRuntime(
         "bridge",
         ...(options.internal ? ["--internal"] : []),
         ...labelArgs,
-        validateNetworkName(networkName),
+        validateResourceName("network", networkName),
       ]);
     },
 
     async removeNetwork(runtime: FleetContainerRuntimeName, networkName: string): Promise<void> {
-      await execute(runtime, ["network", "rm", validateNetworkName(networkName)]);
+      await execute(runtime, ["network", "rm", validateResourceName("network", networkName)]);
     },
 
     async start(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["start", validateContainerName(containerName)]);
+      await execute(runtime, ["start", validateResourceName("container", containerName)]);
     },
 
     async stop(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["stop", validateContainerName(containerName)]);
+      await execute(runtime, ["stop", validateResourceName("container", containerName)]);
     },
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["restart", validateContainerName(containerName)]);
+      await execute(runtime, ["restart", validateResourceName("container", containerName)]);
     },
 
     async logs(
@@ -743,7 +728,7 @@ export function createFleetContainerRuntime(
       await execute(runtime, [
         "rm",
         ...(force ? ["--force"] : []),
-        validateContainerName(containerName),
+        validateResourceName("container", containerName),
       ]);
     },
   };

@@ -1,10 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  ResponseFormatTextConfig,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
@@ -17,8 +13,10 @@ import {
   resolveOpenAISimpleReasoningEffort,
   resolveOpenAIRequestReasoning,
 } from "../providers/openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -46,25 +44,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
-}
 
 function raiseMinimalReasoningForResponsesWebSearch(params: {
   model: Model;
@@ -129,20 +108,8 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-// A Responses-API request whose route honors `instructions` carries the
-// system prompt there, never as an `input` message: `input` is what HTTP
-// continuation (openai-responses-continuation.ts) compares byte-for-byte
-// against the cached previous request to decide whether it can reuse
-// previous_response_id. The embedded runner rebuilds the system prompt fresh
-// on every attempt from live runtime state (active background processes,
-// watched sessions, active-memory context) -- if that text sat inside
-// `input`, ordinary state churn between two turns would make the comparison
-// fail and permanently defeat continuation. `instructions` sits outside the
-// compared `input` array, so it can vary freely per turn with no effect on
-// continuation eligibility. Routes that opt out via `compat.supportsInstructions:
-// false` (see openai-responses-payload-policy.ts) get no instructions field at
-// all -- request construction embeds the prompt back into
-// `input` for those instead.
+// Continuation compares input prefixes, so keep the changing system prompt in
+// instructions on routes that support it. Other routes embed it in input.
 function resolveOpenAIResponsesInstructions(
   model: Model,
   context: Context,
@@ -160,13 +127,8 @@ function resolveOpenAIResponsesInstructions(
     : undefined;
 }
 
-// xAI's server-side `/responses/compact` endpoint (see
-// postOpenAIResponsesCompaction in openai-responses-client.ts) predates and
-// does not accept `instructions`: per
-// https://docs.x.ai/developers/advanced-api-usage/context-compaction the
-// system prompt must be the first `input` message, unlike the main streaming
-// endpoint. Build that message on demand so the compact request body can
-// re-embed the same text the streaming path now carries via `instructions`.
+// xAI /responses/compact needs the system prompt first in input, not instructions:
+// https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
   // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
   const compat = getCompat(model as OpenAIModeModel);
@@ -194,23 +156,6 @@ function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Co
       { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
     ]),
   );
-}
-
-export function resolveOpenAIResponsesTextFormat(
-  responseFormat: Record<string, unknown>,
-): ResponseFormatTextConfig {
-  if (
-    responseFormat.type === "json_schema" &&
-    responseFormat.json_schema &&
-    typeof responseFormat.json_schema === "object" &&
-    !Array.isArray(responseFormat.json_schema)
-  ) {
-    return {
-      ...(responseFormat.json_schema as Record<string, unknown>),
-      type: "json_schema",
-    } as unknown as ResponseFormatTextConfig;
-  }
-  return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
 export function buildOpenAIResponsesParams(

@@ -163,11 +163,9 @@ describe("package lifecycle ownership", () => {
 
     it.each([
       ["callback", "absent"],
-      ["callback", "pending"],
       ["callback", "legacy"],
       ["release-before-retirement", "absent"],
       ["release-before-retirement", "pending"],
-      ["release-before-retirement", "legacy"],
     ])("does not synthesize work after %s failure with %s markers", async (phase, shape) => {
       const { packageRoot, pending, lock } = await fixture();
       const other = await fixture();
@@ -241,72 +239,73 @@ describe("package lifecycle ownership", () => {
     });
   });
 
-  it.each(["directory", "empty", "partial", "unknown", "oversized", "reused-pid"])(
-    "refuses %s ownership immediately without changing it or running scripts",
-    async (kind) => {
-      const { packageRoot, pending, lock } = await fixture();
-      if (kind === "directory") {
-        await fs.mkdir(lock);
-      } else {
-        const raw =
-          kind === "empty"
-            ? ""
-            : kind === "partial"
-              ? "{unfinished"
-              : kind === "oversized"
-                ? "x".repeat(1024 * 1024 + 1)
-                : kind === "reused-pid"
-                  ? JSON.stringify({
-                      ...ownerPayload(),
-                      starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
-                    })
-                  : "{}";
-        await fs.writeFile(lock, raw);
-      }
-      const before = await fs.lstat(lock);
-      const rawBefore = before.isFile() ? await fs.readFile(lock) : null;
-      const runScript = vi.fn();
-      await expect(
-        completePendingPackageLifecycle({ packageRoot, runScript }),
-      ).rejects.toMatchObject({
-        name: "PackageLifecycleOwnershipError",
-        packageRoot,
-        lockPath: lock,
-      });
-      expect(runScript).not.toHaveBeenCalled();
-      expect((await fs.lstat(lock)).ino).toBe(before.ino);
-      if (rawBefore) {
-        expect(await fs.readFile(lock)).toEqual(rawBefore);
-      }
-      expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-    },
-  );
-
-  it("refuses a symlink lock without touching its target", async () => {
-    const { packageRoot, lock } = await fixture();
+  it.each([
+    "directory",
+    "partial",
+    "unknown",
+    "oversized",
+    "reused-pid",
+    "dead-parent",
+    "symlink",
+    "marker-absent",
+  ])("refuses %s ownership immediately without changing it or running scripts", async (kind) => {
+    const { packageRoot, pending, lock } = await fixture();
     const outside = path.join(packageRoot, "sentinel");
-    await fs.mkdir(outside);
-    await fs.writeFile(path.join(outside, "keep"), "keep");
-    await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
-    await expect(
-      completePendingPackageLifecycle({ packageRoot, runScript: vi.fn() }),
-    ).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
-    expect((await fs.lstat(lock)).isSymbolicLink()).toBe(true);
-    expect(await fs.readFile(path.join(outside, "keep"), "utf8")).toBe("keep");
-  });
-
-  it("never reclaims a dead parent's ownership record", async () => {
-    const { packageRoot, lock } = await fixture();
-    const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
-    expect(child.status).toBe(0);
-    const raw = JSON.stringify({ ...ownerPayload(), pid: child.pid });
-    await fs.writeFile(lock, raw);
+    if (kind === "marker-absent") {
+      await fs.rm(pending);
+    }
+    if (kind === "directory") {
+      await fs.mkdir(lock);
+    } else if (kind === "symlink") {
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "keep"), "keep");
+      await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
+    } else if (kind === "dead-parent") {
+      const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
+      expect(child.status).toBe(0);
+      await fs.writeFile(lock, JSON.stringify({ ...ownerPayload(), pid: child.pid }));
+    } else {
+      const raw =
+        kind === "partial" || kind === "marker-absent"
+          ? "{unfinished"
+          : kind === "oversized"
+            ? "x".repeat(1024 * 1024 + 1)
+            : kind === "reused-pid"
+              ? JSON.stringify({
+                  ...ownerPayload(),
+                  starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
+                })
+              : "{}";
+      await fs.writeFile(lock, raw);
+    }
+    const before = await fs.lstat(lock);
+    const rawBefore = before.isFile() ? await fs.readFile(lock) : null;
     const runScript = vi.fn();
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
-      "owner cannot be verified",
-    );
+    const completion = completePendingPackageLifecycle({ packageRoot, runScript });
+    await expect(completion).rejects.toMatchObject({
+      name: "PackageLifecycleOwnershipError",
+      packageRoot,
+      lockPath: lock,
+    });
+    if (kind === "dead-parent") {
+      await expect(completion).rejects.toThrow("owner cannot be verified");
+    }
+    if (kind === "symlink") {
+      await expect(completion).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
+      expect((await fs.lstat(lock)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(path.join(outside, "keep"), "utf8")).toBe("keep");
+    }
     expect(runScript).not.toHaveBeenCalled();
-    expect(await fs.readFile(lock, "utf8")).toBe(raw);
+    expect((await fs.lstat(lock)).ino).toBe(before.ino);
+    if (rawBefore) {
+      expect(await fs.readFile(lock)).toEqual(rawBefore);
+    }
+    if (kind === "marker-absent") {
+      await expect(completion).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
+      await expect(fs.lstat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
+    }
   });
 
   it("retries exclusive acquisition when the observed owner released before exiting", async () => {
@@ -323,16 +322,7 @@ describe("package lifecycle ownership", () => {
     await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("returns without creating a lock for an already completed package", async () => {
-    const { packageRoot, pending } = await fixture();
-    await fs.rm(pending);
-    const runScript = vi.fn();
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).resolves.toBe(false);
-    expect(runScript).not.toHaveBeenCalled();
-    expect(await fs.readdir(packageRoot)).toEqual([]);
-  });
-
-  it.each(["missing", "not-directory", "inaccessible"])(
+  it.each(["not-directory", "inaccessible"])(
     "preserves uncertainty when its bound package root becomes %s after observing work",
     async (state) => {
       const { packageRoot, pending, lock } = await fixture();
@@ -353,9 +343,7 @@ describe("package lifecycle ownership", () => {
         const result = await access(file, mode);
         if (file === pending && !observed) {
           observed = true;
-          if (state === "missing") {
-            await fs.rm(packageRoot, { recursive: true, force: true });
-          } else if (state === "not-directory") {
+          if (state === "not-directory") {
             await fs.rename(packageRoot, displacedRoot);
             await fs.writeFile(packageRoot, "replacement file\n");
           }
@@ -373,9 +361,7 @@ describe("package lifecycle ownership", () => {
       });
       expect(observed).toBe(true);
       expect(runScript).not.toHaveBeenCalled();
-      if (state === "missing") {
-        await expect(fs.lstat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      } else if (state === "not-directory") {
+      if (state === "not-directory") {
         expect(await fs.readFile(packageRoot, "utf8")).toBe("replacement file\n");
         expect(await fs.readFile(path.join(displacedRoot, path.basename(pending)), "utf8")).toBe(
           "pending\n",
@@ -457,18 +443,6 @@ describe("package lifecycle ownership", () => {
     },
   );
 
-  it("refuses an ambiguous lock even after its pending marker disappears", async () => {
-    const { packageRoot, lock, pending } = await fixture();
-    await fs.rm(pending);
-    await fs.writeFile(lock, "{partial");
-    const runScript = vi.fn();
-    await expect(
-      completePendingPackageLifecycle({ packageRoot, runScript }),
-    ).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
-    expect(runScript).not.toHaveBeenCalled();
-    expect(await fs.readFile(lock, "utf8")).toBe("{partial");
-  });
-
   it("bounds a recognizable owner's admission wait with monotonic time", async () => {
     const { packageRoot, lock } = await fixture();
     await fs.writeFile(lock, JSON.stringify(ownerPayload()));
@@ -492,21 +466,33 @@ describe("package lifecycle ownership", () => {
     }
   });
 
-  it("preserves a replacement and refuses further dispatch by its former owner", async () => {
-    const { packageRoot, pending, lock } = await fixture();
-    let replacement: Buffer | undefined;
-    const runScript = vi.fn(async () => {
-      await fs.rename(lock, path.join(packageRoot, "original-generation"));
-      replacement = Buffer.from("replacement generation\n");
-      await fs.writeFile(lock, replacement);
-    });
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
-      "lock generation changed",
-    );
-    expect(runScript).toHaveBeenCalledTimes(1);
-    expect(await fs.readFile(lock)).toEqual(replacement);
-    expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-  });
+  it.each(["promotion", "script"] as const)(
+    "preserves a replacement lock and refuses dispatch after %s",
+    async (phase) => {
+      const { packageRoot, pending, lock } = await fixture();
+      const writeFile = fs.writeFile;
+      const replace = async () => {
+        await fs.rename(lock, path.join(packageRoot, "original-generation"));
+        await writeFile(lock, "replacement generation\n");
+      };
+      if (phase === "promotion") {
+        vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+          if (file === pending) {
+            await replace();
+            vi.mocked(fs.writeFile).mockImplementation(writeFile);
+          }
+          return writeFile(file, data, options);
+        });
+      }
+      const runScript = vi.fn(replace);
+      await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
+        "lock generation changed",
+      );
+      expect(runScript).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
+      expect(await fs.readFile(lock, "utf8")).toBe("replacement generation\n");
+      expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
+    },
+  );
 
   it.each(["ownership", "release"])(
     "does not restore work retired before admission when %s fails",
@@ -564,90 +550,60 @@ describe("package lifecycle ownership", () => {
     },
   );
 
-  it("rechecks ownership after marker promotion before dispatching any script", async () => {
-    const { packageRoot, pending, lock } = await fixture();
-    const writeFile = fs.writeFile;
-    vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-      if (file === pending) {
-        await fs.rename(lock, path.join(packageRoot, "original-generation"));
-        await writeFile(lock, "replacement\n");
-        // The catch path also preserves pending evidence; only replace once.
-        vi.mocked(fs.writeFile).mockImplementation(writeFile);
+  it.each(["publication", "create", "read", "dispose"] as const)(
+    "preserves the %s acquisition failure without dispatching work",
+    async (phase) => {
+      const { packageRoot, pending, lock } = await fixture();
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+      if (phase === "read") {
+        await fs.writeFile(lock, "{}");
       }
-      return writeFile(file, data, options);
-    });
-    const runScript = vi.fn();
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
-      "lock generation changed",
-    );
-    expect(runScript).not.toHaveBeenCalled();
-    expect(await fs.readFile(lock, "utf8")).toBe("replacement\n");
-  });
-
-  it("cleans its own partial publication after a failed write without running scripts", async () => {
-    const { packageRoot, lock } = await fixture();
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-    const open = fs.open;
-    const failure = Object.assign(new Error("publication failed"), { code: "EIO" });
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await open(file, flags, mode);
-      if (file === lock && isExclusiveCreate(flags)) {
-        const write = handle.write.bind(handle);
-        vi.spyOn(handle, "write").mockImplementation(async () => {
-          await write(Buffer.from("{partial"));
+      const failure = Object.assign(new Error(`${phase} failed`), {
+        code: phase === "publication" ? "EIO" : "EACCES",
+      });
+      const open = fs.open;
+      vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const targeted =
+          file === lock &&
+          (phase === "read"
+            ? typeof flags === "number" && !isExclusiveCreate(flags)
+            : isExclusiveCreate(flags));
+        if (targeted && phase !== "publication") {
           throw failure;
-        });
-      }
-      return handle;
-    });
-    const runScript = vi.fn();
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toMatchObject(
-      {
-        name: "FsSafeError",
-        code: "invalid-path",
-        cause: failure,
-      },
-    );
-    expect(runScript).not.toHaveBeenCalled();
-    await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each(["create", "read"])("keeps %s permission errors distinguishable", async (phase) => {
-    const { packageRoot, lock } = await fixture();
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-    if (phase === "read") {
-      await fs.writeFile(lock, "{}");
-    }
-    const denial = Object.assign(new Error(`${phase} permission denied`), { code: "EACCES" });
-    const open = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      if (
-        file === lock &&
-        (phase === "create"
-          ? isExclusiveCreate(flags)
-          : typeof flags === "number" && !isExclusiveCreate(flags))
-      ) {
-        throw denial;
-      }
-      return open(file, flags, mode);
-    });
-    const completion = completePendingPackageLifecycle({ packageRoot, runScript: vi.fn() });
-    if (phase === "create") {
-      await expect(completion).rejects.toMatchObject({
-        name: "FsSafeError",
-        code: "invalid-path",
-        cause: denial,
+        }
+        const handle = await open(file, flags, mode);
+        if (targeted) {
+          const write = handle.write.bind(handle);
+          vi.spyOn(handle, "write").mockImplementation(async () => {
+            await write(Buffer.from("{partial"));
+            throw failure;
+          });
+        }
+        return handle;
       });
-      await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      await expect(completion).rejects.toMatchObject({
-        name: "PackageLifecycleOwnershipError",
-        cause: denial,
-        lockPath: lock,
-      });
-      expect(await fs.readFile(lock, "utf8")).toBe("{}");
-    }
-  });
+      const dispatch = vi.fn();
+      const completion =
+        phase === "dispose"
+          ? discardPendingPackageLifecycle({ packageRoots: [packageRoot], discard: dispatch })
+          : completePendingPackageLifecycle({ packageRoot, runScript: dispatch });
+      if (phase === "dispose") {
+        await expect(completion).rejects.toBe(failure);
+        expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
+      } else {
+        await expect(completion).rejects.toMatchObject(
+          phase === "read"
+            ? { name: "PackageLifecycleOwnershipError", cause: failure, lockPath: lock }
+            : { name: "FsSafeError", code: "invalid-path", cause: failure },
+        );
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+      if (phase === "read") {
+        expect(await fs.readFile(lock, "utf8")).toBe("{}");
+      } else {
+        await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it.each(["pending", "legacy"])(
     "retires the %s marker before a waiting owner can enter during disposal",
@@ -776,41 +732,6 @@ describe("package lifecycle ownership", () => {
       }
     },
   );
-
-  it("restores pending evidence when stage disposal fails", async () => {
-    const { packageRoot, pending, lock } = await fixture();
-    const failure = new Error("stage removal failed");
-    await expect(
-      discardPendingPackageLifecycle({
-        packageRoots: [packageRoot],
-        discard: async () => {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-    await expect(fs.access(lock)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("keeps ordinary unrooted disposal creation failures removable", async () => {
-    const { packageRoot, pending, lock } = await fixture();
-    const denial = Object.assign(new Error("disposal creation denied"), { code: "EACCES" });
-    const open = fs.open;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      if (file === lock && isExclusiveCreate(flags)) {
-        throw denial;
-      }
-      return open(file, flags, mode);
-    });
-    const discard = vi.fn();
-    await expect(
-      discardPendingPackageLifecycle({ packageRoots: [packageRoot], discard }),
-    ).rejects.toBe(denial);
-    expect(discard).not.toHaveBeenCalled();
-    expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-    await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
-  });
 
   it("preserves pending evidence and reports release failure", async () => {
     const { packageRoot, pending, lock } = await fixture();

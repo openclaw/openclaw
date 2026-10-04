@@ -1,4 +1,3 @@
-// Byte-size parser shared by CLI flags and config schemas.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type BytesParseOptions = {

@@ -281,7 +281,6 @@ export function renderSettingsToggle(props: {
   checked: boolean;
   onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
-  ariaDisabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
   return html`
@@ -290,7 +289,7 @@ export function renderSettingsToggle(props: {
       size="s"
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
-      aria-disabled=${props.ariaDisabled ? "true" : "false"}
+      aria-disabled="false"
       @change=${(event: Event) => {
         const target = event.currentTarget as HTMLElement & { checked: boolean };
         if (props.onChange(target.checked) === false) {
@@ -385,7 +384,6 @@ export function renderSettingsSegmented<T extends string>(
     ariaLabel?: string;
     descriptionId?: string;
     className?: string;
-    carapace?: boolean;
   } & (
     | {
         mode?: undefined;
@@ -438,7 +436,7 @@ export function renderSettingsSegmented<T extends string>(
   }
   return html`
     <wa-radio-group
-      class="settings-segmented ${props.carapace ? "oc-segmented" : ""} ${props.className ?? ""}"
+      class="settings-segmented  ${props.className ?? ""}"
       size="s"
       aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
@@ -465,9 +463,7 @@ export function renderSettingsSegmented<T extends string>(
       ${props.options.map(
         (option) => html`
           <wa-radio
-            class="settings-segmented__btn ${
-              props.carapace ? "oc-segmented-item" : ""
-            } ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
+            class="settings-segmented__btn  ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}

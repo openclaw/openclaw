@@ -3,7 +3,6 @@ import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,
-  toConversationStoreEntries,
 } from "./conversation-store-helpers.js";
 import type {
   MSTeamsConversationStore,
@@ -16,6 +15,7 @@ import {
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
+  type MSTeamsSqliteStateOptions,
 } from "./sqlite-state.js";
 
 const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
@@ -24,37 +24,12 @@ const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_MUTATION_KEY = "conversations";
 
-type MSTeamsConversationStoreStateOptions = {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
+type MSTeamsConversationStoreStateOptions = MSTeamsSqliteStateOptions & {
   ttlMs?: number;
-  stateDir?: string;
-  storePath?: string;
 };
-
-function createConversationStateStore(params?: MSTeamsConversationStoreStateOptions) {
-  return getMSTeamsRuntime().state.openKeyedStore<StoredConversationReference>({
-    namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
-    maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
-    env: resolveMSTeamsSqliteStateEnv(params),
-  });
-}
 
 function buildMSTeamsConversationStateKey(conversationId: string): string {
   return crypto.createHash("sha256").update(conversationId).digest("hex");
-}
-
-function prepareMSTeamsConversationReferenceForStorage(
-  conversationId: string,
-  reference: StoredConversationReference,
-): StoredConversationReference {
-  return {
-    ...reference,
-    conversation: {
-      ...reference.conversation,
-      id: conversationId,
-    },
-  };
 }
 
 function getStoredConversationId(reference: StoredConversationReference): string | null {
@@ -66,7 +41,11 @@ export function createMSTeamsConversationStoreState(
   params?: MSTeamsConversationStoreStateOptions,
 ): MSTeamsConversationStore {
   const ttlMs = params?.ttlMs ?? MSTEAMS_CONVERSATION_TTL_MS;
-  const conversationStore = createConversationStateStore(params);
+  const conversationStore = getMSTeamsRuntime().state.openKeyedStore<StoredConversationReference>({
+    namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
+    maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
+    env: resolveMSTeamsSqliteStateEnv(params),
+  });
 
   const isExpired = (reference: StoredConversationReference): boolean => {
     const lastSeenAt = parseDateStringTimestampMs(reference.lastSeenAt);
@@ -79,25 +58,19 @@ export function createMSTeamsConversationStoreState(
   ): Promise<StoredConversationReference | null> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     const value = await conversationStore.lookup(buildMSTeamsConversationStateKey(normalizedId));
-    if (!value) {
-      return null;
-    }
-    if (isExpired(value)) {
-      return null;
-    }
-    return value;
+    return value && !isExpired(value) ? value : null;
   };
 
-  const entries = async (): Promise<Array<[string, StoredConversationReference]>> => {
+  const list = async (): Promise<MSTeamsConversationStoreEntry[]> => {
     const rows = await conversationStore.entries();
-    const kept: Array<[string, StoredConversationReference]> = [];
+    const kept: MSTeamsConversationStoreEntry[] = [];
     for (const row of rows) {
       if (isExpired(row.value)) {
         continue;
       }
       const conversationId = getStoredConversationId(row.value);
       if (conversationId) {
-        kept.push([conversationId, row.value]);
+        kept.push({ conversationId, reference: row.value });
       }
     }
     return kept;
@@ -110,7 +83,10 @@ export function createMSTeamsConversationStoreState(
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     await conversationStore.register(
       buildMSTeamsConversationStateKey(normalizedId),
-      toPluginJsonValue(prepareMSTeamsConversationReferenceForStorage(normalizedId, reference)),
+      toPluginJsonValue({
+        ...reference,
+        conversation: { ...reference.conversation, id: normalizedId },
+      }),
     );
     const rows = [];
     for (const row of await conversationStore.entries()) {
@@ -133,10 +109,6 @@ export function createMSTeamsConversationStoreState(
     for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_CONVERSATIONS)) {
       await conversationStore.delete(row.key);
     }
-  };
-
-  const list = async (): Promise<MSTeamsConversationStoreEntry[]> => {
-    return toConversationStoreEntries(await entries());
   };
 
   const findPreferredDmByUserId = async (

@@ -22,6 +22,7 @@ import * as setupAdmission from "./setup-admission.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
+  defaultClient,
   inferenceFallbackMocks,
   makeContext,
   makeRespond,
@@ -116,7 +117,7 @@ describe("openclaw.setup", () => {
           sessionId,
           authChoice: "custom-api-key",
         },
-        client: { internal: { isLocalClient } },
+        client: { ...defaultClient, internal: { isLocalClient } },
         context,
         respond,
       } as never);
@@ -561,9 +562,14 @@ describe("openclaw.chat", () => {
     },
   );
 
-  it.each(["success", "task error", "response error"])(
-    "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
-    async (outcome) => {
+  it.each([
+    { outcome: "success", modelTarget: undefined },
+    { outcome: "task error", modelTarget: undefined },
+    { outcome: "response error", modelTarget: undefined },
+    { outcome: "success", modelTarget: "utility" as const },
+  ])(
+    "keeps admitted $modelTarget setup on the gateway lane without relabeling $outcome as non-admission",
+    async ({ outcome, modelTarget }) => {
       const failure = new Error("admitted operation failed");
       const started = createDeferred();
       const release = createDeferred();
@@ -588,6 +594,7 @@ describe("openclaw.chat", () => {
         params: {
           kind: "api-key",
           agentId: "research",
+          ...(modelTarget ? { modelTarget } : {}),
           modelRef: "openai/gpt-5.5",
           authChoice: "openai-api-key",
           apiKey: "test-key",
@@ -614,6 +621,7 @@ describe("openclaw.chat", () => {
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
         kind: "api-key",
         agentId: "research",
+        ...(modelTarget ? { modelTarget } : {}),
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
@@ -829,7 +837,7 @@ describe("openclaw.chat", () => {
       { role: "user" as const, text: "one", at: 1 },
       { role: "assistant" as const, text: "two", at: 2 },
     ];
-    transcriptStoreMocks.readTranscriptTail.mockImplementation((limit: number) =>
+    transcriptStoreMocks.readTranscriptTailAsync.mockImplementation(async (limit: number) =>
       turns.slice(-limit),
     );
     const invoke = async (params: Record<string, unknown>) => {
@@ -839,7 +847,7 @@ describe("openclaw.chat", () => {
     };
 
     expect(await invoke({})).toEqual({ ok: true, payload: { turns }, error: undefined });
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(100);
+    expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(100);
     expect(await invoke({ limit: 1 })).toEqual({
       ok: true,
       payload: { turns: [turns[1]] },
@@ -847,6 +855,34 @@ describe("openclaw.chat", () => {
     });
     expect((await invoke({ limit: 501 }))?.ok).toBe(false);
   });
+
+  it.each(["revoked", "rejected"] as const)(
+    "does not disclose %s pending history",
+    async (outcome) => {
+      const read =
+        createDeferred<Awaited<ReturnType<typeof transcriptStoreMocks.readTranscriptTailAsync>>>();
+      transcriptStoreMocks.readTranscriptTailAsync.mockReturnValueOnce(read.promise);
+      let current = true;
+      const { calls, respond } = makeRespond();
+      const pending = systemAgentHandler("openclaw.chat.history")({
+        params: {},
+        respond,
+        hasCurrentClientAuthority: () => current,
+      } as never);
+      expect(calls).toEqual([]);
+      const error =
+        outcome === "revoked" ? "Gateway requester authority changed" : "history reader refused";
+      const rejected = expect(pending).rejects.toThrow(error);
+      if (outcome === "revoked") {
+        current = false;
+        read.resolve([{ role: "assistant", text: "private history", at: 1 }]);
+      } else {
+        read.reject(new Error(error));
+      }
+      await rejected;
+      expect(calls).toEqual([]);
+    },
+  );
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();

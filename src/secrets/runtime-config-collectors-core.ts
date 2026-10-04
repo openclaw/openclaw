@@ -26,7 +26,7 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "./runtime-media-secret-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
@@ -40,16 +40,12 @@ type ProviderLike = {
   enabled?: unknown;
 };
 
-type SkillEntryLike = {
-  apiKey?: unknown;
-  enabled?: unknown;
-};
+type SkillEntryLike = Pick<ProviderLike, "apiKey" | "enabled">;
 
-type ProviderRequestLike = {
-  headers?: unknown;
-  auth?: unknown;
-  proxy?: unknown;
-  tls?: unknown;
+type ConfigCollectorParams = {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
 };
 
 function collectModelProviderAssignments(params: {
@@ -153,11 +149,7 @@ function findTalkProviderConfig(providers: unknown, providerId: string) {
   return id && isRecord(config) ? { id, config } : undefined;
 }
 
-function collectTalkAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectTalkAssignments(params: ConfigCollectorParams): void {
   const talk = params.config.talk as Record<string, unknown> | undefined;
   if (!isRecord(talk)) {
     return;
@@ -278,11 +270,7 @@ function collectTalkAssignments(params: {
   }
 }
 
-function collectGatewayAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectGatewayAssignments(params: ConfigCollectorParams): void {
   const gateway = params.config.gateway as Record<string, unknown> | undefined;
   if (!isRecord(gateway)) {
     return;
@@ -360,7 +348,7 @@ function collectGatewayAssignments(params: {
 }
 
 function collectProviderRequestAssignments(params: {
-  request: ProviderRequestLike;
+  request: Record<string, unknown>;
   pathPrefix: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
@@ -401,11 +389,7 @@ function collectProviderRequestAssignments(params: {
   }
 }
 
-function collectMediaRequestAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectMediaRequestAssignments(params: ConfigCollectorParams): void {
   const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
   const media = isRecord(tools?.media) ? tools.media : undefined;
   if (!media) {
@@ -484,11 +468,7 @@ function collectMediaRequestAssignments(params: {
   }
 }
 
-function collectMessagesTtsAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectMessagesTtsAssignments(params: ConfigCollectorParams): void {
   const tts = params.config.tts as Record<string, unknown> | undefined;
   if (!isRecord(tts)) {
     return;
@@ -501,11 +481,7 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
-function collectAgentTtsAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectAgentTtsAssignments(params: ConfigCollectorParams): void {
   for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
     if (!isRecord(entry.tts)) {
       continue;
@@ -522,11 +498,7 @@ function collectAgentTtsAssignments(params: {
   }
 }
 
-function collectCronAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectCronAssignments(params: ConfigCollectorParams): void {
   const cron = params.config.cron as Record<string, unknown> | undefined;
   if (!isRecord(cron)) {
     return;

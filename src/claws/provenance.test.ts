@@ -513,7 +513,7 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
 
@@ -534,14 +534,17 @@ describe("applyClawAddPlan", () => {
       configCommitted: true,
       installRecord: { agentId: "worker" },
     });
-    expect(config.agents?.defaults).toEqual({ workspace: "/operator/default" });
-    expect(config.agents?.entries).toEqual({
-      main: { default: true },
-      worker: {
-        name: "Worker",
-        identity: { name: "Work" },
-        tools: { deny: ["exec"] },
-        workspace: plan.agent.workspace,
+    expect(config.agents).toEqual({
+      ownership: "explicit",
+      defaults: { workspace: "/operator/default", systemAgent: { agentId: "main" } },
+      entries: {
+        main: {},
+        worker: {
+          name: "Worker",
+          identity: { name: "Work" },
+          tools: { deny: ["exec"] },
+          workspace: plan.agent.workspace,
+        },
       },
     });
     await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
@@ -559,9 +562,13 @@ describe("applyClawAddPlan", () => {
       },
     });
 
-    expect(config.agents?.entries).toEqual({
-      main: { default: true },
-      worker: expect.any(Object),
+    expect(config.agents).toEqual({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: {
+        main: {},
+        worker: { workspace: plan.agent.workspace },
+      },
     });
   });
 

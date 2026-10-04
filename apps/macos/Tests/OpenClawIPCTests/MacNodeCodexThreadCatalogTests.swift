@@ -5,7 +5,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct MacNodeCodexThreadCatalogTests {
     private static let fixtureSourceHomeId = "fe94896e07f486e0c81c8eb582386bf8c881819fc553a097d922707e48677414"
     private static let fixtureInitializeResult =
@@ -1243,20 +1243,19 @@ extension MacNodeCodexThreadCatalogTests {
             URL(fileURLWithPath: fake.executable.path + ".descendant-pid"))))
         defer { _ = Darwin.kill(descendantPID, SIGKILL) }
         let shutdown = Task { await client.shutdown() }
-        let watchdog = Task {
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled else { return }
-            Issue.record("timed out waiting for Codex child shutdown")
+        defer { shutdown.cancel() }
+        // A hung shutdown fails at the suite limit; killing the children lets the join finish.
+        await withTaskCancellationHandler {
+            await shutdown.value
+        } onCancel: {
             shutdown.cancel()
             _ = Darwin.kill(pid, SIGKILL)
             _ = Darwin.kill(descendantPID, SIGKILL)
         }
-        defer {
-            watchdog.cancel()
-            shutdown.cancel()
+        guard !Task.isCancelled else {
+            Issue.record("Still waiting for Codex child shutdown")
+            throw CancellationError()
         }
-        await shutdown.value
-        watchdog.cancel()
 
         errno = 0
         #expect(Darwin.kill(pid, 0) == -1)
@@ -1325,7 +1324,7 @@ extension MacNodeCodexThreadCatalogTests {
             in: URL(fileURLWithPath: fake.executable.path + ".pid"))
         try outputGate.write(contentsOf: Data("emit\n".utf8))
         try outputGate.close()
-        #expect(await TestProcessSupport.waitUntilGone(pid))
+        #expect(try await TestProcessSupport.waitUntilGone(pid))
         _ = try await self.requestEmptyList(
             client: client,
             executable: fake.executable,

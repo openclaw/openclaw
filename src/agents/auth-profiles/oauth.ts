@@ -7,14 +7,9 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProviderId,
-} from "../../llm/oauth.js";
+import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
@@ -61,9 +56,6 @@ import {
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
-
-const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
-  OAUTH_PROVIDER_IDS.has(provider) ? provider : null;
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
@@ -117,14 +109,9 @@ type ResolveApiKeyForProfileResult = {
   credential?: AuthProfileCredential;
 };
 
-function buildApiKeyProfileResult(params: {
-  apiKey: string;
-  provider: string;
-  email?: string;
-  profileId: string;
-  profileType: AuthProfileCredential["type"];
-  credential?: AuthProfileCredential;
-}): ResolveApiKeyForProfileResult {
+function buildApiKeyProfileResult(
+  params: ResolveApiKeyForProfileResult,
+): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
@@ -188,11 +175,10 @@ async function refreshOAuthCredential(
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
-  const oauthProvider = resolveOAuthProvider(credential.provider);
-  if (!oauthProvider) {
+  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
     return null;
   }
-  const result = await getOAuthApiKey(oauthProvider, {
+  const result = await getOAuthApiKey(credential.provider, {
     [credential.provider]: credential,
   });
   return result?.newCredentials ?? null;
@@ -212,7 +198,7 @@ async function canRefreshOAuthCredential(
   if (pluginCapability.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
-  return resolveOAuthProvider(credential.provider) !== null;
+  return OAUTH_PROVIDER_IDS.has(credential.provider);
 }
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
@@ -234,31 +220,47 @@ const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
   canRefreshCredential: canRefreshOAuthCredential,
-  readBootstrapCredential: ({ store, profileId, credential }) =>
-    readExternalCliBootstrapCredential({
-      store,
-      profileId,
-      credential,
-    }),
+  readBootstrapCredential: readExternalCliBootstrapCredential,
 });
-
-/** Clear in-process OAuth refresh queues between isolated tests. */
-function resetOAuthRefreshQueuesForTest(): void {
-  oauthManager.resetRefreshQueuesForTest();
-}
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
     isRefreshTokenReusedError,
-    resetOAuthRefreshQueuesForTest,
+    resetOAuthRefreshQueuesForTest: oauthManager.resetRefreshQueuesForTest,
   };
+}
+
+async function resolveOAuthProfileAccess(
+  params: ResolveApiKeyForProfileParams,
+  credential: OAuthCredential,
+): Promise<ResolveApiKeyForProfileResult | null> {
+  const resolved = await oauthManager.resolveOAuthAccess({
+    store: params.store,
+    profileId: params.profileId,
+    credential,
+    agentDir: params.agentDir,
+    cfg: params.cfg,
+    forceRefresh: params.forceRefresh,
+    validateCredential: params.validateOAuthCredential,
+    signal: params.signal,
+  });
+  return resolved
+    ? buildApiKeyProfileResult({
+        apiKey: resolved.apiKey,
+        provider: resolved.credential.provider,
+        email: resolved.credential.email ?? credential.email,
+        profileId: params.profileId,
+        profileType: credential.type,
+        credential: resolved.credential,
+      })
+    : null;
 }
 
 async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const cred = store.profiles[profileId];
@@ -280,32 +282,9 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  const resolved = await oauthManager.resolveOAuthAccess({
-    store,
-    profileId,
-    credential: cred,
-    agentDir: params.agentDir,
-    cfg,
-    forceRefresh: params.forceRefresh,
-    validateCredential: params.validateOAuthCredential,
-    signal: params.signal,
-  });
+  const resolved = await resolveOAuthProfileAccess(params, cred);
   params.signal?.throwIfAborted();
-  if (!resolved) {
-    return null;
-  }
-  return buildApiKeyProfileResult({
-    apiKey: resolved.apiKey,
-    provider: resolved.credential.provider,
-    email: resolved.credential.email ?? cred.email,
-    profileId,
-    profileType: cred.type,
-    credential: resolved.credential,
-  });
-}
-
-function isRetiredOAuthProfileId(profileId: string): boolean {
-  return profileId === CLAUDE_CLI_PROFILE_ID;
+  return resolved;
 }
 
 function authProfileSecretRefKey(
@@ -314,9 +293,9 @@ function authProfileSecretRefKey(
 ): string | undefined {
   const ref =
     profile.type === "api_key"
-      ? (coerceSecretRef(profile.keyRef, defaults) ?? coerceSecretRef(profile.key, defaults))
+      ? (parseSecretRef(profile.keyRef, defaults) ?? parseSecretRef(profile.key, defaults))
       : profile.type === "token"
-        ? (coerceSecretRef(profile.tokenRef, defaults) ?? coerceSecretRef(profile.token, defaults))
+        ? (parseSecretRef(profile.tokenRef, defaults) ?? parseSecretRef(profile.token, defaults))
         : null;
   return ref ? secretRefKey(ref) : undefined;
 }
@@ -378,7 +357,7 @@ function throwUnmaterializedAuthProfileSecretRef(params: {
   agentDir?: string;
   profileId: string;
   pathSuffix: "key" | "token";
-  ref: NonNullable<ReturnType<typeof coerceSecretRef>>;
+  ref: NonNullable<ReturnType<typeof parseSecretRef>>;
 }): never {
   throw new SecretSurfaceUnavailableError({
     ownerKind: "account",
@@ -411,7 +390,7 @@ export async function resolveApiKeyForProfile(
   }
   // Claude owns this native login slot. Legacy persisted copies must never
   // resolve, refresh, or leave OpenClaw as bearer tokens.
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();
@@ -458,8 +437,8 @@ export async function resolveApiKeyForProfile(
     });
     const inlineValue = cred.type === "api_key" ? cred.key : cred.token;
     const ref =
-      coerceSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
-      coerceSecretRef(inlineValue, refDefaults);
+      parseSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
+      parseSecretRef(inlineValue, refDefaults);
     const apiKey = normalizeOptionalSecretInput(inlineValue);
     if (ref && (!runtimeProfile.published || !apiKey)) {
       throwUnmaterializedAuthProfileSecretRef({
@@ -482,28 +461,9 @@ export async function resolveApiKeyForProfile(
   }
 
   try {
-    const resolved = await oauthManager.resolveOAuthAccess({
-      store,
-      agentDir: params.agentDir,
-      profileId,
-      credential: cred,
-      cfg,
-      forceRefresh: params.forceRefresh,
-      validateCredential: params.validateOAuthCredential,
-      signal: params.signal,
-    });
+    const resolved = await resolveOAuthProfileAccess(params, cred);
     params.signal?.throwIfAborted();
-    if (!resolved) {
-      return null;
-    }
-    return buildApiKeyProfileResult({
-      apiKey: resolved.apiKey,
-      provider: resolved.credential.provider,
-      email: resolved.credential.email ?? cred.email,
-      profileId,
-      profileType: cred.type,
-      credential: resolved.credential,
-    });
+    return resolved;
   } catch (error) {
     params.signal?.throwIfAborted();
     let settlementComplete = isSettledOAuthRefreshFailure(error);
@@ -571,6 +531,7 @@ export async function resolveApiKeyForProfile(
           validateOAuthCredential: params.validateOAuthCredential,
           signal: params.signal,
         });
+        params.signal?.throwIfAborted();
         if (fallbackResolved) {
           return fallbackResolved;
         }

@@ -30,12 +30,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -632,15 +626,6 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
 
   ClawScaffold(modifier = modifier) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.sm)) {
-      ClawTopBar(
-        title = "OpenClaw",
-        subtitle = "Local command center",
-        navigation = { ClawAvatarMark(text = "OC") },
-        actions = {
-          ClawIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
-        },
-      )
-
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -690,18 +675,6 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
       ClawEmptyState(
         title = "Nothing needs your attention",
         body = "OpenClaw will surface approvals, failed jobs, and channel issues here.",
-      )
-
-      ClawBottomNav(
-        items =
-          listOf(
-            ClawNavItem(key = "overview", label = "Home", icon = Icons.Default.Home),
-            ClawNavItem(key = "chat", label = "Chat", icon = Icons.Default.ChatBubble),
-            ClawNavItem(key = "voice", label = "Voice", icon = Icons.Default.Mic),
-            ClawNavItem(key = "settings", label = "Settings", icon = Icons.Default.Settings),
-          ),
-        selectedKey = "chat",
-        onSelect = {},
       )
     }
   }

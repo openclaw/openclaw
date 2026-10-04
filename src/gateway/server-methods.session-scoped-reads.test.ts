@@ -23,6 +23,30 @@ afterEach(() => vi.restoreAllMocks());
 const methods = ["sessions.files.list", "sessions.files.get", "sessions.branches.list"] as const;
 const key = "agent:main:scoped-read";
 
+function dispatchRead(
+  method: (typeof methods)[number],
+  options: Omit<
+    Parameters<typeof handleGatewayRequest>[0],
+    "req" | "isWebchatConnect" | "extraHandlers"
+  >,
+) {
+  return handleGatewayRequest({
+    ...options,
+    req: {
+      type: "req",
+      id: method,
+      method,
+      params: {
+        sessionKey: key,
+        agentId: "main",
+        ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
+      },
+    },
+    isWebchatConnect: () => false,
+    extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
+  });
+}
+
 function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promise<void>) {
   if (method === "sessions.files.list") {
     return vi.spyOn(workspace, "listSessionWorkspaceFiles").mockImplementation(async () => {
@@ -350,66 +374,52 @@ describe("narrow session read owners", () => {
     },
   );
 
-  it.each(methods)(
-    "%s separates a trusted solo operator from its sharing exemption",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const client = sharingPolicyClient({
-          user: GATEWAY_OWNER_PROFILE_ID,
-          scopes: ["operator.sessions.read"],
-        });
-        client.internal = {
-          operatorRoleActor: { kind: "operator", profileId: GATEWAY_OWNER_PROFILE_ID },
-        };
-        await sessions.upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          {
-            sessionId: "solo-session",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
-          },
-        );
-        for (const changed of [false, true]) {
-          client.internal.operatorRoleActor = {
-            kind: "operator",
-            profileId: GATEWAY_OWNER_PROFILE_ID,
-          };
-          const io = prepareRead(method, async () => {
-            if (changed) {
-              client.internal!.operatorRoleActor = {
-                kind: "operator",
-                profileId: "another-person",
-              };
-            }
-          });
-          const respond = vi.fn();
-          await handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "solo-narrow",
-              method,
-              params: {
-                sessionKey: key,
-                agentId: "main",
-                ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
-              },
-            },
-            client,
-            context: createDirectChatContext(),
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
-          });
-          expect(io).toHaveBeenCalledOnce();
-          expect(respond.mock.calls[0]?.[0]).toBe(!changed);
-          if (changed) {
-            expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-          }
-          io.mockRestore();
-        }
+  it("separates a trusted solo operator from its sharing exemption", async () => {
+    const method = "sessions.files.get";
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const client = sharingPolicyClient({
+        user: GATEWAY_OWNER_PROFILE_ID,
+        scopes: ["operator.sessions.read"],
       });
-    },
-  );
+      client.internal = {
+        operatorRoleActor: { kind: "operator", profileId: GATEWAY_OWNER_PROFILE_ID },
+      };
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        {
+          sessionId: "solo-session",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
+        },
+      );
+      for (const changed of [false, true]) {
+        client.internal.operatorRoleActor = {
+          kind: "operator",
+          profileId: GATEWAY_OWNER_PROFILE_ID,
+        };
+        const io = prepareRead(method, async () => {
+          if (changed) {
+            client.internal!.operatorRoleActor = {
+              kind: "operator",
+              profileId: "another-person",
+            };
+          }
+        });
+        const respond = vi.fn();
+        await dispatchRead(method, {
+          client,
+          context: createDirectChatContext(),
+          respond,
+        });
+        expect(io).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(!changed);
+        if (changed) {
+          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+        }
+        io.mockRestore();
+      }
+    });
+  });
 
   it.each(methods)("%s retains shared VIEW and hides foreign drafts before I/O", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -422,22 +432,10 @@ describe("narrow session read owners", () => {
       const io = prepareRead(method, async () => {});
       const request = async () => {
         const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: method,
-            method,
-            params: {
-              sessionKey: key,
-              agentId: "main",
-              ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
-            },
-          },
+        await dispatchRead(method, {
           client: reader,
           context,
           respond,
-          isWebchatConnect: () => false,
-          extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
         });
         return respond;
       };
@@ -518,23 +516,11 @@ describe("narrow session read owners", () => {
         });
         let current = true;
         const respond = vi.fn();
-        const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: changed,
-            method,
-            params: {
-              sessionKey: key,
-              agentId: "main",
-              ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
-            },
-          },
+        const request = dispatchRead(method, {
           client: reader,
           context,
           respond,
           hasCurrentClientAuthority: () => current,
-          isWebchatConnect: () => false,
-          extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
         });
         const outcome = Promise.allSettled([request]);
         try {
@@ -656,71 +642,40 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(methods)(
-    "%s keeps the missing-row contract without reading a workspace",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const reader = roleClient("view", "missing-reader");
-        reader.connect.scopes = ["operator.sessions.read"];
-        const io = prepareRead(method, async () => {});
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "missing",
-            method,
-            params: {
-              sessionKey: key,
-              agentId: "main",
-              ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
-            },
-          },
-          client: reader,
-          context: createDirectChatContext({ getRuntimeConfig: rolePolicyConfig }),
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
-        });
-        expect(io).not.toHaveBeenCalled();
-        expect(respond.mock.calls[0]?.[0]).toBe(method === "sessions.branches.list");
+  it.each([
+    ["sessions.files.get", "narrow"],
+    ["sessions.branches.list", "narrow"],
+    ["sessions.files.get", "solo"],
+    ["sessions.files.get", "internal"],
+  ] as const)("%s keeps missing-row access for %s callers", async (method, identity) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const client =
+        identity === "internal"
+          ? null
+          : identity === "solo"
+            ? sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] })
+            : roleClient("view", "missing-reader");
+      if (identity === "narrow" && client) {
+        client.connect.scopes = ["operator.sessions.read"];
+      }
+      const io = prepareRead(method, async () => {});
+      const respond = vi.fn();
+      await dispatchRead(method, {
+        client,
+        context: createDirectChatContext({
+          getRuntimeConfig: identity === "narrow" ? rolePolicyConfig : () => ({}),
+        }),
+        respond,
+      });
+      expect(io).toHaveBeenCalledTimes(identity === "narrow" ? 0 : 1);
+      expect(respond.mock.calls[0]?.[0]).toBe(
+        identity !== "narrow" || method === "sessions.branches.list",
+      );
+      if (identity === "narrow") {
         expect(respond.mock.calls[0]?.[1]).toEqual(
           method === "sessions.branches.list" ? { branches: [] } : undefined,
         );
-      });
-    },
-  );
-
-  it.each(["sessions.files.list", "sessions.files.get"] as const)(
-    "%s preserves canonical solo-owner and internal browsing without a session row",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const io = prepareRead(method, async () => {});
-        for (const client of [
-          null,
-          sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] }),
-        ]) {
-          const respond = vi.fn();
-          await handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "solo",
-              method,
-              params: {
-                sessionKey: key,
-                agentId: "main",
-                ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
-              },
-            },
-            client,
-            context: createDirectChatContext(),
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: sessionsFilesHandlers,
-          });
-          expect(respond.mock.calls[0]?.[0]).toBe(true);
-        }
-        expect(io).toHaveBeenCalledTimes(2);
-      });
-    },
-  );
+      }
+    });
+  });
 });

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
+import { createMeetingBrowserAdapterOptions } from "./browser-adapter-options.js";
+import { defineBrowserMeetingPlugin } from "./browser-plugin.js";
 import {
   createMeetingChromeTransport,
   createMeetingChromeTransportWithExternalAudio,
@@ -8,11 +10,11 @@ import {
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
 import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
+import { createMeetingPageScripts } from "./page-script-source.js";
 import type {
-  MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
-  MeetingManualActionCategory,
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
+  MeetingPlatformAdapterOptions,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
 import { registerMeetingPluginCli } from "./plugin-cli.js";
@@ -29,10 +31,11 @@ import {
 import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
 import { createMeetingRuntimeSetup } from "./runtime-setup.js";
-import type {
-  MeetingBrowserHealth,
-  MeetingTranscriptLine,
-  MeetingTranscriptSnapshot,
+import {
+  meetingCaptionSourceSchema,
+  type MeetingBrowserHealth,
+  type MeetingTranscriptLine,
+  type MeetingTranscriptSnapshot,
 } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -68,47 +71,6 @@ export interface MeetingPlatformAdapter<
   DialInPlan
 > {}
 
-type MeetingPlatformAdapterOptions<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
-  CreateParams = never,
-  CreateResult = never,
-  DialInParams = never,
-  DialInPlan = never,
-> = Omit<
-  MeetingPlatformAdapter<
-    Session,
-    Mode,
-    Health,
-    Transcript,
-    CreateParams,
-    CreateResult,
-    DialInParams,
-    DialInPlan
-  >,
-  "agentConsult" | "browser" | "session"
-> & {
-  agentConsult: MeetingPlatformRuntimeMetadata["agentConsult"];
-  browser: Omit<
-    MeetingBrowserAdapter<Mode, Health, Transcript>,
-    "captions" | "classifyManualAction" | "parseLeaveResult" | "parseStatus" | "permissionNotes"
-  > & {
-    captions: Omit<MeetingBrowserAdapter<Mode, Health, Transcript>["captions"], "parseTranscript">;
-    permissionNotes?: MeetingBrowserAdapter<Mode, Health, Transcript>["permissionNotes"];
-  };
-  parsing: {
-    classifyManualActionReason(reason: string): MeetingManualActionCategory;
-    displayName: string;
-    invalidTranscriptMessage: string;
-    malformedStatusMessage: string;
-    malformedTranscriptMessage: string;
-    statusFields?(parsed: Record<string, unknown>): Partial<Health>;
-  };
-  session: MeetingPlatformRuntimeMetadata["session"];
-};
-
 function browserResultString(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -121,13 +83,6 @@ const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
 const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
-const meetingCaptionSourceSchema = z.object({
-  id: z.string().min(1).max(512),
-  epoch: z.string().min(1).max(512),
-  revision: z.string().min(1).max(128),
-  finalized: z.boolean(),
-  ownEcho: z.boolean().optional(),
-});
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,
@@ -436,17 +391,28 @@ function createMeetingPlatformAdapter<
 
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
+  createBrowserAdapterOptions: createMeetingBrowserAdapterOptions,
+  createPageScripts: createMeetingPageScripts,
+  defineBrowserMeetingPlugin,
   createChromeTransport: createMeetingChromeTransport,
   createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginChromeTransport: createMeetingPluginChromeTransport,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginConfigSchema: createMeetingPluginConfigSchema,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginShellEntry: createMeetingPluginShellEntry,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeFacade: createMeetingRuntimeFacade,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeSetup: createMeetingRuntimeSetup,
   pluginTypes: createMeetingPluginTypes,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   registerPluginCli: registerMeetingPluginCli,
   resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
   createRuntimeProbes: createMeetingRuntimeProbes,

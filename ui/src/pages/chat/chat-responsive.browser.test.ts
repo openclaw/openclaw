@@ -89,9 +89,8 @@ function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGateway
   });
 }
 
-async function getSharedAppPage(): Promise<Page> {
-  sharedAppPagePromise ??= createSharedAppPage();
-  return await sharedAppPagePromise;
+function getSharedAppPage(): Promise<Page> {
+  return (sharedAppPagePromise ??= createSharedAppPage());
 }
 
 async function createSharedAppPage(): Promise<Page> {
@@ -105,7 +104,8 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
-      if (request.url() === SHARED_APP_IMAGE_URL) {
+      // Chromium normalizes the escaped dot before sending the image request.
+      if (decodeURI(request.url()) === decodeURI(SHARED_APP_IMAGE_URL)) {
         await route.fulfill({
           contentType: "image/png",
           body: Buffer.from(
@@ -227,7 +227,6 @@ type ChatFixtureOptions = {
   crowdedComposerFooter?: boolean;
   direct?: boolean;
   goalMode?: boolean;
-  sessionRailBody?: string;
   slashMenu?: boolean;
 };
 
@@ -594,7 +593,7 @@ function composerControlsHtml() {
           </details>
           <details class="chat-controls__inline-select chat-controls__permission-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
-            <span class="chat-controls__inline-select-label">Guarded</span>
+            <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
             <button class="chat-controls__permission-option">Guarded</button>
@@ -657,42 +656,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </div>
                 </div>
               </div>
-              ${
-                opts.sessionRailBody !== undefined
-                  ? `<openclaw-chat-session-rail>
-                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Side chat">
-                      <header class="chat-session-rail__header">
-                        <div class="chat-session-rail__header-copy">
-                          <strong class="chat-session-rail__headline">Reviewing the session</strong>
-                        </div>
-                      </header>
-                      <div class="chat-session-rail__thread">
-                        <article class="chat-session-rail__exchange">
-                          <div class="chat-session-rail__question">What should I check next?</div>
-                          <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
-                          <span class="chat-session-rail__pr-checks">2 passed</span>
-                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
-                          <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
-                        </article>
-                      </div>
-                      <footer class="agent-chat__input chat-session-rail__composer" data-composer-layout="multiline">
-                        <div class="agent-chat__composer-input-row">
-                          <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                            <textarea class="chat-session-rail__input" rows="1" placeholder="What should I know?"></textarea>
-                          </label>
-                        </div>
-                        <div class="agent-chat__composer-footer">
-                          <div class="agent-chat__composer-trail">
-                            <div class="agent-chat__composer-actions">
-                              <button class="chat-send-btn">${iconSvg()}</button>
-                            </div>
-                          </div>
-                        </div>
-                      </footer>
-                    </section>
-                  </openclaw-chat-session-rail>`
-                  : ""
-              }
               ${
                 opts.crowdedComposerFooter
                   ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
@@ -837,6 +800,58 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   }
 }
 
+async function openSessionRailFixture(width: number, height: number) {
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      <div style="display:flex;height:100dvh">
+        <div class="sidebar-region sidebar-region--right sidebar-region--open${width <= 768 ? " sidebar-region--narrow" : ""}" style="--side-panel-width:400px;--side-panel-height:360px">
+          <div class="sidebar-region__header">Current session</div>
+          <div class="sidebar-region__primary" data-region="main">Conversation</div>
+          <div class="sidebar-region__right-runtime">
+            <div class="side-panel">
+              <header class="rail-header side-panel__header" data-region-header="side">Side chat</header>
+              <div class="side-panel__body">
+                <div class="side-panel__panel" data-region="side">
+                  <openclaw-chat-session-rail>
+                    <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
+                      <div class="chat-session-rail__thread">
+                        <article class="chat-session-rail__exchange">
+                          <div class="chat-group user chat-session-rail__message"><div class="chat-bubble chat-session-rail__question">What should I check next?</div></div>
+                          <div class="chat-group assistant chat-session-rail__message"><div class="chat-bubble chat-session-rail__answer">${LONG_SESSION_RAIL_BODY}</div></div>
+                          <span class="chat-session-rail__pr-checks">2 passed</span>
+                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
+                          <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
+                        </article>
+                      </div>
+                      <form class="agent-chat__input chat-session-rail__composer">
+                        <div class="agent-chat__composer-input-row">
+                          <label class="agent-chat__composer-combobox chat-session-rail__prompt">
+                            <textarea class="chat-session-rail__input" rows="1" placeholder="What should I know?"></textarea>
+                          </label>
+                        </div>
+                        <div class="agent-chat__composer-footer">
+                          <div class="agent-chat__composer-trail">
+                            <div class="agent-chat__composer-actions"><button class="chat-send-btn">${iconSvg()}</button></div>
+                          </div>
+                        </div>
+                      </form>
+                    </section>
+                  </openclaw-chat-session-rail>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </body></html>`);
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
+
 async function getTextContentRect(page: Page, selector: string) {
   const rect = await page.locator(selector).evaluate((node) => {
     const range = document.createRange();
@@ -941,32 +956,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("insets the collapsed session rail from the pane header edge", async () => {
-    await withBrowserPage(openBrowserPage(922, 282), async (page) => {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <div class="chat-split-view__cell" style="width: 922px; height: 282px;">
-            <div class="chat-pane__header">Current session</div>
-            <div class="chat-split-view__pane">
-              <div class="chat-main" style="height: 100%;">
-                <div class="chat-session-rail chat-session-rail--pill">
-                  <span class="chat-session-rail__status" data-health="on-track">On track</span>
-                  <span class="chat-session-rail__headline">Investigating repository guidance</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const header = await getBoundingBox(page, ".chat-pane__header");
-      const observer = await getBoundingBox(page, ".chat-session-rail");
-
-      expect(observer.y).toBeCloseTo(header.y + header.height + 12, 0);
-    });
-  });
-
   it("keeps a constrained no-face header to one flex gap", async () => {
     await withBrowserPage(openBrowserPage(360, 180), async (page) => {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -1020,7 +1009,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
               <span class="chat-pane__session-title"
                 ><span class="chat-pane__session-title-text"
@@ -1141,7 +1130,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 640px;">
-            <div class="chat-pane__header">
+            <div class="chat-pane__header chat-pane__header--closable">
               <div class="chat-pane__crumbs">
                 <div class="chat-pane__project-row">
                   <wa-dropdown class="chat-pane__workspace-menu">
@@ -1212,29 +1201,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         overflow: 0,
       });
       expect(narrow.nestedTrailWidth).toBeLessThanOrEqual(narrow.headerWidth / 2 + 1);
-    });
-  });
-
-  it("keeps a Done status disjoint from a long compact session headline", async () => {
-    await withBrowserPage(openBrowserPage(320, 240), async (page) => {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-session-rail chat-session-rail--pill" style="width: 190px">
-            <span class="chat-session-rail__status" data-health="done">Done</span>
-            <button class="chat-session-rail__expand" type="button">
-              <span class="chat-session-rail__headline">A deliberately long completed-session headline</span>
-            </button>
-            <button class="chat-session-rail__hide" type="button">Hide</button>
-          </div>
-        </body></html>`,
-      );
-
-      const status = await getBoundingBox(page, ".chat-session-rail__status");
-      const headline = await getBoundingBox(page, ".chat-session-rail__headline");
-      const expand = await getBoundingBox(page, ".chat-session-rail__expand");
-
-      expect(status.x + status.width).toBeLessThanOrEqual(headline.x);
-      expect(headline.x + headline.width).toBeLessThanOrEqual(expand.x + expand.width);
     });
   });
 
@@ -2385,6 +2351,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    await image.evaluate((element: HTMLImageElement) => element.decode());
     expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
     expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
     for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
@@ -3349,7 +3316,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             ".agent-chat__composer-combobox > textarea",
           );
           const selectors = [
-            ".chat-controls__permission-trigger .chat-controls__inline-select-label",
             ".chat-controls__model-trigger .chat-controls__inline-select-label",
             ".chat-controls__effort-trigger .chat-controls__inline-select-label",
           ];
@@ -3371,7 +3337,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14, 14],
+          labels: [14, 14],
           placeholder: 16,
           textarea: 16,
         });
@@ -3865,7 +3831,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "",
           "chat-queue__item--failed",
           "",
-          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Delivery has not been confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
         ),
         queueExceptionCellHtml(
           "applying-settings",
@@ -4598,160 +4564,78 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
+    [320, 568],
     [1024, 768],
     [1366, 900],
   ] as const)(
-    "scrolls long session-rail conversations instead of expanding the overlay at %sx%s",
+    "scrolls long embedded side-chat conversations within sidebar panels at %sx%s",
     async (width, height) => {
-      await withBrowserPage(
-        openFixture(width, height, {
-          sessionRailBody: LONG_SESSION_RAIL_BODY,
-        }),
-        async (page) => {
-          const panel = await page.evaluate(() => {
-            const element = document.querySelector(".chat-session-rail") as HTMLElement;
-            const pane = document.querySelector(".chat-main") as HTMLElement;
-            return {
-              clientHeight: element.clientHeight,
-              paneHeight: pane.clientHeight,
-              position: getComputedStyle(element).position,
-            };
-          });
-          expect(panel.position).toBe("absolute");
-          // The rail fills its pane and no more; growth past the container is what
-          // the old floating card was capped against, and the sheet must not
-          // reintroduce it. Long threads scroll internally instead — asserted below.
-          expect(panel.clientHeight).toBeLessThanOrEqual(panel.paneHeight);
-
-          const body = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-            const style = getComputedStyle(node as HTMLElement);
-            return {
-              overflowY: style.overflowY,
-              clientHeight: (node as HTMLElement).clientHeight,
-              scrollHeight: (node as HTMLElement).scrollHeight,
-            };
-          });
-          expect(body.overflowY).toBe("auto");
-          expect(body.clientHeight).toBeLessThan(body.scrollHeight);
-
-          const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-            const element = node as HTMLElement;
-            element.scrollTop = element.scrollHeight;
-            return element.scrollTop;
-          });
-          expect(scrollTop).toBeGreaterThan(0);
-        },
-      );
-    },
-  );
-
-  it("renders the session rail as a mobile overlay without horizontal overflow", async () => {
-    await withBrowserPage(
-      openFixture(320, 568, {
-        sessionRailBody: LONG_SESSION_RAIL_BODY,
-      }),
-      async (page) => {
+      await withBrowserPage(openSessionRailFixture(width, height), async (page) => {
         await expectNoHorizontalOverflow(page);
-        const panel = await page.locator(".chat-session-rail").evaluate((node) => {
-          const element = node as HTMLElement;
+        const panel = await page.evaluate(() => {
+          const element = document.querySelector<HTMLElement>(".chat-session-rail")!;
+          const host = document.querySelector<HTMLElement>(".side-panel__panel")!;
           return {
             clientHeight: element.clientHeight,
+            hostHeight: host.clientHeight,
             position: getComputedStyle(element).position,
           };
         });
-        expect(panel.position).toBe("fixed");
-        // Full-screen sheet at this width: bounded by the viewport, never beyond.
-        expect(panel.clientHeight).toBeLessThanOrEqual(568);
+        expect(panel.position).toBe("relative");
+        expect(panel.clientHeight).toBeLessThanOrEqual(panel.hostHeight);
+        expect(panel.hostHeight).toBeLessThanOrEqual(height);
 
-        const scroll = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-          const element = node as HTMLElement;
-          return {
-            overflowY: getComputedStyle(element).overflowY,
-            clientHeight: element.clientHeight,
-            scrollHeight: element.scrollHeight,
-          };
-        });
-        expect(scroll.overflowY).toBe("auto");
-        expect(scroll.clientHeight).toBeLessThan(scroll.scrollHeight);
-
+        const body = await page.locator(".chat-session-rail__thread").evaluate((node) => ({
+          overflowY: getComputedStyle(node).overflowY,
+          clientHeight: node.clientHeight,
+          scrollHeight: node.scrollHeight,
+        }));
+        expect(body.overflowY).toBe("auto");
+        expect(body.clientHeight).toBeLessThan(body.scrollHeight);
         const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-          const element = node as HTMLElement;
-          element.scrollTop = element.scrollHeight;
-          return element.scrollTop;
+          node.scrollTop = node.scrollHeight;
+          return node.scrollTop;
         });
         expect(scrollTop).toBeGreaterThan(0);
-      },
-    );
-  });
+        const rail = await getRect(page, ".chat-session-rail");
+        const composer = await getRect(page, ".chat-session-rail__composer");
+        expect(composer.bottom).toBeLessThanOrEqual(rail.bottom + 1);
+      });
+    },
+  );
 
   it("keeps rail metadata out of the scrolling thread's layout", async () => {
-    await withBrowserPage(
-      openFixture(1024, 768, { sessionRailBody: LONG_SESSION_RAIL_BODY }),
-      async (page) => {
-        const styles = await page.evaluate(() => {
-          const read = (selector: string) => {
-            const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
-            return {
-              minHeight: style.minHeight,
-              overflowY: style.overflowY,
-              borderTopWidth: style.borderTopWidth,
-            };
-          };
+    await withBrowserPage(openSessionRailFixture(1024, 768), async (page) => {
+      const styles = await page.evaluate(() => {
+        const read = (selector: string) => {
+          const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
           return {
-            thread: read(".chat-session-rail__thread"),
-            prChecks: read(".chat-session-rail__pr-checks"),
-            timestamp: read(".chat-session-rail__timestamp"),
-            hint: read(".chat-session-rail__hint"),
+            minHeight: style.minHeight,
+            overflowY: style.overflowY,
+            borderTopWidth: style.borderTopWidth,
           };
-        });
+        };
+        return {
+          thread: read(".chat-session-rail__thread"),
+          prChecks: read(".chat-session-rail__pr-checks"),
+          timestamp: read(".chat-session-rail__timestamp"),
+          hint: read(".chat-session-rail__hint"),
+        };
+      });
 
-        // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
-        // thread's rule would give each one a 96px scrolling bordered box; the
-        // selector list has silently merged before.
-        expect(styles.thread.minHeight).toBe("96px");
-        expect(styles.thread.overflowY).toBe("auto");
-        for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
-          // Relational, not a literal: the point is that these nodes do not share
-          // the thread's rule, whatever the thread's own numbers become.
-          expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
-          expect(metadata.overflowY).toBe("visible");
-          expect(metadata.borderTopWidth).toBe("0px");
-        }
-      },
-    );
-  });
-
-  it("degrades an undocked session rail to a full-height edge sheet, never a floating card", async () => {
-    await withBrowserPage(
-      openFixture(900, 800, {
-        sessionRailBody: LONG_SESSION_RAIL_BODY,
-      }),
-      async (page) => {
-        const geometry = await page.evaluate(() => {
-          const rail = document.querySelector(".chat-session-rail") as HTMLElement;
-          const main = document.querySelector(".chat-main") as HTMLElement;
-          const railBox = rail.getBoundingClientRect();
-          const mainBox = main.getBoundingClientRect();
-          const style = getComputedStyle(rail);
-          return {
-            topGap: Math.round(railBox.top - mainBox.top),
-            bottomGap: Math.round(mainBox.bottom - railBox.bottom),
-            rightGap: Math.round(mainBox.right - railBox.right),
-            borderRadius: style.borderTopLeftRadius,
-            boxShadow: style.boxShadow,
-            backdropFilter: style.backdropFilter,
-            animationName: style.animationName,
-          };
-        });
-
-        // Flush to the pane on three sides with square corners: a surface that
-        // took the pane over, not a card hovering above the conversation.
-        expect(geometry.topGap).toBe(0);
-        expect(geometry.bottomGap).toBe(0);
-        expect(geometry.rightGap).toBe(0);
-        expect(geometry.borderRadius).toBe("0px");
-      },
-    );
+      // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
+      // thread's rule would give each one a 96px scrolling bordered box; the
+      // selector list has silently merged before.
+      expect(styles.thread.minHeight).toBe("96px");
+      expect(styles.thread.overflowY).toBe("auto");
+      for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
+        // Relational, not a literal: the point is that these nodes do not share
+        // the thread's rule, whatever the thread's own numbers become.
+        expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
+        expect(metadata.overflowY).toBe("visible");
+        expect(metadata.borderTopWidth).toBe("0px");
+      }
+    });
   });
 
   it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {

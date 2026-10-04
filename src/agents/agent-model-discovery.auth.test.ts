@@ -9,7 +9,7 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
-import { discoverAuthStorage } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -72,7 +72,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
   writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
-describe("discoverAuthStorage", () => {
+describe("discoverAuthStorageFacts auth storage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
     const credentials = resolveAgentCredentialMapFromStore(
       createAuthProfileStoreFixture({
@@ -208,7 +208,7 @@ describe("discoverAuthStorage", () => {
           "openai:key": createApiKeyCredential("openai", "test-key"),
         }),
       );
-      const authStorage = discoverAuthStorage(agentDir, {
+      const { authStorage } = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -268,12 +268,12 @@ describe("discoverAuthStorage", () => {
         }),
       );
 
-      const readOnlyStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: readOnlyStorage } = discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
-      const runtimeStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: runtimeStorage } = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -306,7 +306,7 @@ describe("discoverAuthStorage", () => {
           }),
         );
 
-        const storage = discoverAuthStorage(agentDir, {
+        const { authStorage: storage } = discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},

@@ -6,11 +6,12 @@ import {
   listConfiguredSessionStoreAgentIds,
   resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
-  resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../../config/sessions.js";
 import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -47,6 +48,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
   shouldContinue?: () => boolean;
 }): Promise<SessionStoreTarget[]> {
+  if (params.shouldContinue?.() === false) {
+    return [];
+  }
   const storeTargets: SessionStoreTarget[] = [];
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -61,7 +65,16 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       ),
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);
-    for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+    const inventory = prepareSessionStoreTargetInventoryRead(
+      prepareSessionStoreTargetInventory(params.cfg, configuredAgentIds, env, "recovery"),
+    );
+    const targets = await inventory.withRead(async (snapshot) =>
+      snapshot.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
+    );
+    if (params.shouldContinue?.() === false) {
+      return [];
+    }
+    for (const target of targets) {
       const storePath = path.resolve(target.storePath);
       // Fixed configured stores can retain a durable owner whose ID differs from the
       // current roster entry. The validated path is the configuration fact; the target's
@@ -76,32 +89,37 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       const storePath = path.join(sessionsDir, "sessions.json");
       storeTargets.push({
         agentId:
-          resolveSqliteTargetFromSessionStorePath(storePath).agentId ?? LEGACY_IMPLICIT_AGENT_ID,
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId ??
+          LEGACY_IMPLICIT_AGENT_ID,
         storePath,
       });
     }
   }
-  // Probing every store synchronously (admission refusal + status read) blocks the
-  // event loop for the whole chain; large fleets froze startup for the combined
-  // length of all probes (#149935). Probe stores in the same order but yield one
-  // macrotask between targets so timers queued before the scan can run mid-scan.
   const eligibleTargets: SessionStoreTarget[] = [];
   for (const target of storeTargets) {
+    // One explicit macrotask between targets: the refusal probe is synchronous,
+    // and yielding here guarantees timers queued before the scan can run
+    // mid-scan regardless of the status probe's internals (#149935).
     await setImmediate();
-    // Stop during the yield must skip the remaining probes, mirroring the
-    // recovery loop's post-yield recheck (#149935 Rev 3).
     if (params.shouldContinue?.() === false) {
-      break;
+      return [];
     }
-    if (
-      readAgentDatabaseAdmissionRefusal(target.agentId, { env }) ||
-      (params.statuses && !hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses))
-    ) {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
       continue;
     }
-    eligibleTargets.push(target);
+    const hasStatus =
+      !params.statuses ||
+      (await hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses));
+    if (params.shouldContinue?.() === false) {
+      return [];
+    }
+    if (hasStatus) {
+      eligibleTargets.push(target);
+    }
   }
-  return eligibleTargets.toSorted(
-    (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
-  );
+  return eligibleTargets
+    .filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }))
+    .toSorted(
+      (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
+    );
 }

@@ -1,5 +1,8 @@
-// WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -63,18 +66,12 @@ export type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
 function claimsWorkerConnectionIdentity(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const connect = value as { role?: unknown; client?: unknown };
-  if (connect.role === "worker") {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
     return true;
   }
-  if (!connect.client || typeof connect.client !== "object") {
-    return false;
-  }
-  const client = connect.client as { id?: unknown; mode?: unknown };
-  return client.id === GATEWAY_CLIENT_IDS.WORKER || client.mode === GATEWAY_CLIENT_MODES.WORKER;
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
@@ -123,10 +120,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     ingressAttribution.kind === "trusted-proxy" ||
     ingressAttribution.kind === "tailscale-serve" ||
     ingressAttribution.kind === "tailscale-funnel";
-  const remoteIsTrustedProxy =
-    ingressAttribution.kind === "trusted-proxy" ||
-    ingressAttribution.kind === "tailscale-serve" ||
-    ingressAttribution.kind === "tailscale-funnel";
   const hostIsLocalish = isLocalishHost(requestHost);
   const isLocalClient = ingressAttribution.kind === "direct-local";
   const reportedClientIp = isLocalClient
@@ -137,7 +130,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const reportedClientIpSource = resolveNodePairingClientIpSource({
     reportedClientIp,
     hasProxyHeaders,
-    remoteIsTrustedProxy,
+    remoteIsTrustedProxy: hasProxyHeaders,
     remoteIsLoopback: isLoopbackAddress(remoteAddr),
   });
 
@@ -246,38 +239,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     const client = getClient();
     try {
-      const parsed = JSON.parse(text);
-      if (
-        !client &&
-        parsed !== null &&
-        typeof parsed === "object" &&
-        "params" in parsed &&
-        claimsWorkerConnectionIdentity(parsed.params)
-      ) {
+      const parsed: unknown = JSON.parse(text);
+      const frameRecord = asOptionalObjectRecord(parsed);
+      if (!client && claimsWorkerConnectionIdentity(frameRecord?.params)) {
         setHandshakeState("failed");
         setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
         logWsControl.warn("worker admission rejected reason=invalid-handshake");
         close(1008, "invalid-handshake");
         return;
       }
-      const frameType =
-        parsed && typeof parsed === "object" && "type" in parsed
-          ? typeof (parsed as { type?: unknown }).type === "string"
-            ? String((parsed as { type?: unknown }).type)
-            : undefined
-          : undefined;
-      const frameMethod =
-        parsed && typeof parsed === "object" && "method" in parsed
-          ? typeof (parsed as { method?: unknown }).method === "string"
-            ? String((parsed as { method?: unknown }).method)
-            : undefined
-          : undefined;
-      const frameId =
-        parsed && typeof parsed === "object" && "id" in parsed
-          ? typeof (parsed as { id?: unknown }).id === "string"
-            ? String((parsed as { id?: unknown }).id)
-            : undefined
-          : undefined;
+      const frameType = readStringField(frameRecord, "type");
+      const frameMethod = readStringField(frameRecord, "method");
+      const frameId = readStringField(frameRecord, "id");
       if (frameType || frameMethod || frameId) {
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
@@ -304,10 +277,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             handshakeError,
           });
           if (isRequestFrame) {
-            const req = parsed;
             send({
               type: "res",
-              id: req.id,
+              id: parsed.id,
               ok: false,
               error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
             });
@@ -445,35 +417,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return { id: parsed.id, params: parsed.params };
   };
 
-  const isPreparedControlConnect = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-    const connectParams = parsed.params as { role?: unknown };
-    return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
-  };
-
-  const isStartupNodePreauth = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    return parsed ? isStartupNodeConnect(parsed.params) : false;
-  };
-
-  const rejectConnectForClosedAdmission = async (
-    data: GatewayConnectionFrame,
-  ): Promise<boolean> => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-
+  const rejectConnectForClosedAdmission = async (id: string): Promise<void> => {
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining
       ? GATEWAY_RESTART_UNAVAILABLE_REASON
       : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
-    setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
+    setLastFrameMeta({ type: "req", method: "connect", id });
     setHandshakeState("failed");
     setCloseCause(reason, {
       method: "connect",
@@ -481,7 +432,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     });
     await sendFrame({
       type: "res",
-      id: parsed.id,
+      id,
       ok: false,
       error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
         retryable: true,
@@ -496,7 +447,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     queueMicrotask(() =>
       close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
     );
-    return true;
   };
 
   const handleIncomingMessage = async (
@@ -509,11 +459,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
+      const connect = parsePreauthConnectFrame(data);
       if (
+        connect &&
         isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "accepting" &&
         params.isStartupPending?.() === true &&
-        isStartupNodePreauth(data)
+        isStartupNodeConnect(connect.params)
       ) {
         const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
         if (startupAdmission) {
@@ -525,14 +477,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (isGatewaySuspendControlAvailable() && isPreparedControlConnect(data)) {
+      if (
+        connect &&
+        isGatewaySuspendControlAvailable() &&
+        connect.params.role !== "node" &&
+        !claimsWorkerConnectionIdentity(connect.params)
+      ) {
         // Suspension fences work, not authenticated owner recovery. Operators
         // can reconnect through suspension and its drain; node and worker connects
         // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }
-      if (await rejectConnectForClosedAdmission(data)) {
+      if (connect) {
+        await rejectConnectForClosedAdmission(connect.id);
         return;
       }
       // Malformed pre-auth frames still use the established validation and

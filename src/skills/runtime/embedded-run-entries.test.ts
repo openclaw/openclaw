@@ -17,6 +17,7 @@ import {
 } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const prepareWorkspaceSkillsSpy = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
@@ -25,6 +26,67 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     clearRuntimeConfigSnapshot();
     prepareWorkspaceSkillsSpy.mockReset();
     prepareWorkspaceSkillsSpy.mockResolvedValue([]);
+  });
+
+  it.each([false, true])(
+    "retains canonical source ownership unless materialized (sandbox=%s)",
+    async (workspaceOnly) => {
+      const workspaceDir = path.resolve("/synthetic/materialized");
+      const executionWorkspaceDir = path.resolve("/synthetic/canonical");
+      const skillsSnapshot: SkillSnapshot = {
+        prompt: "Hydrate selected skills",
+        skills: [],
+        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+        skillRoots: recordSkillRootsExecutionFileHost(
+          {
+            agentWorkspaceDir: path.resolve("/synthetic/agent"),
+            executionWorkspaceDir,
+          },
+          "gateway",
+        ),
+      };
+      const serializedSnapshot = JSON.stringify(skillsSnapshot);
+      const hydratedSnapshot: SkillSnapshot = JSON.parse(serializedSnapshot);
+      await resolveEmbeddedRunSkillEntries({
+        workspaceDir,
+        workspaceOnly,
+        config: {},
+        skillsSnapshot: hydratedSnapshot,
+      });
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[0]).toBe(
+        workspaceOnly ? workspaceDir : path.resolve("/synthetic/agent"),
+      );
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[1]).toMatchObject({
+        executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
+        executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
+      });
+    },
+  );
+
+  it("rebuilds version-6 roots that predate source-host provenance", async () => {
+    const agentWorkspaceDir = path.resolve("/synthetic/current-agent");
+    const executionWorkspaceDir = path.resolve("/synthetic/current-canonical");
+    await resolveEmbeddedRunSkillEntries({
+      workspaceDir: agentWorkspaceDir,
+      executionWorkspaceDir,
+      executionWorkspaceFileHost: "gateway",
+      config: {},
+      skillsSnapshot: {
+        prompt: "Hydrate selected skills",
+        skills: [],
+        promptFormatVersion: 6,
+        skillRoots: {
+          agentWorkspaceDir: path.resolve("/synthetic/stale-agent"),
+          executionWorkspaceDir: path.resolve("/synthetic/stale-canonical"),
+        },
+      },
+    });
+
+    expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[0]).toBe(agentWorkspaceDir);
+    expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[1]).toMatchObject({
+      executionWorkspaceDir,
+      executionWorkspaceFileHost: "gateway",
+    });
   });
 
   it("threads agentId through live skill loading", async () => {

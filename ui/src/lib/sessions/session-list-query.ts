@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { sessionMatchesArchivedFilter } from "./navigation.ts";
@@ -22,53 +23,46 @@ import {
   normalizeManagedSessionListQuery,
 } from "./session-requests.ts";
 import {
+  hasSessionChangedAncestorCoverage,
   matchesExistingSession,
   parseSessionChangedEvent,
   reconcileSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
 
-const ROW_SNAPSHOT_REASONS = new Set([
-  "patch",
-  "participants",
-  "placement",
-  "send",
-  "steer",
-  "agent.run.started",
-  "agent.input.settled",
-  "run-capacity",
-  "chat.title",
-]);
-
-/** Only a held member moving within a known roster can replace a list read. */
+/** Held members and certified query exclusions can replace a list read. */
 export function canApplySessionListSnapshot(
   result: SessionsListResult | null,
   payload: unknown,
   options: SessionListOptions,
+  sortBy: "updatedAt" | "activity" = "updatedAt",
 ): boolean {
   const parsed = parseSessionChangedEvent(payload);
-  if (!result || !parsed || !isPrimarySessionListQuery({ ...options, archivedFilter: "active" })) {
+  if (
+    !result ||
+    !parsed ||
+    !isPrimarySessionListQuery({ ...options, archivedFilter: "active", excludeSubagents: false })
+  ) {
     return false;
   }
-  const [eventInfo, event] = parsed;
+  const [, event] = parsed;
   if (
     !asOptionalRecord(event.session) ||
     event.catalogChanged === true ||
     event.phase === "reset" ||
-    (eventInfo.reason !== null && !ROW_SNAPSHOT_REASONS.has(eventInfo.reason)) ||
     (options.offset ?? 0) > 0
   ) {
     return false;
   }
   const snapshots = sessionChangedSnapshots(payload);
   const complete = Array.isArray(event.ancestorSessions);
-  let held = false;
+  let covered = false;
   for (const snapshot of snapshots) {
     const parsedSnapshot = parseSessionChangedEvent(snapshot);
     if (!parsedSnapshot) {
       return false;
     }
-    const [info] = parsedSnapshot;
+    const [info, , source] = parsedSnapshot;
     const agentId = info.agentId ?? parseAgentSessionKey(info.key)?.agentId;
     if (
       options.agentId &&
@@ -80,6 +74,31 @@ export function canApplySessionListSnapshot(
     const existing = result.sessions.find((row) =>
       matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
     );
+    const subagentExcluded = options.excludeSubagents === true && isSubagentSessionKey(info.key);
+    const parentKeys = [
+      existing?.spawnedBy ?? source.spawnedBy,
+      existing?.controlOwnerSessionKey ?? source.controlOwnerSessionKey,
+      existing?.parentSessionKey ?? source.parentSessionKey,
+    ].filter((key): key is string => typeof key === "string" && Boolean(key));
+    // Missing certification means the bounded Gateway traversal was incomplete.
+    if (
+      (!complete &&
+        (isSubagentSessionKey(info.key) ||
+          parentKeys.length > 0 ||
+          existing?.childSessions?.length)) ||
+      !hasSessionChangedAncestorCoverage(
+        result.sessions,
+        info.key,
+        parentKeys,
+        complete ? snapshots : undefined,
+      )
+    ) {
+      return false;
+    }
+    if (subagentExcluded) {
+      covered = true;
+      continue;
+    }
     const next = reconcileSessionChangedRow(existing, snapshot, {
       resultAgentId: options.agentId,
       archivedFilter: "all",
@@ -101,38 +120,15 @@ export function canApplySessionListSnapshot(
     ) {
       return false;
     }
-    const parentKeys = [
-      existing.spawnedBy,
-      existing.controlOwnerSessionKey,
-      existing.parentSessionKey,
-    ];
-    // Missing certification means the bounded Gateway traversal was incomplete.
-    if (
-      (!complete &&
-        (isSubagentSessionKey(existing.key) ||
-          parentKeys.some(Boolean) ||
-          existing.childSessions?.length)) ||
-      result.sessions.some(
-        (parent) =>
-          (parentKeys.some((key) => key && areUiSessionKeysEquivalent(key, parent.key)) ||
-            parent.childSessions?.some((key) => areUiSessionKeysEquivalent(key, existing.key))) &&
-          (!complete ||
-            !snapshots.some((candidate) => {
-              const candidateInfo = parseSessionChangedEvent(candidate)?.[0];
-              return (
-                candidateInfo &&
-                matchesExistingSession(parent, candidateInfo.key, candidateInfo.agentId)
-              );
-            })),
-      )
-    ) {
-      return false;
-    }
     // A member whose rank only improves cannot evict another member. Missing rows,
     // pin/archive/owner changes and backwards clocks need authoritative admission.
     if (
       !info.isAncestorReference &&
-      (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0))
+      (info.updatedAt === null ||
+        info.updatedAt < (existing.updatedAt ?? 0) ||
+        (info.snapshotAt !== undefined && info.snapshotAt < (existing.snapshotAt ?? 0)) ||
+        (sortBy === "activity" &&
+          sessionActivityTimestamp(next) < sessionActivityTimestamp(existing)))
     ) {
       return false;
     }
@@ -149,9 +145,9 @@ export function canApplySessionListSnapshot(
     ) {
       return false;
     }
-    held = true;
+    covered = true;
   }
-  return held;
+  return covered;
 }
 
 export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
@@ -315,10 +311,32 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  startupRetryAttempt: number;
+  /** Invalidation retires remaining pages without cancelling the correlated RPC. */
+  readGeneration: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
 };
+
+export function sessionListsNeedingEventRefresh(
+  lists: Iterable<ManagedSessionList>,
+  payload: unknown,
+  matches: ReturnType<typeof sessionListEventMatcher>,
+): Set<ManagedSessionList> {
+  const invalidated = new Set<ManagedSessionList>();
+  for (const entry of lists) {
+    if (
+      matches(entry.query, entry.snapshot.result) &&
+      (entry.pending !== null ||
+        entry.snapshot.error !== null ||
+        !canApplySessionListSnapshot(entry.snapshot.result, payload, entry.scope))
+    ) {
+      invalidated.add(entry);
+    }
+  }
+  return invalidated;
+}
 
 export function isPrimarySessionListQuery(options: SessionListScope): boolean {
   if (options.includeDerivedTitles === false || options.includeLastMessage === false) {

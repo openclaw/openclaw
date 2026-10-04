@@ -1,15 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
+import * as schemaInspection from "./openclaw-agent-schema-inspection-worker.js";
 import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
@@ -18,6 +22,8 @@ import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -29,7 +35,8 @@ function createFleet() {
   const agentIds = ["first", "second", "third"];
   const config: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(agentIds.map((id, index) => [id, { default: index === 0 }])),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: "first" } },
     },
   };
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
@@ -64,6 +71,60 @@ function createFleet() {
       }),
   };
 }
+
+it("keeps pending startup stores fenced without inspecting or copying them again in bootstrap", async () => {
+  const fleet = createFleet();
+  const pathname = fleet.paths[0]!;
+  const raw = new (requireNodeSqlite().DatabaseSync)(pathname);
+  raw.exec("PRAGMA journal_mode=WAL;");
+  raw.close();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const createReader = schemaInspection.createAgentSchemaInspectionWorker;
+  let paused = false;
+  let selectedInspections = 0;
+  vi.spyOn(schemaInspection, "createAgentSchemaInspectionWorker").mockImplementation(() => {
+    const reader = createReader();
+    const inspect = reader.inspect;
+    return Object.assign(reader, {
+      inspect: async (...args: Parameters<typeof inspect>) => {
+        if (args[0].pathname === pathname) {
+          selectedInspections += 1;
+          if (!paused) {
+            paused = true;
+            entered.resolve();
+            await release.promise;
+          }
+        }
+        return inspect(...args);
+      },
+    });
+  });
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+  await withAgentDatabaseStartupAdmission(async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const readiness = fleet.ready();
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await readiness;
+      vi.useRealTimers();
+      const refusal = readAgentDatabaseAdmissionRefusal("first", { env: fleet.env });
+      expect(refusal?.code).toBe("agent-database-inspection-pending");
+      expect(selectedInspections).toBe(1);
+
+      const bootstrap = await fleet.inspect();
+      expect(bootstrap.agentRefusals).toContain(refusal);
+      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBe(refusal);
+      expect(selectedInspections).toBe(1);
+      expect(prepare.mock.calls.filter(([source]) => source === pathname)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      release.resolve();
+      await Promise.allSettled([readiness]);
+    }
+  });
+});
 
 it("carries fleet compatibility once into bootstrap while readiness always inspects fresh", async () => {
   const fleet = createFleet();

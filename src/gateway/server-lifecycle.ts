@@ -1,3 +1,4 @@
+import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -233,7 +234,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
-  runtimeState.gatewayLifetimeSidecars.publish({ stop: () => runtime.scheduler.stop() });
   const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({
     getServices: () => runtimeState.pluginServices,
     setServices: (services) => {
@@ -302,10 +302,8 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.hooksConfig = next.hooksConfig;
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
     },
-    swapHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
-      const previous = runtimeState.heartbeatRunner;
+    setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
       runtimeState.heartbeatRunner = next;
-      return previous;
     },
     // Stable callbacks keep reload transactions out of retained plugin contexts.
     getCronService: () => runtimeState.cronState.cron,
@@ -329,6 +327,7 @@ export async function prepareGatewayLifecycle(params: {
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     scheduler: runtime.scheduler,
+    getSessionRowProjection: runtime.getSessionRowProjection,
     broadcastToConnIds,
     isConnectionActive,
     prepareRead: async (connId, session) => {
@@ -390,6 +389,7 @@ export async function prepareGatewayLifecycle(params: {
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
     browserAuthRateLimiter.dispose();
+    void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
@@ -398,7 +398,7 @@ export async function prepareGatewayLifecycle(params: {
       notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
     );
     requestEntryLifetime.beginClose();
-    mentionInbox.dispose();
+    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -424,6 +424,7 @@ export async function prepareGatewayLifecycle(params: {
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
+      closeAuthProfileUsage(params.sdkResourceHost),
       requestEntryLifetime.waitForPendingEntries(),
       stopDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
@@ -432,6 +433,7 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.maintenance?.stopPeriodicTasks().catch(() => {}),
       runtimeState.controlUiSessionPullRequests?.stop(),
       healthWork.drain(),
+      mentionInbox.dispose(),
     ]);
   };
   const runClosePrelude = async () => {
@@ -575,6 +577,7 @@ export async function prepareGatewayLifecycle(params: {
               clients,
               finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
               drainSdkWork: () => params.sdkResourceHost.drainWork(),
+              stopScheduler: () => runtime.scheduler.stop(),
               closeSdkResources: () => params.sdkResourceHost.close(),
               ...(transport
                 ? {

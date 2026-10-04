@@ -60,7 +60,7 @@ export function createMessageActionDiscoveryContext(
     params.channel ?? params.currentChannelProvider,
   );
   return {
-    cfg: params.cfg ?? ({} as OpenClawConfig),
+    cfg: params.cfg ?? {},
     ...(params.chatType ? { chatType: params.chatType } : {}),
     currentChannelId: params.currentChannelId,
     currentChannelProvider,
@@ -75,13 +75,9 @@ export function createMessageActionDiscoveryContext(
   };
 }
 
-function logMessageActionError(params: {
-  pluginId: string;
-  operation: "describeMessageTool";
-  error: unknown;
-}) {
+function logMessageActionError(params: { pluginId: string; error: unknown }) {
   const message = formatErrorMessage(params.error);
-  const key = `${params.pluginId}:${params.operation}:${message}`;
+  const key = `${params.pluginId}:describeMessageTool:${message}`;
   // Discovery runs while building tool schemas, so log each plugin/error pair
   // once and let the agent continue with the remaining channel capabilities.
   if (loggedMessageActionErrors.has(key)) {
@@ -90,7 +86,7 @@ function logMessageActionError(params: {
   loggedMessageActionErrors.add(key);
   const stack = params.error instanceof Error && params.error.stack ? params.error.stack : null;
   defaultRuntime.error?.(
-    `[message-action-discovery] ${params.pluginId}.actions.${params.operation} failed: ${stack ?? message}`,
+    `[message-action-discovery] ${params.pluginId}.actions.describeMessageTool failed: ${stack ?? message}`,
   );
 }
 
@@ -104,7 +100,6 @@ function describeMessageToolSafely(params: {
   } catch (error) {
     logMessageActionError({
       pluginId: params.pluginId,
-      operation: "describeMessageTool",
       error,
     });
     return null;
@@ -170,9 +165,7 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
     return { pluginId: prepared.id, actions: prepared.actions };
   }
   if (!catalog) {
-    const loadedPlugin = getLoadedChannelPlugin(
-      channelId as Parameters<typeof getChannelPlugin>[0],
-    );
+    const loadedPlugin = getLoadedChannelPlugin(channelId);
     if (loadedPlugin?.actions) {
       return {
         pluginId: loadedPlugin.id,
@@ -189,9 +182,7 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
       actions: bundledActions,
     };
   }
-  const plugin = catalog
-    ? undefined
-    : getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = catalog ? undefined : getChannelPlugin(channelId);
   return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
 }
 
@@ -205,20 +196,13 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
   includeSchema?: boolean;
 }): ResolvedChannelMessageActionDiscovery {
   const adapter = params.actions;
-  if (!adapter) {
-    return {
-      actions: [],
-      capabilities: [],
-      schemaContributions: [],
-      mediaSourceParams: [],
-    };
-  }
-
-  const described = describeMessageToolSafely({
-    pluginId: params.pluginId,
-    context: params.context,
-    describeMessageTool: adapter.describeMessageTool,
-  });
+  const described = adapter
+    ? describeMessageToolSafely({
+        pluginId: params.pluginId,
+        context: params.context,
+        describeMessageTool: adapter.describeMessageTool,
+      })
+    : null;
   return {
     actions:
       params.includeActions && Array.isArray(described?.actions) ? [...described.actions] : [],
@@ -272,9 +256,6 @@ export function listCrossChannelSchemaSupportedMessageActions(
     const actions = contribution.actions;
     if (!Array.isArray(actions)) {
       return [];
-    }
-    if (actions.length === 0) {
-      continue;
     }
     for (const action of actions) {
       schemaBlockedActions.add(action);

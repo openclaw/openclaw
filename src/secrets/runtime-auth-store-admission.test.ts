@@ -74,46 +74,41 @@ it.each(["matching", "other-state", "other-path"])(
   },
 );
 
-it.each(["same-path", "path-alias"])(
-  "keeps the healthy owner's credentials when another agent is refused at %s",
-  async (locator) => {
-    const root = tempDirs.make("openclaw-secret-owner-");
-    const env = { OPENCLAW_STATE_DIR: root };
-    const agentDir = path.join(root, "agents/main/agent");
-    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.writeFileSync(databasePath, "fixture");
-    const alias = path.join(root, "alias.sqlite");
-    fs.linkSync(databasePath, alias);
-    recordAgentDatabaseAdmissions(
-      [
-        {
-          agentId: "worker",
-          paths: [locator === "same-path" ? databasePath : alias],
-          code: "agent-database-ownership-mismatch",
-          embeddedOwnerId: "main",
-          reason: "The worker path belongs to main.",
-          repairHint: "Repair the worker database path.",
-        },
-      ],
-      { env, source: "startup" },
-    );
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: {},
-      env,
-      agentDirs: [agentDir],
-      includeConfigRefs: false,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:healthy": { type: "api_key", provider: "custom", key: "fixture-key" },
-        }),
-    });
-    expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
-      key: "fixture-key",
-    });
-    expect(snapshot.degradedOwners).toEqual([]);
-  },
-);
+it("keeps the healthy owner's credentials when another agent is refused at its path", async () => {
+  const root = tempDirs.make("openclaw-secret-owner-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const agentDir = path.join(root, "agents/main/agent");
+  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(databasePath, "fixture");
+  recordAgentDatabaseAdmissions(
+    [
+      {
+        agentId: "worker",
+        paths: [databasePath],
+        code: "agent-database-ownership-mismatch",
+        embeddedOwnerId: "main",
+        reason: "The worker path belongs to main.",
+        repairHint: "Repair the worker database path.",
+      },
+    ],
+    { env, source: "startup" },
+  );
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: {},
+    env,
+    agentDirs: [agentDir],
+    includeConfigRefs: false,
+    loadAuthStore: () =>
+      loadAuthStoreWithProfiles({
+        "custom:healthy": { type: "api_key", provider: "custom", key: "fixture-key" },
+      }),
+  });
+  expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
+    key: "fixture-key",
+  });
+  expect(snapshot.degradedOwners).toEqual([]);
+});
 
 it("loads a pending agent's auth store under its live preparation authority", async () => {
   const root = tempDirs.make("openclaw-secret-preparation-");

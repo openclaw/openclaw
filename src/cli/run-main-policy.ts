@@ -2,6 +2,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,6 +10,7 @@ import {
   FLAG_TERMINATOR,
   getCommandPositionalsWithRootOptions,
 } from "../infra/cli-root-options.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type {
   PluginManifestCommandAliasRecord,
   PluginManifestToolOwnerRecord,
@@ -20,15 +22,74 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
-const ROOT_HELP_ALIASES = new Set(["tools"]);
+const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+const CLI_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
+export function isGatewayRunFastPathArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
+    return false;
+  }
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (!sawGateway) {
+      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+      continue;
+    }
+
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    const consumed = consumeGatewayRunOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (!sawRun && arg === "run") {
+      sawRun = true;
+      continue;
+    }
+    return false;
+  }
+
+  return sawGateway;
+}
 
 export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
@@ -61,9 +122,7 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
       return argv;
     }
     if (i === updateIndex) {
-      const next = [...argv];
-      next.splice(updateIndex, 1, "update");
-      return next;
+      return argv.toSpliced(updateIndex, 1, "update");
     }
     const consumed = consumeRootOptionToken(argv, i);
     if (consumed > 0) {
@@ -99,9 +158,6 @@ export function shouldUseRootHelpFastPath(
     (invocation.isRootHelpInvocation ||
       (invocation.commandPath.length === 1 &&
         ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
-        invocation.hasHelpOrVersion) ||
-      (invocation.commandPath.length === 1 &&
-        invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))
   );
 }
@@ -137,6 +193,22 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
     return false;
   }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
+}
+
+export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
+  );
+}
+
+export function shouldBootstrapCliProxyBeforeFastPath(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
+    return true;
+  }
+  return CLI_PROXY_ENV_KEYS.some((key) => normalizeOptionalString(env[key]) !== undefined);
 }
 
 function formatExcludedPluginCommand(command: string, owner: string): string {

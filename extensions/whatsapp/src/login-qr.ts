@@ -11,6 +11,7 @@ import {
   defaultRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getActiveWebListener } from "./active-listener.js";
 import {
@@ -339,16 +340,11 @@ export async function startWebLoginWithQr(
 
   await resetActiveLogin(account.accountId);
 
-  let resolveQr: ((qr: string) => void) | null = null;
-  let rejectQr: ((err: Error) => void) | null = null;
-  const qrPromise = new Promise<string>((resolve, reject) => {
-    resolveQr = resolve;
-    rejectQr = reject;
-  });
+  const qrReady = createDeferred<string>();
 
   const qrTimer = setTimeout(
     () => {
-      rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
+      qrReady.reject(new Error("Timed out waiting for WhatsApp QR"));
     },
     resolveTimerTimeoutMs(opts.timeoutMs, 30_000, 5000),
   );
@@ -384,12 +380,8 @@ export async function startWebLoginWithQr(
             qrVersion,
           });
         }
-        if (resolveQr) {
-          clearTimeout(qrTimer);
-          resolveQr(qr);
-          resolveQr = null;
-          rejectQr = null;
-        }
+        clearTimeout(qrTimer);
+        qrReady.resolve(qr);
         runtime.log(info("WhatsApp QR received."));
       },
     });
@@ -443,7 +435,7 @@ export async function startWebLoginWithQr(
   const loginStartResult = await waitForQrOrRecoveredLogin({
     accountId: account.accountId,
     login: nextLogin,
-    qrPromise,
+    qrPromise: qrReady.promise,
   });
   clearTimeout(qrTimer);
 
@@ -557,15 +549,14 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), remaining);
-    });
-    const result = await Promise.race([
-      login.waitPromise.then(() => "done" as const),
-      login.qrUpdate.promise.then(() => "qr-update" as const),
-      timeout,
-    ]).finally(() => clearTimeout(timer));
+    const result = await raceWithTimeout(
+      Promise.race([
+        login.waitPromise.then(() => "done" as const),
+        login.qrUpdate.promise.then(() => "qr-update" as const),
+      ]),
+      remaining,
+      () => "timeout" as const,
+    );
 
     if (result === "timeout") {
       return {

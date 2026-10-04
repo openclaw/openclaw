@@ -31,11 +31,7 @@ export function resolveMinimaxMediaBaseUrl(
   providerId: string,
 ): string {
   const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  try {
-    return configured ? new URL(configured).origin : DEFAULT_MINIMAX_MEDIA_BASE_URL;
-  } catch {
-    return DEFAULT_MINIMAX_MEDIA_BASE_URL;
-  }
+  return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
 }
 
 export function assertMinimaxBaseResp(value: unknown, context: string): void {

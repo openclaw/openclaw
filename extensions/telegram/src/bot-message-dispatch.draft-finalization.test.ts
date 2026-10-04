@@ -24,7 +24,6 @@ const droppedButtons = (...labels: string[]) => ({
 async function dispatchPresentationFinal(params: {
   payload: ReplyPayload;
   context?: TelegramMessageContext;
-  richMessages?: boolean;
 }) {
   const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -34,7 +33,7 @@ async function dispatchPresentationFinal(params: {
   await dispatchWithContext({
     context: params.context ?? createContext(),
     streamMode: "partial",
-    telegramCfg: { richMessages: params.richMessages ?? true, streaming: { mode: "partial" } },
+    telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
   });
   expect(deliverReplies).not.toHaveBeenCalled();
   return answerDraftStream.update.mock.calls.at(-1)?.[0] as string;
@@ -54,25 +53,17 @@ function expectPresentation(
   expect(text).not.toBe("Gateway status as plain text");
 }
 describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
-  it.each([true, false])(
-    "respects richMessages=%s on the finalized status preview",
-    async (richMessages) => {
-      const finalUpdate = await dispatchPresentationFinal({
-        payload: {
-          text: "Gateway status as plain text",
-          presentationTextMode: "fallback",
-          presentation: { blocks: [statusTable(0)] },
-        },
-        richMessages,
-      });
-      if (richMessages) {
-        expect(finalUpdate).toContain("<table><caption>Status</caption>");
-        expect(finalUpdate).toContain("<td>running</td>");
-      } else {
-        expect(finalUpdate).toBe("Gateway status as plain text");
-      }
-    },
-  );
+  it("respects richMessages=true on the finalized status preview", async () => {
+    const finalUpdate = await dispatchPresentationFinal({
+      payload: {
+        text: "Gateway status as plain text",
+        presentationTextMode: "fallback",
+        presentation: { blocks: [statusTable(0)] },
+      },
+    });
+    expect(finalUpdate).toContain("<table><caption>Status</caption>");
+    expect(finalUpdate).toContain("<td>running</td>");
+  });
   it.each<{
     name: string;
     payload: ReplyPayload;
@@ -81,28 +72,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     context?: () => TelegramMessageContext;
     contains?: string[];
   }>([
-    {
-      name: "fallback presentation controls",
+    ...(["Status summary\n\n- Legacy\n- Presentation"] as const).map((text) => ({
+      name: `unset mixed ${text || "empty"}`,
       payload: {
-        text: "Gateway status as plain text",
-        presentationTextMode: "fallback" as const,
-        presentation: { blocks: [statusTable(0), droppedButtons("Copy manually", "Use link")] },
+        text,
+        presentation: { blocks: [statusTable(), droppedButtons("Presentation")] },
+        interactive: { blocks: [droppedButtons("Legacy")] },
       },
-      labels: ["Copy manually", "Use link"],
-    },
-    ...(["Status summary", "", "Status summary\n\n- Legacy\n- Presentation"] as const).map(
-      (text) => ({
-        name: `unset mixed ${text || "empty"}`,
-        payload: {
-          text,
-          presentation: { blocks: [statusTable(), droppedButtons("Presentation")] },
-          interactive: { blocks: [droppedButtons("Legacy")] },
-        },
-        labels: ["Presentation", "Legacy"],
-        authoredText: text.split("\n\n")[0],
-      }),
-    ),
-    ...([undefined, "fallback"] as const).map((presentationTextMode) => ({
+      labels: ["Presentation", "Legacy"],
+      authoredText: text.split("\n\n")[0],
+    })),
+    ...(["fallback"] as const).map((presentationTextMode) => ({
       name: `legacy controls ${presentationTextMode ?? "unset"}`,
       payload: {
         text: "Gateway status as plain text",

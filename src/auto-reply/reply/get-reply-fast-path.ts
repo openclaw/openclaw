@@ -63,19 +63,8 @@ export function resolveGetReplyConfig(params: {
   return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
 
-export function shouldUseReplyFastTestBootstrap(params: {
-  isFastTestEnv: boolean;
-  configOverride?: OpenClawConfig;
-}): boolean {
-  return (
-    params.isFastTestEnv &&
-    isCompleteReplyConfig(params.configOverride) &&
-    !usesFullReplyRuntime(params.configOverride)
-  );
-}
-
 export function shouldUseReplyFastTestRuntime(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   isFastTestEnv: boolean;
 }): boolean {
   return (
@@ -156,10 +145,13 @@ export function initFastReplySessionState(params: {
       ? {
           previousSessionId: existingEntry.sessionId,
           spawnedBy: existingEntry.spawnedBy,
+          spawnedBySenderIsOwner: existingEntry.spawnedBySenderIsOwner,
+          spawnedBySessionId: existingEntry.spawnedBySessionId,
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
           parentSessionKey: existingEntry.parentSessionKey,
           parentSessionId: existingEntry.parentSessionId,
+          parentSessionLifecycleRevision: existingEntry.parentSessionLifecycleRevision,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,

@@ -188,13 +188,6 @@ const APPROVAL_REACTION_ORDER = APPROVAL_REACTION_BINDINGS.map((binding) => bind
 const VARIATION_SELECTOR_RE = /[\uFE0E\uFE0F]/gu;
 const FITZPATRICK_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
 
-function normalizeDecisionList(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): ExecApprovalReplyDecision[] {
-  const allowed = new Set(allowedDecisions);
-  return APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision));
-}
-
 /** List the canonical reaction bindings allowed for a specific approval request. */
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -346,16 +339,11 @@ function buildManualInstructionSection(params: {
   return lines;
 }
 
-function buildCommandActionInstructionSection(actions: PendingApprovalView["actions"]): string[] {
-  return actions.flatMap((action) =>
-    action.command.trim() ? [`${action.label}: ${action.command}`] : [],
-  );
-}
-
 function listDecisionActions(actions: PendingApprovalView["actions"]): ExecApprovalReplyDecision[] {
-  return normalizeDecisionList(
+  const allowed = new Set(
     actions.flatMap((action) => ("decision" in action && action.decision ? [action.decision] : [])),
   );
+  return APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision));
 }
 function buildApprovalReactionPromptText(params: {
   view: PendingApprovalView;
@@ -452,7 +440,9 @@ function buildApprovalReactionPromptText(params: {
   if (params.reactionHint) {
     sections.push(params.reactionHint);
   }
-  const commandInstructions = buildCommandActionInstructionSection(view.actions);
+  const commandInstructions = view.actions.flatMap((action) =>
+    action.command.trim() ? [`${action.label}: ${action.command}`] : [],
+  );
   if (commandInstructions.length > 0) {
     sections.push(commandInstructions.join("\n"));
   }
@@ -472,26 +462,6 @@ function withoutPresentation(payload: ReplyPayload): ReplyPayload {
   return rest;
 }
 
-function buildMetadataPayload(params: {
-  request: ApprovalRequest;
-  view: PendingApprovalView;
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): ReplyPayload {
-  const sessionKey = params.request.request.sessionKey ?? null;
-  return withoutPresentation(
-    buildApprovalPendingReplyPayload({
-      approvalKind: params.view.approvalKind,
-      approvalId: params.view.approvalId,
-      approvalSlug: params.view.approvalId.slice(0, 8),
-      text: params.text,
-      agentId: params.view.agentId ?? null,
-      allowedDecisions: params.allowedDecisions,
-      sessionKey,
-    }),
-  );
-}
-
 /** Build an approval prompt payload with reaction bindings for a prepared view. */
 export function buildApprovalPendingPromptPayload(params: {
   request: ApprovalRequest;
@@ -506,12 +476,17 @@ export function buildApprovalPendingPromptPayload(params: {
     reactionHint: buildApprovalReactionHint({ allowedDecisions }),
   });
   return {
-    ...buildMetadataPayload({
-      request: params.request,
-      view: params.view,
-      text,
-      allowedDecisions,
-    }),
+    ...withoutPresentation(
+      buildApprovalPendingReplyPayload({
+        approvalKind: params.view.approvalKind,
+        approvalId: params.view.approvalId,
+        approvalSlug: params.view.approvalId.slice(0, 8),
+        text,
+        agentId: params.view.agentId ?? null,
+        allowedDecisions,
+        sessionKey: params.request.request.sessionKey ?? null,
+      }),
+    ),
     allowedDecisions,
     reactionBindings,
   };

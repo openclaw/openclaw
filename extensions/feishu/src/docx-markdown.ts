@@ -1,4 +1,9 @@
-import { chunkFeishuMarkdown, parseFeishuMarkdown, type FeishuMarkdownNode } from "./markdown.js";
+import {
+  chunkFeishuMarkdown,
+  parseFeishuMarkdown,
+  visitFeishuMarkdown,
+  type FeishuMarkdownNode,
+} from "./markdown.js";
 
 export type DocxMarkdownImage = { url: string | undefined };
 
@@ -13,26 +18,6 @@ type DocxMarkdownPlan = {
 
 const MAX_BREAK_PROBES = 32;
 const STABLE_LINE_CONTAINER_TYPES = new Set(["list", "blockquote", "code"]);
-
-function visitMarkdown(root: FeishuMarkdownNode, visitor: (node: FeishuMarkdownNode) => void) {
-  const pending = [root];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (!node) {
-      continue;
-    }
-    visitor(node);
-    if (!node.children) {
-      continue;
-    }
-    for (let index = node.children.length - 1; index >= 0; index -= 1) {
-      const child = node.children[index];
-      if (child) {
-        pending.push(child);
-      }
-    }
-  }
-}
 
 function resolveRemoteImageUrl(value: string | undefined): string | undefined {
   if (!value) {
@@ -49,7 +34,7 @@ function resolveRemoteImageUrl(value: string | undefined): string | undefined {
 function collectMarkdownImages(root: FeishuMarkdownNode): DocxMarkdownImage[] {
   const definitions = new Map<string, string>();
   const imageNodes: FeishuMarkdownNode[] = [];
-  visitMarkdown(root, (node) => {
+  visitFeishuMarkdown(root, (node) => {
     if (node.type === "definition" && node.identifier && node.url) {
       // CommonMark resolves the first matching definition.
       if (!definitions.has(node.identifier)) {
@@ -204,17 +189,7 @@ function splitTableAtRow(
 }
 
 function isFencedCodeSource(source: string): boolean {
-  const firstLineEnd = source.indexOf("\n");
-  const firstLine = source.slice(0, firstLineEnd === -1 ? source.length : firstLineEnd);
-  let indent = 0;
-  while (indent < firstLine.length && firstLine[indent] === " ") {
-    indent += 1;
-  }
-  if (indent > 3) {
-    return false;
-  }
-  const marker = firstLine.slice(indent);
-  return marker.startsWith("```") || marker.startsWith("~~~");
+  return /^ {0,3}(?:`{3}|~{3})/.test(source);
 }
 
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {

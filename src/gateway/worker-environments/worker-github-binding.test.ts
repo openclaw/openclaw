@@ -34,7 +34,12 @@ vi.mock("../../agents/worktrees/service.js", () => ({
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
 vi.mock("../../state/session-repository-workspaces.js", () => ({
-  getSessionRepositoryWorkspaceStore: () => ({ get: mocks.repositoryWorkspace }),
+  getSessionRepositoryWorkspaceStore: () => ({
+    prepare: async () => ({
+      workspace: mocks.repositoryWorkspace(),
+      current: mocks.repositoryWorkspace,
+    }),
+  }),
 }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken }));
 
@@ -105,7 +110,9 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       gitAuthor: { name: "Shared Bot" },
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token);
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.github.com",
+    });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
   });
 

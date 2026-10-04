@@ -1,4 +1,3 @@
-// Setup plugin config helpers build plugin config from onboarding answers.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -14,7 +13,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
-export type ConfigurablePlugin = {
+type ConfigurablePlugin = {
   id: string;
   name: string;
   uiHints: Record<string, PluginConfigUiHint>;
@@ -113,7 +112,7 @@ function parseJsonNumberInput(value: string): number | undefined {
   }
 }
 
-export function discoverConfigurablePlugins(params: {
+function discoverConfigurablePlugins(params: {
   manifestPlugins: ReadonlyArray<{
     id: string;
     name?: string;
@@ -146,7 +145,7 @@ export function discoverConfigurablePlugins(params: {
   return result.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-export function discoverUnconfiguredPlugins(
+function discoverUnconfiguredPlugins(
   params: Parameters<typeof discoverConfigurablePlugins>[0] & { config: OpenClawConfig },
 ): ConfigurablePlugin[] {
   const all = discoverConfigurablePlugins(params);
@@ -213,6 +212,7 @@ async function promptPluginFields(params: {
       continue;
     }
 
+    let nextValue: unknown;
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((configValue, index) => ({
         value: String(index),
@@ -229,70 +229,50 @@ async function promptPluginFields(params: {
         options,
         initialValue: hasValue ? "__keep__" : undefined,
       });
-      if (selected !== "__keep__") {
-        const selectedValue = schemaProp.enum[Number(selected)];
-        setPathCreateStrict(updatedConfig, pathSegments, structuredClone(selectedValue));
-        changed = true;
+      if (selected === "__keep__") {
+        continue;
       }
-      continue;
-    }
-
-    if (schemaProp?.type === "boolean") {
-      const confirmed = await prompter.confirm({
+      nextValue = structuredClone(schemaProp.enum[Number(selected)]);
+    } else if (schemaProp?.type === "boolean") {
+      nextValue = await prompter.confirm({
         message: `${label}${helpSuffix}`,
         initialValue: typeof currentValue === "boolean" ? currentValue : false,
       });
-      if (confirmed !== currentValue) {
-        setPathCreateStrict(updatedConfig, pathSegments, confirmed);
-        changed = true;
+      if (nextValue === currentValue) {
+        continue;
       }
-      continue;
-    }
-
-    if (schemaProp?.type === "array") {
-      const currentStr = Array.isArray(currentValue) ? currentValue.join(", ") : "";
+    } else {
+      const isArray = schemaProp?.type === "array";
+      const currentStr = isArray
+        ? Array.isArray(currentValue)
+          ? currentValue.join(", ")
+          : ""
+        : formatCurrentValue(currentValue);
       const input = await prompter.text({
-        message: `${label}${t("wizard.plugins.arrayPromptSuffix")}${helpSuffix}`,
+        message: `${label}${isArray ? t("wizard.plugins.arrayPromptSuffix") : ""}${helpSuffix}`,
         initialValue: currentStr,
-        placeholder: hint.placeholder ?? t("wizard.plugins.arrayPlaceholder"),
+        placeholder:
+          hint.placeholder ?? (isArray ? t("wizard.plugins.arrayPlaceholder") : undefined),
       });
       const trimmed = input.trim();
-      if (trimmed !== currentStr) {
-        setPathCreateStrict(
-          updatedConfig,
-          pathSegments,
-          trimmed ? normalizeStringEntries(trimmed.split(",")) : undefined,
-        );
-        changed = true;
+      if (trimmed === currentStr) {
+        continue;
       }
-      continue;
-    }
-
-    const currentStr = formatCurrentValue(currentValue);
-    const input = await prompter.text({
-      message: `${label}${helpSuffix}`,
-      initialValue: currentStr,
-      placeholder: hint.placeholder,
-    });
-    const trimmed = input.trim();
-    if (trimmed !== currentStr) {
-      // Coerce numeric text input when the schema expects a JSON number or integer.
-      if (schemaProp?.type === "number" || schemaProp?.type === "integer") {
-        if (trimmed === "") {
-          setPathCreateStrict(updatedConfig, pathSegments, undefined);
-          changed = true;
-        } else {
-          const parsed = parseJsonNumberInput(trimmed);
-          if (parsed !== undefined && (schemaProp.type === "number" || Number.isInteger(parsed))) {
-            setPathCreateStrict(updatedConfig, pathSegments, parsed);
-            changed = true;
-          }
+      nextValue = trimmed
+        ? isArray
+          ? normalizeStringEntries(trimmed.split(","))
+          : trimmed
+        : undefined;
+      if (trimmed && (schemaProp?.type === "number" || schemaProp?.type === "integer")) {
+        const parsed = parseJsonNumberInput(trimmed);
+        if (parsed === undefined || (schemaProp.type === "integer" && !Number.isInteger(parsed))) {
+          continue;
         }
-      } else {
-        setPathCreateStrict(updatedConfig, pathSegments, trimmed || undefined);
-        changed = true;
+        nextValue = parsed;
       }
     }
+    setPathCreateStrict(updatedConfig, pathSegments, nextValue);
+    changed = true;
   }
 
   if (!changed) {

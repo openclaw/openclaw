@@ -15,8 +15,14 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
-import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
+import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
+import {
+  compareCodeUnits,
+  readPublicationArtifactArchive,
+  sha256Digest,
+} from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 import { npmRegistryReadbackDeadline } from "./npm-publish-plan.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -24,6 +30,20 @@ import {
   collectPublishablePluginPackages,
   parsePluginReleaseSelection,
 } from "./plugin-npm-release.ts";
+import {
+  DIAGNOSTIC_MAX_PACKAGES,
+  diagnosticChildNames,
+  diagnosticId,
+  diagnosticOutcome,
+  diagnosticRef,
+  diagnosticSchema,
+  diagnosticSha,
+  diagnosticError,
+  diagnosticPackage,
+  diagnosticStage,
+  diagnosticStageNames,
+} from "./release-postpublish-diagnostic-schema.mts";
+import { sleep } from "./sleep.mjs";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -59,11 +79,6 @@ type NpmViewFields = {
   distTagVersion?: string;
   integrity?: string;
   tarball?: string;
-};
-
-type FetchWithRetryResult = {
-  response: Response;
-  signal: AbortSignal;
 };
 
 type WorkflowRunSummary = {
@@ -106,158 +121,9 @@ const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const DIAGNOSTIC_MAX_BYTES = 128 * 1024;
-const DIAGNOSTIC_MAX_PACKAGES = 256;
-const diagnosticStates = z.enum([
-  "unattempted",
-  "skipped",
-  "started",
-  "success",
-  "failure",
-  "unknown",
-]);
-const diagnosticError = z.object({
-  class: z.enum([
-    "registry-not-visible",
-    "selector-mismatch",
-    "identity-mismatch",
-    "transport",
-    "malformed-response",
-    "command-failure",
-    "evidence-write-failure",
-  ]),
-  status: z.number().int().min(0).max(255).nullable(),
-});
-const diagnosticPackage = z.object({
-  name: z
-    .string()
-    .max(128)
-    .regex(/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u),
-  state: diagnosticStates,
-  publication: z.enum(["unknown", "observed"]),
-  error: diagnosticError.nullable(),
-});
-const diagnosticStage = z.object({
-  state: diagnosticStates,
-  publication: z.enum(["unknown", "observed"]),
-  error: diagnosticError.nullable(),
-  packages: z.array(diagnosticPackage).max(DIAGNOSTIC_MAX_PACKAGES),
-  packagesTruncated: z.boolean(),
-});
-const diagnosticStageNames = [
-  "checkout",
-  "githubRelease",
-  "coreNpm",
-  "postpublish",
-  "pluginNpm",
-  "clawHub",
-  "fullReleaseValidation",
-  "pluginNpmRun",
-  "pluginClawHubRun",
-  "pluginClawHubBootstrap",
-  "openclawNpm",
-  "npmTelegram",
-  "evidence",
-  "binding",
-  "assets",
-] as const;
-const diagnosticChildNames = [
-  "fullReleaseValidation",
-  "openclawNpm",
-  "pluginNpm",
-  "pluginClawHub",
-  "pluginClawHubBootstrap",
-  "npmTelegram",
-] as const;
 type DiagnosticStageName = (typeof diagnosticStageNames)[number];
 type NpmDiagnosticScope = { stage: "coreNpm" } | { stage: "pluginNpm"; packageName: string };
 type DiagnosticChildName = (typeof diagnosticChildNames)[number];
-const diagnosticId = z.string().max(20).regex(POSITIVE_INTEGER_PATTERN).nullable();
-const diagnosticSha = z.string().regex(COMMIT_SHA_PATTERN).nullable();
-const diagnosticRef = z
-  .string()
-  .max(200)
-  .regex(/^(?:refs\/(?:heads|tags)\/)?[A-Za-z0-9][A-Za-z0-9._/-]*$/u)
-  .nullable();
-const diagnosticOutcome = z.enum([
-  "success",
-  "failure",
-  "cancelled",
-  "skipped",
-  "timed_out",
-  "action_required",
-  "neutral",
-  "stale",
-  "unknown",
-]);
-const diagnosticSchema = z.object({
-  schemaVersion: z.literal(1),
-  kind: z.literal("release-postpublish-diagnostics"),
-  invocationId: z.string().uuid(),
-  context: z.object({
-    repository: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u)
-      .nullable(),
-    releaseVersion: z
-      .string()
-      .max(80)
-      .regex(/^[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    releaseTag: z
-      .string()
-      .max(81)
-      .regex(/^v[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    npmDistTag: z.enum(["latest", "beta", "alpha", "extended-stable"]).nullable(),
-    requestedSourceSha: diagnosticSha,
-    toolingSha: diagnosticSha,
-    suppliedToolingSha: diagnosticSha,
-    suppliedToolingRef: diagnosticRef,
-    parentRunId: diagnosticId,
-    parentRunAttempt: diagnosticId,
-    validationEvidence: z.object({
-      mode: z.enum(["full-release-validation", "authorized-beta-focused-v1"]).nullable(),
-      runId: diagnosticId,
-      runAttempt: diagnosticId,
-    }),
-  }),
-  selection: z.object({
-    plugins: z.array(diagnosticPackage.shape.name).max(DIAGNOSTIC_MAX_PACKAGES),
-    pluginsTruncated: z.boolean(),
-    workflowRef: diagnosticRef,
-    clawHubWorkflowRef: diagnosticRef,
-  }),
-  verification: diagnosticStates,
-  currentStage: z.enum(diagnosticStageNames).nullable(),
-  stages: z.record(z.enum(diagnosticStageNames), diagnosticStage),
-  children: z.record(
-    z.enum(diagnosticChildNames),
-    z.object({
-      suppliedRunId: diagnosticId,
-      runAttempt: diagnosticId,
-      producerRunAttempt: diagnosticId,
-      status: z.enum([
-        "queued",
-        "in_progress",
-        "completed",
-        "waiting",
-        "pending",
-        "requested",
-        "unknown",
-      ]),
-      conclusion: diagnosticOutcome,
-      failedJobCount: z.number().int().min(0).max(10000).nullable(),
-      readbackArtifactId: diagnosticId,
-      packageArtifactId: diagnosticId,
-    }),
-  ),
-  jobOutcomeBeforeArtifactUploads: diagnosticOutcome,
-  stepOutcomes: z.object({
-    coreStart: diagnosticOutcome,
-    completion: diagnosticOutcome,
-  }),
-});
 type PostpublishDiagnostic = z.infer<typeof diagnosticSchema>;
 
 function diagnosticValue<T>(schema: z.ZodType<T>, value: unknown): T | null {
@@ -681,10 +547,6 @@ function recordReleasePublishDiagnostics(event: string): void {
   }
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function requireString(value: unknown, label: string): string {
   const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
@@ -759,12 +621,7 @@ export async function runNpmViewWithRetry(
 ): Promise<string> {
   const deadlineMs = npmRegistryReadbackDeadline();
   const attempts = options.attempts ?? Infinity;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const run =
     options.run ??
     ((npmArgs: string[]) =>
@@ -988,37 +845,6 @@ export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?
   return verifier;
 }
 
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  attempts: number,
-): Promise<FetchWithRetryResult> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
-      const response = await fetch(url, {
-        ...options,
-        signal,
-      });
-      if (response.status !== 429 && response.status < 500) {
-        return { response, signal };
-      }
-      await cancelResponseBody(response);
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < attempts) {
-      await new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, attempt * 1000);
-      });
-    }
-  }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return a stable response: ${message}`);
-}
-
 async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
@@ -1033,12 +859,7 @@ export async function fetchJsonWithRetry(
   } = {},
 ): Promise<unknown> {
   const attempts = options.attempts ?? 5;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS;
   let lastError: unknown;
@@ -1095,12 +916,28 @@ export async function readBoundedJsonResponse(
 }
 
 export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  try {
-    return response.status;
-  } finally {
-    await cancelResponseBody(response);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method,
+        redirect: "manual",
+        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+      });
+      await cancelResponseBody(response);
+      if (response.status !== 429 && response.status < 500) {
+        return response.status;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 5) {
+      await sleep(attempt * 1000);
+    }
   }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
 async function readNpmBetaFloorError(
@@ -1256,6 +1093,7 @@ function verifyWorkflowRun(params: {
   expectedHeadSha?: string;
   allowedHeadBranches?: string[];
   rerunFailed?: boolean;
+  acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
 }): WorkflowRunSummary {
   const raw = runReleaseVerifierCommand("gh", [
@@ -1314,14 +1152,19 @@ function verifyWorkflowRun(params: {
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
+  const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
   params.observe?.(run, failedJobs.length);
-  if (failedJobs.length > 0 && params.rerunFailed) {
+  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
     runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
+  if (
+    status !== "completed" ||
+    (conclusion !== "success" && !acceptedFailure) ||
+    (failedJobs.length > 0 && !acceptedFailure)
+  ) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
@@ -1998,16 +1841,23 @@ export async function verifyBetaRelease(
     diagnostic.start("coreNpm");
     const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
     diagnostic.observeNpmPublication({ stage: "coreNpm" });
-    const coreBetaFloorError = await readNpmBetaFloorError("openclaw", args.version);
-    if (coreBetaFloorError !== undefined) {
-      betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: coreBetaFloorError });
-      diagnostic.fail(createNpmBetaFloorError([coreBetaFloorError]));
-    } else {
+    const corePackages = collectPublishableCorePackages(rootDir);
+    // Core versions can be reused without retagging; only enforce their beta floor.
+    for (const name of ["openclaw", ...corePackages.map((pkg) => pkg.name)]) {
+      const error = await readNpmBetaFloorError(name, args.version);
+      if (error !== undefined) {
+        betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: error });
+        diagnostic.fail(createNpmBetaFloorError([error]));
+      }
+    }
+    const coreBetaFloorFailed = betaFloorErrors.length > 0;
+    if (!coreBetaFloorFailed) {
       diagnostic.success("coreNpm");
       lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+      lines.push(`core npm beta floors OK: ${corePackages.length}`);
     }
 
-    if (!args.skipPostpublish && coreBetaFloorError === undefined) {
+    if (!args.skipPostpublish && !coreBetaFloorFailed) {
       diagnostic.start("postpublish");
       const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
         rootDir,
@@ -2180,6 +2030,10 @@ export async function verifyBetaRelease(
             ? undefined
             : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
         expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+        acceptFailedRun:
+          originalAttempt === undefined
+            ? undefined
+            : (_run, jobs) => isRecoverableOpenClawNpmRegistryReadbackFailure(jobs),
         expectedHeadBranch:
           process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(/^refs\/(?:tags|heads)\//u, "") ??
           args.workflowRef,

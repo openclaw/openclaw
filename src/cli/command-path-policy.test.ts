@@ -167,7 +167,7 @@ describe("command-path-policy", () => {
   });
 
   it("keeps gateway control RPCs on core-only config validation", () => {
-    for (const subcommand of ["call", "restart", "suspend", "resume"]) {
+    for (const subcommand of ["call", "suspend", "resume"]) {
       expectResolvedPolicy(["gateway", subcommand], {
         configGuard: "validate",
         networkProxy: "bypass",

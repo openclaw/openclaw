@@ -11,8 +11,8 @@ import {
   expect,
   it,
   type Mock,
+  vi,
 } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
@@ -25,7 +25,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
+import { runDirectSessionReplyScenario } from "./server.sessions-send.direct-reply.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -41,6 +41,7 @@ const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -169,7 +170,19 @@ beforeAll(async () => {
   gatewayPort = portClaim.port;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startTestGatewayServer(portClaim);
+  const kernelModule = await import("./server-kernel.js");
+  const createKernel = kernelModule.createGatewayKernel;
+  const captureKernel = vi
+    .spyOn(kernelModule, "createGatewayKernel")
+    .mockImplementation(async (...args) => {
+      kernel = await createKernel(...args);
+      return kernel;
+    });
+  try {
+    server = await startTestGatewayServer(portClaim);
+  } finally {
+    captureKernel.mockRestore();
+  }
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -186,7 +199,7 @@ beforeEach(async () => {
   await prepareGatewayReplyRuntimeForTest();
 });
 
-// Detached A2A steps retain their selected store until the owner has settled.
+// Detached replies retain their selected store until the owner has settled.
 afterEach(
   async () => {
     await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
@@ -241,33 +254,17 @@ describe("sessions_send gateway loopback", () => {
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const body = "    const first = 1;\n        const second = 2;";
-    const announcement = createDeferred();
-    void announcement.promise.catch(() => {});
     const spy = agentCommandMock as unknown as Mock<
       (opts: AgentCommandGatewayIngressOpts) => Promise<void>
     >;
-    spy.mockImplementation((opts) => {
-      const completed = (async () => {
-        await opts.userTurnTranscriptRecorder?.persistApproved();
-        await emitLifecycleAssistantReply({
-          opts,
-          defaultSessionId: "main",
-          includeTimestamp: true,
-          resolveText: (extraSystemPrompt) => {
-            if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
-              return "REPLY_SKIP";
-            }
-            if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-              return "ANNOUNCE_SKIP";
-            }
-            return "pong";
-          },
-        });
-      })();
-      if (opts.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-        announcement.resolve(completed);
-      }
-      return completed;
+    spy.mockImplementation(async (opts) => {
+      await opts.userTurnTranscriptRecorder?.persistApproved();
+      await emitLifecycleAssistantReply({
+        opts,
+        defaultSessionId: "main",
+        includeTimestamp: true,
+        resolveText: () => "pong",
+      });
     });
 
     const tool = getSessionsSendTool();
@@ -287,8 +284,7 @@ describe("sessions_send gateway loopback", () => {
     expect(result.details).toMatchObject({ runId: firstCall?.runId });
     expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
 
-    // The reply precedes its detached announcement's writes to this same transcript.
-    await announcement.promise;
+    expect(spy).toHaveBeenCalledOnce();
     const { callGateway } = await import("./call.js");
     const history = await callGateway<{ messages?: unknown[] }>({
       method: "chat.history",
@@ -311,12 +307,13 @@ describe("sessions_send gateway loopback", () => {
   });
 
   it(
-    "delivers an account-scoped DM announcement without stored delivery context",
+    "delivers a same-session reply to an account-scoped DM without stored delivery context",
     { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
     async () => {
-      await runDirectSessionAnnounceScenario({
-        dir: tempDirs.make("openclaw-direct-announce-"),
-        sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
+      await runDirectSessionReplyScenario({
+        dir: tempDirs.make("openclaw-direct-reply-"),
+        resolveGatewayContext: () => kernel.gatewayRequestContext,
+        sessionKey: "agent:main:feishu:work:dm:ou_reply_recipient",
         expectedAccountId: "work",
       });
     },
@@ -382,7 +379,12 @@ describe("sessions_send agent targeting", () => {
       const config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
         agents: {
-          list: [{ id: "main", default: true }, { id: "orion" }],
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
+          },
+          entries: { main: {}, orion: {} },
         },
       };
 
@@ -405,18 +407,7 @@ describe("sessions_send agent targeting", () => {
           emitLifecycleAssistantReply({
             opts,
             defaultSessionId: "orion-created",
-            // The detached announce flow keeps stepping this same mock after the
-            // awaited reply; skipping both follow-up steps ends the tail instead of
-            // running five ping-pong turns no row asserts on.
-            resolveText: (extraSystemPrompt) => {
-              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
-                return "REPLY_SKIP";
-              }
-              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-                return "ANNOUNCE_SKIP";
-              }
-              return "orion response";
-            },
+            resolveText: () => "orion response",
           }),
         );
         spy.mockClear();

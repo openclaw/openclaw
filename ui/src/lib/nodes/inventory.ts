@@ -11,7 +11,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { parseWorkerSlotSummary } from "../../../../src/shared/node-list-parse.js";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -124,7 +124,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlotSummary(raw.workerSlots) ?? undefined,
+    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
@@ -221,22 +221,14 @@ function entryRecency(entry: DeviceInventoryEntry): number {
 }
 
 function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
 function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
   const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
+  return order !== 0 ? order : left.name.localeCompare(right.name);
 }
 
 /** Joins paired devices with node catalog rows and groups duplicate pairings. */

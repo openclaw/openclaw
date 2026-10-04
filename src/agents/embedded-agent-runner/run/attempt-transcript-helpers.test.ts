@@ -3,7 +3,7 @@ import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcrip
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 describe("attempt transcript cleanup", () => {
-  it("keeps live messages unchanged when the durable suffix fence rejects cleanup", () => {
+  it("keeps live messages unchanged when the durable suffix fence rejects cleanup", async () => {
     const user = { role: "user", content: "question" };
     const signal = new MidTurnPrecheckSignal({
       route: "compact_only",
@@ -21,18 +21,18 @@ describe("attempt transcript cleanup", () => {
     };
     const messages = [user, precheckError];
     const fenceError = new Error("concurrent transcript append");
-    const removeTrailingEntries = vi.fn(() => {
+    const removeTrailingEntriesAsync = vi.fn(async () => {
       throw fenceError;
     });
     const activeSession = { agent: { state: { messages } } };
     const getEntries = vi.fn(() => [{ type: "message", message: precheckError }]);
 
-    expect(() =>
+    await expect(
       removeTrailingMidTurnPrecheckAssistantError({
         activeSession: activeSession as never,
-        sessionManager: { getEntries, removeTrailingEntries } as never,
+        sessionManager: { getEntries, removeTrailingEntriesAsync } as never,
       }),
-    ).toThrow(fenceError);
+    ).rejects.toThrow(fenceError);
 
     expect(activeSession.agent.state.messages).toBe(messages);
     expect(activeSession.agent.state.messages).toEqual([user, precheckError]);

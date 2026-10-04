@@ -286,6 +286,17 @@ export function runSqliteReadOperationSync<T>(database: DatabaseSync, operation:
   }
 }
 
+/** Always execute a fresh probe; compare versions only on the same connection. */
+export function readSqliteDataVersion(database: DatabaseSync): number {
+  const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
+    statement.get(),
+  );
+  if (typeof row?.data_version !== "number") {
+    throw new Error("SQLite did not return a numeric PRAGMA data_version");
+  }
+  return row.data_version;
+}
+
 /** Foreign commits are observed on the next operation; SQLite owns snapshot visibility. */
 export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   const tracked = owners.get(database);
@@ -293,14 +304,9 @@ export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   if (owner && !owner.authorizerActive && owner.readDataVersion !== undefined) {
     return owner.readDataVersion;
   }
-  const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
-    statement.get(),
-  );
-  if (typeof row?.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
+  const dataVersion = readSqliteDataVersion(database);
   if (owner) {
-    if (owner.dataVersion !== row.data_version) {
+    if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
       const unchanged =
@@ -316,13 +322,13 @@ export function readSqliteCacheDataVersion(database: DatabaseSync): number {
       if (!unchanged) {
         invalidate(owner);
       }
-      owner.dataVersion = row.data_version;
+      owner.dataVersion = dataVersion;
     }
     if (owner.readDepth > 0 && !owner.authorizerActive) {
-      owner.readDataVersion = row.data_version;
+      owner.readDataVersion = dataVersion;
     }
   }
-  return row.data_version;
+  return dataVersion;
 }
 
 /** Install at native open, before callers can retain statements or install an authorizer. */

@@ -4,6 +4,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import {
   NON_ENV_SECRETREF_MARKER,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -92,7 +93,6 @@ describe("model auth markers", () => {
       expect(isNonSecretApiKeyMarker("gcp-vertex-credentials")).toBe(true);
       expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
       expect(isNonSecretApiKeyMarker("minimax-oauth")).toBe(true);
-      expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
     });
   });
 

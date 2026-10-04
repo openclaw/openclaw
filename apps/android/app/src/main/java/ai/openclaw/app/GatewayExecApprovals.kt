@@ -53,11 +53,14 @@ internal data class GatewayExecApprovalInboxState(
   val notice: GatewayExecApprovalNotice? = null,
 )
 
-internal enum class GatewayApprovalTerminalStatus {
-  Allowed,
-  Denied,
-  Expired,
-  Cancelled,
+internal enum class GatewayApprovalTerminalStatus(
+  val wireValue: String,
+  val expectedDecisions: Set<String>?,
+) {
+  Allowed("allowed", setOf("allow-once", "allow-always")),
+  Denied("denied", setOf("deny")),
+  Expired("expired", null),
+  Cancelled("cancelled", null),
 }
 
 internal sealed interface GatewayExecApprovalSnapshot {
@@ -387,6 +390,7 @@ internal fun legacyGatewayExecApprovalTerminal(
 
 private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprovalSnapshot? {
   val status = obj.strictString("status") ?: return null
+  val terminalStatus = GatewayApprovalTerminalStatus.entries.firstOrNull { it.wireValue == status }
   val expectedKeys = APPROVAL_SNAPSHOT_KEYS_BY_STATUS[status] ?: return null
   val attributionKeys = if (status == "pending") setOf("sourceSessionKey") else setOf("source", "resolver")
   if (!obj.keys.containsAll(expectedKeys) || !obj.hasOnlyKeys(expectedKeys + attributionKeys)) return null
@@ -398,52 +402,10 @@ private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprov
   val summary =
     (parseGatewayExecApprovalPresentation(id, createdAtMs, expiresAtMs, presentation) ?: return null)
       .copy(sessionKey = obj.strictNonEmptyString("sourceSessionKey"))
-  return when (status) {
-    "pending" -> {
-      GatewayExecApprovalSnapshot.Pending(summary)
-    }
-
-    "allowed" -> {
-      parseTerminalApproval(
-        obj = obj,
-        id = id,
-        status = GatewayApprovalTerminalStatus.Allowed,
-        expectedDecision = setOf("allow-once", "allow-always"),
-      )?.takeIf { terminal ->
-        terminal.decision?.let(summary.allowedDecisions::contains) == true
-      }
-    }
-
-    "denied" -> {
-      parseTerminalApproval(
-        obj = obj,
-        id = id,
-        status = GatewayApprovalTerminalStatus.Denied,
-        expectedDecision = setOf("deny"),
-      )
-    }
-
-    "expired" -> {
-      parseTerminalApproval(
-        obj = obj,
-        id = id,
-        status = GatewayApprovalTerminalStatus.Expired,
-        expectedDecision = null,
-      )
-    }
-
-    "cancelled" -> {
-      parseTerminalApproval(
-        obj = obj,
-        id = id,
-        status = GatewayApprovalTerminalStatus.Cancelled,
-        expectedDecision = null,
-      )
-    }
-
-    else -> {
-      null
-    }
+  if (terminalStatus == null) return GatewayExecApprovalSnapshot.Pending(summary)
+  return parseTerminalApproval(obj, id, terminalStatus)?.takeIf { terminal ->
+    terminalStatus != GatewayApprovalTerminalStatus.Allowed ||
+      terminal.decision?.let(summary.allowedDecisions::contains) == true
   }
 }
 
@@ -469,7 +431,7 @@ private fun parseGatewayExecApprovalPresentation(
       external
         ?.let {
           if (!it.hasExactKeys(setOf("label", "decisions")) || it.strictNonEmptyString("label") == null) return null
-          val values = (it["decisions"] as? JsonArray)?.map { value -> value.strictString() ?: return null } ?: return null
+          val values = (it["decisions"] as? JsonArray)?.map { value -> value.asJsonStringOrNull() ?: return null } ?: return null
           if (values.size !in 1..2 || values.distinct().size != values.size || values.any { decision -> decision !in setOf("allow-once", "allow-always") }) return null
           values
         }.orEmpty()
@@ -517,15 +479,14 @@ private fun parseTerminalApproval(
   obj: JsonObject,
   id: String,
   status: GatewayApprovalTerminalStatus,
-  expectedDecision: Set<String>?,
 ): GatewayExecApprovalSnapshot.Terminal? {
   obj.strictNonNegativeLong("resolvedAtMs") ?: return null
   val reason = obj.strictString("reason") ?: return null
   if (reason !in APPROVAL_TERMINAL_REASONS) return null
   val decision = obj.strictString("decision")
-  if (expectedDecision == null) {
+  if (status.expectedDecisions == null) {
     if (obj.containsKey("decision")) return null
-  } else if (decision !in expectedDecision) {
+  } else if (decision !in status.expectedDecisions) {
     return null
   }
   return GatewayExecApprovalSnapshot.Terminal(id = id, status = status, decision = decision)
@@ -533,7 +494,7 @@ private fun parseTerminalApproval(
 
 private fun parseAllowedDecisions(items: JsonArray?): List<String>? {
   if (items == null || items.size !in 1..3) return null
-  val decisions = items.map { item -> item.strictString() ?: return null }
+  val decisions = items.map { item -> item.asJsonStringOrNull() ?: return null }
   if (decisions.distinct().size != decisions.size || "deny" !in decisions) return null
   return decisions.takeIf { values -> values.all { it in APPROVAL_DECISIONS } }
 }
@@ -548,17 +509,12 @@ private fun JsonObject.optionalString(
 ): OptionalString? {
   val value = this[key]
   if (value == null || value is JsonNull) return OptionalString(null)
-  val string = value.strictString() ?: return null
+  val string = value.asJsonStringOrNull() ?: return null
   if (requireNonEmpty && string.isEmpty()) return null
   return OptionalString(string)
 }
 
-private fun JsonObject.strictString(key: String): String? = this[key].strictString()
-
-private fun JsonElement?.strictString(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf { it.isString }
-    ?.content
+private fun JsonObject.strictString(key: String): String? = this[key].asJsonStringOrNull()
 
 private fun JsonObject.strictNonEmptyString(key: String): String? =
   strictString(key)
@@ -616,13 +572,14 @@ private val APPROVAL_SNAPSHOT_COMMON_KEYS =
   setOf("id", "urlPath", "status", "createdAtMs", "expiresAtMs", "presentation")
 
 private val APPROVAL_SNAPSHOT_KEYS_BY_STATUS =
-  mapOf(
-    "pending" to APPROVAL_SNAPSHOT_COMMON_KEYS,
-    "allowed" to APPROVAL_SNAPSHOT_COMMON_KEYS + setOf("resolvedAtMs", "reason", "decision"),
-    "denied" to APPROVAL_SNAPSHOT_COMMON_KEYS + setOf("resolvedAtMs", "reason", "decision"),
-    "expired" to APPROVAL_SNAPSHOT_COMMON_KEYS + setOf("resolvedAtMs", "reason"),
-    "cancelled" to APPROVAL_SNAPSHOT_COMMON_KEYS + setOf("resolvedAtMs", "reason"),
-  )
+  mapOf("pending" to APPROVAL_SNAPSHOT_COMMON_KEYS) +
+    GatewayApprovalTerminalStatus.entries.associate { status ->
+      status.wireValue to
+        (
+          APPROVAL_SNAPSHOT_COMMON_KEYS + setOf("resolvedAtMs", "reason") +
+            if (status.expectedDecisions == null) emptySet() else setOf("decision")
+        )
+    }
 
 private val EXEC_APPROVAL_PRESENTATION_REQUIRED_KEYS = setOf("kind", "commandText", "allowedDecisions")
 

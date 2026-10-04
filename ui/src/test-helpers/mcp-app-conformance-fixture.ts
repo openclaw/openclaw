@@ -90,16 +90,20 @@ export type McpAppFixtureEvent = {
   aborted?: boolean;
 };
 
-async function readMcpAppFixtureEvents(eventsPath: string): Promise<McpAppFixtureEvent[]> {
-  return (await fs.readFile(eventsPath, "utf8"))
+async function readMcpAppFixtureEvents(
+  eventsPath: string,
+  scenario?: string,
+): Promise<McpAppFixtureEvent[]> {
+  const events = (await fs.readFile(eventsPath, "utf8"))
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as McpAppFixtureEvent);
+  return scenario === undefined ? events : events.filter((event) => event.scenario === scenario);
 }
 
 export function createMcpAppFixtureControl(controlPath: string, eventsPath: string) {
   return {
-    readEvents: () => readMcpAppFixtureEvents(eventsPath),
+    readEvents: (scenario?: string) => readMcpAppFixtureEvents(eventsPath, scenario),
     async configure(value: Record<string, unknown>): Promise<void> {
       const nextPath = controlPath + ".next";
       await fs.writeFile(nextPath, JSON.stringify(value));
@@ -150,9 +154,7 @@ export function createMcpAppTeardownRecorder(proofDir: string, fixtureEventsPath
           startedAtMs,
           observedAtMs: Date.now(),
           diagnostics,
-          events: (await readMcpAppFixtureEvents(fixtureEventsPath)).filter(
-            (event) => event.scenario === scenario,
-          ),
+          events: await readMcpAppFixtureEvents(fixtureEventsPath, scenario),
         });
         await fs.writeFile(
           path.join(proofDir, "graceful-teardown.json"),
@@ -266,10 +268,13 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
-import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
+import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
+import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
-document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-  window.mcpConformancePrompt = event.detail.text;
+document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
+  event.preventDefault();
+  window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
+  event.detail.respond(true);
 });
 window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");
@@ -336,7 +341,7 @@ window.mcpConformanceUnmount = async () => {
       setTheme("dark");
       Reflect.set(view, "context", {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
         },
         theme: {

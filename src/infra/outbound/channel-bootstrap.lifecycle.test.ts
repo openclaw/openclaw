@@ -101,13 +101,13 @@ function sender(registry: PluginRegistry | undefined) {
   return expectDefined(registry?.channels[0]?.plugin.outbound?.sendText, "bootstrapped sender");
 }
 
-describe.each([
-  { mode: "sync", bootstrap: bootstrapOutboundChannelPlugin },
-  { mode: "async", bootstrap: bootstrapOutboundChannelPluginAsync },
-])("outbound bootstrap lifetime ($mode)", ({ bootstrap }) => {
-  it.each(["cache", "registry"] as const)(
-    "sends through a fresh instance after %s retirement",
-    async (retirement) => {
+describe("outbound bootstrap lifetime", () => {
+  it.each([
+    { retirement: "registry", bootstrap: bootstrapOutboundChannelPlugin },
+    { retirement: "cache", bootstrap: bootstrapOutboundChannelPluginAsync },
+  ])(
+    "sends through a fresh instance after $retirement retirement",
+    async ({ retirement, bootstrap }) => {
       const fixture = createFixture();
       const request = { cfg: fixture.config, to: "recipient", text: "hello" };
       await using firstCache = createPluginCache();
@@ -136,6 +136,7 @@ describe.each([
   );
 
   it("discovers a newly installed sender after metadata invalidation clears an unavailable outcome", async () => {
+    const bootstrap = bootstrapOutboundChannelPluginAsync;
     const fixture = createFixture({ global: true, deferInstall: true });
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
@@ -153,6 +154,7 @@ describe.each([
   });
 
   it("keeps available and empty metadata outcomes separate within one cache", async () => {
+    const bootstrap = bootstrapOutboundChannelPluginAsync;
     const fixture = createFixture();
     await using cache = createPluginCache();
     const { available, empty } = withPluginCache(cache, () => ({

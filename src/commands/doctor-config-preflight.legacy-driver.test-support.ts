@@ -254,12 +254,9 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             };
             const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
             try {
-              db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-                managedRoot,
-                managedRow.owner,
-                managedRow.payload_json,
-                managedRow.updated_at,
-              );
+              db.prepare(
+                "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+              ).run(managedRoot, managedRow.owner, managedRow.payload_json, managedRow.updated_at);
             } finally {
               db.close();
             }
@@ -312,9 +309,10 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
           if (mode === "valid managed v1" && resumed.code === 0) {
             const current = new DatabaseSync(agentPath, { readOnly: true });
             try {
-              expect(current.prepare("PRAGMA user_version").get()?.user_version).toBe(
-                OPENCLAW_AGENT_SCHEMA_VERSION,
-              );
+              expect(
+                current.prepare("PRAGMA user_version").get()?.user_version,
+                `${resumed.stdout}\n${resumed.stderr}`,
+              ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
             } finally {
               current.close();
             }
@@ -375,9 +373,10 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
           }
           const repaired = new DatabaseSync(agentPath, { readOnly: true });
           try {
-            expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_AGENT_SCHEMA_VERSION,
-            );
+            expect(
+              repaired.prepare("PRAGMA user_version").get()?.user_version,
+              `${resumed.stdout}\n${resumed.stderr}`,
+            ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
             expect(
               repaired.prepare("SELECT value_json,updated_at FROM cache_entries").all(),
             ).toEqual([{ value_json: '{"keep":true}', updated_at: 7 }]);

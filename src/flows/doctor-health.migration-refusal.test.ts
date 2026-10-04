@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
+import * as nocow from "../commands/doctor-sqlite-nocow.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
@@ -25,6 +26,7 @@ import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { ExitError } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   claimOpenClawAgentDatabaseLease,
@@ -57,6 +59,9 @@ const maintenance = vi.hoisted(() => ({
   run: <T>(operation: () => T): T => operation(),
   finish: vi.fn(),
   releaseState: vi.fn(),
+  repairSqliteNoCow: vi.fn(),
+  enableSqliteReclamation: vi.fn(),
+  cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
 const resultWriter = await vi.importActual<typeof import("../infra/update-doctor-result.js")>(
@@ -67,71 +72,160 @@ beforeEach(() => {
     resultWriter.writeUpdatePostInstallDoctorResult,
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("Doctor refused-migration maintenance outcome", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    maintenance.enableSqliteReclamation.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
   });
 
-  it("unwinds a repair runtime exit through maintenance restoration", async () => {
-    mocks.runContributions.mockImplementationOnce(async (ctx) => ctx.runtime.exit(130));
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await expect(
-      runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
-    ).rejects.toEqual(new ExitError(130));
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(maintenance.finish).toHaveBeenCalledExactlyOnceWith(
-      undefined,
-      undefined,
-      new ExitError(130),
-    );
-    expect(maintenance.release).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { fix: false, updating: undefined, request: "1", repair: false, conversion: false },
+    { fix: false, updating: "1", request: "1", repair: false, conversion: false },
+    { fix: true, updating: undefined, request: undefined, repair: true, conversion: false },
+    { fix: true, updating: "0", request: "0", repair: true, conversion: false },
+    { fix: true, updating: "1", request: undefined, repair: false, conversion: true },
+    { fix: true, updating: "true", request: "0", repair: false, conversion: true },
+    { fix: true, updating: "1", request: "1", repair: true, conversion: true },
+  ])(
+    "gates SQLite repairs after checks and before restoration (fix=$fix, update=$updating, request=$request)",
+    async ({ fix, updating, request, repair, conversion }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updating);
+      vi.stubEnv("OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR", request);
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      const events: string[] = [];
+      const advisory =
+        "SQLite store on btrfs without NOCOW: /synthetic/store.sqlite. Run openclaw doctor --fix to rewrite it while the Gateway is stopped.";
+      vi.spyOn(nocow, "inspectDoctorSqliteNoCow").mockReturnValue({
+        paths: ["/synthetic/store.sqlite"],
+        notes: [advisory],
+      });
+      mocks.runContributions.mockImplementationOnce(async () => {
+        entered.resolve();
+        await proceed.promise;
+        events.push("checks completed");
+      });
+      maintenance.repairSqliteNoCow.mockReset().mockImplementationOnce(async () => {
+        events.push("repair");
+      });
+      maintenance.enableSqliteReclamation.mockImplementationOnce(async () => {
+        events.push("conversion");
+      });
+      maintenance.cleanupRetainedRuntimes.mockReset().mockImplementationOnce(async () => {
+        events.push("cleanup");
+      });
+      maintenance.finish.mockImplementationOnce(async () => {
+        events.push("restoration");
+      });
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const work = runDoctorHealthFlow(runtime, { repair: fix, nonInteractive: true });
+      await entered.promise;
+      expect(maintenance.repairSqliteNoCow).not.toHaveBeenCalled();
+      expect(maintenance.enableSqliteReclamation).not.toHaveBeenCalled();
+      proceed.resolve();
+      await work;
+      expect(events).toEqual([
+        "checks completed",
+        ...(repair ? ["repair"] : []),
+        ...(conversion ? ["conversion"] : []),
+        ...(fix ? ["cleanup"] : []),
+        "restoration",
+      ]);
+      if (conversion) {
+        expect(maintenance.enableSqliteReclamation).toHaveBeenCalledOnce();
+      } else {
+        expect(maintenance.enableSqliteReclamation).not.toHaveBeenCalled();
+      }
+      if (repair) {
+        expect(maintenance.repairSqliteNoCow).toHaveBeenCalledExactlyOnceWith([
+          "/synthetic/store.sqlite",
+        ]);
+      } else {
+        expect(maintenance.repairSqliteNoCow).not.toHaveBeenCalled();
+      }
+      expect(runtime.log).toHaveBeenCalledWith(advisory);
+      const deferred =
+        "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.";
+      if (fix && !repair) {
+        expect(runtime.log).toHaveBeenCalledWith(deferred);
+      } else {
+        expect(runtime.log).not.toHaveBeenCalledWith(deferred);
+      }
+    },
+  );
 
-  it("forwards database write proof produced while failed Doctor maintenance settles", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    await withOpenClawTestState(
-      {
-        scenario: "minimal",
-        env: { OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath },
-      },
-      async (state) => {
-        await state.writeConfig({ gateway: { mode: "local" } });
-        const databaseGenerations = { [state.statePath("state/openclaw.sqlite")]: null };
-        const databaseWrites = { unchanged: false, generations: databaseGenerations };
-        let released = false;
-        vi.mocked(doctorMaintenance.beginDoctorMaintenance).mockResolvedValueOnce({
-          ...maintenance,
-          get databaseWrites() {
-            return released ? databaseWrites : undefined;
-          },
-          release: async () => {
+  it.each(["diagnostic", "runtime exit"])(
+    "settles %s failure before forwarding database write proof",
+    async (kind) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      await withOpenClawTestState(
+        {
+          scenario: "minimal",
+          env: { OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath },
+        },
+        async (state) => {
+          await state.writeConfig({ gateway: { mode: "local" } });
+          const databaseGenerations = { [state.statePath("state/openclaw.sqlite")]: null };
+          const databaseWrites = { unchanged: false, generations: databaseGenerations };
+          let released = false;
+          const release = vi.fn(async () => {
             released = true;
-          },
-        });
-        const failure = new Error("injected post-migration Doctor failure");
-        mocks.runContributions.mockRejectedValueOnce(failure);
-        await expect(
-          runDoctorHealthFlow(
-            { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          });
+          vi.mocked(doctorMaintenance.beginDoctorMaintenance).mockResolvedValueOnce({
+            ...maintenance,
+            get databaseWrites() {
+              return released ? databaseWrites : undefined;
+            },
+            release,
+          });
+          const failure =
+            kind === "runtime exit"
+              ? new ExitError(130)
+              : new Error("injected post-migration Doctor failure");
+          mocks.runContributions.mockImplementationOnce(async (ctx) => {
+            if (kind === "runtime exit") {
+              ctx.runtime.exit(130);
+            } else {
+              throw failure;
+            }
+          });
+          const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const work = runDoctorHealthFlow(
+            runtime,
             { repair: true, nonInteractive: true },
             { inputHash: hashConfigRaw(null), assertCurrent() {}, databaseGenerations },
-          ),
-        ).rejects.toBe(failure);
-        expect(doctorMaintenance.beginDoctorMaintenance).toHaveBeenCalledWith(
-          expect.objectContaining({ databaseGenerations }),
-        );
-        await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toMatchObject({
-          status: "error",
-          databaseWrites,
-        });
-      },
-    );
-  });
+          );
+          if (kind === "runtime exit") {
+            await expect(work).rejects.toEqual(failure);
+          } else {
+            await expect(work).rejects.toBe(failure);
+          }
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(maintenance.finish).toHaveBeenCalledExactlyOnceWith(undefined, undefined, failure);
+          expect(release).toHaveBeenCalledOnce();
+          expect(mocks.outro).not.toHaveBeenCalled();
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("Check the reported service state"),
+          );
+          expect(doctorMaintenance.beginDoctorMaintenance).toHaveBeenCalledWith(
+            expect.objectContaining({ databaseGenerations }),
+          );
+          await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toMatchObject({
+            status: "error",
+            databaseWrites,
+          });
+        },
+      );
+    },
+  );
 
   it.each(["success", "validation", "conflict", "missing-receipt"] as const)(
     "uses the latest receipt for maintenance-time token recovery (%s)",
@@ -265,11 +359,9 @@ describe("Doctor refused-migration maintenance outcome", () => {
           file: state.path("warnings.log"),
         });
         try {
+          const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           await expect(
-            runDoctorHealthFlow(
-              { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-              { repair: true, nonInteractive: true },
-            ),
+            runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
           ).rejects.toBe(failure);
           expect(failure.message.startsWith(originalMessage)).toBe(true);
           expect(failure.message).toContain(
@@ -284,6 +376,8 @@ describe("Doctor refused-migration maintenance outcome", () => {
           });
           expect(maintenance.release).toHaveBeenCalledOnce();
           expect(maintenance.finish).toHaveBeenCalledExactlyOnceWith(undefined, undefined, failure);
+          expect(mocks.outro).not.toHaveBeenCalled();
+          expect(runtime.error).not.toHaveBeenCalled();
           await flushLogger();
           const tail = await readConfiguredParsedLogTail();
           expect(tail.lines.map((line) => line.message).join("\n")).toContain(failure.message);
@@ -295,33 +389,6 @@ describe("Doctor refused-migration maintenance outcome", () => {
       },
     );
   });
-
-  it.each([true, false])(
-    "passes maintenance its failure before releasing custody (migration refusal=%s)",
-    async (migrationRefusal) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        await state.writeConfig({ gateway: { mode: "local" } });
-        const failure = migrationRefusal
-          ? new DoctorStateMigrationRefusalError([])
-          : new Error("diagnostic failed");
-        mocks.runContributions.mockRejectedValueOnce(failure);
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        await expect(
-          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
-        ).rejects.toBe(failure);
-        expect(maintenance.release).toHaveBeenCalledOnce();
-        expect(maintenance.finish).toHaveBeenCalledExactlyOnceWith(undefined, undefined, failure);
-        expect(mocks.outro).not.toHaveBeenCalled();
-        if (migrationRefusal) {
-          expect(runtime.error).not.toHaveBeenCalled();
-        } else {
-          expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringContaining("Check the reported service state"),
-          );
-        }
-      });
-    },
-  );
 });
 
 describe("Doctor maintenance admission", () => {

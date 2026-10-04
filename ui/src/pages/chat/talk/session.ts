@@ -7,7 +7,6 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkInputController } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
-  RealtimeTalkGatewayRelaySessionResult,
   RealtimeTalkSessionResult,
   RealtimeTalkStatus,
   RealtimeTalkTransport,
@@ -20,11 +19,7 @@ import {
   retireUncommittedRealtimeTalkTransport,
   retryVoiceTranscriptPersistence,
 } from "./transcript-owner.ts";
-import {
-  normalizeLaunchTransport,
-  resolveRealtimeTalkTransport,
-  type RealtimeTalkLaunchTransport,
-} from "./transport.ts";
+import { normalizeLaunchTransport, type RealtimeTalkLaunchTransport } from "./transport.ts";
 
 export type { RealtimeTalkStatus };
 
@@ -76,17 +71,6 @@ type RealtimeTalkConfigResult = {
     };
   };
 };
-
-function compactLaunchParams(
-  params: RealtimeTalkLaunchOptions & {
-    sessionKey: string;
-    mode?: string;
-    brain?: string;
-    capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
-  },
-): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
-}
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
@@ -162,7 +146,7 @@ export class RealtimeTalkSession {
         { ...this.options, capabilities },
         lifecycleGeneration,
       );
-      const transport = resolveRealtimeTalkTransport(session);
+      const { transport } = session;
       // Managed-room stays unsupported here and carries no voice bookkeeping;
       // reject it before the voice-session requirement produces a misleading error.
       if (transport === "managed-room") {
@@ -170,9 +154,7 @@ export class RealtimeTalkSession {
       }
       const voiceSessionId =
         session.voiceSessionId ??
-        (transport === "gateway-relay"
-          ? (session as RealtimeTalkGatewayRelaySessionResult).relaySessionId
-          : undefined);
+        (session.transport === "gateway-relay" ? session.relaySessionId : undefined);
       if (!voiceSessionId) {
         throw new Error("Realtime Talk session did not return a voice session id");
       }
@@ -222,8 +204,6 @@ export class RealtimeTalkSession {
           callbacks,
           input,
           videoDeviceId: this.localOptions.videoDeviceId,
-          consultThinkingLevel: session.consultThinkingLevel,
-          consultFastMode: session.consultFastMode,
         });
         this.pendingStartup = nextTransport;
         this.callbacks.onVideoCapability?.(
@@ -262,7 +242,7 @@ export class RealtimeTalkSession {
         return;
       }
       this.transport = nextTransport;
-      this.selectedTransport = normalizeLaunchTransport(transport);
+      this.selectedTransport = transport;
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
         this.transportGeneration = nextTransportGeneration;
@@ -326,28 +306,27 @@ export class RealtimeTalkSession {
     },
     lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
-    const launchOptions = { ...options };
-    if (launchOptions.voiceChangeId && launchOptions.transport === "gateway-relay") {
-      return this.createRelaySession(launchOptions);
+    if (options.voiceChangeId && options.transport === "gateway-relay") {
+      return this.createRelaySession(options);
     }
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
-        compactLaunchParams({
+        {
           sessionKey: this.sessionKey,
-          ...launchOptions,
-        }),
+          ...options,
+        },
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
     } catch (error) {
       if (
-        launchOptions.voiceChangeId ||
+        options.voiceChangeId ||
         this.closed ||
         this.lifecycleGeneration !== lifecycleGeneration
       ) {
         throw error;
       }
-      let transport = launchOptions.transport;
+      let transport = options.transport;
       if (!transport) {
         let result: RealtimeTalkConfigResult;
         try {
@@ -378,7 +357,7 @@ export class RealtimeTalkSession {
         throw error;
       }
       try {
-        return await this.createRelaySession(launchOptions);
+        return await this.createRelaySession(options);
       } catch {
         throw error;
       }
@@ -388,14 +367,14 @@ export class RealtimeTalkSession {
   private createRelaySession(options: RealtimeTalkLaunchOptions) {
     return this.client.request<RealtimeTalkSessionResult>(
       "talk.session.create",
-      compactLaunchParams({
+      {
         sessionKey: this.sessionKey,
         ...options,
         mode: "realtime",
         transport: "gateway-relay",
         brain: "agent-consult",
         capabilities: ["voice-selection"],
-      }),
+      },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
   }
@@ -420,8 +399,7 @@ export class RealtimeTalkSession {
     this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
-    this.videoEnabled = false;
-    activeRealtimeTalkSessions.delete(this);
+    this.rememberVideoEnabled(false);
     const detached = this.detachVoiceSession();
     const transport = this.transport;
     const hadPendingStartup = this.pendingStartup !== null;
@@ -684,27 +662,25 @@ export class RealtimeTalkSession {
     }
     const operation = ++this.videoOperation;
     const previousEnabled = this.videoEnabled;
-    this.videoEnabled = enabled;
-    if (enabled) {
-      activeRealtimeTalkSessions.add(this);
-    } else {
-      activeRealtimeTalkSessions.delete(this);
-    }
+    this.rememberVideoEnabled(enabled);
     try {
       await transport.setVideoEnabled(enabled);
     } catch (error) {
       if (operation === this.videoOperation && !this.closed && this.transport === transport) {
-        this.videoEnabled = previousEnabled;
-        if (previousEnabled) {
-          activeRealtimeTalkSessions.add(this);
-        } else {
-          activeRealtimeTalkSessions.delete(this);
-        }
+        this.rememberVideoEnabled(previousEnabled);
       }
       throw error;
     }
     if (operation === this.videoOperation && (this.closed || this.transport !== transport)) {
-      this.videoEnabled = false;
+      this.rememberVideoEnabled(false);
+    }
+  }
+
+  private rememberVideoEnabled(enabled: boolean): void {
+    this.videoEnabled = enabled;
+    if (enabled) {
+      activeRealtimeTalkSessions.add(this);
+    } else {
       activeRealtimeTalkSessions.delete(this);
     }
   }

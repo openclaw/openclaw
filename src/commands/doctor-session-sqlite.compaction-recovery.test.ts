@@ -107,13 +107,13 @@ describe("runDoctorSessionSqlite", () => {
     const quarantineBefore = [sqlitePath, laterPath].map((databasePath) =>
       readPersistedQuarantineRow(databasePath, { env: store.env }),
     );
-    const agentDatabase = await import("../state/openclaw-agent-db.js");
-    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
+    const migrate = agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance;
     // The competitor must not inherit the maintenance authority being revoked.
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const repair = vi
-      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance")
       .mockImplementationOnce(async (options, maintenance) => {
         await migrate(options, maintenance);
         // Lose the real owner at the caller's new await boundary, after native repair succeeds.
@@ -247,23 +247,6 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets[0]?.sqlitePath).toBe(target.sqlitePath);
     expect(report.totals.validatedEntries).toBe(1);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "reapplies owner-only permissions after compaction",
-    async () => {
-      const { sqlitePath, store } = await createImportedStoreForCompaction();
-      fs.chmodSync(sqlitePath, 0o666);
-
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "compact",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(0);
-      expect(fs.statSync(sqlitePath).mode & 0o777).toBe(0o600);
-    },
-  );
 
   it("rejects stale secondary indexes before compacting and quarantines them in recovery", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();

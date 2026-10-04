@@ -51,115 +51,112 @@ afterEach(() => {
   }
 });
 
+type AuthorityCase = {
+  name: string;
+  trigger: Parameters<typeof createUpdateRun>[0]["trigger"];
+  recorded?: UpdateRepairTurnMessage["requester"];
+  sent?: UpdateRepairTurnMessage["requester"];
+  change?: "origin" | "policy";
+  refusal?: string;
+};
+const revoked = "requester-revoked";
+const profile = { ...requester, authorizationSource: "profile:synthetic" };
+
 describe("delegated repair requester binding", () => {
-  it.each([
-    { name: "omitted chat requester", trigger: "chat", recorded: requester, sent: undefined },
+  it.each<AuthorityCase>([
+    { name: "omitted chat requester", trigger: "chat", recorded: requester, refusal: revoked },
     {
       name: "substituted chat requester",
       trigger: "chat",
       recorded: requester,
       sent: { ...requester, senderId: "other-owner" },
+      refusal: revoked,
     },
-    { name: "requester added to a CLI run", trigger: "cli", recorded: undefined, sent: requester },
-  ] as const)("refuses $name before selecting inference", async ({ trigger, recorded, sent }) => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
-      await state.writeConfig({ commands: { ownerAllowFrom: ["owner", "other-owner"] } });
-      const run = createUpdateRun({ trigger, origin: { requester: recorded } }, { env: state.env });
-      recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
-      const result = await runDelegatedUpdateRepairTurn(
-        message(run.runId, state, sent),
-        state.env,
-        new AbortController().signal,
-        vi.fn(),
-      );
-      expect(result).toMatchObject({ status: "aborted", reason: "requester-revoked" });
-      expect(runtime.prepareUpdateRepairInference).not.toHaveBeenCalled();
-      expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    { name: "chat owner", trigger: "chat", recorded: requester },
-    { name: "local CLI", trigger: "cli", recorded: undefined },
-    { name: "Control UI", trigger: "control-ui", recorded: undefined },
-    { name: "API", trigger: "api", recorded: undefined },
-    { name: "campaign", trigger: "campaign", recorded: undefined },
-    { name: "Mac app", trigger: "mac-app", recorded: undefined },
-    { name: "internal channel", trigger: "control-ui", recorded: { channel: "webchat" } },
-    { name: "channel-less operator", trigger: "api", recorded: { senderId: "operator" } },
-  ] as const)("accepts the recorded $name authority", async ({ trigger, recorded }) => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
-      await state.writeConfig({ commands: { ownerAllowFrom: ["owner"] } });
-      const run = createUpdateRun({ trigger, origin: { requester: recorded } }, { env: state.env });
-      recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
-      expect(
-        await runDelegatedUpdateRepairTurn(
-          message(run.runId, state, recorded),
-          state.env,
-          new AbortController().signal,
-          vi.fn(),
-        ),
-      ).toMatchObject({ status: "completed", toolCalls: 0 });
-    });
-  });
-
-  it.each(["origin", "policy"] as const)(
-    "refuses a changed %s after awaited route preparation",
-    async (change) => {
+    { name: "requester added to CLI", trigger: "cli", sent: requester, refusal: revoked },
+    { name: "chat owner", trigger: "chat", recorded: requester, sent: requester },
+    { name: "local CLI", trigger: "cli" },
+    {
+      name: "internal channel",
+      trigger: "control-ui",
+      recorded: { channel: "webchat" },
+      sent: { channel: "webchat" },
+    },
+    {
+      name: "channel-less operator",
+      trigger: "api",
+      recorded: { senderId: "operator" },
+      sent: { senderId: "operator" },
+    },
+    {
+      name: "changed origin",
+      trigger: "chat",
+      recorded: requester,
+      sent: requester,
+      change: "origin",
+      refusal: revoked,
+    },
+    {
+      name: "changed policy",
+      trigger: "chat",
+      recorded: requester,
+      sent: requester,
+      change: "policy",
+      refusal: revoked,
+    },
+    {
+      name: "profile without native continuation",
+      trigger: "chat",
+      recorded: profile,
+      sent: profile,
+      refusal: "Requester continuation requires its admitted Gateway update owner.",
+    },
+  ])(
+    "checks $name before allowing inference effects",
+    async ({ trigger, recorded, sent, change, refusal }) => {
       await withOpenClawTestState({ layout: "home" }, async (state) => {
         await state.writeConfig({ commands: { ownerAllowFrom: ["owner", "other-owner"] } });
-        const run = createUpdateRun({ trigger: "chat", origin: { requester } }, { env: state.env });
+        const run = createUpdateRun(
+          { trigger, origin: { requester: recorded } },
+          { env: state.env },
+        );
         recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
-        runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => {
-          if (change === "origin") {
-            recordUpdateRunPhase(
-              run.runId,
-              "repairing",
-              { origin: { requester: { ...requester, senderId: "other-owner" } } },
-              { env: state.env },
-            );
-          } else {
-            await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
-          }
-          return selected;
-        });
+        if (change) {
+          runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => {
+            if (change === "origin") {
+              recordUpdateRunPhase(
+                run.runId,
+                "repairing",
+                {
+                  origin: { requester: { ...requester, senderId: "other-owner" } },
+                },
+                { env: state.env },
+              );
+            } else {
+              await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
+            }
+            return selected;
+          });
+        }
         const onRoute = vi.fn();
-        expect(
-          await runDelegatedUpdateRepairTurn(
-            message(run.runId, state, requester),
-            state.env,
-            new AbortController().signal,
-            onRoute,
-          ),
-        ).toMatchObject({ status: "aborted", reason: "requester-revoked" });
-        expect(onRoute).not.toHaveBeenCalled();
-        expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
+        const result = await runDelegatedUpdateRepairTurn(
+          message(run.runId, state, sent),
+          state.env,
+          new AbortController().signal,
+          onRoute,
+        );
+        if (refusal) {
+          expect(result).toMatchObject({ status: "aborted", reason: refusal });
+          expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
+          expect(onRoute).not.toHaveBeenCalled();
+          if (!change) {
+            expect(runtime.prepareUpdateRepairInference).not.toHaveBeenCalled();
+          }
+        } else {
+          expect(result).toMatchObject({ status: "completed", toolCalls: 0 });
+        }
       });
     },
   );
-
-  it("retains the native continuation requirement for a recorded profile", async () => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
-      const recorded = { ...requester, authorizationSource: "profile:synthetic" };
-      const run = createUpdateRun(
-        { trigger: "chat", origin: { requester: recorded } },
-        { env: state.env },
-      );
-      recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
-      expect(
-        await runDelegatedUpdateRepairTurn(
-          message(run.runId, state, recorded),
-          state.env,
-          new AbortController().signal,
-          vi.fn(),
-        ),
-      ).toMatchObject({
-        status: "aborted",
-        reason: "Requester continuation requires its admitted Gateway update owner.",
-      });
-      expect(runtime.prepareUpdateRepairInference).not.toHaveBeenCalled();
-    });
-  });
 });
 
 function message(

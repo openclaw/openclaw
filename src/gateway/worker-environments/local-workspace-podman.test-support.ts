@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { expect, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { localWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -9,7 +13,12 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 
 /** Production required-Podman lifecycle proof, including revocation and selected cwd. */
-export async function proveRequiredPodmanWorkspace(root: string, owner: LocalWorkspaceOwner) {
+export async function proveRequiredPodmanWorkspace(
+  root: string,
+  owner: LocalWorkspaceOwner,
+  signal: AbortSignal,
+  verifyCleanup: (body: () => Promise<void>) => Promise<void>,
+) {
   const [
     { insertRegistryWorktree },
     { upsertSessionEntryCore },
@@ -306,25 +315,34 @@ export async function proveRequiredPodmanWorkspace(root: string, owner: LocalWor
       await import("../../agents/sandbox/process-cleanup.js");
     const cleanup = prepareSandboxProcessCleanup(backend, {});
     const childSpec = await backend.buildExecSpec({
-      command: "while :; do echo tick >> child-writes; sleep 0.1; done",
+      command:
+        "echo tick >> child-writes; echo child-writes-ready; while :; do sleep 0.1; echo tick >> child-writes; done",
       env: cleanup.env,
       usePty: false,
     });
     childSpec.assertCurrent?.();
     const child = spawn(childSpec.argv[0]!, childSpec.argv.slice(1), {
       env: childSpec.env,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "ignore"],
     });
     const closed = new Promise<void>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", () => resolve());
     });
+    const lines = createInterface({ input: child.stdout });
     try {
-      await vi.waitFor(async () =>
-        expect(
-          (await fs.stat(path.join(childSandbox!.workspaceDir, "child-writes"))).size,
-        ).toBeGreaterThan(0),
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
+          once(lines, "line", { signal }),
+          closed,
+          "Podman child exited before writing child-writes",
+        ),
+        signal,
       );
+      expect(ready).toBe("child-writes-ready");
+      expect(
+        (await fs.stat(path.join(childSandbox!.workspaceDir, "child-writes"))).size,
+      ).toBeGreaterThan(0);
       childCurrent = false;
       expect(() => prepareSandboxProcessCleanup(backend, {})).toThrow("child owner revoked");
       await expect(
@@ -332,7 +350,7 @@ export async function proveRequiredPodmanWorkspace(root: string, owner: LocalWor
       ).rejects.toThrow("child owner revoked");
       await expect(cleanup.interrupt(1000)).rejects.toThrow("child owner revoked");
       await cleanup.terminate();
-      await closed;
+      await withinTest(closed, signal);
       const stoppedBytes = await fs.readFile(path.join(childSandbox!.workspaceDir, "child-writes"));
       await new Promise((resolve) => {
         setTimeout(resolve, 300);
@@ -349,9 +367,18 @@ export async function proveRequiredPodmanWorkspace(root: string, owner: LocalWor
         }),
       ).rejects.toThrow("child owner revoked");
     } finally {
-      await cleanup.terminate();
-      child.kill("SIGKILL");
-      await closed;
+      await verifyCleanup(() =>
+        runQaGatewayFixture(
+          async () => {
+            lines.close();
+            await cleanup.terminate();
+          },
+          async () => {
+            child.kill("SIGKILL");
+            await closed;
+          },
+        ),
+      );
     }
     // The source-only fixture deliberately installed an unsafe host helper.
     // Publication must reject it, then succeed only after the fixture owner removes it.
@@ -416,8 +443,12 @@ export async function proveRequiredPodmanWorkspace(root: string, owner: LocalWor
     expect(localWorkspaceStore().get(owner.worktree.id)).toBeUndefined();
     await expect(fs.stat(sandbox.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
-    for (const runtime of (await readRegistry()).entries) {
-      await removeSandboxContainer(runtime.containerName);
-    }
+    await verifyCleanup(async () => {
+      const runtimes = (await readRegistry()).entries;
+      await runQaGatewayFixture(
+        async () => {},
+        ...runtimes.map((runtime) => () => removeSandboxContainer(runtime.containerName)),
+      );
+    });
   }
 }

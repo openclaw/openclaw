@@ -1,7 +1,8 @@
 // Feishu tests cover chat plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
+import { registerFeishuChatTools } from "./chat.js";
 import type { FeishuConfig } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -12,8 +13,6 @@ const contactUserGetMock = vi.hoisted(() => vi.fn());
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
-
-let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 
 const DIRECT_CHAT_RESPONSE = {
   code: 0,
@@ -105,10 +104,6 @@ describe("registerFeishuChatTools", () => {
     );
     return [resolveRegisteredTool(registerTool, params.context), registerTool] as const;
   }
-
-  beforeAll(async () => {
-    ({ registerFeishuChatTools } = await import("./chat.js"));
-  });
 
   afterAll(() => {
     vi.doUnmock("./client.js");

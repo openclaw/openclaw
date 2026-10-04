@@ -83,39 +83,13 @@ describe("worker SSH identity invocation lifetime", () => {
     expect(resolveIdentity).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects a direct legacy identity result after the exact lease owner changes", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const { service, environment } = await fixture(async () => {
-      entered.resolve();
-      await release.promise;
-      return { kind: "material", contents: "synthetic-worker-key" };
-    });
-    const lookup = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
-    try {
-      await entered.promise;
-      await service.attachSession({
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        sessionId: "new-owner",
-      });
-      release.resolve();
-      expect(await lookup).toBeInstanceOf(Error);
-    } finally {
-      release.resolve();
-      await lookup;
-    }
-  });
-
-  it("does not enter a queued resolver after its lease owner changes", async () => {
+  it("rejects a late identity and its queued lookup after the lease owner changes", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const resolveIdentity = vi.fn(async () => {
       entered.resolve();
       await release.promise;
-      return { kind: "path" as const, path: "/keys/worker" };
+      return { kind: "material" as const, contents: "synthetic-worker-key" };
     });
     const { service, environment } = await fixture(resolveIdentity);
     const first = service

@@ -24,7 +24,7 @@ import {
   normalizeSnippet,
   parseEntryRangeFromKey,
   parseStoreTimestampMs,
-  toNonNegativeInt,
+  toFiniteNonNegativeInt,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
@@ -118,9 +118,9 @@ export async function loadShortTermPromotionDreamingStats(params: {
       continue;
     }
     const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
-    const recallCount = toNonNegativeInt(entry.recallCount);
-    const dailyCount = toNonNegativeInt(entry.dailyCount);
-    const groundedCount = toNonNegativeInt(entry.groundedCount);
+    const recallCount = Math.max(0, toFiniteNonNegativeInt(entry.recallCount));
+    const dailyCount = Math.max(0, toFiniteNonNegativeInt(entry.dailyCount));
+    const groundedCount = Math.max(0, toFiniteNonNegativeInt(entry.groundedCount));
     const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
     const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entry.path);
     const detail: ShortTermDreamingStatsEntry = {
@@ -169,8 +169,8 @@ export async function loadShortTermPromotionDreamingStats(params: {
     if (!detail) {
       continue;
     }
-    const lightHits = toNonNegativeInt(phaseEntry.lightHits);
-    const remHits = toNonNegativeInt(phaseEntry.remHits);
+    const lightHits = Math.max(0, toFiniteNonNegativeInt(phaseEntry.lightHits));
+    const remHits = Math.max(0, toFiniteNonNegativeInt(phaseEntry.remHits));
     lightPhaseHitCount += lightHits;
     remPhaseHitCount += remHits;
     phaseSignalCount += lightHits + remHits;
@@ -287,12 +287,10 @@ export async function readLightStagedKeys(params: {
     if (entry.lightHits <= 0) {
       continue;
     }
-    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
-    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
-    const lastRemConsideredMs = Date.parse(entry.lastRemConsideredAt ?? "");
+    const lastLightMs = parseStoreTimestampMs(entry.lastLightAt);
     const lastConsumedMs = Math.max(
-      Number.isFinite(lastRemMs) ? lastRemMs : Number.NEGATIVE_INFINITY,
-      Number.isFinite(lastRemConsideredMs) ? lastRemConsideredMs : Number.NEGATIVE_INFINITY,
+      parseStoreTimestampMs(entry.lastRemAt),
+      parseStoreTimestampMs(entry.lastRemConsideredAt),
     );
     const hasPendingLightSignal = Number.isFinite(lastLightMs)
       ? lastLightMs > lastConsumedMs

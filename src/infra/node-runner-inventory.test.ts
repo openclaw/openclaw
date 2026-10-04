@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { availableWorkerSlots } from "../shared/node-list-parse.js";
+import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import {
+  createNodeRunnerInventoryIssueError,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
   type NodeWorkerCapacitySnapshot,
@@ -65,6 +67,18 @@ it("keeps retired dialect markers observational and empty declarations valid", (
   expect(parseNodeRunnerInventoryDeclaration({ protocolFeatures, workerHost })).toEqual({
     protocolFeatures,
   });
+});
+
+it("retains the private node diagnostic under a typed update code", () => {
+  const error = createNodeRunnerInventoryIssueError(
+    "private-node-id",
+    NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  );
+  expect(error).toMatchObject({
+    name: "NodeRunnerUpdateRequiredError",
+    code: "node_runner_update_required",
+  });
+  expect(error.message).toContain("private-node-id");
 });
 
 describe("idle worker capacity negotiation", () => {

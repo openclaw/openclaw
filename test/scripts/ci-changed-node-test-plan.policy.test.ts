@@ -42,7 +42,6 @@ describe("CI changed Node test plan", () => {
       ] as const) {
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend,
-          includeReleaseOnlyToolingShards: false,
         });
         expect(shards).not.toBeNull();
         const targetConfig = expectDefined(
@@ -316,17 +315,16 @@ describe("CI changed Node test plan", () => {
       });
     });
 
-    it("relaxes only the compact packing policy fallback", () => {
+    it("keeps compact packing policy and runtime inputs bounded", () => {
       const onFallback = vi.fn();
       createChangedNodeTestShards(
         ["scripts/lib/ci-node-test-plan.mts", "test/scripts/ci-node-test-plan.test.ts"],
-        { runnerBackend: "blacksmith", releaseFastLane: true, onFallback },
+        { runnerBackend: "blacksmith", onFallback },
       );
       expect(onFallback).not.toHaveBeenCalledWith(
         "compact packing policy requires full-plan proof",
       );
       const globalPlan = createChangedNodeTestShards(["scripts/run-vitest.mts"], {
-        releaseFastLane: true,
         onFallback,
       });
       expect(globalPlan).not.toBeNull();

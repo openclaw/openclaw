@@ -104,7 +104,10 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
-    [agentSessionQueuePromptContext]: () => () => undefined,
+    isCompacting: false,
+    [agentSessionQueuePromptContext]: () => {
+      throw new Error("Unexpected prompt context in the result-budget probe");
+    },
     agent,
     get messages() {
       return agent.state.messages;
@@ -121,7 +124,6 @@ async function dispatch(
       transcriptPrompt: "",
       systemPrompt: "",
       runtimeOnly: true,
-      sessionPromptState,
       toolResultMaxChars: resolveLiveToolResultMaxChars({
         contextWindowTokens,
       }),

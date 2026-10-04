@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigForm } from "../../components/config-form.ts";
-import { memorySchemaKeysForTab, memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
+import { memoryTabForRoute, memorySettingsSchema } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -225,16 +225,7 @@ describe("memoryTabForRoute", () => {
   });
 });
 
-describe("memorySchemaKeysForTab", () => {
-  it("shows builtin memory settings only on Settings", () => {
-    expect(memorySchemaKeysForTab("overview")).toEqual([]);
-    expect(memorySchemaKeysForTab("memories")).toEqual([]);
-    expect(memorySchemaKeysForTab("dreams")).toEqual([]);
-    expect(memorySchemaKeysForTab("settings")).toEqual(["citations", "search"]);
-  });
-});
-
-describe("narrowMemorySchema", () => {
+describe("memorySettingsSchema", () => {
   const schema = {
     type: "object",
     properties: {
@@ -243,31 +234,29 @@ describe("narrowMemorySchema", () => {
         properties: {
           citations: { type: "string" },
           search: { type: "object" },
+          internal: { type: "object" },
         },
       },
       tools: { type: "object" },
     },
   };
 
-  it("keeps only the requested memory children and drops sibling sections", () => {
-    const narrowed = narrowMemorySchema(schema, ["search"]) as {
+  it("keeps the curated settings and drops other fields and sibling sections", () => {
+    const narrowed = memorySettingsSchema(schema) as {
       properties: { memory: { properties: Record<string, unknown> }; tools?: unknown };
     };
 
     expect(Object.keys(narrowed.properties)).toEqual(["memory"]);
-    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["search"]);
+    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["citations", "search"]);
   });
 
-  it("returns a stable object per key set so schema analysis stays cached", () => {
-    expect(narrowMemorySchema(schema, ["search"])).toBe(narrowMemorySchema(schema, ["search"]));
-    expect(narrowMemorySchema(schema, ["search"])).not.toBe(
-      narrowMemorySchema(schema, ["citations"]),
-    );
+  it("returns a stable object so schema analysis stays cached", () => {
+    expect(memorySettingsSchema(schema)).toBe(memorySettingsSchema(schema));
   });
 
   it("passes non-memory schemas through untouched", () => {
     const unrelated = { type: "object", properties: { tools: {} } };
-    expect(narrowMemorySchema(unrelated, ["search"])).toBe(unrelated);
-    expect(narrowMemorySchema(null, ["search"])).toBeNull();
+    expect(memorySettingsSchema(unrelated)).toBe(unrelated);
+    expect(memorySettingsSchema(null)).toBeNull();
   });
 });

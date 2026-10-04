@@ -1,16 +1,20 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import {
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-  runCodeModeScriptHeadless,
-} from "./code-mode.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
@@ -22,14 +26,20 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
+import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool, type ToolDefinition } from "./sessions/index.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
+import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -56,7 +66,8 @@ describe("Code Mode catalog and model-visible surface", () => {
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
     expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       ...ctx,
       tools: [
         {
@@ -195,7 +206,7 @@ describe("Code Mode search", () => {
       execute: clientExecute,
     };
     applyCodeModeCatalog({ tools: [...tools, plugin], config, catalogRef });
-    addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const code = `
       const found = [];
       for (const tool of catalog.all()) {
@@ -281,7 +292,7 @@ describe("Code Mode search", () => {
   });
 });
 
-it("lists and reads only prompt-eligible skills through the worker bridge", async () => {
+it("searches and reads eligible skills through the worker bridge and normal tool dispatch", async () => {
   const demo = createFixtureSkillEntry("demo");
   const hidden = createFixtureSkillEntry("hidden");
   const body = "---\nname: demo\n---\n\n# Complete demo instructions\n";
@@ -292,16 +303,20 @@ it("lists and reads only prompt-eligible skills through the worker bridge", asyn
     reader,
   });
   const h = createCodeModeHarness({ codeModeSkills });
-  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+  applyCodeModeCatalog({
+    ...h.ctx,
+    tools: [...h.tools, ...createInstalledSkillTools(codeModeSkills)],
+  });
   const result = await runUntilCompleted({
     execTool: h.tools[0]!,
     waitTool: h.tools[1]!,
     code: `
     const listed = await skills.list();
+    const found = await skills.search("demo");
     const body = await skills.read("demo");
     let unknown;
     try { await skills.read("missing"); } catch (error) { unknown = error.message; }
-    return { listed, body, unknown };
+    return { listed, found, body, unknown };
   `,
   });
   expect(result).toMatchObject({
@@ -310,8 +325,15 @@ it("lists and reads only prompt-eligible skills through the worker bridge", asyn
       listed: [
         { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
       ],
+      found: {
+        skills: [
+          { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
+        ],
+        hasMore: false,
+        coverage: { bodyIndexed: 0, metadataOnly: 1, truncatedBodies: 0 },
+      },
       body,
-      unknown: 'Unknown skill "missing". Available skills: demo',
+      unknown: 'Unknown installed skill "missing".',
     },
   });
   expect(reader).toHaveBeenCalledExactlyOnceWith({
@@ -319,6 +341,221 @@ it("lists and reads only prompt-eligible skills through the worker bridge", asyn
     signal: expect.any(AbortSignal),
   });
 });
+
+it.for([undefined, "transported", "skills_read", "skills_search", "shadowed", "revoked"] as const)(
+  "keeps disk-backed skill discovery within the harness read authority: %s",
+  async (scenario, { signal: testSignal }) =>
+    withTempDir("code-mode-skill-authority-", async (dir) => {
+      const denied = scenario === "transported" ? undefined : scenario;
+      const filePath = path.join(dir, "SKILL.md");
+      await writeFile(filePath, "Private instructions");
+      const readStarted = createDeferred();
+      const releaseRead = createDeferred();
+      let reads = 0;
+      const skills = [
+        {
+          name: "guide",
+          description: "Guide",
+          location: filePath,
+          source: { filePath },
+          readSearchContent: async (maxBytes: number) => {
+            reads += 1;
+            const content = (await readLocalFileSafely({ filePath, maxBytes })).buffer.toString(
+              "utf8",
+            );
+            readStarted.resolve();
+            if (denied === "revoked") {
+              await releaseRead.promise;
+            }
+            return content;
+          },
+        },
+      ];
+      const skillTools = createInstalledSkillTools(skills);
+      let effectiveTools = skillTools.filter((tool) => tool.name !== denied);
+      if (denied === "shadowed") {
+        effectiveTools = effectiveTools.map((tool) =>
+          tool.name === "skills_read"
+            ? {
+                ...tool,
+                execute: async () => {
+                  throw new Error("Shadowed reader");
+                },
+              }
+            : tool,
+        );
+      }
+      const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+        config: {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: true, toolSearch: false },
+        },
+        presentation:
+          scenario === "transported"
+            ? {
+                ...createToolSurfacePresentationForTest({
+                  tools: { codeMode: true, toolSearch: false },
+                }),
+                skills: skills.map(({ name, description, location }) => ({
+                  name,
+                  description,
+                  location,
+                })),
+              }
+            : undefined,
+        modelToolsEnabled: true,
+        executeTool: async ({ toolName, toolCallId, input, signal, onUpdate }) => {
+          const tool = effectiveTools.find((candidate) => candidate.name === toolName);
+          if (!tool) {
+            throw new Error(`Unknown native skill tool: ${toolName}`);
+          }
+          return tool.execute(toolCallId, input, signal, onUpdate);
+        },
+      });
+      try {
+        const surface = runtime.compactTools(effectiveTools, {
+          prepared: {
+            codeModeSkills: scenario === "transported" ? undefined : skills,
+            preserveToolNames: [],
+          },
+        });
+        const exec = surface.tools.find((tool) => tool.name === "exec")!;
+        const wait = surface.tools.find((tool) => tool.name === "wait")!;
+        expect(exec.description.includes("skills.search(")).toBe(denied !== "skills_search");
+        expect(exec.description.includes("skills.list(")).toBe(denied !== "skills_search");
+        expect(exec.description.includes("skills.read(")).toBe(denied !== "skills_read");
+        const pending = runUntilCompleted({
+          execTool: exec,
+          waitTool: wait,
+          code: `
+        async function outcome(call) {
+          try { return await call(); } catch (error) { return error.message; }
+        }
+        return {
+          listed: await outcome(() => skills.list()),
+          bodyMatch: await outcome(() => skills.search("private")),
+          found: await outcome(() => skills.search("guide")),
+          body: await outcome(() => skills.read("guide")),
+        };
+      `,
+        });
+        if (denied === "revoked") {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              readStarted.promise,
+              pending,
+              "Skill search completed before reading its instruction file",
+            ),
+            testSignal,
+          );
+          effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
+          runtime.compactTools(effectiveTools, {
+            prepared: { codeModeSkills: skills, preserveToolNames: [] },
+          });
+          releaseRead.resolve();
+        }
+        const result = await pending;
+        const unavailable = `${denied} is not available in this run.`;
+        expect(result).toMatchObject({
+          status: "completed",
+          value: {
+            listed:
+              denied === "skills_search"
+                ? unavailable
+                : [{ name: "guide", description: "Guide", location: filePath }],
+            found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
+            bodyMatch:
+              denied === "skills_search"
+                ? unavailable
+                : denied === "revoked"
+                  ? expect.stringContaining("permission changed")
+                  : { skills: denied === undefined ? [{ name: "guide" }] : [] },
+            body:
+              denied === "skills_read"
+                ? unavailable
+                : denied === "revoked"
+                  ? expect.stringContaining("Unknown tool id: skills_read.")
+                  : denied === "shadowed"
+                    ? expect.stringContaining("Shadowed reader")
+                    : "Private instructions",
+          },
+        });
+        expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
+        if (denied === undefined) {
+          effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
+          const revoked = runtime.compactTools(effectiveTools, {
+            prepared: { codeModeSkills: skills, preserveToolNames: [] },
+          });
+          expect(
+            await runUntilCompleted({
+              execTool: revoked.tools.find((tool) => tool.name === "exec")!,
+              waitTool: revoked.tools.find((tool) => tool.name === "wait")!,
+              code: 'return await skills.search("private");',
+            }),
+          ).toMatchObject({ status: "completed", value: { skills: [] } });
+          expect(reads).toBe(1);
+        }
+      } finally {
+        releaseRead.resolve();
+        runtime.cleanup();
+      }
+    }),
+);
+
+it.each([undefined, "read", "skills_read"])(
+  "preserves prompt-listed whole reads under read grants with explicit denial=%s",
+  async (denied) => {
+    const guide = createFixtureSkillEntry("guide");
+    const hidden = createFixtureSkillEntry("hidden");
+    const body = `${"x".repeat(256 * 1024)}complete tail`;
+    guide.skill.readContent = body;
+    hidden.skill.readContent = body;
+    const skills = prepareInstalledSkillCatalog({
+      workspaceDir: "/workspace",
+      snapshot: {
+        prompt: await resolveSkillsPrompt({ entries: [guide], workspaceDir: "/workspace" }),
+        skills: [{ name: "guide" }, { name: "hidden" }],
+        discoverySkills: [guide.skill, hidden.skill],
+      },
+    });
+    const h = createCodeModeHarness({ codeModeSkills: skills });
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [
+        ...h.tools,
+        ...filterToolsByPolicy(createInstalledSkillTools(skills), {
+          allow: ["read", "exec"],
+          deny: denied ? [denied] : [],
+        }),
+      ],
+    });
+    const result = await runUntilCompleted({
+      execTool: h.tools[0]!,
+      waitTool: h.tools[1]!,
+      code: `
+        let body;
+        let hidden;
+        try {
+          const content = await skills.read("guide");
+          body = { length: content.length, tail: content.slice(-13) };
+        } catch (error) { body = error.message; }
+        try { await skills.read("hidden"); } catch (error) { hidden = error.message; }
+        return { body, hidden };
+      `,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        body: denied
+          ? "skills_read is not available in this run."
+          : { length: body.length, tail: "complete tail" },
+        hidden: denied
+          ? "skills_read is not available in this run."
+          : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
+      },
+    });
+  },
+);
 
 it("returns missing implicitly optional daily memory through Code Mode", async () => {
   const h = createCodeModeHarness();

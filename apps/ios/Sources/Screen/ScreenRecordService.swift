@@ -17,7 +17,8 @@ final class ScreenRecordService: @unchecked Sendable {
     }
 
     private final class CaptureState: @unchecked Sendable {
-        private let lock = NSLock()
+        // The lock orders admission against finalization; writer state belongs to recordQueue.
+        private let admissionLock = NSLock()
         var writer: AVAssetWriter?
         var videoInput: AVAssetWriterInput?
         var audioInput: AVAssetWriterInput?
@@ -26,16 +27,14 @@ final class ScreenRecordService: @unchecked Sendable {
         var handlerError: Error?
         var acceptingSamples = true
 
-        func withLock<T>(_ body: (CaptureState) -> T) -> T {
-            self.lock.lock()
-            defer { lock.unlock() }
-            return body(self)
+        func withAdmissionLock(_ body: (CaptureState) -> Void) {
+            self.admissionLock.lock()
+            defer { self.admissionLock.unlock() }
+            body(self)
         }
 
         func recordError(_ error: Error) {
-            self.withLock { state in
-                if state.handlerError == nil { state.handlerError = error }
-            }
+            if self.handlerError == nil { self.handlerError = error }
         }
     }
 
@@ -46,7 +45,6 @@ final class ScreenRecordService: @unchecked Sendable {
         private enum Phase {
             case idle
             case starting
-            case startRequested
             case cancelling
             case cancelled
             case finished
@@ -90,7 +88,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 switch state.phase {
                 case .idle:
                     state.phase = .cancelled
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .cancelling
                 case .cancelling, .cancelled, .finished:
                     break
@@ -109,7 +107,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 case .cancelled:
                     state.phase = .finished
                     return false
-                case .starting, .startRequested, .cancelling, .finished:
+                case .starting, .cancelling, .finished:
                     preconditionFailure("ReplayKit capture start operation can only run once")
                 }
             }
@@ -121,17 +119,6 @@ final class ScreenRecordService: @unchecked Sendable {
             self.startAction { [weak self] error in
                 self?.captureDidStart(error: error)
             }
-
-            self.withLock { state in
-                switch state.phase {
-                case .starting:
-                    state.phase = .startRequested
-                case .cancelling, .finished:
-                    break
-                case .idle, .startRequested, .cancelled:
-                    break
-                }
-            }
         }
 
         private func captureDidStart(error: Error?) {
@@ -139,7 +126,7 @@ final class ScreenRecordService: @unchecked Sendable {
             var shouldStop = false
             let completion = self.withLock { state -> (CheckedContinuation<Void, Error>, Result<Void, Error>)? in
                 switch state.phase {
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .finished
                     guard let continuation = state.continuation else { return nil }
                     state.continuation = nil
@@ -349,7 +336,7 @@ final class ScreenRecordService: @unchecked Sendable {
             // ReplayKit can call the capture handler on a background queue.
             // Enqueue under the state lock so closing capture forms a barrier:
             // every accepted sample precedes finalization/discard, and none follow.
-            state.withLock { captureState in
+            state.withAdmissionLock { captureState in
                 guard captureState.acceptingSamples else { return }
                 self.recordQueue.async {
                     let sample = sampleBox.value
@@ -378,34 +365,22 @@ final class ScreenRecordService: @unchecked Sendable {
         config: RecordConfig)
     {
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-        let shouldSkip = state.withLock { state in
-            if let lastVideoTime = state.lastVideoTime {
-                let delta = CMTimeSubtract(pts, lastVideoTime)
-                return delta.seconds < (1.0 / config.fpsValue)
-            }
-            return false
-        }
-        if shouldSkip {
+        if let lastVideoTime = state.lastVideoTime,
+           CMTimeSubtract(pts, lastVideoTime).seconds < (1.0 / config.fpsValue)
+        {
             return
         }
 
-        if state.withLock({ $0.writer == nil }) {
+        if state.writer == nil {
             self.prepareWriter(sample: sample, state: state, config: config, pts: pts)
         }
 
-        guard let vInput = state.withLock({ $0.videoInput }) else { return }
-        if vInput.isReadyForMoreMediaData {
-            if vInput.append(sample) {
-                state.withLock { state in
-                    state.sawVideo = true
-                    state.lastVideoTime = pts
-                }
-            } else {
-                let err = state.withLock { $0.writer?.error }
-                if let err {
-                    state.recordError(ScreenRecordError.writeFailed(err.localizedDescription))
-                }
-            }
+        guard let vInput = state.videoInput, vInput.isReadyForMoreMediaData else { return }
+        if vInput.append(sample) {
+            state.sawVideo = true
+            state.lastVideoTime = pts
+        } else if let error = state.writer?.error {
+            state.recordError(ScreenRecordError.writeFailed(error.localizedDescription))
         }
     }
 
@@ -440,9 +415,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 aInput.expectsMediaDataInRealTime = true
                 if writer.canAdd(aInput) {
                     writer.add(aInput)
-                    state.withLock { state in
-                        state.audioInput = aInput
-                    }
+                    state.audioInput = aInput
                 }
             }
 
@@ -451,10 +424,8 @@ final class ScreenRecordService: @unchecked Sendable {
                     writer.error?.localizedDescription ?? "Failed to start writer")
             }
             writer.startSession(atSourceTime: pts)
-            state.withLock { state in
-                state.writer = writer
-                state.videoInput = vInput
-            }
+            state.writer = writer
+            state.videoInput = vInput
         } catch {
             state.recordError(error)
         }
@@ -465,8 +436,7 @@ final class ScreenRecordService: @unchecked Sendable {
         state: CaptureState,
         includeAudio: Bool)
     {
-        let (aInput, writer) = state.withLock { ($0.audioInput, $0.writer) }
-        guard includeAudio, let aInput, writer != nil else { return }
+        guard includeAudio, let aInput = state.audioInput, state.writer != nil else { return }
         if aInput.isReadyForMoreMediaData {
             _ = aInput.append(sample)
         }
@@ -488,23 +458,19 @@ final class ScreenRecordService: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             // ReplayKit has stopped, so finalization can queue behind every pending sample.
             // AVAssetWriter requires all append calls to return before finishWriting starts.
-            state.withLock { captureState in
+            state.withAdmissionLock { captureState in
                 captureState.acceptingSamples = false
                 self.recordQueue.async {
                     do {
-                        if let handlerError = state.withLock({ $0.handlerError }) {
+                        if let handlerError = state.handlerError {
                             throw handlerError
                         }
-                        let writer = state.withLock { $0.writer }
-                        let videoInput = state.withLock { $0.videoInput }
-                        let audioInput = state.withLock { $0.audioInput }
-                        let sawVideo = state.withLock { $0.sawVideo }
-                        guard let writer, let videoInput, sawVideo else {
+                        guard let writer = state.writer, let videoInput = state.videoInput, state.sawVideo else {
                             throw ScreenRecordError.captureFailed("No frames captured")
                         }
 
                         videoInput.markAsFinished()
-                        audioInput?.markAsFinished()
+                        state.audioInput?.markAsFinished()
                         let writerBox = UncheckedSendableBox(value: writer)
                         writer.finishWriting {
                             let writer = writerBox.value
@@ -526,16 +492,13 @@ final class ScreenRecordService: @unchecked Sendable {
 
     private func discardCapture(state: CaptureState, outputURL: URL) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            state.withLock { captureState in
+            state.withAdmissionLock { captureState in
                 captureState.acceptingSamples = false
                 self.recordQueue.async {
-                    let writer = state.withLock { state -> AVAssetWriter? in
-                        let writer = state.writer
-                        state.writer = nil
-                        state.videoInput = nil
-                        state.audioInput = nil
-                        return writer
-                    }
+                    let writer = state.writer
+                    state.writer = nil
+                    state.videoInput = nil
+                    state.audioInput = nil
                     writer?.cancelWriting()
                     try? FileManager.default.removeItem(at: outputURL)
                     cont.resume()

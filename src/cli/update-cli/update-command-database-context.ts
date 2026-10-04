@@ -1,4 +1,5 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -145,6 +146,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
 export async function inspectUpdateDatabaseContexts(
   params: UpdateManagedServiceInspectionParams & {
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     candidateAdmissionChecks?: readonly string[];
   },
 ) {
@@ -165,7 +167,10 @@ export async function inspectUpdateDatabaseContexts(
       ? []
       : [
           await captureTargetDatabaseSchemaContext(process.env, {
-            legacyConfigPlan: params.legacyConfigPlan,
+            legacyConfigPlan:
+              params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
+                ? params.callerLegacyConfigPlan
+                : params.legacyConfigPlan,
             configValidation,
           }),
         ];
@@ -192,7 +197,7 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
+  await inspectUpdateManagedServices({
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { renderAssistantAttachments as renderAttachmentCards } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
@@ -433,7 +434,7 @@ describe("attachment sidebar source ownership", () => {
     render(
       renderAssistantAttachments(
         [
-          svgAttachment("https://example.com/oversized.svg", "oversized.svg", {
+          svgAttachment(`${window.location.origin}/oversized.svg`, "oversized.svg", {
             sizeBytes: 256 * 1024 + 1,
           }),
         ],
@@ -775,27 +776,35 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("renders named attachment failures with separable status and reason text", () => {
+  it.each([
+    {
+      code: "unsupported-format",
+      label: "settings.toml",
+      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+    },
+    {
+      code: "invalid-reference",
+      label: "Media not attached",
+      reason: "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
+    },
+  ])("renders $code failures with separable status and reason text", ({ code, label, reason }) => {
     const container = document.body.appendChild(document.createElement("div"));
     render(
       renderAssistantAttachments(
-        [
-          {
+        expectDefined(
+          normalizeAttachmentContentBlock({
             type: "attachment_error",
-            attachment: {
-              code: "unsupported-format",
-              kind: "document",
-              label: "settings.toml",
-            },
-          },
-        ],
+            attachment: { code, kind: "document", label },
+          }),
+          "normalized attachment failure",
+        ),
         {},
       ),
       container,
     );
 
     expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
-      "settings.toml",
+      label,
     );
     expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
     expect(container.querySelector(".chat-assistant-attachment-card--definitive")).not.toBeNull();
@@ -812,7 +821,7 @@ describe("attachment sidebar source ownership", () => {
     ).toBe("true");
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
-    ).toBe("Rejected by the local attachment allowlist. Send a supported file type.");
+    ).toBe(reason);
     expect(
       container.querySelector(
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",

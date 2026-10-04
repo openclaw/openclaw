@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+case "${BASH_SOURCE[0]}" in
+  */*) source "${BASH_SOURCE[0]%/*}/docker-e2e-container.sh" ;;
+  *) source ./docker-e2e-container.sh ;;
+esac
+
 OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.factory .gemini .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
@@ -352,14 +357,16 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
-openclaw_live_timeout_bin() {
-  if command -v timeout >/dev/null 2>&1; then
-    printf '%s\n' timeout
-  elif command -v gtimeout >/dev/null 2>&1; then
-    printf '%s\n' gtimeout
-  else
-    return 1
-  fi
+openclaw_live_require_build_extension() {
+  local extension="${1:?extension required}"
+  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
+  case " $current " in
+    *" $extension "*)
+      ;;
+    *)
+      export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension"
+      ;;
+  esac
 }
 
 openclaw_live_timeout_supports_kill_after() {
@@ -376,52 +383,6 @@ openclaw_live_resource_limits_disabled() {
   return 1
 }
 
-openclaw_live_resource_value_disabled() {
-  case "${1:-}" in
-    "" | 0 | none | NONE | off | OFF | false | FALSE)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-openclaw_live_resolve_pids_limit() {
-  local env_name="$1"
-  local pids_limit="$2"
-  if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
-    echo "invalid $env_name: $pids_limit" >&2
-    return 2
-  fi
-  printf '%s\n' "$((10#$pids_limit))"
-}
-
-openclaw_live_detect_available_cpus() {
-  if [ -n "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}" ]; then
-    printf '%s\n' "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}"
-    return 0
-  fi
-  if command -v nproc >/dev/null 2>&1; then
-    nproc
-    return 0
-  fi
-  if command -v getconf >/dev/null 2>&1; then
-    getconf _NPROCESSORS_ONLN
-    return 0
-  fi
-  return 1
-}
-
-openclaw_live_resolve_cpus() {
-  local requested="$1"
-  local available=""
-  available="$(openclaw_live_detect_available_cpus 2>/dev/null || true)"
-  if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
-    printf '%s\n' "$available"
-    return 0
-  fi
-  printf '%s\n' "$requested"
-}
-
 openclaw_live_docker_run_resource_args() {
   local target_array="${1:?target array required}"
   eval "${target_array}=()"
@@ -436,16 +397,16 @@ openclaw_live_docker_run_resource_args() {
   if [ -z "${OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:-}" ]; then
     pids_limit_env="OPENCLAW_DOCKER_E2E_PIDS_LIMIT"
   fi
-  cpus="$(openclaw_live_resolve_cpus "$cpus")"
+  cpus="$(docker_e2e_resolve_cpus "$cpus" "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}")"
 
-  if ! openclaw_live_resource_value_disabled "$memory"; then
+  if ! docker_e2e_resource_value_disabled "$memory"; then
     eval "${target_array}+=(--memory \"\$memory\")"
   fi
-  if ! openclaw_live_resource_value_disabled "$cpus"; then
+  if ! docker_e2e_resource_value_disabled "$cpus"; then
     eval "${target_array}+=(--cpus \"\$cpus\")"
   fi
-  if ! openclaw_live_resource_value_disabled "$pids_limit"; then
-    pids_limit="$(openclaw_live_resolve_pids_limit "$pids_limit_env" "$pids_limit")" || return $?
+  if ! docker_e2e_resource_value_disabled "$pids_limit"; then
+    pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit" "$pids_limit_env")" || return $?
     eval "${target_array}+=(--pids-limit \"\$pids_limit\")"
   fi
 }
@@ -457,7 +418,7 @@ openclaw_live_init_docker_run_args() {
   local timeout_bin
   local quoted_timeout
 
-  if ! timeout_bin="$(openclaw_live_timeout_bin)"; then
+  if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
     echo "timeout command not found; cannot bound live Docker run after ${timeout_value}" >&2
     return 127
   fi

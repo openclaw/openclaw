@@ -131,7 +131,7 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
       if (hasAnyModifier(parsed.mods)) {
         return false;
       }
-      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
+      return Object.hasOwn(DECCKM_SS3_KEYS, normalizeLowercaseStringOrEmpty(parsed.base));
     }) ?? false
   );
 }
@@ -280,17 +280,7 @@ function toCtrlChar(char: string): string | null {
 }
 
 function xtermModifier(mods: Modifiers): number {
-  let mod = 1;
-  if (mods.shift) {
-    mod += 1;
-  }
-  if (mods.alt) {
-    mod += 2;
-  }
-  if (mods.ctrl) {
-    mod += 4;
-  }
-  return mod;
+  return 1 + (mods.shift ? 1 : 0) + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0);
 }
 
 function hasAnyModifier(mods: Modifiers): boolean {

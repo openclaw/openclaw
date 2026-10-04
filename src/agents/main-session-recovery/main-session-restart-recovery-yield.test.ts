@@ -109,8 +109,8 @@ describe("restart recovery discovery yield", () => {
 
       const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
       let shouldContinueCalls = 0;
-      // Calls 1-2: discovery probes both stores (discovery shares the callback
-      // now). Call 3: the first target's pre-yield check passes. Call 4: the
+      // Calls 1-4: discovery probes both stores (pre + post-status per store).
+      // Call 5: the first target's pre-yield check passes. Call 6: the
       // post-yield recheck cancels, so store 1's recoverStore must never run —
       // this pins the recovery-yield guard specifically (#149935 Rev 2/4).
       const result = await recoverRestartAbortedMainSessions({
@@ -122,7 +122,7 @@ describe("restart recovery discovery yield", () => {
           waitForAgent: vi.fn(),
           sendRecoveryNotice: vi.fn(),
         } as unknown as Parameters<typeof recoverRestartAbortedMainSessions>[0]["gatewayRuntime"],
-        shouldContinue: () => ++shouldContinueCalls <= 3,
+        shouldContinue: () => ++shouldContinueCalls <= 5,
       });
 
       expect(storeSpy).toHaveBeenCalledTimes(0);
@@ -154,8 +154,8 @@ describe("restart recovery discovery yield", () => {
 
       const probeSpy = vi.spyOn(sessionAccessor, "hasSessionEntriesByStatusReadOnly");
       let shouldContinueCalls = 0;
-      // Call 1 after the first yield passes; call 2 after the second yield
-      // cancels, so store 2's probe must never run (#149935 Rev 3).
+      // Call 1: store A's pre-probe check passes; call 2 (its post-status
+      // recheck) cancels — store B's probe must never run (#149935 Rev 3).
       const storeTargets = await discoverRestartRecoveryStoreTargets({
         cfg,
         stateDir: tmpDir,
@@ -164,7 +164,7 @@ describe("restart recovery discovery yield", () => {
       });
 
       expect(probeSpy).toHaveBeenCalledTimes(1);
-      expect(storeTargets).toHaveLength(1);
+      expect(storeTargets).toHaveLength(0);
       probeSpy.mockRestore();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });

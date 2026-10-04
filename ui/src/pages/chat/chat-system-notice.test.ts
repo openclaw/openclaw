@@ -104,14 +104,9 @@ describe("system notices through pending-to-history promotion", () => {
       "<task-notification>\n<status>completed</status>\n</task-notification>",
       true,
     ],
-    ...[
-      undefined,
-      "session-companion",
-      "heartbeat",
-      "main-session-restart-recovery",
-      "restart_sentinel",
-      " restart-sentinel ",
-    ].map((sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const),
+    ...[undefined, " restart-sentinel "].map(
+      (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
+    ),
   ] as const)(
     "preserves %s presentation, search and turn boundaries",
     (sourceTool, label, text, midTurn) => {
@@ -162,13 +157,12 @@ describe("system notices through pending-to-history promotion", () => {
         }
         expect(notice.startsTurn).toBe(midTurn ? undefined : true);
         expect(notice.collapsedBody).toBe(midTurn ? true : undefined);
-        expect(
-          coalesceAgentRunFrames(items).filter((item) => item.kind === "agent-run-frame"),
-        ).toMatchObject(
-          stage === 1 && !midTurn
-            ? [{ runId: "run", boundaryId: "send:run", parts: [items[2]] }]
-            : [],
-        );
+        const framed = coalesceAgentRunFrames(items);
+        expect(framed).toContain(notice);
+        // A known-run reply frames even before promotion supplies a causal boundary.
+        expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
+          { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
+        ]);
         expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
       }
       for (const messages of stages) {

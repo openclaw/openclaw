@@ -70,30 +70,28 @@ describe("queued collector native admission", () => {
             currentControl.preparePublication,
             "native publication preparation",
           );
-          const publish = expectDefined(params.onResult, "native cancellation publication");
-          return kill(
-            {
-              ...params,
-              onResult: (result) => {
-                publish(result);
+          const publishSnapshot = expectDefined(
+            preparation.publishSnapshot,
+            "native cancellation snapshot publication",
+          );
+          return kill(params, {
+            ...currentControl,
+            preparePublication: {
+              ...preparation,
+              publishSnapshot: (result) => {
+                publishSnapshot(result);
                 order.push("published");
               },
-            },
-            {
-              ...currentControl,
-              preparePublication: {
-                needsPreparation: () => preparation.needsPreparation(),
-                prepare: async () => {
-                  publicationEntered.resolve();
-                  await releasePublication.promise;
-                  if (publicationFailure) {
-                    throw new Error("publication preparation failed");
-                  }
-                  await preparation.prepare();
-                },
+              prepare: async (publishPrepared) => {
+                publicationEntered.resolve();
+                await releasePublication.promise;
+                if (publicationFailure) {
+                  throw new Error("publication preparation failed");
+                }
+                return await preparation.prepare(publishPrepared);
               },
             },
-          );
+          });
         });
       const runtimeGate = vi
         .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
@@ -243,13 +241,23 @@ describe("queued collector native admission", () => {
         ]);
         expect(order).toEqual([]);
         expect(registration).toHaveBeenCalledOnce();
-        expect(registration).toHaveReturnedWith(false);
+        await expect(registration.mock.results[0]?.value).resolves.toBe(false);
         expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeDefined();
-        expect(entry.execution.startedAt).toBeUndefined();
+        const interrupted = expectDefined(
+          registryMemory.getCurrentSubagentRunOwner(registryMemory.subagentRuns, entry),
+          "cancelled native collector before publication",
+        );
+        expect(interrupted.execution.startedAt).toBeUndefined();
         releasePublication.resolve();
         await stopping;
         await dispatched.promise;
-        await vi.waitFor(() => expect(entry.collectorCompletion?.status).toBe("killed"));
+        // This unadopted launch still owns its provisional session; join its real cleanup.
+        await closeSwarmScheduler();
+        const stopped = expectDefined(
+          registryMemory.getCurrentSubagentRunOwner(registryMemory.subagentRuns, entry),
+          "stopped native collector after cleanup",
+        );
+        expect(stopped.collectorCompletion?.status).toBe("killed");
         expect(respond).toHaveBeenCalledOnce();
         if (publicationFailure) {
           expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -263,11 +271,9 @@ describe("queued collector native admission", () => {
         }
         expect.soft(context.chatRunState.hasAbortMarker(entry.runId)).toBe(true);
         expect.soft(admission.abortStopReason).toBe("rpc");
-        expect.soft(entry.execution.startedAt).toBeUndefined();
-        expect.soft(entry.sessionStartedAt).toBeUndefined();
+        expect.soft(stopped.execution.startedAt).toBeUndefined();
+        expect.soft(stopped.sessionStartedAt).toBeUndefined();
         expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
-        // This unadopted launch still owns its provisional session; join its real cleanup.
-        await closeSwarmScheduler();
         expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
         expect(order).toContain("deleted");
         if (!exact && !publicationFailure) {

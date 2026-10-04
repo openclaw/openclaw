@@ -29,7 +29,7 @@ describe("pinned pnpm cold bootstrap", () => {
     for (const name of archives) {
       fs.copyFileSync(path.join(f.registry, name), path.join(f.image, name));
     }
-    for (const source of ["image", "store", "registry"]) {
+    for (const [index, source] of ["image", "store", "registry"].entries()) {
       if (source === "store") {
         for (const name of archives) {
           fs.writeFileSync(path.join(f.image, name), "corrupt image");
@@ -46,10 +46,13 @@ describe("pinned pnpm cold bootstrap", () => {
       expect(
         fs.readFileSync(path.join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8"),
       ).toBe("native-fixture\n");
-      expect(JSON.parse(fs.readFileSync(path.join(root, ".corepack"), "utf8")).hash).toBe(
-        f.spec.split("+")[1],
-      );
+      expect(JSON.parse(fs.readFileSync(path.join(root, ".corepack"), "utf8"))).toEqual({
+        locator: { name: "pnpm", reference: f.spec.slice(5) },
+        bin: { pnpm: "./bin/pnpm.mjs", pnpx: "./bin/pnpx.mjs" },
+        hash: f.spec.split("+")[1],
+      });
       expect(fs.existsSync(f.calls)).toBe(source === "registry");
+      expect(fs.readdirSync(f.runner)).toHaveLength(index + 1);
       for (const name of archives) {
         expect(fs.readFileSync(path.join(f.store, "toolchain", name))).toEqual(
           fs.readFileSync(path.join(f.registry, name)),
@@ -66,6 +69,20 @@ describe("pinned pnpm cold bootstrap", () => {
       failures: 1,
       attempts: 2,
       succeeds: true,
+    },
+    {
+      name: "recovers a connection reset",
+      status: null,
+      failures: 1,
+      attempts: 2,
+      succeeds: true,
+    },
+    {
+      name: "bounds persistent connection resets",
+      status: null,
+      failures: 4,
+      attempts: 3,
+      succeeds: false,
     },
     {
       name: "bounds persistent transient failures",
@@ -100,6 +117,10 @@ describe("pinned pnpm cold bootstrap", () => {
         server.on("request", (request, response) => {
           const name = path.basename(request.url ?? "");
           if (name === "pnpm-12.5.1.tgz" && ++wrapperAttempts <= failures) {
+            if (status === null) {
+              request.socket.destroy();
+              return;
+            }
             response.writeHead(status).end();
             return;
           }
@@ -131,27 +152,6 @@ describe("pinned pnpm cold bootstrap", () => {
         }
       }
     });
-  });
-
-  it("downloads authenticated registry archives when both the store and image are empty", async ({
-    command,
-  }) => {
-    const f = createPnpmArchiveFixture(command);
-    const result = await f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).not.toBe("");
-    const root = path.join(result.stdout.trim(), "v1/pnpm/12.5.1");
-    expect(fs.readFileSync(path.join(root, "pnpm"), "utf8")).toBe("wrapper-fixture\n");
-    expect(fs.readFileSync(path.join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8")).toBe(
-      "native-fixture\n",
-    );
-    expect(JSON.parse(fs.readFileSync(path.join(root, ".corepack"), "utf8"))).toEqual({
-      locator: { name: "pnpm", reference: f.spec.slice(5) },
-      bin: { pnpm: "./bin/pnpm.mjs", pnpx: "./bin/pnpx.mjs" },
-      hash: f.spec.split("+")[1],
-    });
-    expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
-    expect(fs.readdirSync(f.runner)).toHaveLength(1);
   });
 
   it("uses authenticated image bytes without making a network request", async ({ command }) => {

@@ -54,7 +54,7 @@ function requestOptions(params: {
     respond: vi.fn(),
     context: {
       broadcast: vi.fn(),
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       hasExecApprovalClients: () => true,
       validateAgentRuntimeApprovalAuthority: params.validateAuthority ?? (() => true),
@@ -179,6 +179,10 @@ describe("plugin approval signed agent runtime", () => {
           pluginId: "forged-plugin",
           title: "Sensitive action",
           description: "D",
+          policySubject: {
+            pluginKey: "calendar",
+            tool: "create_event.raw",
+          },
           agentId: "forged-agent",
           sessionKey: "forged-session",
           turnSourceChannel: "forged-channel",
@@ -217,6 +221,10 @@ describe("plugin approval signed agent runtime", () => {
       const approvalId = String(broadcastPayload?.id);
       expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
         pluginId: "codex",
+        policySubject: {
+          pluginKey: "calendar",
+          tool: "create_event.raw",
+        },
         agentId: "main",
         sessionKey: "agent:main:session-1",
         turnSourceChannel: "telegram",
@@ -237,6 +245,30 @@ describe("plugin approval signed agent runtime", () => {
       });
       await manager.resolve(approvalId, "deny");
       await pending;
+    });
+  });
+
+  it("rejects a plugin reviewer policy subject from an unsigned client", async (testContext) => {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    await fixture.run(async () => {
+      const opts = requestOptions({
+        request: {
+          title: "Sensitive action",
+          description: "D",
+          policySubject: { pluginKey: "calendar" },
+        },
+        identity: identityWithoutExecution(),
+      });
+      (opts.client as { internal?: unknown }).internal = undefined;
+
+      await requestHandler(fixture.manager)(opts);
+
+      expect(await fixture.manager.listPendingRecords()).toHaveLength(0);
+      expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+        message: expect.stringContaining("requires agent runtime authority"),
+      });
     });
   });
 

@@ -67,7 +67,7 @@ const config = {
       models: { "openai/gpt-5.4": {} },
       modelPolicy: { allow: ["openai/gpt-5.4"] },
     },
-    list: [{ id: "main", default: true }],
+    entries: { main: {} },
   },
 } as OpenClawConfig;
 const context = {
@@ -201,7 +201,7 @@ describe("gateway chat metadata lifecycle composition", () => {
             },
             modelPolicy: { allow: ["openai/*", "openai/gpt-5.6-luna"] },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       };
       const rows = ["codex-latest", "gpt-5.6-luna"].map((id) => ({
@@ -340,7 +340,7 @@ describe("gateway chat metadata lifecycle composition", () => {
             models: { [modelRef]: { agentRuntime: { id: "native-test" } } },
             modelPolicy: { allow: [modelRef] },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       };
       let currentConfig = nativeConfig;
@@ -698,7 +698,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         });
       const rosterConfig: OpenClawConfig = {
         ...config,
-        agents: { ...config.agents, list: [{ id: "main", default: true }, { id: "healthy" }] },
+        agents: { ...config.agents, entries: { main: {}, healthy: {} } },
       };
       mocks.configuredAgentIds = ["main", "healthy"];
       const retiredRegistry = createEmptyPluginRegistry();

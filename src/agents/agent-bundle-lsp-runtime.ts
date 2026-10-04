@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -13,10 +14,7 @@ import {
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import {
-  defaultBundleLspRuntimeDependencies,
-  type BundleLspRuntimeDependencies,
-} from "./agent-bundle-lsp-dependencies.js";
+import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
@@ -24,8 +22,6 @@ import {
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-// Minimal LSP JSON-RPC framing over stdio (Content-Length header + JSON body).
 
 type LspSession = {
   serverName: string;
@@ -84,13 +80,9 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
   };
 }
 
-function rememberLspFailure(session: LspSession, error: Error): void {
-  session.failure ??= error;
-}
-
 function failLspSession(session: LspSession, error: Error): void {
-  rememberLspFailure(session, error);
-  session.pendingRequests.rejectAll(session.failure ?? error);
+  session.failure ??= error;
+  session.pendingRequests.rejectAll(session.failure);
 }
 
 function lspProcessExitError(
@@ -112,7 +104,7 @@ function attachLspProcessHandlers(session: LspSession): void {
   });
   session.process.onExit((code, signal) => {
     // Block new requests immediately, but let stdout drain any final response before close.
-    rememberLspFailure(session, lspProcessExitError(session, code, signal));
+    session.failure ??= lspProcessExitError(session, code, signal);
   });
   void session.process.wait().then(
     ({ code, signal }) => failLspSession(session, lspProcessExitError(session, code, signal)),
@@ -359,7 +351,6 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
         }
       }
     }
-    // Notifications (no id) are logged but not acted on
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
@@ -540,11 +531,9 @@ export async function createBundleLspToolRuntime(params: {
   abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
   throwIfLspAborted(params.abortSignal);
-  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
-  const loaded = dependencies.loadLspConfig({
+  const loaded = loadEnabledBundleLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
@@ -552,7 +541,7 @@ export async function createBundleLspToolRuntime(params: {
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  if (Object.keys(loaded.lspServers).length === 0) {
+  if (Object.keys(loaded.config.lspServers).length === 0) {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
@@ -565,7 +554,7 @@ export async function createBundleLspToolRuntime(params: {
   const tools: AnyAgentTool[] = [];
 
   try {
-    for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
+    for (const [serverName, rawServer] of Object.entries(loaded.config.lspServers)) {
       throwIfLspAborted(params.abortSignal);
       const launch = resolveStdioMcpServerLaunchConfig(rawServer);
       if (!launch.ok) {
@@ -578,7 +567,7 @@ export async function createBundleLspToolRuntime(params: {
       try {
         session = createLspSession(
           serverName,
-          await dependencies.spawnServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+          await spawnLspServerProcess(launchConfig, { abortSignal: params.abortSignal }),
         );
         activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);

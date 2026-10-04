@@ -6,7 +6,7 @@ export type SubagentCancellationControl = {
 };
 
 export const SUBAGENT_KILL_TASK_ERROR = "Subagent run killed.";
-export type SubagentTerminalState = {
+type SubagentTerminalState = {
   status: "succeeded" | "failed" | "timed_out" | "cancelled";
   endedAt: number;
   error?: string;

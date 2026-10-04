@@ -30,6 +30,14 @@ read_when:
 
 ### Real-Gateway Control UI fixture lifetimes
 
+Use `pairControlUiPage` from `ui/src/test-helpers/control-ui-browser-pairing.ts`
+with the isolated Gateway's CLI runner to authenticate each new page. It obtains
+and consumes a fresh `dashboard --json` browser handoff and waits for the Gateway
+handshake. Dashboard pairing links are single-use; do not reuse a captured URL
+for another tab or browser context. Pass this operation as `preparePage` to
+`withControlUiRunInspector` so collection authenticates its own page while leaving
+the caller's Chat and draft in place. Reload uses the browser's paired credential.
+
 Use `createControlUiE2eSuite` from
 `ui/src/e2e/control-ui-e2e-suite.test-support.ts` for real-Gateway browser fixtures.
 `suite.define(...)` owns the native hooks. Each native `it` passes its test context
@@ -135,6 +143,15 @@ returns so the caller can rethrow the original failure. A late browser response
 cannot publish a screenshot after that budget expires; test action deadlines and
 caller-owned browser cleanup remain unchanged.
 
+Pages from the shared suite's `withPage` also arm a renderer stall probe before the
+test runs. When the renderer misses that read deadline, the public summary's
+`rendererStall` records main-thread busy time by kind and the paused JavaScript
+stack, then resumes the page, within a further three-second budget. A stall that
+ended before a responsive read appears in `browser.longFrames` as frames of at
+least one second with their script attribution. Both keep only bundle paths,
+positions, function names, and listener tag and event names; map positions with
+the same commit's bundled build sourcemaps.
+
 The private JSON report's `ci.shardIndex` and `ci.vitestShardCount` fields record
 `VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal CI.
 Missing values remain `null`; manual and separate release E2E invocations do not
@@ -192,6 +209,7 @@ corrupted video is not continuous-flow proof.
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
+- `pnpm test:e2e:agent-plugin-gateway`: synthetic provider and MCP fixtures exercise plugin installation and a real Gateway. `OPENCLAW_VITEST_RUNTIME=bun` selects Bun for the OpenClaw product processes; fixture services and build orchestration keep their existing Node commands.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
   Broad runs prepare the shared runtime once, then use four sequential Vitest shards in fresh processes to bound worker memory. The worker limit applies within each process; ordinary test failures are retained while remaining shards finish. Explicit filters, watch mode, caller-supplied shards, coverage, and report-output options keep one direct invocation.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.

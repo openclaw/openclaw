@@ -30,6 +30,21 @@ const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
+export type StoredComposerState = {
+  version: 4;
+  gatewayOwner: string;
+  sessions: Record<string, StoredComposerSession>;
+  recovery: Record<string, StoredComposerRecovery>;
+  legacyReceipts?: Partial<Record<"1" | "2" | "3", string>>;
+  recoveryBlocked?: true;
+};
+
+export type StoredComposerRecovery = {
+  sourceVersion: 1 | 2 | 3 | 4;
+  sourceScopeKey: string;
+  session: StoredComposerSession;
+};
+
 export type StoredComposerSession = {
   awaitingDefaults?: true;
   draft?: string;
@@ -44,6 +59,7 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.storageScope === right.storageScope &&
     left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
     left.workContextUnavailable === right.workContextUnavailable &&
@@ -114,6 +130,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const storageScope = normalizeOptionalString(entry.storageScope);
+  if (storageScope) {
+    item.storageScope = storageScope;
+  }
   const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
   if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
     item.asyncQuestionItemId = asyncQuestionItemId;
@@ -228,13 +248,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
   // Keep this before sendAttempts: queue admission compares canonical JSON bytes.
-  const sendError = normalizeOptionalString(entry.sendError);
-  if (sendError) {
-    item.sendError = sendError;
-  }
-  const sendRunId = normalizeOptionalString(entry.sendRunId);
-  if (sendRunId) {
-    item.sendRunId = sendRunId;
+  for (const key of ["sendError", "sendRunId"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;

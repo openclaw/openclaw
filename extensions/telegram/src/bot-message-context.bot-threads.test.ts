@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
 import type { Message, Update } from "grammy/types";
@@ -5,7 +6,6 @@ import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/co
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   apiCalls,
@@ -25,13 +25,14 @@ import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 import { createForumTopicTelegram } from "./send-forum-topics.js";
 import { getTopicCreatorUserId } from "./topic-name-cache.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let updateId = 12_000;
 let storePath: string;
 let runtimeError: MockInstance<typeof defaultRuntime.error>;
 
 beforeEach(() => {
-  storePath = path.join(tempDirs.make("telegram-bot-topic-admission-"), "sessions.json");
+  const storeDir = harness.state.path("telegram-bot-topic-admission");
+  mkdirSync(storeDir);
+  storePath = path.join(storeDir, "sessions.json");
   resetTelegramTopicNameCacheForTest();
   runtimeError = vi.spyOn(defaultRuntime, "error");
 });

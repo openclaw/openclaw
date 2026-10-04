@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type SelectQueryBuilder } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -35,17 +36,13 @@ import type {
   UserProfileDisplay,
   UserProfileAvatarMime,
   UserProfileEmailBinding,
+  UserProfileIdentity,
   UserProfileEmailBindingIndex,
   UserProfilesDatabase,
 } from "./user-profiles.types.js";
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
-
-const metadataReaders = new WeakMap<
-  DatabaseSync,
-  (profileId: string) => UserProfileMetadataRow | undefined
->();
 
 export function insertUserProfile(
   db: DatabaseSync,
@@ -230,6 +227,37 @@ export function selectResolvedUserProfileById(
   );
 }
 
+// Reuse compilation only; every authority check binds and reads current rows.
+const metadataReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<string, UserProfileMetadataRow>(db, (parameter) =>
+    userProfilesDb(db)
+      .selectFrom("user_profiles")
+      .select((eb) => [
+        "id",
+        "display_name",
+        // Preserve native conversion errors for non-BLOB values in damaged profile rows.
+        eb
+          .case()
+          .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
+          .then(null)
+          .else(eb.ref("avatar"))
+          .end()
+          .as("avatar"),
+        "avatar_mime",
+        "avatar_sha256",
+        "merged_into",
+        "role",
+        "created_at",
+        "updated_at",
+      ])
+      .where(
+        "id",
+        "=",
+        parameter((id) => id),
+      ),
+  ),
+);
+
 /** Keep native row validation while omitting avatar payloads from metadata reads. */
 export function selectResolvedUserProfileMetadataById(
   db: DatabaseSync,
@@ -238,39 +266,7 @@ export function selectResolvedUserProfileMetadataById(
   if (!hasEnsuredUserProfileRoleSchema(db)) {
     return selectResolvedUserProfileById(db, profileId);
   }
-  let read = metadataReaders.get(db);
-  if (!read) {
-    // Reuse compilation only; every authority check binds and reads current rows.
-    read = prepareSqliteQueryTakeFirstSync<string, UserProfileMetadataRow>(db, (parameter) =>
-      userProfilesDb(db)
-        .selectFrom("user_profiles")
-        .select((eb) => [
-          "id",
-          "display_name",
-          // Preserve native conversion errors for non-BLOB values in damaged profile rows.
-          eb
-            .case()
-            .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
-            .then(null)
-            .else(eb.ref("avatar"))
-            .end()
-            .as("avatar"),
-          "avatar_mime",
-          "avatar_sha256",
-          "merged_into",
-          "role",
-          "created_at",
-          "updated_at",
-        ])
-        .where(
-          "id",
-          "=",
-          parameter((id) => id),
-        ),
-    );
-    metadataReaders.set(db, read);
-  }
-  return readResolvedUserProfile(profileId, read);
+  return readResolvedUserProfile(profileId, metadataReader(db));
 }
 
 export function requireResolvedUserProfileMetadataById(
@@ -436,12 +432,13 @@ export function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: 
 export function projectCatalogUserProfileIdentity(
   resident: Map<string, ProfileDisplayRow>,
   profileId: string,
-) {
+): UserProfileIdentity | undefined {
   const profile = resolveCatalogProfile(resident, profileId);
   return (
     profile && {
       profileId: profile.id,
       role: profile.role ?? null,
+      githubLogin: profile.githubLogin ?? null,
       aliases: new Set(
         [...resident.values()]
           .filter((row) => row.id === profile.id || row.merged_into === profile.id)
@@ -460,15 +457,20 @@ export function bindPreparedUserProfileIdentity(
     assertCurrent: (profileId: string) => void;
     release: () => void;
   },
+  emailTargets?: readonly string[],
 ): PreparedUserProfileIdentity {
   const { rows, bindings } = catalog;
-  const initial = [...bindings.byEmail.values()].filter(
-    (binding) => binding.profileId === profileId,
-  );
+  const initial =
+    emailTargets === undefined
+      ? [...bindings.byEmail.values()].filter((binding) => binding.profileId === profileId)
+      : [...new Set(emailTargets)].map((email) => bindings.byEmail.get(email));
   const ids = Object.freeze(
-    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
+    initial.flatMap((binding) => (binding?.bindingId ? [binding.bindingId] : [])).toSorted(),
   );
-  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
+  const assertCurrent = (
+    requiredEmailBindingIds: readonly string[] = [],
+    requiredGithubAccountIds?: readonly number[],
+  ) => {
     catalog.assertCurrent(profileId);
     if (
       resolveCatalogProfile(rows, profileId)?.id !== profileId ||
@@ -476,22 +478,41 @@ export function bindPreparedUserProfileIdentity(
     ) {
       throw new UserProfileNotFoundError(profileId);
     }
+    if (requiredGithubAccountIds?.length) {
+      const accounts = new Set(rows.get(profileId)?.githubAccountIds);
+      if (requiredGithubAccountIds.some((accountId) => !accounts.has(accountId))) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+    }
   };
-  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
-    assertCurrent(requiredEmailBindingIds);
-    return { profileId, assignedRole: rows.get(profileId)?.role || null };
+  function readCurrentProfile(
+    this: void,
+    requiredEmailBindingIds?: readonly string[],
+    requiredGithubAccountIds?: readonly number[],
+  ) {
+    assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
+    return {
+      profileId,
+      assignedRole: rows.get(profileId)?.role || null,
+      githubLogin: rows.get(profileId)?.githubLogin ?? null,
+    };
   }
   return {
     readCurrentProfile,
     get emailBindingIds() {
       assertCurrent();
-      if (initial.some((binding) => binding.bindingId === null)) {
+      if (
+        initial.some(
+          (binding) => !binding || binding.profileId !== profileId || binding.bindingId === null,
+        )
+      ) {
         throw new UserProfileNotFoundError(profileId);
       }
       return ids;
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
+      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -502,7 +523,9 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
+          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
           assignedRole: profile.assignedRole,
+          githubLogin: profile.githubLogin,
         },
         aliases,
       };

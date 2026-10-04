@@ -10,6 +10,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
+import { createSandboxFsBridge } from "./fs-bridge.js";
 
 async function runLocalShellCommand(
   params: SandboxBackendCommandParams,
@@ -112,10 +113,7 @@ describe("sandbox fs bridge local backend e2e", () => {
       };
 
       try {
-        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
-          import("./fs-bridge.js"),
-          import("./test-fixtures.js"),
-        ]);
+        const { createSandboxTestContext } = await import("./test-fixtures.js");
 
         const sandbox = createSandboxTestContext({
           overrides: {
@@ -211,10 +209,7 @@ describe("sandbox fs bridge local backend e2e", () => {
       };
 
       try {
-        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
-          import("./fs-bridge.js"),
-          import("./test-fixtures.js"),
-        ]);
+        const { createSandboxTestContext } = await import("./test-fixtures.js");
         const bridge = createSandboxFsBridge({
           sandbox: createSandboxTestContext({
             overrides: {
@@ -273,10 +268,7 @@ describe("sandbox fs bridge local backend e2e", () => {
       };
 
       try {
-        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
-          import("./fs-bridge.js"),
-          import("./test-fixtures.js"),
-        ]);
+        const { createSandboxTestContext } = await import("./test-fixtures.js");
 
         const sandbox = createSandboxTestContext({
           overrides: {

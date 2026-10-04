@@ -305,7 +305,7 @@ describeControlUiE2e("Plugin overview", () => {
       expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
         "Skills1",
         "Tools2",
-        "MCP servers1",
+        "MCP Server1",
       ]);
       await page.getByRole("button", { name: /calendar_search/ }).click();
       await page.getByRole("dialog", { name: "calendar_search" }).waitFor();

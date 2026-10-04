@@ -1,7 +1,7 @@
 // Plugin npm manifest tests validate generated plugin package manifests.
 import { execFile, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
+import fs, {
   chmodSync,
   existsSync,
   lstatSync,
@@ -14,18 +14,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
-  resolvePluginNpmCommand,
   runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
 import {
@@ -113,7 +113,9 @@ function parseNpmPackResult(stdout: string): NpmPackResult {
 }
 
 function listNpmPackDryRunFiles(packageDir: string): string[] {
-  const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
@@ -507,41 +509,6 @@ describe("plugin npm package manifest staging", () => {
     expect(packageJson.openclaw?.release?.bundleRuntimeDependencies).toBe(false);
   });
 
-  it("wraps Windows npm.cmd staging through cmd.exe without shell mode", () => {
-    const nodeDir = "C:\\Program Files\\nodejs";
-    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
-
-    expect(
-      resolvePluginNpmCommand(["install", "--package-lock-only"], {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: { PATH: "C:\\bin" },
-        execPath: win32.join(nodeDir, "node.exe"),
-        existsSync: (candidate: string) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\Program Files\\nodejs\\npm.cmd" install --package-lock-only"',
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("rejects bare npm fallback on Windows plugin package staging", () => {
-    expect(() =>
-      resolvePluginNpmCommand(["install"], {
-        execPath: "C:\\nodejs\\node.exe",
-        existsSync: () => false,
-        platform: "win32",
-      }),
-    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
-  });
-
   it("retries timed-out bundled dependency installs after cleaning partial output", () => {
     const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
     const spawnResults = [
@@ -834,6 +801,50 @@ describe("plugin npm package manifest staging", () => {
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
+  it("restores both source manifests when the package overlay write fails", () => {
+    const repoDir = fixtureDirs.make("openclaw-plugin-npm-overlay-write-failure-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeGeneratedChannelMetadata(repoDir, "diffs");
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    const manifestPath = join(packageDir, "openclaw.plugin.json");
+    const packageJsonPath = join(packageDir, "package.json");
+    writeFileSync(manifestPath, '{"id":"diffs"}\r\n');
+    const originalManifest = readFileSync(manifestPath);
+    const originalPackageJson = readFileSync(packageJsonPath);
+    const failure = Object.assign(new Error("package overlay write failed"), { code: "EIO" });
+    const write = fs.writeFileSync.bind(fs);
+    let injected = false;
+    let manifestAtFailure: Buffer | undefined;
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      if (!injected && file === packageJsonPath) {
+        injected = true;
+        manifestAtFailure = readFileSync(manifestPath);
+        throw failure;
+      }
+      write(file, data, options);
+    });
+    const callback = vi.fn();
+    let caught: unknown;
+    try {
+      withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir, bundleDependencies: true },
+        callback,
+      );
+    } catch (error) {
+      caught = error;
+    } finally {
+      writeSpy.mockRestore();
+    }
+
+    expect(injected).toBe(true);
+    expect(manifestAtFailure).not.toEqual(originalManifest);
+    expect(caught).toBe(failure);
+    expect(callback).not.toHaveBeenCalled();
+    expect(readFileSync(manifestPath)).toEqual(originalManifest);
+    expect(readFileSync(packageJsonPath)).toEqual(originalPackageJson);
+  });
+
   it.each(["qa-lab", "qa-channel"] as const)(
     "packs only the private %s Gateway surface and restores source metadata",
     (id) => {
@@ -1039,13 +1050,9 @@ describe("plugin npm package manifest staging", () => {
         mkdirSync(consumerDir, { recursive: true });
         writeJsonFile(join(consumerDir, "package.json"), { private: true, type: "module" });
 
-        const packInvocation = resolvePluginNpmCommand([
-          "pack",
-          "--json",
-          "--ignore-scripts",
-          "--pack-destination",
-          consumerDir,
-        ]);
+        const packInvocation = resolveNpmRunner({
+          npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", consumerDir],
+        });
         const pack = spawnSync(packInvocation.command, packInvocation.args, {
           cwd: packageDir,
           encoding: "utf8",
@@ -1171,7 +1178,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     "split destination",
     "failed command",
     "ancestor optional",
-    "legacy shrinkwrap",
   ])("preserves source dependencies while staging npm bundles with %s", (scenario) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
     const packageDir = writePublishablePluginPackage(repoDir);
@@ -1211,16 +1217,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
     writeFileText(sourceOnlyPath, "keep\n");
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
-    const shrinkwrapPath = join(packageDir, "npm-shrinkwrap.json");
-    const legacyShrinkwrap = `${JSON.stringify({
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      packages: {},
-    })}\n`;
-    if (scenario === "legacy shrinkwrap") {
-      writeFileText(shrinkwrapPath, legacyShrinkwrap);
-    }
     const outputDir =
       scenario.includes("destination") && scenario !== "default destination"
         ? join(packageDir, "artifacts")
@@ -1268,9 +1264,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
-    if (scenario === "legacy shrinkwrap") {
-      expect(readFileSync(shrinkwrapPath, "utf8")).toBe(legacyShrinkwrap);
-    }
     if (scenario === "failed command") {
       const stagingDir = result.stdout.trim();
       expect(stagingDir).not.toBe("");
@@ -1485,16 +1478,18 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
         expect(bundled.status, bundled.stderr).toBe(0);
         expect(JSON.parse(bundled.stdout)).toEqual([2, expectedSibling]);
       }
-      const npm = resolvePluginNpmCommand([
-        "install",
-        "--ignore-scripts",
-        "--omit=dev",
-        "--omit=peer",
-        "--legacy-peer-deps",
-        "--workspaces=false",
-        "--no-audit",
-        "--no-fund",
-      ]);
+      const npm = resolveNpmRunner({
+        npmArgs: [
+          "install",
+          "--ignore-scripts",
+          "--omit=dev",
+          "--omit=peer",
+          "--legacy-peer-deps",
+          "--workspaces=false",
+          "--no-audit",
+          "--no-fund",
+        ],
+      });
       await execFileAsync(npm.command, npm.args, {
         cwd: consumerPackage,
         encoding: "utf8",

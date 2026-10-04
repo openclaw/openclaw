@@ -625,22 +625,15 @@ function readMatrixDimensionIds(params: {
   if (!Array.isArray(params.value)) {
     return sanitizeGalleryStringArray(params.fallback, params);
   }
-  const ids = sanitizeGalleryStringArray(
-    params.value.map((entry) => {
-      if (typeof entry === "string") {
-        return entry;
-      }
-      return readStringValue(readRecord(entry)?.id) ?? null;
-    }),
+  return sanitizeGalleryStringArray(
+    [
+      ...params.value.map((entry) =>
+        typeof entry === "string" ? entry : (readStringValue(readRecord(entry)?.id) ?? null),
+      ),
+      ...params.fallback,
+    ],
     params,
   );
-  for (const rawFallbackId of params.fallback) {
-    const fallbackId = sanitizeGalleryText(rawFallbackId, params);
-    if (!ids.includes(fallbackId)) {
-      ids.push(fallbackId);
-    }
-  }
-  return ids;
 }
 
 function uxMatrixEntryKey(

@@ -8,7 +8,11 @@ import type {
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
-import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import {
+  getActiveMemorySearchManagerCore,
+  isActiveMemoryProviderNative,
+  resolveActiveMemoryBackendConfig,
+} from "../../plugins/memory-runtime.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -69,7 +73,29 @@ function hasUsableAgentIdInput(value: string): boolean {
 
 /** Operator-scoped search over the active agent memory index. */
 export const memorySearchHandlers: GatewayRequestHandlers = {
-  "memory.search": async ({ params, respond, context }) => {
+  "memory.get": async (options) => {
+    const { memoryProviderHandlers } = await import("./memory-provider.js");
+    await memoryProviderHandlers["memory.get"](options);
+  },
+  "memory.status": async (options) => {
+    const { memoryProviderHandlers } = await import("./memory-provider.js");
+    await memoryProviderHandlers["memory.status"](options);
+  },
+  "memory.search": async (options) => {
+    const { params, respond, context } = options;
+    if (params?.version === 2) {
+      const { memoryProviderHandlers } = await import("./memory-provider.js");
+      await memoryProviderHandlers["memory.search"](options);
+      return;
+    }
+    if (params?.version !== undefined && params.version !== 1) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "unsupported memory version"),
+      );
+      return;
+    }
     const record = params && typeof params === "object" ? (params as Record<string, unknown>) : {};
     const query = typeof record.query === "string" ? record.query.trim() : "";
     if (!query) {
@@ -123,6 +149,21 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
         return;
       }
+    }
+    // Only a native owner is asked for its backend; a legacy runtime keeps its manager calls.
+    const backend = isActiveMemoryProviderNative({ cfg, agentId })
+      ? resolveActiveMemoryBackendConfig({ cfg, agentId })
+      : null;
+    if (backend?.backend === "provider-runtime") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `memory plugin "${backend.providerId}" uses the provider runtime; retry memory.search with version: 2`,
+        ),
+      );
+      return;
     }
     let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {

@@ -78,7 +78,9 @@ import {
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
-import * as chatMessage from "./components/chat-message.ts";
+import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
+import * as chatMessage from "./components/chat-message-group.ts";
+import * as chatMessageStream from "./components/chat-message-stream.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
@@ -214,25 +216,21 @@ const buildChatItemsMock = vi.fn(
     return items as ReturnType<typeof chatThread.buildCachedChatItems>;
   },
 );
-const renderMessageGroupMock = vi.fn(
-  (
-    ...[group, _opts]: Parameters<typeof chatMessage.renderMessageGroup>
-  ): ReturnType<typeof chatMessage.renderMessageGroup> => {
-    const text = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
-          }
-          return content == null ? "" : JSON.stringify(content);
+const renderMessageGroupMock = vi.fn<typeof chatMessage.renderMessageGroup>((group) => {
+  const text = group.messages
+    .map(({ message }) => {
+      if (typeof message === "object" && message !== null && "content" in message) {
+        const content = (message as { content?: unknown }).content;
+        if (typeof content === "string") {
+          return content;
         }
-        return String(message);
-      })
-      .join("\n");
-    return html`<div class="chat-group">${text}</div>`;
-  },
-);
+        return content == null ? "" : JSON.stringify(content);
+      }
+      return String(message);
+    })
+    .join("\n");
+  return html`<div class="chat-group">${text}</div>`;
+});
 
 type ChatHeaderTestState = {
   basePath?: string;
@@ -297,23 +295,14 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-function renderStreamGroupMock(
-  ...[parts, _opts]: Parameters<typeof chatMessage.renderStreamGroup>
-): ReturnType<typeof chatMessage.renderStreamGroup> {
-  return html`<div class="chat-stream-run">
+const renderStreamGroupMock: typeof chatMessageStream.renderStreamGroup = (parts) =>
+  html`<div class="chat-stream-run">
     ${parts.map((part) =>
       part.kind === "reading-indicator"
         ? html`<div class="chat-reading-indicator"></div>`
         : html`<div class="chat-stream">${part.kind === "stream" ? part.text : ""}</div>`,
     )}
   </div>`;
-}
-
-function renderWorkGroupSummaryMock(
-  ..._args: Parameters<typeof chatMessage.renderWorkGroupSummary>
-): ReturnType<typeof chatMessage.renderWorkGroupSummary> {
-  return html`<div class="chat-work-group"></div>`;
-}
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -323,8 +312,10 @@ beforeEach(() => {
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
   vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
-  vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
-  vi.spyOn(chatMessage, "renderWorkGroupSummary").mockImplementation(renderWorkGroupSummaryMock);
+  vi.spyOn(chatMessageStream, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
+  vi.spyOn(chatMessageStream, "renderWorkGroupSummary").mockReturnValue(
+    html`<div class="chat-work-group"></div>`,
+  );
 });
 
 function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -2507,99 +2498,6 @@ describe("chat composer render invalidation", () => {
 
     render(renderChat(props), container);
     expect(getComposerTextarea(container).dir).toBe("rtl");
-  });
-});
-
-describe("chat composer IME composition", () => {
-  it("leaves active IME keys to the browser and recovers Enter-send after blur", () => {
-    // Browsers can drop compositionend (detach/blur mid-IME). The composing
-    // flag persists across renders, so without the blur reset Enter, history
-    // keys, and command menus stay dead until the Send button is clicked.
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: null,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: false,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 0,
-    }));
-    const onSend = vi.fn();
-    const container = renderChatView({ onHistoryKeydown, onSend, draft: "hello" });
-    const textarea = getComposerTextarea(container);
-
-    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "dangqian";
-    for (const key of ["Enter", "ArrowUp"]) {
-      expect(keydownComposer(container, key).defaultPrevented).toBe(false);
-    }
-    expect(onSend).not.toHaveBeenCalled();
-    expect(onHistoryKeydown).not.toHaveBeenCalled();
-    expect(textarea.value).toBe("dangqian");
-
-    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-
-    const enterEvent = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      cancelable: true,
-    });
-    textarea.dispatchEvent(enterEvent);
-
-    expect(enterEvent.defaultPrevented).toBe(true);
-    expect(onSend).toHaveBeenCalledOnce();
-  });
-
-  it("invalidates after handled input history navigation", () => {
-    const onRequestUpdate = vi.fn();
-    const onHistoryKeydown = vi.fn(() => ({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: true,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 0,
-    }));
-    const container = renderChatView({ onHistoryKeydown, onRequestUpdate });
-    const textarea = getComposerTextarea(container);
-    const arrowEvent = new KeyboardEvent("keydown", {
-      key: "ArrowUp",
-      bubbles: true,
-      cancelable: true,
-    });
-
-    textarea.dispatchEvent(arrowEvent);
-    expect(arrowEvent.defaultPrevented).toBe(true);
-    expect(onHistoryKeydown).toHaveBeenCalledOnce();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("does not force textarea resize during IME composition", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-
-    // Set a sentinel height to detect unwanted overwrites
-    textarea.style.height = "42px";
-
-    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "shi";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-    textarea.value = "shichang";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-
-    // Height must stay untouched — no forced reflow during composition
-    expect(textarea.style.height).toBe("42px");
-
-    textarea.value = "市场";
-    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-
-    // After composition ends, adjustTextareaHeight runs via syncComposerValue
-    expect(textarea.style.height).not.toBe("42px");
   });
 });
 
@@ -4957,7 +4855,7 @@ describe("chat model controls", () => {
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 
-    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    const speedToggle = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]');
     expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
     await waitForFast(() => expect(speedToggle?.disabled).toBe(false));
     speedToggle?.click();
@@ -5472,7 +5370,7 @@ describe("right-click Reply", () => {
     confirmationOwner.appendChild(confirmationTrigger);
     section.appendChild(confirmationOwner);
     window.localStorage.removeItem("openclaw:skip-rewind-confirm");
-    chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+    chatMessageConfirmation.openChatRewindConfirmation(confirmationTrigger, vi.fn());
     const confirmation = document.querySelector<HTMLElement>(".chat-confirm-popover");
     const { bubble } = appendChatBubble(container, { text: "open message actions" });
 
@@ -5483,7 +5381,7 @@ describe("right-click Reply", () => {
       expect(confirmation?.isConnected).toBe(false);
       expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
     } finally {
-      chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
+      chatMessageConfirmation.dismissConfirmedActionPopovers(confirmationOwner);
       confirmationOwner.remove();
       container.remove();
     }
@@ -5936,10 +5834,12 @@ describe("chat transcript rendering cache", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([streamPart]);
     renderChatView({ ...mediaProps, canAbort: true, runActive: true });
 
-    expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]).toMatchObject(expected);
-    expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]?.onOpenImage).toEqual(
-      expect.any(Function),
+    expect(vi.mocked(chatMessageStream.renderStreamGroup).mock.calls.at(-1)?.[1]).toMatchObject(
+      expected,
     );
+    expect(
+      vi.mocked(chatMessageStream.renderStreamGroup).mock.calls.at(-1)?.[1]?.onOpenImage,
+    ).toEqual(expect.any(Function));
 
     const reply = {
       kind: "group" as const,

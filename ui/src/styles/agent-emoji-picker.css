@@ -1,0 +1,96 @@
+openclaw-agent-emoji-picker {
+  display: block;
+}
+
+.agent-emoji-picker__trigger {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.agent-emoji-picker__trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-emoji-picker__trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.agent-emoji-picker__icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+wa-popover.agent-emoji-picker__popover {
+  --max-width: min(306px, calc(100vw - 24px));
+}
+
+wa-popover.agent-emoji-picker__popover::part(body) {
+  width: min(306px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.agent-emoji-picker__panel {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-emoji-picker__search {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.agent-emoji-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  max-height: min(260px, 40vh);
+  overflow-y: auto;
+}
+
+.agent-emoji-picker__choice {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 24px;
+}
+
+.agent-emoji-picker__choice:hover,
+.agent-emoji-picker__choice:focus-visible,
+.agent-emoji-picker__choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.agent-emoji-picker__empty {
+  grid-column: 1 / -1;
+  padding: 12px;
+  color: var(--muted);
+  text-align: center;
+}

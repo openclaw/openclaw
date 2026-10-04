@@ -1,13 +1,13 @@
 ---
-summary: "Which typed-public SDK subpath replaces each legacy import, including the retained channel facades"
+summary: "Which typed-public SDK subpath replaces each legacy import, including the removed channel facades"
 read_when:
   - You are replacing a broad SDK barrel import with a focused subpath
-  - You need the retained channel facade to channel-outbound mappings
+  - You need the removed channel facade to channel-outbound mappings
 title: "Import path reference"
 sidebarTitle: "Import paths"
 ---
 
-How to pick the narrowest documented subpath, and the per-export mappings for the retained channel facades. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
+How to pick the narrowest documented subpath, and the per-export mappings for the removed channel facades. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
 ## Import path reference
 
@@ -26,10 +26,9 @@ The mappings on this page are a migration subset, not the full SDK surface.
 Check both the public subpath and its actual named exports before replacing an
 import.
 
-Reserved bundled-plugin helper seams have been retired from the public SDK
-export map except for explicitly documented compatibility facades such as the
-deprecated `plugin-sdk/discord` shim retained for external plugins that still
-import the published `@openclaw/discord` package directly. Owner-specific
+Reserved bundled-plugin helper seams, including the `plugin-sdk/discord` and
+`plugin-sdk/telegram-account` compatibility facades, have been retired from the
+public SDK export map. Owner-specific
 helpers live inside the owning plugin package; shared host behavior moves
 through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
 `plugin-sdk/security-runtime`, and the injected plugin API.
@@ -38,9 +37,36 @@ Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
 
-### Retained channel facade mappings
+### Removed command and channel facades
 
-The retained channel facades are not interchangeable with `channel-outbound`.
+The `command-auth`, `discord`, and `telegram-account` subpaths were retired on
+October 2, 2026 with explicit SDK-owner approval. Use these replacements:
+
+| Removed surface                                                                         | Replacement                                                                                                                                             |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command-auth` sender authorization helpers and runtime parameter types                 | `resolveChannelMessageIngress` from `channel-ingress-runtime`; adapt the caller to the ingress contract rather than recreating legacy allowlist policy. |
+| `command-auth` native command parsing, specs, authorization, and session-target helpers | The matching named exports from `command-auth-native`.                                                                                                  |
+| `command-auth` help builders                                                            | `buildCommandsMessage`, `buildCommandsMessagePaginated`, and `buildHelpMessage` from `command-status`.                                                  |
+| `command-auth` model-provider data helpers                                              | The matching named exports from `models-provider-runtime`.                                                                                              |
+| `command-auth` access-group helpers                                                     | Delegate sender authorization to `channel-ingress-runtime`; `access-groups` is private-local and is not a third-party replacement.                      |
+| `command-auth` direct-DM access helpers                                                 | The matching named exports from `channel-inbound`.                                                                                                      |
+| `discord` generic channel types and helpers                                             | The matching named exports from `channel-contract`, `channel-core`, `channel-plugin-common`, `channel-status`, or `config-contracts`.                   |
+| `discord` channel-owned helpers and types                                               | Repository consumers use the Discord plugin's `api.ts` / `runtime-api.ts`; external plugins use generic channel contracts and the injected runtime.     |
+| `telegram-account` account resolution and types                                         | Repository consumers use the Telegram plugin's `api.ts`; external plugins use generic channel contracts and injected runtime helpers.                   |
+
+Check each named export before changing an import. The legacy sender-authorization
+types and Discord facade's permissive component/thread-binding types are removed;
+the owning APIs have their own contracts. Some legacy exports have no typed-public
+replacement and require caller changes. Do not replace them with private-local
+host exports or another plugin's private `src/*` files. Older published packages
+that import these facades must be upgraded before loading them on a host containing
+this removal; SDK-owner approval is not evidence of external migration.
+
+<a id="retained-channel-facade-mappings" />
+
+### Removed channel facade mappings
+
+The removed channel facades are not interchangeable with `channel-outbound`.
 Migrate each function and type separately.
 
 For `openclaw/plugin-sdk/channel-reply-pipeline`, use these exports from
@@ -52,39 +78,34 @@ For `openclaw/plugin-sdk/channel-reply-pipeline`, use these exports from
 | `resolveChannelSourceReplyDeliveryMode`                                         | `resolveChannelMessageSourceReplyDeliveryMode` |
 | `createReplyPrefixContext`, `createReplyPrefixOptions`, `createTypingCallbacks` | Same names                                     |
 
-These functions share their implementations with the retained facade. The named
-types do not all move with them: `channel-outbound` does not export
+These functions preserve the former facade's implementations. Their named
+types are also available unchanged from `channel-outbound`:
 `ChannelReplyPipeline`, `CreateTypingCallbacksParams`, `ReplyPrefixContext`,
-`ReplyPrefixContextBundle`, `ReplyPrefixOptions`, or `TypingCallbacks`.
-`SourceReplyDeliveryMode` is available from the typed-public
-`openclaw/plugin-sdk/reply-runtime` subpath. Callers that still need the other
-named imports must retain their compatibility type imports until an SDK owner
-approves a public replacement; do not import the internal `channel-reply-core`
-source file.
+`ReplyPrefixContextBundle`, `ReplyPrefixOptions`, `SourceReplyDeliveryMode`,
+and `TypingCallbacks`.
 
 From `openclaw/plugin-sdk/channel-lifecycle`, these functions move unchanged to
 `channel-outbound`: `createAccountStatusSink`, `createChannelRunQueue`,
 `keepHttpServerTaskAlive`, `runPassiveAccountLifecycle`, `waitUntilAbort`,
 `createDraftStreamLoop`, `createFinalizableDraftLifecycle`,
-`createFinalizableDraftStreamControlsForState`, and `takeMessageIdAfterStop`.
-Other lifecycle helpers need more than a path change:
-
-| Retained helper                                       | Migration limit                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deliverFinalizableDraftPreview`                      | Adapt to `defineFinalizableLivePreviewAdapter` and `deliverWithFinalizableLivePreviewAdapter`. Move preview callbacks into `adapter` and handle an object result with `kind` and optional `liveState`, not the legacy string result. The adapter can return `preview-retained`; the legacy wrapper maps that kind to `normal-skipped`. |
-| `createFinalizableDraftStreamControls`                | `createFinalizableDraftStreamControlsForState` requires a shared `{ stopped, final }` object instead of custom state getter/marker callbacks.                                                                                                                                                                                          |
-| `clearFinalizableDraftMessage`                        | Adopting `createFinalizableDraftLifecycle` changes cleanup ownership: it serializes clears and retains failed deletions for retry. `takeMessageIdAfterStop` only takes the ID; it does not delete the message.                                                                                                                         |
-| `createRunStateMachine`, `createArmableStallWatchdog` | No modern public equivalents. Keep retained imports pending an SDK-owner decision.                                                                                                                                                                                                                                                     |
+`createFinalizableDraftStreamControls`,
+`createFinalizableDraftStreamControlsForState`, `clearFinalizableDraftMessage`,
+`takeMessageIdAfterStop`, `createRunStateMachine`, and `createArmableStallWatchdog`.
 
 The named types `ChannelRunQueue`, `ChannelRunQueueParams`,
-`ChannelRunQueueTaskContext`, `DraftPreviewFinalizerDraft`,
-`DraftPreviewFinalizerResult`, `DraftStreamLoop`, `FinalizableDraftStreamState`,
-`ArmableStallWatchdog`, and `StallWatchdogTimeoutMeta` are not exported by
-`channel-outbound`. Nor does it export `deliverFinalizableLivePreview`,
-`LivePreviewFinalizerDraft`, or `LivePreviewFinalizerResult`, despite the legacy
-finalizer annotations recommending them. Keep needed compatibility type imports;
-inferred factory results are not necessarily identical to caller-implemented
-legacy interfaces.
+`ChannelRunQueueTaskContext`, `DraftStreamLoop`, `FinalizableDraftStreamState`,
+`ArmableStallWatchdog`, and `StallWatchdogTimeoutMeta` also move unchanged to
+`channel-outbound`.
+
+Replace `deliverFinalizableDraftPreview` with
+`defineFinalizableLivePreviewAdapter` and `deliverWithFinalizableLivePreviewAdapter`.
+Move preview callbacks into `adapter` and handle an object result with `kind`
+and optional `liveState`, not the legacy string result. The adapter can return
+`preview-retained`; the removed wrapper mapped that kind to `normal-skipped`.
+
+The legacy `DraftPreviewFinalizerDraft` and `DraftPreviewFinalizerResult` names
+are removed. Adapt type usage to the focused live-preview contracts and account
+for the result-shape change.
 
 For `openclaw/plugin-sdk/channel-message`, move outbound exports unchanged to
 `channel-outbound`, but migrate its three dispatch aliases to

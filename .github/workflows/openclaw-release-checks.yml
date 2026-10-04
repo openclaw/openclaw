@@ -199,6 +199,9 @@ jobs:
       package_acceptance_scheduled: ${{ steps.inputs.outputs.package_acceptance_scheduled }}
       qa_parity_scheduled: ${{ steps.inputs.outputs.qa_parity_scheduled }}
     steps:
+      - name: Report release runner routing
+        if: vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
+        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays pinned to Blacksmith and queues during an outage."
       - name: Require trusted workflow ref for release checks
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -1414,6 +1417,25 @@ jobs:
       shared_image_artifact_namespace: release-live
       shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+      AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+      BASETEN_API_KEY: ${{ secrets.BASETEN_API_KEY }}
+      OPENCLAW_LIVE_R2_ACCOUNT_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCOUNT_ID }}
+      OPENCLAW_LIVE_R2_BUCKET: ${{ secrets.OPENCLAW_LIVE_R2_BUCKET }}
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCESS_KEY_ID }}
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY: ${{ secrets.OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN: ${{ secrets.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN }}
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING: ${{ secrets.OPENCLAW_GOOGLE_MEET_LIVE_MEETING }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_ID }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_SECRET }}
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: ${{ secrets.OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN }}
+      GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
+      INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      VOLCENGINE_TTS_API_KEY: ${{ secrets.VOLCENGINE_TTS_API_KEY }}
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1426,11 +1448,13 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      NOVITA_API_KEY: ${{ secrets.NOVITA_API_KEY }}
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
       OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
@@ -1441,6 +1465,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
@@ -1917,7 +1942,9 @@ jobs:
     name: Run QA Lab runtime-pair lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
+    # (36639549086, 36639978260). An outage queues this lane instead of failing it.
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

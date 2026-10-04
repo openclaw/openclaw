@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -10,6 +9,7 @@ import {
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 
 type CaptureSessionDiffBaseline =
   (typeof import("./session-diff.js"))["captureSessionDiffBaseline"];
@@ -46,7 +46,7 @@ vi.mock("./session-diff.js", async (importOriginal) => ({
 
 import { ensureSessionDiffBaseline } from "./session-diff-baseline.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-diff-owner-");
 
 function baseline(sessionId: string): SessionDiffBaseline {
   return {
@@ -74,7 +74,7 @@ async function seedEntry(params: {
   sessionKey: string;
   storePath: string;
 }> {
-  const dir = tempDirs.make("openclaw-session-diff-owner-");
+  const dir = sessionDirs.make();
   const storePath = path.join(dir, "sessions.json");
   const agentId = params.agentId ?? "main";
   const sessionKey = params.sessionKey ?? "agent:main:diff-owner";
@@ -377,7 +377,7 @@ describe("ensureSessionDiffBaseline", () => {
 
   it("invalidates claim arming when the authoritative row is missing", async () => {
     const entry = makeEntry("deleted-before-arm");
-    const storePath = path.join(tempDirs.make("openclaw-session-diff-missing-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
 
     const result = await Promise.allSettled([
       ensure(

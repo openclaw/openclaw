@@ -8,14 +8,19 @@ export async function autoRemovalProtectionReason(
   record: ManagedWorktreeRecord,
   prefilter: ReturnType<typeof createWorktreeGcPrefilter>,
   hasLiveLease: (id: string) => boolean,
-  context: { env: NodeJS.ProcessEnv; getConfig: () => OpenClawConfig },
+  context: {
+    env: NodeJS.ProcessEnv;
+    getConfig: () => OpenClawConfig;
+    signal?: AbortSignal;
+    beforeRun?: () => void;
+  },
   policy: WorktreeCleanupOwnerPolicy = {},
 ): Promise<string | undefined> {
   if (record.gcProtection) {
     if (!policy.retryDeferred) {
       return record.gcProtection;
     }
-    await deferWorktreeGcRecord(context.env, record, null);
+    await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
   }
   if (
     record.ownerId !== undefined &&
@@ -29,7 +34,7 @@ export async function autoRemovalProtectionReason(
   const protection = await prefilter(record);
   if (protection !== undefined) {
     if (protection === "branch-moved") {
-      await deferWorktreeGcRecord(context.env, record, protection);
+      await deferWorktreeGcRecord(context.env, record, protection, context.beforeRun);
     }
     return protection;
   }
@@ -40,7 +45,7 @@ export async function autoRemovalProtectionReason(
   const nested = await inspectManagedWorktreeCheckout(record, "nested-repository", context);
   if (nested.retainedReason !== undefined) {
     const reason = "worktree contains a nested repository";
-    await deferWorktreeGcRecord(context.env, record, reason);
+    await deferWorktreeGcRecord(context.env, record, reason, context.beforeRun);
     return reason;
   }
   return undefined;

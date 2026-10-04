@@ -68,12 +68,7 @@ type LocalSource = {
 
 type ParsedSource = NpmSource | GitSource | LocalSource;
 
-interface ResourceManifest {
-  extensions?: string[];
-  skills?: string[];
-  prompts?: string[];
-  themes?: string[];
-}
+type ResourceManifest = Partial<Record<ResourceType, string[]>>;
 
 // First-wins discovery ranks project before user, explicit before automatic,
 // and package resources after both top-level scopes.
@@ -85,7 +80,7 @@ function resourcePrecedenceRank(m: PathMetadata): number {
   return scopeBase + (m.source === "local" ? 0 : 1);
 }
 
-type ResourceType = "extensions" | "skills" | "prompts" | "themes";
+type ResourceType = keyof ResolvedPaths;
 type TopLevelAutoResourceType = Extract<ResourceType, "prompts" | "themes">;
 type ResourceState = { metadata: PathMetadata; enabled: boolean };
 type ResourceAccumulator = Record<ResourceType, Map<string, ResourceState>>;
@@ -115,10 +110,6 @@ function getAgentResourceTempDir(agentDir: string): string {
   return tempDir;
 }
 
-function isPattern(s: string): boolean {
-  return isOverridePattern(s) || hasGlobPattern(s);
-}
-
 function isOverridePattern(s: string): boolean {
   return s.startsWith("!") || s.startsWith("+") || s.startsWith("-");
 }
@@ -131,7 +122,7 @@ function splitPatterns(entries: string[]): { plain: string[]; patterns: string[]
   const plain: string[] = [];
   const patterns: string[] = [];
   for (const entry of entries) {
-    if (isPattern(entry)) {
+    if (isOverridePattern(entry) || hasGlobPattern(entry)) {
       patterns.push(entry);
     } else {
       plain.push(entry);
@@ -156,7 +147,7 @@ function collectDirectoryEntries(
   dir: string,
   root: string,
   ignoreMatcher?: IgnoreMatcher,
-  options: { allowNodeModules?: boolean; requireWithinRoot?: boolean } = {},
+  options: { requireWithinRoot?: boolean } = {},
 ): CollectedDirectory {
   if (!existsSync(dir)) {
     return { entries: [], ignoreMatcher };
@@ -165,10 +156,7 @@ function collectDirectoryEntries(
   const ig = addIgnoreRules(dir, root, ignoreMatcher);
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (
-        entry.name.startsWith(".") ||
-        (!options.allowNodeModules && entry.name === "node_modules")
-      ) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
         continue;
       }
       const fullPath = join(dir, entry.name);
@@ -201,26 +189,15 @@ function collectDirectoryEntries(
 function collectFiles(
   dir: string,
   filePattern: RegExp,
-  skipNodeModules = true,
   ignoreMatcher?: IgnoreMatcher,
   rootDir?: string,
 ): string[] {
   const files: string[] = [];
   const root = rootDir ?? dir;
-  const directory = collectDirectoryEntries(dir, root, ignoreMatcher, {
-    allowNodeModules: !skipNodeModules,
-  });
+  const directory = collectDirectoryEntries(dir, root, ignoreMatcher);
   for (const entry of directory.entries) {
     if (entry.isDirectory) {
-      files.push(
-        ...collectFiles(
-          entry.fullPath,
-          filePattern,
-          skipNodeModules,
-          directory.ignoreMatcher,
-          root,
-        ),
-      );
+      files.push(...collectFiles(entry.fullPath, filePattern, directory.ignoreMatcher, root));
     } else if (entry.isFile && filePattern.test(entry.name)) {
       files.push(entry.fullPath);
     }
@@ -258,29 +235,12 @@ function collectSkillEntries(
   return entries;
 }
 
-function findGitRepoRoot(startDir: string): string | null {
-  let dir = resolve(startDir);
-  while (true) {
-    if (existsSync(join(dir, ".git"))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
 function collectAncestorAgentsSkillDirs(startDir: string): string[] {
   const skillDirs: string[] = [];
-  const resolvedStartDir = resolve(startDir);
-  const gitRepoRoot = findGitRepoRoot(resolvedStartDir);
-
-  let dir = resolvedStartDir;
+  let dir = resolve(startDir);
   while (true) {
     skillDirs.push(join(dir, ".agents", "skills"));
-    if (gitRepoRoot && dir === gitRepoRoot) {
+    if (existsSync(join(dir, ".git"))) {
       break;
     }
     const parent = dirname(dir);
@@ -335,13 +295,11 @@ function resolveExtensionEntries(dir: string, rootDir = dir): string[] | null {
     }
   }
 
-  const indexTs = join(dir, "index.ts");
-  const indexJs = join(dir, "index.js");
-  if (existsSync(indexTs) && isRealPathWithinRoot(rootDir, indexTs)) {
-    return [indexTs];
-  }
-  if (existsSync(indexJs) && isRealPathWithinRoot(rootDir, indexJs)) {
-    return [indexJs];
+  for (const filename of ["index.ts", "index.js"]) {
+    const path = join(dir, filename);
+    if (existsSync(path) && isRealPathWithinRoot(rootDir, path)) {
+      return [path];
+    }
   }
 
   return null;
@@ -579,7 +537,7 @@ export class DefaultPackageManager implements PackageManager {
       : options?.local
         ? "project"
         : "user";
-    const packageSources = sources.map((source) => ({ pkg: source as PackageSource, scope }));
+    const packageSources = sources.map((pkg) => ({ pkg, scope }));
     await this.resolvePackageSources(packageSources, accumulator);
     return this.toResolvedPaths(accumulator);
   }
@@ -606,23 +564,11 @@ export class DefaultPackageManager implements PackageManager {
       }
 
       metadata.baseDir = target.baseDir;
-      if (target.kind === "file") {
-        this.addResource(
-          accumulator.extensions,
-          target.path,
-          metadata,
-          this.isExtensionEnabled(target.path, filter?.extensions, target.baseDir),
-        );
-        continue;
-      }
-
-      const hasPackageLayout = this.collectPackageResources(
-        target.path,
-        accumulator,
-        filter,
-        metadata,
-      );
-      if (parsed.type === "local" && !hasPackageLayout) {
+      if (
+        target.kind === "file" ||
+        (!this.collectPackageResources(target.path, accumulator, filter, metadata) &&
+          parsed.type === "local")
+      ) {
         this.addResource(
           accumulator.extensions,
           target.path,
@@ -692,12 +638,7 @@ export class DefaultPackageManager implements PackageManager {
       return { type: "local", path: source };
     }
 
-    const gitParsed = parseGitUrl(source);
-    if (gitParsed) {
-      return gitParsed;
-    }
-
-    return { type: "local", path: source };
+    return parseGitUrl(source) ?? { type: "local", path: source };
   }
 
   private installedNpmMatchesPinnedVersion(source: NpmSource, installedPath: string): boolean {
@@ -715,28 +656,18 @@ export class DefaultPackageManager implements PackageManager {
     }
   }
 
-  /**
-   * Get a unique identity for a package, ignoring version/ref.
-   * Used to detect when the same package is in both global and project settings.
-   * For git packages, uses normalized host/path to ensure SSH and HTTPS URLs
-   * for the same repository are treated as identical.
-   */
+  /** Ignore versions and normalize git transports when deduplicating scoped packages. */
   private getPackageIdentity(source: string, scope: SourceScope): string {
     const parsed = this.parseSource(source);
     if (parsed.type === "npm") {
       return `npm:${parsed.name}`;
     }
     if (parsed.type === "git") {
-      // Use host/path for identity to normalize SSH and HTTPS
       return `git:${parsed.host}/${parsed.path}`;
     }
     return `local:${this.resolvePathFromBase(parsed.path, this.getBaseDirForScope(scope))}`;
   }
 
-  /**
-   * Dedupe packages: if same package identity appears in both global and project,
-   * keep only the project one (project wins).
-   */
   private dedupePackages(
     packages: Array<{ pkg: PackageSource; scope: SourceScope }>,
   ): Array<{ pkg: PackageSource; scope: SourceScope }> {
@@ -819,57 +750,48 @@ export class DefaultPackageManager implements PackageManager {
       manifest !== null || RESOURCE_TYPES.some((type) => existsSync(join(packageRoot, type)));
     for (const resourceType of RESOURCE_TYPES) {
       const patterns = filter?.[resourceType];
-      const target = accumulator[resourceType];
-      if (patterns !== undefined) {
-        this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
-        continue;
-      }
       const entries = manifest?.[resourceType];
-      if (manifest !== null && (!filter || entries !== undefined)) {
-        this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
-        continue;
+      // User filters fall back to conventions for absent or empty manifest entries.
+      // Without a user filter, an explicit manifest can deliberately omit a type.
+      const useManifest =
+        patterns !== undefined
+          ? Boolean(entries?.length)
+          : manifest !== null && (!filter || entries !== undefined);
+      let allFiles: string[];
+      if (useManifest) {
+        const files = this.collectFilesFromManifestEntries(
+          entries ?? [],
+          packageRoot,
+          resourceType,
+        );
+        const enabled = applyPatterns(
+          files,
+          (entries ?? []).filter(isOverridePattern),
+          packageRoot,
+        );
+        // Package defaults retain discovery order; filtered packages retain pattern order.
+        allFiles =
+          patterns === undefined ? files.filter((file) => enabled.has(file)) : [...enabled];
+      } else {
+        allFiles = this.collectConventionResourceFiles(packageRoot, resourceType);
       }
-      const dir = join(packageRoot, resourceType);
-      if (existsSync(dir)) {
-        for (const path of this.collectConventionResourceFiles(packageRoot, resourceType)) {
-          this.addResource(target, path, metadata, true);
-        }
+      // An explicit empty filter disables the type; absent filters use package defaults.
+      const enabledByUser =
+        patterns === undefined
+          ? undefined
+          : patterns.length > 0
+            ? applyPatterns(allFiles, patterns, packageRoot)
+            : new Set<string>();
+      for (const path of allFiles) {
+        this.addResource(
+          accumulator[resourceType],
+          path,
+          metadata,
+          enabledByUser?.has(path) ?? true,
+        );
       }
     }
     return hasPackageLayout;
-  }
-
-  private applyPackageFilter(
-    packageRoot: string,
-    userPatterns: string[],
-    resourceType: ResourceType,
-    target: Map<string, ResourceState>,
-    metadata: PathMetadata,
-  ): void {
-    const allFiles = this.collectManifestFiles(packageRoot, resourceType);
-
-    // An explicit empty filter disables the type; absent filters use package defaults.
-    const enabledByUser =
-      userPatterns.length > 0 ? applyPatterns(allFiles, userPatterns, packageRoot) : new Set();
-    for (const f of allFiles) {
-      this.addResource(target, f, metadata, enabledByUser.has(f));
-    }
-  }
-
-  private collectManifestFiles(packageRoot: string, resourceType: ResourceType): string[] {
-    const manifest = readResourceManifestFile(join(packageRoot, "package.json"));
-    const entries = manifest?.[resourceType];
-    if (entries && entries.length > 0) {
-      const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
-      const manifestPatterns = entries.filter(isOverridePattern);
-      return Array.from(
-        manifestPatterns.length > 0
-          ? applyPatterns(allFiles, manifestPatterns, packageRoot)
-          : new Set(allFiles),
-      );
-    }
-
-    return this.collectConventionResourceFiles(packageRoot, resourceType);
   }
 
   private collectConventionResourceFiles(
@@ -884,28 +806,6 @@ export class DefaultPackageManager implements PackageManager {
       collectResourceFiles(conventionDir, resourceType),
       packageRoot,
     );
-  }
-
-  private addManifestEntries(
-    entries: string[] | undefined,
-    root: string,
-    resourceType: ResourceType,
-    target: Map<string, ResourceState>,
-    metadata: PathMetadata,
-  ): void {
-    if (!entries) {
-      return;
-    }
-
-    const allFiles = this.collectFilesFromManifestEntries(entries, root, resourceType);
-    const patterns = entries.filter(isOverridePattern);
-    const enabledPaths = applyPatterns(allFiles, patterns, root);
-
-    for (const f of allFiles) {
-      if (enabledPaths.has(f)) {
-        this.addResource(target, f, metadata, true);
-      }
-    }
   }
 
   private collectFilesFromManifestEntries(
@@ -1066,9 +966,6 @@ export class DefaultPackageManager implements PackageManager {
     metadata: PathMetadata,
     enabled: boolean,
   ): void {
-    if (!path) {
-      return;
-    }
     if (!map.has(path)) {
       map.set(path, { metadata, enabled });
     }
