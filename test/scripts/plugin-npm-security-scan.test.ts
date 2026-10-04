@@ -161,15 +161,16 @@ describe("plugin npm artifact security scan", () => {
     expect(result.criticalFindingCount).toBe(1);
   });
 
-  it("keeps the reviewed iMessage setup helper finding exact", () => {
-    const result = scanPluginNpmArtifactSecurity({
-      packageName: "@openclaw/imessage",
-      packageVersion: "1.0.0",
-      tarball: packageTarball("@openclaw/imessage", {
-        "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE,
+  it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/imessage",
+        packageVersion: "1.0.0",
+        tarball: packageTarball("@openclaw/imessage", {
+          "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE,
+        }),
       }),
-    });
-    expect(result.criticalFindingCount).toBe(1);
+    ).toThrow("unreviewed critical findings in exact npm artifact");
   });
 
   it("keeps reviewed dist findings reachable in mixed-layout artifacts", () => {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -69,6 +70,13 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
 ]);
 
+const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
+  [
+    "setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs",
+    "34833261f1e012015e6e28f35903d78f77efcfdac68f924310b8a3761264878b",
+  ],
+]);
+
 // Vendored runtime findings are owned by dependency path instead of every plugin
 // that happens to carry the same dependency. Tests, declarations, examples, and
 // benchmarks are excluded before this shrink-only inventory is consulted.
@@ -119,7 +127,10 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.min.js", 1],
 ]);
 
-type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & { path: string };
+type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & {
+  contentSha256: string;
+  path: string;
+};
 
 function normalizeFindingPath(file: string): string {
   const name = path.posix.basename(file);
@@ -279,6 +290,7 @@ export function scanPluginNpmArtifactSecurity(params: {
       for (const finding of scanSource(Buffer.from(content).toString("utf8"), packedPath)) {
         if (finding.severity === "critical") {
           critical.push({
+            contentSha256: createHash("sha256").update(content).digest("hex"),
             line: finding.line,
             path: normalizeFindingPath(packedPath),
             ruleId: finding.ruleId,
@@ -304,7 +316,13 @@ export function scanPluginNpmArtifactSecurity(params: {
     const reviewedLimit = dependencyPath
       ? REVIEWED_DEPENDENCY_FINDING_LIMITS.get(key)
       : REVIEWED_CRITICAL_FINDING_LIMITS.get(key);
-    if (count > (reviewedLimit ?? 0)) {
+    const reviewedContentSha256 = dependencyPath
+      ? undefined
+      : REVIEWED_CRITICAL_FINDING_CONTENT_SHA256.get(key);
+    if (
+      count > (reviewedLimit ?? 0) ||
+      (reviewedContentSha256 !== undefined && finding.contentSha256 !== reviewedContentSha256)
+    ) {
       unexpected.push(finding);
     }
   }
