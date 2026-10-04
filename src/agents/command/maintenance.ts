@@ -84,11 +84,15 @@ export async function prepareCommandForegroundRun(
   let entry: SessionEntry | undefined;
   let timeoutMs: number;
   try {
+    // Inter-session completion turns still need the required preflight compaction
+    // (token threshold + maxActiveTranscriptBytes). `preserveUserFacingSessionModelState`
+    // protects the user-facing runtime model at result-recording sites and keeps the
+    // turn out of optional post-turn maintenance (post-run.ts); it must not also skip
+    // the required compaction checkpoint documented to run before inference.
     entry =
       params.opts.modelRun === true ||
       params.opts.promptMode === "none" ||
-      params.suppressVisibleSessionEffects ||
-      params.preserveUserFacingSessionModelState
+      params.suppressVisibleSessionEffects
         ? params.sessionEntry
         : await runCommandPreflightMaintenance({
             ...params,

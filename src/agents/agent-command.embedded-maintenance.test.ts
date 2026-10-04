@@ -1,5 +1,6 @@
 /** Tests proactive embedded maintenance and final-reply lifecycle safety. */
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
@@ -24,6 +25,7 @@ import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js"
 const {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  acceptCompactionSuccessor,
   createAgentRunRestartAbortError,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -577,6 +579,171 @@ describe("agentCommand embedded maintenance", () => {
     if (testCase.observeAuth === false) {
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     }
+  });
+
+  it("runs required preflight compaction for a preserve-state completion turn over its threshold", async () => {
+    const storePath = requireStorePath();
+    const sessionId = "preserved-completion-compaction";
+    const successorSessionId = "preserved-completion-successor";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const model = "gpt-5.6-luna";
+    const text = "completion turn reply";
+    let preflightParams: Parameters<typeof state.runSessionPreflightCompactionMock>[0] | undefined;
+    let attemptSessionId: string | undefined;
+    state.cfg = {
+      ...state.cfg,
+      agents: {
+        defaults: {
+          model: { primary: `openai/${model}` },
+          models: { [`openai/${model}`]: {} },
+          compaction: { mode: "safeguard", memoryFlush: { enabled: false } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.test",
+            api: "openai-responses",
+            models: [
+              {
+                id: model,
+                name: "GPT-5.6 Luna",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId, updatedAt: Date.now(), totalTokens: 90_000, totalTokensFresh: true },
+    );
+    const lastCallUsage = {
+      input: 3,
+      output: 26,
+      cacheRead: 904_813,
+      cacheWrite: 53,
+      total: 904_895,
+    };
+    const completed = makeResult({ sessionId: successorSessionId, text, runner: "embedded" });
+    completed.meta.agentMeta = {
+      sessionId: successorSessionId,
+      provider: "openai",
+      model,
+      agentHarnessId: "openclaw",
+      contextTokens: 922_000,
+      promptTokens: 904_869,
+      usage: lastCallUsage,
+      lastCallUsage,
+    };
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      return { sessionEntry: params.sessionEntry, outcome: "completed" };
+    });
+    state.runSessionPreflightCompactionMock.mockImplementationOnce(async (params) => {
+      preflightParams = params;
+      const entry = expectDefined(params.sessionEntry, "preflight predecessor");
+      const checkpoint = expectDefined(params.beforeCompaction, "preflight checkpoint");
+      const refreshed = expectDefined(await checkpoint(entry), "checkpoint session");
+      const ownerEntry = expectDefined(
+        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+        "authoritative checkpoint owner",
+      );
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: { agentId: "main", sessionId: refreshed.sessionId, sessionKey, storePath },
+        currentSessionFile: sessionKey,
+        expectedEntry: {
+          sessionId: refreshed.sessionId,
+          lifecycleRevision: ownerEntry.lifecycleRevision,
+          activeWriterRunId: ownerEntry.activeWriterRunId,
+        },
+        assertActive: () => params.abortSignal?.throwIfAborted(),
+        onCommitted: params.onCompactionCommitted,
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: successorSessionId, tokensBefore: 90_000, tokensAfter: 42 },
+        },
+      });
+      if (params.sessionStore) {
+        params.sessionStore[sessionKey] = accepted.entry;
+      }
+      params.onSessionIdChanged?.(accepted.sessionId);
+      return accepted.entry;
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      attemptSessionId = params.sessionId;
+      await params.userTurnTranscriptRecorder?.persistApproved();
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: successorSessionId, sessionKey, storePath },
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            api: "openai-responses",
+            provider: "openai",
+            model,
+            stopReason: "stop",
+            timestamp: Date.now(),
+            usage: {
+              ...lastCallUsage,
+              totalTokens: lastCallUsage.total,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          },
+          cwd: state.workspaceDir,
+        },
+      );
+      params.onSuccessfulAuthProfile?.({
+        authProfileId: "openai:completed",
+        authProfileIdSource: "user",
+      });
+      return completed;
+    });
+
+    await agentCommandFromGatewayIngress(
+      {
+        message: "completion turn",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+        allowModelOverride: false,
+        // An inter-session completion turn preserves user-facing session model state;
+        // the required preflight compaction must still run (issue #162853).
+        preserveUserFacingSessionModelState: true,
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+
+    await waitForSessionMaintenance(sessionKey);
+    // The preserve-state completion turn still runs the required preflight compaction.
+    expect(state.runSessionPreflightCompactionMock).toHaveBeenCalledOnce();
+    expect(preflightParams?.followupRun.run.sessionId).toBe(sessionId);
+    // The user-facing model selection is preserved across the compaction successor.
+    expect(preflightParams?.followupRun.run.provider).toBe("openai");
+    expect(preflightParams?.followupRun.run.model).toBe(model);
+    // Optional post-turn maintenance stays excluded for preserve-state turns.
+    expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
+    // The accepted compaction successor reaches inference.
+    expect(attemptSessionId).toBe(successorSessionId);
+    expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(successorSessionId);
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: expect.objectContaining({
+          meta: expect.objectContaining({
+            agentMeta: expect.objectContaining({ sessionId: successorSessionId }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {
